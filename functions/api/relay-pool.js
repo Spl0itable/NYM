@@ -96,15 +96,12 @@ export async function onRequest(context) {
   const DEDUP_MAX = 50000;
   let dedupCounter = 0;
 
-  // Public-channel 24hr archival
-  const archiveEnabled = !!(env && env.R2_BUCKET);
-  const ARCHIVE_DEDUP_HOST = 'https://nymchat-archive.invalid';
-  const CHANNEL_ARCHIVE_TTL = 24 * 60 * 60;   // seconds; matches bucket lifecycle rule
+  const CHANNELS_DB = env && env.DB_CHANNELS;
+  const archiveEnabled = !!(CHANNELS_DB && typeof CHANNELS_DB.prepare === 'function');
   const CHANNEL_EVENT_MAX = 64 * 1024;
-  const CHANNEL_INDEX_CAP = 2000;
-  const CHANNEL_FLUSH_INTERVAL = 15000;
-  const channelArchiveBuf = new Map();        // channelName -> Map<eventId, createdAt>
-  const channelIndexLastFlush = new Map();    // channelName -> last flush ts
+  const ARCHIVE_FLUSH_MAX = 400;
+  const ARCHIVE_BATCH = 100;
+  const archiveBuf = new Map();   // eventId -> { id, channel, kind, pubkey, created_at, json }
 
   function trimDedup() {
     if (++dedupCounter < 500) return;
@@ -141,7 +138,7 @@ export async function onRequest(context) {
     try {
       if (serverOpen && server.readyState === 1) {
         server.send(JSON.stringify(['POOL:PING', Date.now()]));
-        flushChannelIndexes().catch(() => { });
+        runArchive(flushArchive());
       } else {
         clearInterval(keepaliveTimer);
         keepaliveTimer = null;
@@ -543,10 +540,6 @@ export async function onRequest(context) {
     return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
   }
 
-  function archiveDedupReq(eventId) {
-    return new Request(ARCHIVE_DEDUP_HOST + '/handled/' + eventId, { method: 'GET' });
-  }
-
   const isArchivableChannelKind = (k) => k === 20000 || k === 23333 || k === 7;
 
   // Channel name for an event: 'g' for geohash (20000), 'd' for named (23333),
@@ -557,28 +550,15 @@ export async function onRequest(context) {
     return getTag('g') || getTag('d');
   }
 
-  // Store one channel event, gated by the edge cache so concurrent stateless
-  // instances write it at most once. Fire-and-forget; never blocks forwarding.
-  async function doArchiveChannel(channel, eventId, objJson, createdAt) {
-    if (!channel || !eventId || !objJson || objJson.length > CHANNEL_EVENT_MAX) return;
-    try {
-      const dedupReq = archiveDedupReq(eventId);
-      if (await caches.default.match(dedupReq)) return;
-      const key = 'channel/' + channel + '/' + eventId;
-      let exists = false;
-      try { exists = !!(await env.R2_BUCKET.head(key)); } catch { exists = false; }
-      if (!exists) await env.R2_BUCKET.put(key, objJson);
-      const headers = new Headers();
-      headers.set('Cache-Control', 'public, max-age=' + CHANNEL_ARCHIVE_TTL);
-      await caches.default.put(dedupReq, new Response('1', { headers }));
-      let buf = channelArchiveBuf.get(channel);
-      if (!buf) { buf = new Map(); channelArchiveBuf.set(channel, buf); }
-      buf.set(eventId, createdAt || 0);
-    } catch { /* best-effort */ }
-  }
-
   function runArchive(work) {
     if (context && context.waitUntil) { try { context.waitUntil(work); } catch { /* noop */ } }
+  }
+
+  function bufferArchive(channel, eventId, kind, pubkey, createdAt, objJson) {
+    if (!channel || !eventId || !objJson || objJson.length > CHANNEL_EVENT_MAX) return;
+    if (archiveBuf.has(eventId)) return;
+    archiveBuf.set(eventId, { id: eventId, channel, kind, pubkey: pubkey || null, created_at: createdAt || 0, json: objJson });
+    if (archiveBuf.size >= ARCHIVE_FLUSH_MAX) runArchive(flushArchive());
   }
 
   // Inbound event from a relay (string frame).
@@ -588,60 +568,36 @@ export async function onRequest(context) {
     if (!channel) return;
     const objJson = extractEventObjectJson(raw);
     if (!objJson) return;
-    runArchive(doArchiveChannel(channel, eventId, objJson, extractEventCreatedAt(raw)));
+    bufferArchive(channel, eventId, kind, extractEventStringField(raw, 'pubkey'), extractEventCreatedAt(raw), objJson);
   }
 
   // Outbound event the client is publishing — archived immediately so sends
-  // land in R2 without waiting for the relay echo (deduped, so saved once).
+  // land in D1 without waiting for the relay echo (deduped, so saved once).
   function archiveOutgoingEvent(ev) {
     if (!archiveEnabled || !ev || typeof ev.id !== 'string' || !isArchivableChannelKind(ev.kind)) return;
     const tags = Array.isArray(ev.tags) ? ev.tags : [];
     const getTag = (n) => { const t = tags.find((x) => Array.isArray(x) && x[0] === n); return t ? t[1] : null; };
     const channel = sanitizeChannelKey(channelFromTags(getTag, ev.kind));
     if (!channel) return;
-    runArchive(doArchiveChannel(channel, ev.id, JSON.stringify(ev),
-      typeof ev.created_at === 'number' ? ev.created_at : 0));
+    bufferArchive(channel, ev.id, ev.kind, typeof ev.pubkey === 'string' ? ev.pubkey : null,
+      typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
   }
 
-  // Merge buffered ids into each channel's index (one PUT per channel per
-  // interval). Read-merge-write; an occasional lost update is backfilled by relays.
-  async function flushChannelIndexes() {
-    if (!archiveEnabled || channelArchiveBuf.size === 0) return;
+  // Flush buffered events as batched INSERT OR IGNORE statements. The id primary
+  // key drops duplicates; an occasional failed flush is backfilled by relays.
+  async function flushArchive() {
+    if (!archiveEnabled || archiveBuf.size === 0) return;
+    const rows = Array.from(archiveBuf.values());
+    archiveBuf.clear();
+    const stmt = CHANNELS_DB.prepare(
+      'INSERT OR IGNORE INTO events (id, channel, kind, pubkey, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
     const now = Date.now();
-    const minTs = now - CHANNEL_ARCHIVE_TTL * 1000;
-    for (const [channel, buf] of channelArchiveBuf) {
-      if (buf.size === 0) continue;
-      const last = channelIndexLastFlush.get(channel) || 0;
-      if (now - last < CHANNEL_FLUSH_INTERVAL) continue;
-      channelIndexLastFlush.set(channel, now);
-      const additions = Array.from(buf.entries());
-      buf.clear();
-      try {
-        const key = 'channel-index/' + channel;
-        let items = [];
-        try {
-          const obj = await env.R2_BUCKET.get(key);
-          if (obj) { const d = await obj.json(); if (d && Array.isArray(d.items)) items = d.items; }
-        } catch { items = []; }
-        const existingIds = new Set();
-        for (const it of items) {
-          if (Array.isArray(it) && typeof it[0] === 'string') existingIds.add(it[0]);
-        }
-        const hasNew = additions.some((it) => Array.isArray(it) && typeof it[0] === 'string' && !existingIds.has(it[0]));
-        if (!hasNew) continue;
-        const seen = new Set();
-        const merged = [];
-        for (const it of additions.concat(items)) {
-          if (!Array.isArray(it) || typeof it[0] !== 'string') continue;
-          if (seen.has(it[0])) continue;
-          if ((it[1] || 0) * 1000 < minTs) continue;
-          seen.add(it[0]);
-          merged.push([it[0], it[1] || 0]);
-        }
-        merged.sort((a, b) => (b[1] || 0) - (a[1] || 0));
-        const capped = merged.length > CHANNEL_INDEX_CAP ? merged.slice(0, CHANNEL_INDEX_CAP) : merged;
-        await env.R2_BUCKET.put(key, JSON.stringify({ v: 1, items: capped }));
-      } catch { /* best-effort */ }
+    for (let i = 0; i < rows.length; i += ARCHIVE_BATCH) {
+      const chunk = rows.slice(i, i + ARCHIVE_BATCH).map(
+        (r) => stmt.bind(r.id, r.channel, r.kind, r.pubkey, r.created_at, r.json, now)
+      );
+      try { await CHANNELS_DB.batch(chunk); } catch { /* best-effort */ }
     }
   }
 
@@ -1429,10 +1385,9 @@ export async function onRequest(context) {
   // Handle client disconnect
   function cleanupAll() {
     serverOpen = false;
-    // Final, un-throttled flush of buffered channel index entries.
-    if (archiveEnabled && channelArchiveBuf.size > 0) {
-      channelIndexLastFlush.clear();
-      const finalFlush = flushChannelIndexes().catch(() => { });
+    // Final flush of any buffered channel events.
+    if (archiveEnabled && archiveBuf.size > 0) {
+      const finalFlush = flushArchive().catch(() => { });
       if (context && context.waitUntil) { try { context.waitUntil(finalFlush); } catch { /* noop */ } }
     }
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }

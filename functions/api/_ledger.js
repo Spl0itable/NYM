@@ -1,6 +1,17 @@
 // Durable Object: NymLedger
 // Serializes the money-critical mutations
 
+import {
+  creditsGet,
+  creditsPut,
+  shopGet,
+  shopPut,
+  invoicePut,
+  invoiceDelete,
+  invoiceGet,
+  codePut
+} from "./_d1.js";
+
 const SATS_PER_CREDIT_DEFAULT = 100;
 
 export class NymLedger {
@@ -82,46 +93,21 @@ export class NymLedger {
     return true;
   }
 
-  // R2 credit/shop helpers
+  // D1 credit/shop helpers
   async _getCredits(pk) {
-    const blank = { balance: 0, totalPurchased: 0, totalUsed: 0, rl: [], createdAt: Date.now() };
-    if (!this.env.R2_BUCKET) return blank;
-    try {
-      const obj = await this.env.R2_BUCKET.get("credits/" + pk);
-      if (!obj) return blank;
-      const data = await obj.json();
-      if (!data || typeof data.balance !== "number") return blank;
-      if (!Array.isArray(data.rl)) data.rl = [];
-      return data;
-    } catch {
-      return blank;
-    }
+    return creditsGet(this.env.DB_CREDITS, pk);
   }
 
   async _putCredits(pk, data) {
-    data.updatedAt = Date.now();
-    await this.env.R2_BUCKET.put("credits/" + pk, JSON.stringify(data));
+    await creditsPut(this.env.DB_CREDITS, pk, data);
   }
 
   async _getShop(pk) {
-    const blank = { owned: {}, active: { style: null, flair: [], cosmetics: [], supporter: false }, updatedAt: 0 };
-    if (!this.env.R2_BUCKET) return blank;
-    try {
-      const obj = await this.env.R2_BUCKET.get("shop/" + pk);
-      if (!obj) return blank;
-      const data = await obj.json();
-      if (!data || typeof data !== "object") return blank;
-      if (!data.owned || typeof data.owned !== "object") data.owned = {};
-      if (!data.active || typeof data.active !== "object") data.active = blank.active;
-      return data;
-    } catch {
-      return blank;
-    }
+    return shopGet(this.env.DB_SHOP, pk);
   }
 
   async _putShop(pk, data) {
-    data.updatedAt = Date.now();
-    await this.env.R2_BUCKET.put("shop/" + pk, JSON.stringify(data));
+    await shopPut(this.env.DB_SHOP, pk, data);
   }
 
   _pruneActive(rec) {
@@ -186,12 +172,12 @@ export class NymLedger {
     crec.balance = (crec.balance || 0) + credits;
     crec.totalPurchased = (crec.totalPurchased || 0) + credits;
     await this._putCredits(creditTo, crec);
-    // Keep the legacy R2 marker so check-invoice's claimed read still works.
+    // Mark the invoice claimed so check-invoice's claimed read still works.
     try {
-      await this.env.R2_BUCKET.put("claimed/" + invoiceId, JSON.stringify(
-        Object.assign({ at: Date.now() }, a.claimData || {})));
+      await invoicePut(this.env.DB_INVOICES, "credits", "claimed", invoiceId,
+        Object.assign({ at: Date.now() }, a.claimData || {}));
     } catch {}
-    try { await this.env.R2_BUCKET.delete("pending/" + invoiceId); } catch {}
+    try { await invoiceDelete(this.env.DB_INVOICES, "credits", "pending", invoiceId); } catch {}
     return { credited: credits, balance: crec.balance, recipient: creditTo };
   }
 
@@ -206,23 +192,18 @@ export class NymLedger {
     if (!this._claimOnce("shop/" + invoiceId, "shop")) {
       // Already granted — return the prior marker so the client can recover.
       let prev = null;
-      try {
-        const o = await this.env.R2_BUCKET.get("shop-claimed/" + invoiceId);
-        if (o) prev = await o.json();
-      } catch {}
+      try { prev = await invoiceGet(this.env.DB_INVOICES, "shop", "claimed", invoiceId); } catch {}
       return { alreadyClaimed: true, prev };
     }
     const crec = await this._getShop(recipient);
     crec.owned[itemId] = { at: Date.now(), amountSats: Number(a.amountSats) || 0, gift: !!a.gift, code };
     await this._putShop(recipient, crec);
+    try { await codePut(this.env.DB_CODES, code, itemId, recipient, Date.now()); } catch {}
     try {
-      await this.env.R2_BUCKET.put("shop-code/" + code, JSON.stringify({ itemId, owner: recipient, createdAt: Date.now() }));
+      await invoicePut(this.env.DB_INVOICES, "shop", "claimed", invoiceId,
+        Object.assign({ itemId, pubkey: recipient, code, at: Date.now() }, a.claimData || {}));
     } catch {}
-    try {
-      await this.env.R2_BUCKET.put("shop-claimed/" + invoiceId, JSON.stringify(
-        Object.assign({ itemId, pubkey: recipient, code, at: Date.now() }, a.claimData || {})));
-    } catch {}
-    try { await this.env.R2_BUCKET.delete("shop-pending/" + invoiceId); } catch {}
+    try { await invoiceDelete(this.env.DB_INVOICES, "shop", "pending", invoiceId); } catch {}
     return { itemId, code, recipient, owned: crec.owned, active: crec.active };
   }
 
@@ -242,9 +223,7 @@ export class NymLedger {
     await this._putShop(from, fromRec);
     await this._putShop(to, toRec);
     if (entry.code) {
-      try {
-        await this.env.R2_BUCKET.put("shop-code/" + entry.code, JSON.stringify({ itemId, owner: to, createdAt: Date.now() }));
-      } catch {}
+      try { await codePut(this.env.DB_CODES, entry.code, itemId, to, Date.now()); } catch {}
     }
     return { ok: true, itemId, owned: fromRec.owned, active: fromRec.active, code: entry.code || null };
   }
@@ -270,9 +249,7 @@ export class NymLedger {
     const rrec = await this._getShop(user);
     rrec.owned[itemId] = { at: Date.now(), amountSats: 0, gift: false, code, redeemed: true };
     await this._putShop(user, rrec);
-    try {
-      await this.env.R2_BUCKET.put("shop-code/" + code, JSON.stringify({ itemId, owner: user, createdAt: a.createdAt || Date.now() }));
-    } catch {}
+    try { await codePut(this.env.DB_CODES, code, itemId, user, a.createdAt || Date.now()); } catch {}
     return { itemId, owned: rrec.owned, active: rrec.active, prevOwner };
   }
 }

@@ -38,6 +38,16 @@
 import { ledgerCall } from "./_ledger.js";
 export { NymLedger } from "./_ledger.js";
 import {
+  creditsGet,
+  creditsPut,
+  botThreadGet,
+  botThreadPut,
+  botThreadDelete,
+  invoiceGet,
+  invoiceHas,
+  invoicePut
+} from "./_d1.js";
+import {
   getPublicKey,
   getEventHash,
   signEvent,
@@ -244,22 +254,10 @@ function botCreditsForTask(taskType) {
 }
 
 async function botGetCredits(env, pubkey) {
-  var blank = { balance: 0, totalPurchased: 0, totalUsed: 0, rl: [], createdAt: Date.now() };
-  if (!env.R2_BUCKET) return blank;
-  try {
-    var obj = await env.R2_BUCKET.get("credits/" + pubkey);
-    if (!obj) return blank;
-    var data = await obj.json();
-    if (!data || typeof data.balance !== "number") return blank;
-    if (!Array.isArray(data.rl)) data.rl = [];
-    return data;
-  } catch (e) {
-    return blank;
-  }
+  return creditsGet(env.DB_CREDITS, pubkey);
 }
 async function botPutCredits(env, pubkey, data) {
-  data.updatedAt = Date.now();
-  await env.R2_BUCKET.put("credits/" + pubkey, JSON.stringify(data));
+  await creditsPut(env.DB_CREDITS, pubkey, data);
 }
 
 function isHex64(x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); }
@@ -267,22 +265,13 @@ function isHex64(x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x);
 // Per-user ordered list of NIP-17 gift-wrap event IDs for the private Nymbot
 var BOT_THREAD_MAX = 40;
 async function botGetThread(env, pubkey) {
-  if (!env.R2_BUCKET) return [];
-  try {
-    var obj = await env.R2_BUCKET.get("botpm-thread/" + pubkey);
-    if (!obj) return [];
-    var data = await obj.json();
-    var ids = Array.isArray(data) ? data : (data && Array.isArray(data.ids) ? data.ids : []);
-    return ids.filter(isHex64);
-  } catch (e) {
-    return [];
-  }
+  var ids = await botThreadGet(env.DB_BOT, pubkey);
+  return ids.filter(isHex64);
 }
 async function botPutThread(env, pubkey, ids) {
-  if (!env.R2_BUCKET) return;
   var trimmed = ids.filter(isHex64);
   if (trimmed.length > BOT_THREAD_MAX) trimmed = trimmed.slice(-BOT_THREAD_MAX);
-  await env.R2_BUCKET.put("botpm-thread/" + pubkey, JSON.stringify({ ids: trimmed, updatedAt: Date.now() }));
+  await botThreadPut(env.DB_BOT, pubkey, trimmed);
 }
 // Split a PM message into its leading quote-reply block
 function splitQuotedReply(raw) {
@@ -410,8 +399,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   };
-  if (!env.R2_BUCKET) {
-    return json({ error: "Private Nymbot messaging is not configured (missing R2_BUCKET binding)." }, 503);
+  if (!env.DB_CREDITS) {
+    return json({ error: "Private Nymbot messaging is not configured (missing DB_CREDITS binding)." }, 503);
   }
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) {
@@ -506,7 +495,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       return json({ error: "Bot Lightning wallet supports neither LUD-21 verification nor NIP-57 zap receipts." }, 502);
     }
     var invoiceId = bytesToHex(sha256(utf8ToBytes(invData.pr)));
-    await env.R2_BUCKET.put("pending/" + invoiceId, JSON.stringify({
+    await invoicePut(env.DB_INVOICES, "credits", "pending", invoiceId, {
       pubkey: userPubkey,
       recipientPubkey: ciGiftTo,
       amountSats: reqSats,
@@ -515,7 +504,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       verifyUrl: hasVerify ? invData.verify : null,
       providerPubkey: canNip57 ? lnurlData.nostrPubkey.toLowerCase() : null,
       createdAt: Date.now()
-    }));
+    });
     return json({
       pr: invData.pr,
       verify: hasVerify ? invData.verify : null,
@@ -528,11 +517,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "check-invoice") {
     var ciId = String(body.invoiceId || "");
     if (!/^[0-9a-f]{64}$/i.test(ciId)) return json({ error: "Invalid invoice reference." }, 400);
-    if (await env.R2_BUCKET.get("claimed/" + ciId)) return json({ paid: true, claimed: true });
-    var ciPending = await env.R2_BUCKET.get("pending/" + ciId);
-    if (!ciPending) return json({ error: "Unknown or expired invoice." }, 404);
-    var ciRec;
-    try { ciRec = await ciPending.json(); } catch (e) { return json({ error: "Corrupt invoice record." }, 500); }
+    if (await invoiceHas(env.DB_INVOICES, "credits", "claimed", ciId)) return json({ paid: true, claimed: true });
+    var ciRec = await invoiceGet(env.DB_INVOICES, "credits", "pending", ciId);
+    if (!ciRec) return json({ error: "Unknown or expired invoice." }, 404);
     if (ciRec.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
     return json({ paid: await invoicePaymentConfirmed(env, ciRec, body.receipt) });
   }
@@ -540,17 +527,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "claim-credits") {
     var invoiceId = String(body.invoiceId || "");
     if (!/^[0-9a-f]{64}$/i.test(invoiceId)) return json({ error: "Invalid invoice reference." }, 400);
-    var pendingObj = await env.R2_BUCKET.get("pending/" + invoiceId);
-    if (!pendingObj) {
+    var pending = await invoiceGet(env.DB_INVOICES, "credits", "pending", invoiceId);
+    if (!pending) {
       // May already be claimed (pending deleted on claim).
-      if (await env.R2_BUCKET.get("claimed/" + invoiceId)) return json({ error: "This payment was already claimed." }, 409);
+      if (await invoiceHas(env.DB_INVOICES, "credits", "claimed", invoiceId)) return json({ error: "This payment was already claimed." }, 409);
       return json({ error: "Unknown or expired invoice." }, 404);
-    }
-    var pending;
-    try {
-      pending = await pendingObj.json();
-    } catch (e) {
-      return json({ error: "Corrupt invoice record." }, 500);
     }
     // Only the buyer who created the invoice may claim it
     if (pending.pubkey !== userPubkey) {
@@ -704,7 +685,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "clear-history") {
-    try { await env.R2_BUCKET.delete("botpm-thread/" + userPubkey); } catch (e) { }
+    try { await botThreadDelete(env.DB_BOT, userPubkey); } catch (e) { }
     return json({ cleared: true });
   }
 
@@ -713,7 +694,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.69.449";
+var NYMCHAT_VERSION = "3.69.450";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -1352,7 +1333,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.69.449 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.69.450 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -2177,7 +2158,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.69.449")
+  // Prefix match (e.g. "3.61" matches "3.69.450")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -2232,7 +2213,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.69.449", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.69.450", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

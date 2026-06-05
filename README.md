@@ -31,7 +31,7 @@ The web app is served as static files plus a set of Cloudflare Pages Functions u
 - **Ephemeral Identity**: Generate a temporary keypair and pseudonym per session.
 - **Auto-Ephemeral Mode**: Auto-start an ephemeral session without a welcome screen.
 - **Login with a Nostr Account**: Use a persistent identity via a NIP-07 browser extension (Alby, nos2x, and similar), a NIP-46 remote signer, or by entering an nsec.
-- **Optional Identity Encryption**: Encrypt your saved identity key on a device so it cannot be read from local storage without unlocking. You pick the unlock factor per device: a password, a PIN, a passkey, or a biometric (Face/Touch ID, Windows Hello, Android biometric, or a hardware security key). Passkey and biometric unlock use WebAuthn with the PRF extension to derive the key; password and PIN use PBKDF2. The key stays in memory only for the session and the plaintext key is never written to disk while encryption is on. This is a per-device setting and is not synced, because the unlock factor and the stored key are local to each device, so you enable it separately on each device. After you enable it, the app confirms an unlock right away so you are not locked out if an authenticator turns out not to support PRF. Only a non-sensitive on/off preference syncs across devices, so a new device can offer to set it up too. No password, salt, or credential is ever synced.
+- **Optional Identity Encryption**: Encrypt your saved identity's (nsec) private key on a device so it cannot be read from local storage without unlocking. You pick the unlock factor per device: a password, a PIN, a passkey, or a biometric (Face/Touch ID, Windows Hello, Android biometric, or a hardware security key). Passkey and biometric unlock use WebAuthn with the PRF extension to derive the key; password and PIN use PBKDF2. The key stays in memory only for the session and the plaintext key is never written to disk while encryption is on. This is a per-device setting and is not synced, because the unlock factor and the stored key are local to each device, so you enable it separately on each device. After you enable it, the app confirms an unlock right away so you are not locked out if an authenticator turns out not to support PRF. Only a non-sensitive on/off preference syncs across devices, so a new device can offer to set it up too. No password, salt, or credential is ever synced.
 
 ### Channels
 - **Geohash Channels**: Location-based channels using geohash encoding (kind 20000).
@@ -214,52 +214,9 @@ Nymbot is context-aware. When you use `?ask` or `?summarize`, the bot receives t
 
 Quote-reply to any Nymbot response to continue the conversation. The bot carries context from the reply chain (up to six messages of history). You can also quote any message and mention `@Nymbot` to ask the AI about it.
 
-## Running Locally
-
-Nymchat is a static PWA plus a set of Cloudflare Pages Functions in `functions/api/` that handle the relay and media proxy, link previews, the Nymbot, and server-side storage (the flair shop and encrypted settings sync).
-
-Install dependencies and build the static assets:
-
-```
-npm install
-npm run build
-```
-
-The build minifies and content-hashes the assets into `dist/`.
-
-To run the full app locally, including the `/api/*` Functions, use the Cloudflare Wrangler CLI:
-
-```
-npx wrangler pages dev dist
-```
-
-The Functions expect bindings to be configured for some features: an R2 bucket and a Durable Object for the shop, settings sync, and Nymbot credits, plus bot and Lightning configuration for Nymbot. The Durable Object binding and SQLite migration are defined in `wrangler.toml`. Plain relay chat works without these, but the server-backed features need the bindings set.
-
-You can also serve the built `dist/` directory with any static file server to view the interface, but the `/api/*` features will be unavailable without the Functions.
-
 ## Mobile App (iOS & Android)
 
 Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory.
-
-The Flutter app is a native shell around the Nymchat PWA, providing:
-- **Native Notifications**: System notifications for new messages.
-- **Native Integration**: Camera, microphone, file picking, sharing, and a smooth native feel on both platforms.
-
-### Building the Flutter App
-
-1. Install the [Flutter SDK](https://flutter.dev/docs/get-started/install) (requires SDK ^3.6.0).
-2. Navigate to the app directory:
-   ```
-   cd android-ios-app
-   ```
-3. Install dependencies:
-   ```
-   flutter pub get
-   ```
-4. Run on your device or emulator:
-   ```
-   flutter run
-   ```
 
 ## Contributing
 

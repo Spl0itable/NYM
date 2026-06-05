@@ -1,7 +1,19 @@
-// Cloudflare Pages Function: R2-backed user storage (flair shop + encrypted settings).
+// Cloudflare Pages Function: D1-backed user storage (flair shop, encrypted
+// settings, profile mirror, PM gift-wrap archive, public channel archive).
 
 import { ledgerCall } from "./_ledger.js";
 export { NymLedger } from "./_ledger.js";
+import {
+  hasD1,
+  replica,
+  shopGet,
+  shopPut,
+  shopGetActiveMany,
+  invoiceGet,
+  invoiceHas,
+  invoicePut,
+  codeGet
+} from "./_d1.js";
 import {
   getPublicKey,
   getEventHash,
@@ -61,39 +73,10 @@ var SHOP_CATALOG = {
   "cosmetic-redacted": { price: 2800, type: "cosmetic" }
 };
 
-function shopBlankRecord() {
-  return { owned: {}, active: { style: null, flair: [], cosmetics: [], supporter: false }, updatedAt: 0 };
-}
-async function shopGetRecord(env, pubkey) {
-  if (!env.R2_BUCKET) return shopBlankRecord();
-  try {
-    var obj = await env.R2_BUCKET.get("shop/" + pubkey);
-    if (!obj) return shopBlankRecord();
-    var d = await obj.json();
-    if (!d || typeof d !== "object" || typeof d.owned !== "object" || !d.owned) return shopBlankRecord();
-    if (!d.active || typeof d.active !== "object") d.active = { style: null, flair: [], cosmetics: [], supporter: false };
-    if (!Array.isArray(d.active.flair)) d.active.flair = [];
-    if (!Array.isArray(d.active.cosmetics)) d.active.cosmetics = [];
-    return d;
-  } catch (e) {
-    return shopBlankRecord();
-  }
-}
-async function shopPutRecord(env, pubkey, data) {
-  data.updatedAt = Date.now();
-  await env.R2_BUCKET.put("shop/" + pubkey, JSON.stringify(data));
-}
-// Drop active selections that point at items the user no longer owns.
-function shopPruneActive(rec) {
-  var a = rec.active;
-  if (a.style && !rec.owned[a.style]) a.style = null;
-  a.flair = a.flair.filter(function (id) { return !!rec.owned[id]; });
-  a.cosmetics = a.cosmetics.filter(function (id) { return !!rec.owned[id]; });
-  if (a.supporter && !rec.owned["supporter-badge"]) a.supporter = false;
-}
 function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
 }
+
 // Generate a BOLT11 invoice from the bot's Lightning address (LUD-21).
 async function botGenerateInvoice(env, sats, zapRequest, comment) {
   var lnAddr = (env.BOT_LIGHTNING_ADDRESS || BOT_LIGHTNING_ADDRESS).split("@");
@@ -131,8 +114,6 @@ async function botGenerateInvoice(env, sats, zapRequest, comment) {
     return { error: "Could not generate a Lightning invoice.", status: 502 };
   }
   if (!invData || !invData.pr) return { error: (invData && invData.reason) || "Bot wallet did not return an invoice.", status: 502 };
-  // Prefer LUD-21 server-side verification; fall back to the NIP-57 zap
-  // receipt (kind 9735) signed by the wallet's Nostr identity.
   var hasVerify = invData.verify && /^https:\/\//i.test(invData.verify);
   var canNip57 = zapRequest && lnurlData.allowsNostr &&
     typeof lnurlData.nostrPubkey === "string" && /^[0-9a-f]{64}$/i.test(lnurlData.nostrPubkey);
@@ -157,7 +138,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   };
-  if (!env.R2_BUCKET) return json({ error: "Shop is not configured (missing R2_BUCKET binding)." }, 503);
+  if (!hasD1(env.DB_SHOP)) return json({ error: "Shop is not configured (missing DB_SHOP binding)." }, 503);
 
   // Public: look up other users' active items so clients can show their
   // flair/style without a Nostr REQ. No auth — read-only and non-sensitive.
@@ -184,12 +165,14 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       if (pair[1] && pair[1].st) statuses[pair[0]] = pair[1].st;
       else misses.push(pair[0]);
     });
-    var recs = await Promise.all(misses.map(function (pk) { return shopGetRecord(env, pk); }));
-    misses.forEach(function (pk, idx) {
-      var st = { active: recs[idx].active, updatedAt: recs[idx].updatedAt };
-      statuses[pk] = st;
-      readCachePut(context, "/shop-status/" + pk, { st: st }, SHOP_READ_TTL);
-    });
+    if (misses.length) {
+      var actives = await shopGetActiveMany(env.DB_SHOP, misses);
+      misses.forEach(function (pk) {
+        var st = { active: actives[pk].active, updatedAt: actives[pk].updatedAt };
+        statuses[pk] = st;
+        readCachePut(context, "/shop-status/" + pk, { st: st }, SHOP_READ_TTL);
+      });
+    }
     return json({ statuses: statuses });
   }
 
@@ -207,12 +190,12 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "shop-get") {
-    var rec = await shopGetRecord(env, userPubkey);
+    var rec = await shopGet(env.DB_SHOP, userPubkey);
     return json({ owned: rec.owned, active: rec.active, updatedAt: rec.updatedAt });
   }
 
   if (body.action === "shop-set-active") {
-    var rec = await shopGetRecord(env, userPubkey);
+    var rec = await shopGet(env.DB_SHOP, userPubkey);
     var want = (body.active && typeof body.active === "object") ? body.active : {};
     var nextStyle = null;
     if (typeof want.style === "string" && rec.owned[want.style] &&
@@ -231,7 +214,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       cosmetics: nextCos,
       supporter: !!want.supporter && !!rec.owned["supporter-badge"]
     };
-    await shopPutRecord(env, userPubkey, rec);
+    await shopPut(env.DB_SHOP, userPubkey, rec);
     readCachePut(context, "/shop-status/" + userPubkey, { st: { active: rec.active, updatedAt: rec.updatedAt } }, SHOP_READ_TTL);
     return json({ active: rec.active, updatedAt: rec.updatedAt });
   }
@@ -247,7 +230,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var inv = await botGenerateInvoice(env, cat.price, body.zapRequest, body.comment);
     if (inv.error) return json({ error: inv.error }, inv.status || 502);
     var invoiceId = bytesToHex(sha256(utf8ToBytes(inv.pr)));
-    await env.R2_BUCKET.put("shop-pending/" + invoiceId, JSON.stringify({
+    await invoicePut(env.DB_INVOICES, "shop", "pending", invoiceId, {
       pubkey: userPubkey,
       recipientPubkey: giftTo,
       itemId: itemId,
@@ -257,7 +240,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       verifyUrl: inv.verifyUrl,
       providerPubkey: inv.providerPubkey,
       createdAt: Date.now()
-    }));
+    });
     return json({
       pr: inv.pr,
       verify: inv.verifyMethod === "lud21" ? inv.verifyUrl : null,
@@ -270,11 +253,9 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "shop-check") {
     var scId = String(body.invoiceId || "");
     if (!/^[0-9a-f]{64}$/i.test(scId)) return json({ error: "Invalid invoice reference." }, 400);
-    if (await env.R2_BUCKET.get("shop-claimed/" + scId)) return json({ paid: true, claimed: true });
-    var scPending = await env.R2_BUCKET.get("shop-pending/" + scId);
-    if (!scPending) return json({ error: "Unknown or expired invoice." }, 404);
-    var scRec;
-    try { scRec = await scPending.json(); } catch (e) { return json({ error: "Corrupt invoice record." }, 500); }
+    if (await invoiceHas(env.DB_INVOICES, "shop", "claimed", scId)) return json({ paid: true, claimed: true });
+    var scRec = await invoiceGet(env.DB_INVOICES, "shop", "pending", scId);
+    if (!scRec) return json({ error: "Unknown or expired invoice." }, 404);
     if (scRec.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
     return json({ paid: await invoicePaymentConfirmed(env, scRec, body.receipt) });
   }
@@ -282,23 +263,12 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "shop-claim") {
     var invoiceId = String(body.invoiceId || "");
     if (!/^[0-9a-f]{64}$/i.test(invoiceId)) return json({ error: "Invalid invoice reference." }, 400);
-    var claimKey = "shop-claimed/" + invoiceId;
-    var already = await env.R2_BUCKET.get(claimKey);
-    if (already) {
-      var prevClaim = await already.json().catch(function () { return null; });
-      if (prevClaim) {
-        return json({ itemId: prevClaim.itemId, code: prevClaim.code, gift: prevClaim.gift, recipient: prevClaim.pubkey, alreadyClaimed: true });
-      }
-      return json({ error: "This payment was already claimed." }, 409);
+    var prevClaim = await invoiceGet(env.DB_INVOICES, "shop", "claimed", invoiceId);
+    if (prevClaim) {
+      return json({ itemId: prevClaim.itemId, code: prevClaim.code, gift: prevClaim.gift, recipient: prevClaim.pubkey, alreadyClaimed: true });
     }
-    var pendingObj = await env.R2_BUCKET.get("shop-pending/" + invoiceId);
-    if (!pendingObj) return json({ error: "Unknown or expired invoice." }, 404);
-    var pending;
-    try {
-      pending = await pendingObj.json();
-    } catch (e) {
-      return json({ error: "Corrupt invoice record." }, 500);
-    }
+    var pending = await invoiceGet(env.DB_INVOICES, "shop", "pending", invoiceId);
+    if (!pending) return json({ error: "Unknown or expired invoice." }, 404);
     if (pending.pubkey !== userPubkey) return json({ error: "This invoice belongs to a different user." }, 403);
     if (!await invoicePaymentConfirmed(env, pending, body.receipt)) {
       return json({ error: "Payment not confirmed yet." }, 402);
@@ -369,14 +339,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "shop-redeem") {
     var code = String(body.code || "").trim().toUpperCase();
     if (!/^NYM-[0-9A-F]{32}$/.test(code)) return json({ error: "Invalid recovery code." }, 400);
-    var codeObj = await env.R2_BUCKET.get("shop-code/" + code);
-    if (!codeObj) return json({ error: "Unknown recovery code." }, 404);
-    var codeData;
-    try {
-      codeData = await codeObj.json();
-    } catch (e) {
-      return json({ error: "Corrupt code record." }, 500);
-    }
+    var codeData = await codeGet(env.DB_CODES, code);
+    if (!codeData) return json({ error: "Unknown recovery code." }, 404);
     var redeemItem = codeData.itemId;
     if (!SHOP_CATALOG[redeemItem]) return json({ error: "Unknown shop item." }, 400);
     var prevOwner = (codeData.owner || "").toLowerCase();
@@ -413,7 +377,7 @@ async function handleSettingsAction(context, body) {
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   };
-  if (!env.R2_BUCKET) return json({ error: "Settings storage is not configured (missing R2_BUCKET binding)." }, 503);
+  if (!hasD1(env.DB_SETTINGS)) return json({ error: "Settings storage is not configured (missing DB_SETTINGS binding)." }, 503);
 
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
@@ -421,19 +385,16 @@ async function handleSettingsAction(context, body) {
   if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "settings-get") {
-    var results = await Promise.all(SETTINGS_CATEGORIES.map(async function (cat) {
-      try {
-        var obj = await env.R2_BUCKET.get("settings/" + userPubkey + "/" + cat);
-        if (!obj) return [cat, null];
-        var d = await obj.json();
-        if (!d || typeof d.blob !== "string") return [cat, null];
-        return [cat, { blob: d.blob, updatedAt: d.updatedAt || 0 }];
-      } catch (e) {
-        return [cat, null];
-      }
-    }));
     var categories = {};
-    results.forEach(function (r) { categories[r[0]] = r[1]; });
+    SETTINGS_CATEGORIES.forEach(function (cat) { categories[cat] = null; });
+    try {
+      var rs = await env.DB_SETTINGS.prepare("SELECT category, blob, updated_at FROM settings WHERE pubkey = ?").bind(userPubkey).all();
+      (rs.results || []).forEach(function (r) {
+        if (SETTINGS_CATEGORIES.indexOf(r.category) !== -1 && typeof r.blob === "string") {
+          categories[r.category] = { blob: r.blob, updatedAt: r.updated_at || 0 };
+        }
+      });
+    } catch (e) { }
     return json({ categories: categories });
   }
 
@@ -444,20 +405,19 @@ async function handleSettingsAction(context, body) {
     if (body.blob.length > SETTINGS_MAX_BLOB) return json({ error: "Settings payload too large." }, 413);
     var contentHash = (typeof body.contentHash === "string" && /^[0-9a-f]{64}$/i.test(body.contentHash))
       ? body.contentHash.toLowerCase() : null;
-    var settingsKey = "settings/" + userPubkey + "/" + cat;
     if (contentHash) {
       try {
-        var prevObj = await env.R2_BUCKET.get(settingsKey);
-        if (prevObj) {
-          var prevDoc = await prevObj.json();
-          if (prevDoc && prevDoc.contentHash === contentHash) {
-            return json({ ok: true, category: cat, updatedAt: prevDoc.updatedAt || 0, unchanged: true });
-          }
+        var prevDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
+        if (prevDoc && prevDoc.content_hash === contentHash) {
+          return json({ ok: true, category: cat, updatedAt: prevDoc.updated_at || 0, unchanged: true });
         }
       } catch (e) { }
     }
     var updatedAt = Date.now();
-    await env.R2_BUCKET.put(settingsKey, JSON.stringify({ blob: body.blob, updatedAt: updatedAt, contentHash: contentHash, v: 2 }));
+    await env.DB_SETTINGS.prepare(
+      "INSERT INTO settings (pubkey, category, blob, content_hash, updated_at) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT(pubkey, category) DO UPDATE SET blob = excluded.blob, content_hash = excluded.content_hash, updated_at = excluded.updated_at"
+    ).bind(userPubkey, cat, body.blob, contentHash, updatedAt).run();
     return json({ ok: true, category: cat, updatedAt: updatedAt });
   }
 
@@ -488,10 +448,10 @@ async function handleProfileAction(context, body) {
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   };
-  if (!env.R2_BUCKET) return json({ error: "Profile storage is not configured (missing R2_BUCKET binding)." }, 503);
+  if (!hasD1(env.DB_PROFILES)) return json({ error: "Profile storage is not configured (missing DB_PROFILES binding)." }, 503);
 
   // Public batch read so clients can fetch profiles without a Nostr REQ.
-  // Per-pubkey edge cache: hits skip R2, misses GET then populate the cache.
+  // Per-pubkey edge cache: hits skip D1, misses read from a replica.
   if (body.action === "profile-get") {
     var rawPks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
     var pks = [];
@@ -503,35 +463,38 @@ async function handleProfileAction(context, body) {
       var cached = await readCacheGet("/profile/" + pk);
       return [pk, cached];
     }));
+    var cachedRecs = {};
+    var misses = [];
+    cacheLookups.forEach(function (pair) {
+      if (pair[1] !== null) cachedRecs[pair[0]] = pair[1].rec || null;
+      else misses.push(pair[0]);
+    });
+    var freshRecs = {};
+    if (misses.length) {
+      try {
+        var ph = misses.map(function () { return "?"; }).join(",");
+        var rs = await replica(env.DB_PROFILES).prepare("SELECT pubkey, event, updated_at FROM profiles WHERE pubkey IN (" + ph + ")").bind(...misses).all();
+        (rs.results || []).forEach(function (r) {
+          var ev = null;
+          try { ev = JSON.parse(r.event); } catch (e) { ev = null; }
+          if (ev) freshRecs[r.pubkey] = { event: ev, updatedAt: r.updated_at || 0 };
+        });
+      } catch (e) { }
+    }
     var profEncoder = new TextEncoder();
     var profStream = new ReadableStream({
       start(controller) {
-        var misses = [];
-        cacheLookups.forEach(function (pair) {
-          var pk = pair[0], cached = pair[1];
-          if (cached !== null) {
-            controller.enqueue(profEncoder.encode(JSON.stringify([pk, cached.rec || null]) + "\n"));
+        pks.forEach(function (pk) {
+          var rec;
+          if (Object.prototype.hasOwnProperty.call(cachedRecs, pk)) {
+            rec = cachedRecs[pk];
           } else {
-            misses.push(pk);
+            rec = freshRecs[pk] || null;
+            readCachePut(context, "/profile/" + pk, { rec: rec }, PROFILE_READ_TTL);
           }
-        });
-        var pending = misses.map(async function (pk) {
-          var rec = null;
-          try {
-            var obj = await env.R2_BUCKET.get("profile/" + pk);
-            if (obj) {
-              var d = await obj.json();
-              if (d && d.event) rec = { event: d.event, updatedAt: d.updatedAt || 0 };
-            }
-          } catch (e) { }
-          readCachePut(context, "/profile/" + pk, { rec: rec }, PROFILE_READ_TTL);
           controller.enqueue(profEncoder.encode(JSON.stringify([pk, rec]) + "\n"));
         });
-        Promise.all(pending).then(function () {
-          try { controller.close(); } catch (_) { }
-        }).catch(function (e) {
-          try { controller.error(e); } catch (_) { }
-        });
+        try { controller.close(); } catch (_) { }
       }
     });
     return new Response(profStream, {
@@ -551,16 +514,16 @@ async function handleProfileAction(context, body) {
     if (JSON.stringify(ev).length > PROFILE_MAX_EVENT) return json({ error: "Profile too large." }, 413);
     // Keep only the newest profile, ordered by the event's own created_at.
     try {
-      var existing = await env.R2_BUCKET.get("profile/" + userPubkey);
-      if (existing) {
-        var prev = await existing.json();
-        if (prev && prev.event && (prev.event.created_at || 0) >= (ev.created_at || 0)) {
-          return json({ ok: true, updatedAt: prev.updatedAt || 0, stale: true });
-        }
+      var prev = await env.DB_PROFILES.prepare("SELECT created_at, updated_at FROM profiles WHERE pubkey = ?").bind(userPubkey).first();
+      if (prev && (prev.created_at || 0) >= (ev.created_at || 0)) {
+        return json({ ok: true, updatedAt: prev.updated_at || 0, stale: true });
       }
     } catch (e) { }
     var updatedAt = Date.now();
-    await env.R2_BUCKET.put("profile/" + userPubkey, JSON.stringify({ event: ev, updatedAt: updatedAt }));
+    await env.DB_PROFILES.prepare(
+      "INSERT INTO profiles (pubkey, created_at, updated_at, event) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(pubkey) DO UPDATE SET created_at = excluded.created_at, updated_at = excluded.updated_at, event = excluded.event"
+    ).bind(userPubkey, ev.created_at || 0, updatedAt, JSON.stringify(ev)).run();
     // Refresh the edge cache so the new profile is served immediately.
     readCachePut(context, "/profile/" + userPubkey, { rec: { event: ev, updatedAt: updatedAt } }, PROFILE_READ_TTL);
     return json({ ok: true, updatedAt: updatedAt });
@@ -570,31 +533,11 @@ async function handleProfileAction(context, body) {
 }
 
 var PM_EVENT_MAX = 96 * 1024;
-var PM_INDEX_CAP = 4000;
 var CHANNEL_EVENT_MAX = 64 * 1024;
-var CHANNEL_INDEX_CAP = 2000;
 var CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
-var ARCHIVE_DEDUP_HOST = "https://nymchat-archive.invalid";
-
-function archiveDedupRequest(eventId) {
-  return new Request(ARCHIVE_DEDUP_HOST + "/handled/" + eventId, { method: "GET" });
-}
-async function archiveAlreadyHandled(eventId) {
-  try { return !!(await caches.default.match(archiveDedupRequest(eventId))); }
-  catch (e) { return false; }
-}
-function archiveMarkHandled(context, eventId, ttlSeconds) {
-  try {
-    var headers = new Headers();
-    headers.set("Cache-Control", "public, max-age=" + (ttlSeconds || 3600));
-    var op = caches.default.put(archiveDedupRequest(eventId), new Response("1", { headers: headers }));
-    if (context && context.waitUntil) context.waitUntil(op);
-  } catch (e) { }
-}
 
 // Read-through edge cache for PUBLIC reads (channel-get, profile-get) so many
-// stateless workers serve them from the per-colo cache instead of hitting R2.
-// Stores the JSON payload only; never used for private (settings/PM) reads.
+// stateless workers serve them from the per-colo cache instead of hitting D1.
 var READ_CACHE_HOST = "https://nymchat-read.invalid";
 var CHANNEL_READ_TTL = 45;
 var PROFILE_READ_TTL = 300;
@@ -641,40 +584,7 @@ function readCacheDelete(context, path) {
   } catch (e) { }
 }
 
-// Small JSON index: { v:1, items: [[id, created_at], ...] } newest-first.
-async function archiveReadIndex(env, key) {
-  try {
-    var obj = await env.R2_BUCKET.get(key);
-    if (!obj) return { v: 1, items: [] };
-    var d = await obj.json();
-    if (!d || !Array.isArray(d.items)) return { v: 1, items: [] };
-    return d;
-  } catch (e) { return { v: 1, items: [] }; }
-}
-async function archiveWriteIndex(env, key, idx) {
-  try { await env.R2_BUCKET.put(key, JSON.stringify({ v: 1, items: idx.items })); }
-  catch (e) { }
-}
-// Merge new [id, ts] entries, drop anything older than minTs, cap to `cap`.
-function archiveMergeIndex(idx, additions, cap, minTs) {
-  var seen = new Set();
-  var merged = [];
-  var all = additions.concat(idx.items);
-  for (var i = 0; i < all.length; i++) {
-    var it = all[i];
-    if (!Array.isArray(it) || typeof it[0] !== "string") continue;
-    if (seen.has(it[0])) continue;
-    if (minTs && (it[1] || 0) * 1000 < minTs) continue;
-    seen.add(it[0]);
-    merged.push([it[0], it[1] || 0]);
-  }
-  merged.sort(function (a, b) { return (b[1] || 0) - (a[1] || 0); });
-  if (merged.length > cap) merged = merged.slice(0, cap);
-  idx.items = merged;
-  return idx;
-}
-
-// Channel names become R2 key segments; keep them to a safe, bounded charset.
+// Channel names become D1 row keys; keep them to a safe, bounded charset.
 function archiveSanitizeChannel(name) {
   if (typeof name !== "string") return "";
   return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, "").slice(0, 80);
@@ -705,39 +615,35 @@ async function handlePmAction(context, body) {
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   };
-  if (!env.R2_BUCKET) return json({ error: "PM storage is not configured (missing R2_BUCKET binding)." }, 503);
+  if (!hasD1(env.DB_PM)) return json({ error: "PM storage is not configured (missing DB_PM binding)." }, 503);
 
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
   if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
-  // Upload one or more gift wraps addressed to the authenticated user. Already
-  // stored events are skipped (edge cache, then a Class B existence check).
+  // Upload one or more gift wraps addressed to the authenticated user. The
+  // primary key (pubkey, id) makes re-uploads free no-ops via INSERT OR IGNORE.
   if (body.action === "pm-put") {
     var events = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
-    var idxKey = "pm-index/" + userPubkey;
-    var idx = await archiveReadIndex(env, idxKey);
-    var added = [];
+    var now = Date.now();
+    var stmt = env.DB_PM.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
+    var batch = [];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i];
       if (!pmIsValidWrapForUser(ev, userPubkey)) continue;
       if (JSON.stringify(ev).length > PM_EVENT_MAX) continue;
-      if (await archiveAlreadyHandled(ev.id)) continue;
-      var key = "pm/" + userPubkey + "/" + ev.id;
-      var exists = false;
-      try { exists = !!(await env.R2_BUCKET.head(key)); } catch (e) { exists = false; }
-      if (exists) { archiveMarkHandled(context, ev.id, 86400); continue; }
-      await env.R2_BUCKET.put(key, JSON.stringify(ev));
-      archiveMarkHandled(context, ev.id, 86400);
-      added.push([ev.id, ev.created_at || 0]);
+      batch.push(stmt.bind(userPubkey, ev.id, ev.created_at || 0, JSON.stringify(ev), now));
     }
-    if (added.length) {
-      archiveMergeIndex(idx, added, PM_INDEX_CAP, 0);
-      await archiveWriteIndex(env, idxKey, idx);
+    var added = 0;
+    if (batch.length) {
+      var res = await env.DB_PM.batch(batch);
+      res.forEach(function (r) { added += (r.meta && r.meta.changes) || 0; });
     }
-    return json({ ok: true, added: added.length, stored: idx.items.length });
+    var stored = 0;
+    try { stored = (await env.DB_PM.prepare("SELECT COUNT(*) AS c FROM pm WHERE pubkey = ?").bind(userPubkey).first("c")) || 0; } catch (e) { }
+    return json({ ok: true, added: added, stored: stored });
   }
 
   if (body.action === "pm-get") {
@@ -746,34 +652,21 @@ async function handlePmAction(context, body) {
     var limit = Number(body.limit);
     if (!Number.isFinite(limit) || limit <= 0) limit = 1000;
     if (limit > 1000) limit = 1000;
-    var idx2 = await archiveReadIndex(env, "pm-index/" + userPubkey);
-    var ids = [];
-    for (var j = 0; j < idx2.items.length; j++) {
-      var it = idx2.items[j];
-      var ts = it[1] || 0;
-      if (ts < since) continue;
-      if (before && ts >= before) continue;
-      ids.push(it[0]);
-      if (ids.length >= limit) break;
-    }
-    var hasMore = ids.length >= limit;
+    var sql = "SELECT event FROM pm WHERE pubkey = ? AND created_at >= ?";
+    var binds = [userPubkey, since];
+    if (before) { sql += " AND created_at < ?"; binds.push(before); }
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    binds.push(limit);
+    var rows = [];
+    try { rows = (await replica(env.DB_PM).prepare(sql).bind(...binds).all()).results || []; } catch (e) { rows = []; }
+    var hasMore = rows.length >= limit;
     var pmEncoder = new TextEncoder();
     var pmStream = new ReadableStream({
       start(controller) {
-        var pending = ids.map(async function (id) {
-          try {
-            var o = await env.R2_BUCKET.get("pm/" + userPubkey + "/" + id);
-            if (!o) return;
-            var ev = await o.json();
-            if (!ev) return;
-            controller.enqueue(pmEncoder.encode(JSON.stringify(ev) + "\n"));
-          } catch (e) { }
-        });
-        Promise.all(pending).then(function () {
-          try { controller.close(); } catch (_) { }
-        }).catch(function (e) {
-          try { controller.error(e); } catch (_) { }
-        });
+        for (var j = 0; j < rows.length; j++) {
+          controller.enqueue(pmEncoder.encode(rows[j].event + "\n"));
+        }
+        try { controller.close(); } catch (_) { }
       }
     });
     return new Response(pmStream, {
@@ -787,22 +680,22 @@ async function handlePmAction(context, body) {
     });
   }
 
-  // Delete the user's own stored wraps (e.g. after a NIP-09 kind 5). Objects
-  // live under the authenticated user's own prefix, so ownership is implicit.
+  // Delete the user's own stored wraps (e.g. after a NIP-09 kind 5). Rows live
+  // under the authenticated user's own pubkey, so ownership is implicit.
   if (body.action === "pm-delete") {
     var delIds = Array.isArray(body.ids) ? body.ids.slice(0, 200) : [];
-    var removed = 0;
-    var rmSet = new Set();
+    var clean = [];
     for (var k = 0; k < delIds.length; k++) {
       var did = delIds[k];
-      if (typeof did !== "string" || !/^[0-9a-f]{64}$/i.test(did)) continue;
-      did = did.toLowerCase();
-      try { await env.R2_BUCKET.delete("pm/" + userPubkey + "/" + did); removed++; rmSet.add(did); } catch (e) { }
+      if (typeof did === "string" && /^[0-9a-f]{64}$/i.test(did)) clean.push(did.toLowerCase());
     }
-    if (rmSet.size) {
-      var idx3 = await archiveReadIndex(env, "pm-index/" + userPubkey);
-      idx3.items = idx3.items.filter(function (it) { return !rmSet.has(it[0]); });
-      await archiveWriteIndex(env, "pm-index/" + userPubkey, idx3);
+    var removed = 0;
+    if (clean.length) {
+      var ph2 = clean.map(function () { return "?"; }).join(",");
+      try {
+        var dr = await env.DB_PM.prepare("DELETE FROM pm WHERE pubkey = ? AND id IN (" + ph2 + ")").bind(userPubkey, ...clean).run();
+        removed = (dr.meta && dr.meta.changes) || 0;
+      } catch (e) { }
     }
     return json({ ok: true, removed: removed });
   }
@@ -818,15 +711,16 @@ async function handleChannelAction(context, body) {
       headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
     });
   };
-  if (!env.R2_BUCKET) return json({ error: "Channel storage is not configured (missing R2_BUCKET binding)." }, 503);
+  if (!hasD1(env.DB_CHANNELS)) return json({ error: "Channel storage is not configured (missing DB_CHANNELS binding)." }, 503);
 
   // Public read: hydrate a channel's recent history. No auth (channels are
   // public); the worker's origin gate already limits this to Nymchat clients.
   if (body.action === "channel-get") {
     var name = archiveSanitizeChannel(body.channel);
     if (!name) return json({ error: "Invalid channel." }, 400);
-    var minTs = Date.now() - CHANNEL_TTL_MS;
+    var minTsSec = Math.floor((Date.now() - CHANNEL_TTL_MS) / 1000);
     var since = Number(body.since) || 0;
+    var floorSec = since > minTsSec ? since : minTsSec;
     var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...BOT_CORS_HEADERS };
     if (!since) {
       var cachedBody = await readCacheGetRaw("/channel/" + name);
@@ -834,45 +728,31 @@ async function handleChannelAction(context, body) {
         return new Response(cachedBody, { status: 200, headers: ndjsonHeaders });
       }
     }
-    var idx = await archiveReadIndex(env, "channel-index/" + name);
-    var ids = [];
-    for (var i = 0; i < idx.items.length; i++) {
-      var it = idx.items[i];
-      var tsMs = (it[1] || 0) * 1000;
-      if (tsMs < minTs) continue;
-      if ((it[1] || 0) < since) continue;
-      ids.push(it[0]);
-      if (ids.length >= 500) break;
-    }
+    var rows = [];
+    try {
+      rows = (await replica(env.DB_CHANNELS).prepare(
+        "SELECT json FROM events WHERE channel = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500"
+      ).bind(name, floorSec).all()).results || [];
+    } catch (e) { rows = []; }
     var encoder = new TextEncoder();
     var cacheBuf = !since ? [] : null;
     var stream = new ReadableStream({
       start(controller) {
-        var pending = ids.map(async function (id) {
-          try {
-            var o = await env.R2_BUCKET.get("channel/" + name + "/" + id);
-            if (!o) return;
-            var ev = await o.json();
-            if (!ev) return;
-            var line = JSON.stringify(ev) + "\n";
-            controller.enqueue(encoder.encode(line));
-            if (cacheBuf) cacheBuf.push(line);
-          } catch (e) { }
-        });
-        Promise.all(pending).then(function () {
-          try { controller.close(); } catch (_) { }
-          if (cacheBuf) {
-            readCachePutRaw(context, "/channel/" + name, cacheBuf.join(""), "application/x-ndjson", CHANNEL_READ_TTL);
-          }
-        }).catch(function (e) {
-          try { controller.error(e); } catch (_) { }
-        });
+        for (var i = 0; i < rows.length; i++) {
+          var line = rows[i].json + "\n";
+          controller.enqueue(encoder.encode(line));
+          if (cacheBuf) cacheBuf.push(line);
+        }
+        try { controller.close(); } catch (_) { }
+        if (cacheBuf) {
+          readCachePutRaw(context, "/channel/" + name, cacheBuf.join(""), "application/x-ndjson", CHANNEL_READ_TTL);
+        }
       }
     });
     return new Response(stream, { status: 200, headers: ndjsonHeaders });
   }
 
-  // Public read: lightweight recent-activity counts for many channels at once
+  // Public read: lightweight recent-activity counts for many channels at once.
   if (body.action === "channel-activity") {
     var reqNames = Array.isArray(body.channels) ? body.channels : [];
     var wanted = [];
@@ -886,28 +766,32 @@ async function handleChannelAction(context, body) {
     var activity = {};
     if (wanted.length === 0) return json({ activity: activity });
     var nowSecA = Math.floor(Date.now() / 1000);
-    var pendingA = wanted.map(async function (anm) {
-      // Short-lived per-channel edge cache. Buckets are "hours ago" from compute
-      // time; within the TTL the drift is at most a fraction of one hour bucket.
-      var cachePath = "/channel-activity/" + anm;
-      var cachedA = await readCacheGet(cachePath);
-      if (cachedA && Array.isArray(cachedA.b) && cachedA.b.length === 24) {
-        activity[anm] = cachedA.b;
-        return;
-      }
-      var idxA = await archiveReadIndex(env, "channel-index/" + anm);
-      var buckets = new Array(24).fill(0);
-      for (var bi = 0; bi < idxA.items.length; bi++) {
-        var tsA = (idxA.items[bi] && idxA.items[bi][1]) || 0;
-        if (!tsA) continue;
-        var ageH = Math.floor((nowSecA - tsA) / 3600);
-        if (ageH < 0) ageH = 0;
-        if (ageH < 24) buckets[ageH]++;
-      }
-      activity[anm] = buckets;
-      readCachePut(context, cachePath, { b: buckets }, CHANNEL_READ_TTL);
-    });
-    await Promise.all(pendingA);
+    var minTsA = nowSecA - 24 * 3600;
+    var misses = [];
+    await Promise.all(wanted.map(async function (anm) {
+      var cachedA = await readCacheGet("/channel-activity/" + anm);
+      if (cachedA && Array.isArray(cachedA.b) && cachedA.b.length === 24) activity[anm] = cachedA.b;
+      else misses.push(anm);
+    }));
+    if (misses.length) {
+      var buckets = {};
+      misses.forEach(function (anm) { buckets[anm] = new Array(24).fill(0); });
+      try {
+        var ph3 = misses.map(function () { return "?"; }).join(",");
+        var rsA = await replica(env.DB_CHANNELS).prepare(
+          "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c " +
+          "FROM events WHERE channel IN (" + ph3 + ") AND created_at >= ? GROUP BY channel, age"
+        ).bind(nowSecA, ...misses, minTsA).all();
+        (rsA.results || []).forEach(function (r) {
+          var ageH = r.age;
+          if (ageH >= 0 && ageH < 24 && buckets[r.channel]) buckets[r.channel][ageH] = r.c || 0;
+        });
+      } catch (e) { }
+      misses.forEach(function (anm) {
+        activity[anm] = buckets[anm];
+        readCachePut(context, "/channel-activity/" + anm, { b: buckets[anm] }, CHANNEL_READ_TTL);
+      });
+    }
     return json({ activity: activity });
   }
 
@@ -927,29 +811,19 @@ async function handleChannelAction(context, body) {
       }
     } catch (e) { return json({ error: "Deletion event failed verification." }, 400); }
     var targets = del.tags.filter(function (t) { return Array.isArray(t) && t[0] === "e" && typeof t[1] === "string"; })
-      .map(function (t) { return t[1].toLowerCase(); }).slice(0, 100);
-    var removedSet = new Set();
-    for (var d = 0; d < targets.length; d++) {
-      var tid = targets[d];
-      if (!/^[0-9a-f]{64}$/.test(tid)) continue;
+      .map(function (t) { return t[1].toLowerCase(); }).filter(function (t) { return /^[0-9a-f]{64}$/.test(t); }).slice(0, 100);
+    var removed = 0;
+    if (targets.length) {
+      var ph4 = targets.map(function () { return "?"; }).join(",");
       try {
-        var o2 = await env.R2_BUCKET.get("channel/" + name2 + "/" + tid);
-        if (!o2) continue;
-        var ev2 = await o2.json();
-        if (ev2 && ev2.pubkey === del.pubkey) {
-          await env.R2_BUCKET.delete("channel/" + name2 + "/" + tid);
-          removedSet.add(tid);
-        }
+        var dr2 = await env.DB_CHANNELS.prepare(
+          "DELETE FROM events WHERE channel = ? AND pubkey = ? AND id IN (" + ph4 + ")"
+        ).bind(name2, del.pubkey, ...targets).run();
+        removed = (dr2.meta && dr2.meta.changes) || 0;
       } catch (e) { }
     }
-    if (removedSet.size) {
-      var cidx = await archiveReadIndex(env, "channel-index/" + name2);
-      cidx.items = cidx.items.filter(function (it) { return !removedSet.has(it[0]); });
-      await archiveWriteIndex(env, "channel-index/" + name2, cidx);
-      // Purge the cached channel read so the deletion isn't served stale.
-      readCacheDelete(context, "/channel/" + name2);
-    }
-    return json({ ok: true, removed: removedSet.size });
+    if (removed) readCacheDelete(context, "/channel/" + name2);
+    return json({ ok: true, removed: removed });
   }
 
   return json({ error: "Unknown action" }, 400);
