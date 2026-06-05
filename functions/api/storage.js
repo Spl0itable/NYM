@@ -641,9 +641,7 @@ async function handlePmAction(context, body) {
       var res = await env.DB_PM.batch(batch);
       res.forEach(function (r) { added += (r.meta && r.meta.changes) || 0; });
     }
-    var stored = 0;
-    try { stored = (await env.DB_PM.prepare("SELECT COUNT(*) AS c FROM pm WHERE pubkey = ?").bind(userPubkey).first("c")) || 0; } catch (e) { }
-    return json({ ok: true, added: added, stored: stored });
+    return json({ ok: true, added: added });
   }
 
   if (body.action === "pm-get") {
