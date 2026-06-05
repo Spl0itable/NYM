@@ -978,6 +978,19 @@ Object.assign(NYM.prototype, {
         return `nym#${pubkey.slice(-4)}`;
     },
 
+    getNymHtmlFromPubkey(pubkey) {
+        return this.dimNymSuffix(this.getNymFromPubkey(pubkey));
+    },
+
+    // Escape a plain `name#xxxx` display string and wrap its trailing 4-hex
+    // pubkey suffix in a dimmed .nym-suffix span.
+    dimNymSuffix(text) {
+        const s = String(text == null ? '' : text);
+        const m = s.match(/^([\s\S]*?)#([0-9a-f]{4})$/i);
+        if (!m) return this.escapeHtml(s);
+        return `${this.escapeHtml(m[1])}<span class="nym-suffix">#${m[2]}</span>`;
+    },
+
     // Compute the effective status (online / away / offline / hidden) for a user.
     // Returns 'hidden' when the user has opted out of broadcasting their status
     // — callers should suppress the status indicator entirely in that case.
@@ -1553,8 +1566,7 @@ Object.assign(NYM.prototype, {
         this.saveBlockedUsers();
         this.showMessagesFromUnblockedUser(pubkey);
 
-        const nym = this.getNymFromPubkey(pubkey);
-        this.displaySystemMessage(`Unblocked ${nym}`);
+        this.displaySystemMessage(`Unblocked ${this.getNymHtmlFromPubkey(pubkey)}`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1570,8 +1582,7 @@ Object.assign(NYM.prototype, {
         this.saveBlockedUsers();
         this.hideMessagesFromBlockedUser(pubkey);
 
-        const nym = this.getNymFromPubkey(pubkey);
-        this.displaySystemMessage(`Blocked ${nym}`);
+        this.displaySystemMessage(`Blocked ${this.getNymHtmlFromPubkey(pubkey)}`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1628,11 +1639,10 @@ Object.assign(NYM.prototype, {
         blockedArray.forEach(pubkey => {
             const safePk = this._safePubkey(pubkey);
             if (!safePk) return;
-            const nym = this.getNymFromPubkey(pubkey);
             const row = document.createElement('div');
             row.className = 'blocked-item';
             const span = document.createElement('span');
-            span.textContent = nym;
+            span.innerHTML = this.getNymHtmlFromPubkey(pubkey);
             const btn = document.createElement('button');
             btn.className = 'unblock-btn';
             btn.textContent = 'Unblock';
@@ -1765,17 +1775,16 @@ Object.assign(NYM.prototype, {
             if (!targetPubkey) return;
         }
 
-        const targetNym = this.getNymFromPubkey(targetPubkey);
-        const cleanNym = this.getCleanNym ? this.getCleanNym(targetNym) : targetNym.replace(/<[^>]*>/g, '');
+        const nymHtml = this.getNymHtmlFromPubkey(targetPubkey);
 
         if (this.friends.has(targetPubkey)) {
             this.friends.delete(targetPubkey);
             this.saveFriends();
-            this.displaySystemMessage(`Removed ${cleanNym} from friends`);
+            this.displaySystemMessage(`Removed ${nymHtml} from friends`, 'system', { html: true });
         } else {
             this.friends.add(targetPubkey);
             this.saveFriends();
-            this.displaySystemMessage(`Added ${cleanNym} as a friend`);
+            this.displaySystemMessage(`Added ${nymHtml} as a friend`, 'system', { html: true });
         }
 
         this.updateFriendsList();
@@ -1788,8 +1797,7 @@ Object.assign(NYM.prototype, {
         this.friends.delete(pubkey);
         this.saveFriends();
 
-        const nym = this.getNymFromPubkey(pubkey);
-        this.displaySystemMessage(`Removed ${nym} from friends`);
+        this.displaySystemMessage(`Removed ${this.getNymHtmlFromPubkey(pubkey)} from friends`, 'system', { html: true });
         this.updateFriendsList();
         this._refreshFriendBadgesFor(pubkey);
         if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
@@ -1861,11 +1869,10 @@ Object.assign(NYM.prototype, {
         friendsArray.forEach(pubkey => {
             const safePk = this._safePubkey(pubkey);
             if (!safePk) return;
-            const nym = this.getNymFromPubkey(pubkey);
             const row = document.createElement('div');
             row.className = 'blocked-item';
             const span = document.createElement('span');
-            span.textContent = nym;
+            span.innerHTML = this.getNymHtmlFromPubkey(pubkey);
             const btn = document.createElement('button');
             btn.className = 'unblock-btn';
             btn.textContent = 'Remove';

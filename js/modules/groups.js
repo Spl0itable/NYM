@@ -576,7 +576,7 @@ Object.assign(NYM.prototype, {
                     this.openGroup(groupId); // refresh header member count
                     // Fetch profile so nickname displays correctly
                     if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
-                    this.displaySystemMessage(`${this.getNymFromPubkey(senderPubkey)} left the group.`);
+                    this.displaySystemMessage(`${this.getNymHtmlFromPubkey(senderPubkey)} left the group.`, 'system', { html: true });
                 }
             }
             return;

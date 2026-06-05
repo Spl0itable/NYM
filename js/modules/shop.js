@@ -1500,7 +1500,7 @@ ${code ? `
             }
         }
 
-        this.displaySystemMessage(`Settings from ${transfer.fromNym} applied successfully!`);
+        this.displaySystemMessage(`Settings from ${this.dimNymSuffix(transfer.fromNym)} applied successfully!`, 'system', { html: true });
     },
 
     rejectSettingsTransfer(eventId) {
@@ -1509,7 +1509,7 @@ ${code ? `
         this.renderPendingSettingsTransfers();
         this.dismissTransferEvent(eventId);
         if (transfer) {
-            this.displaySystemMessage(`Settings transfer from ${transfer.fromNym} rejected.`);
+            this.displaySystemMessage(`Settings transfer from ${this.dimNymSuffix(transfer.fromNym)} rejected.`, 'system', { html: true });
         }
     },
 

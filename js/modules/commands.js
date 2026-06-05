@@ -912,8 +912,7 @@ Object.assign(NYM.prototype, {
             if (!targetPubkey) return;
         }
 
-        const targetNym = this.getNymFromPubkey(targetPubkey);
-        const cleanNym = this.getCleanNym ? this.getCleanNym(targetNym) : targetNym.replace(/<[^>]*>/g, '');
+        const nymHtml = this.getNymHtmlFromPubkey(targetPubkey);
 
         // Check if already blocked to toggle
         if (this.blockedUsers.has(targetPubkey)) {
@@ -922,7 +921,7 @@ Object.assign(NYM.prototype, {
             this.saveBlockedUsers();
             this.showMessagesFromUnblockedUser(targetPubkey);
 
-            this.displaySystemMessage(`Unblocked ${cleanNym}`);
+            this.displaySystemMessage(`Unblocked ${nymHtml}`, 'system', { html: true });
             this.updateUserList();
             this.updateBlockedList();
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -933,7 +932,7 @@ Object.assign(NYM.prototype, {
         this.saveBlockedUsers();
         this.hideMessagesFromBlockedUser(targetPubkey);
 
-        this.displaySystemMessage(`Blocked ${cleanNym}`);
+        this.displaySystemMessage(`Blocked ${nymHtml}`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();

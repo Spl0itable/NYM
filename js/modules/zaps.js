@@ -226,7 +226,8 @@ Object.assign(NYM.prototype, {
         const lnAddress = this.userLightningAddresses.get(recipientPubkey);
 
         if (!lnAddress) {
-            this.displaySystemMessage(`${recipientNym} doesn't have a lightning address set`);
+            const recipHtml = recipientPubkey ? this.getNymHtmlFromPubkey(recipientPubkey) : this.dimNymSuffix(recipientNym);
+            this.displaySystemMessage(`${recipHtml} doesn't have a lightning address set`, 'system', { html: true });
             return;
         }
 

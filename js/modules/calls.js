@@ -79,6 +79,7 @@ Object.assign(NYM.prototype, {
             timerInterval: null,
             ringTimeout: null
         };
+        this._initCallExtras(this.activeCall);
 
         this._broadcastCallSignal(targets, { type: 'invite', callId, kind, isGroup, groupId, members: this.activeCall.members });
         this._showCallOverlay();
@@ -130,6 +131,11 @@ Object.assign(NYM.prototype, {
             case 'offer': this._onCallOffer(sender, data); break;
             case 'answer': this._onCallAnswer(sender, data); break;
             case 'ice': this._onCallIce(sender, data); break;
+            case 'share': this._onCallShare(sender, data); break;
+            case 'present-state': this._onPresentState(sender, data); break;
+            case 'present-request': this._onPresentRequest(sender, data); break;
+            case 'reaction': this._onCallReaction(sender, data); break;
+            case 'chat': this._onCallChat(sender, data); break;
         }
     },
 
@@ -335,6 +341,7 @@ Object.assign(NYM.prototype, {
             timerInterval: null,
             ringTimeout: null
         };
+        this._initCallExtras(this.activeCall);
         this.incomingCall = null;
 
         this._showCallOverlay();
@@ -416,11 +423,23 @@ Object.assign(NYM.prototype, {
             stream: new MediaStream(),
             pendingCandidates: [],
             haveRemote: false,
+            videoSender: null,
             nym: this._nymForPubkey(peerPubkey)
         };
         this.activeCall.peers.set(peerPubkey, entry);
 
-        this.activeCall.localStream.getTracks().forEach(t => pc.addTrack(t, this.activeCall.localStream));
+        this.activeCall.localStream.getTracks().forEach(t => {
+            const sender = pc.addTrack(t, this.activeCall.localStream);
+            if (t.kind === 'video') entry.videoSender = sender;
+        });
+        if (this.activeCall.sharing && this.activeCall.screenStream && entry.videoSender) {
+            const st = this.activeCall.screenStream.getVideoTracks()[0];
+            if (st) { try { entry.videoSender.replaceTrack(st); } catch (e) { /* ignore */ } }
+            this._sendCallSignal(peerPubkey, { type: 'share', callId: this.activeCall.callId, on: true });
+        }
+        if (this._isCallMod() && (this.activeCall.shareRestricted || this.activeCall.presenter)) {
+            this._sendCallSignal(peerPubkey, { type: 'present-state', callId: this.activeCall.callId, restricted: !!this.activeCall.shareRestricted, presenter: this.activeCall.presenter || null });
+        }
 
         pc.onicecandidate = (e) => {
             if (e.candidate && this.activeCall) {
@@ -539,6 +558,7 @@ Object.assign(NYM.prototype, {
             ac.peers.forEach(entry => { try { entry.pc.close(); } catch (e) { /* ignore */ } });
             ac.peers.clear();
             if (ac.localStream) ac.localStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { /* ignore */ } });
+            if (ac.screenStream) ac.screenStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { /* ignore */ } });
         }
         this.activeCall = null;
         this._stopRingtone();
@@ -588,6 +608,12 @@ Object.assign(NYM.prototype, {
         if (videoBtn) videoBtn.classList.toggle('nm-call-hidden', this.activeCall.kind !== 'video');
         const muteBtn = document.getElementById('callMuteBtn');
         if (muteBtn) { muteBtn.classList.remove('active'); muteBtn.title = 'Mute microphone'; }
+        const chatMsgs = document.getElementById('callChatMessages');
+        if (chatMsgs) chatMsgs.innerHTML = '';
+        ['callChatPanel', 'callReactionsBar', 'callPresenterMenu'].forEach(id => {
+            const el = document.getElementById(id); if (el) el.classList.remove('active');
+        });
+        this._updateCallControls();
         this._renderCallGrid();
     },
 
@@ -596,6 +622,11 @@ Object.assign(NYM.prototype, {
         if (ov) ov.classList.remove('active');
         const grid = document.getElementById('callGrid');
         if (grid) grid.innerHTML = '';
+        ['callChatPanel', 'callReactionsBar', 'callPresenterMenu'].forEach(id => {
+            const el = document.getElementById(id); if (el) el.classList.remove('active');
+        });
+        const fly = document.getElementById('callReactionsFly');
+        if (fly) fly.innerHTML = '';
     },
 
     _renderCallGrid() {
@@ -606,15 +637,16 @@ Object.assign(NYM.prototype, {
         this.activeCall.peers.forEach((_e, pk) => desired.add('pk-' + this._safePubkey(pk)));
         Array.from(grid.children).forEach(ch => { if (!desired.has(ch.dataset.tile)) grid.removeChild(ch); });
 
-        this._ensureTile('local', 'You', this.activeCall.localStream, true, this.pubkey);
+        const localStream = this.activeCall.sharing && this.activeCall.screenStream ? this.activeCall.screenStream : this.activeCall.localStream;
+        this._ensureTile('local', 'You', localStream, true, this.pubkey, this.activeCall.sharing);
         this.activeCall.peers.forEach((entry, pk) => {
-            this._ensureTile('pk-' + this._safePubkey(pk), entry.nym, entry.stream, false, pk);
+            this._ensureTile('pk-' + this._safePubkey(pk), entry.nym, entry.stream, false, pk, this.activeCall.sharingPeers.has(pk));
         });
 
         grid.dataset.count = String(grid.children.length);
     },
 
-    _ensureTile(id, label, stream, isLocal, pubkey) {
+    _ensureTile(id, label, stream, isLocal, pubkey, sharing) {
         const grid = document.getElementById('callGrid');
         if (!grid) return;
         let tile = grid.querySelector(`[data-tile="${id}"]`);
@@ -631,9 +663,13 @@ Object.assign(NYM.prototype, {
             av.alt = '';
             const name = document.createElement('div');
             name.className = 'call-tile-name';
+            const badge = document.createElement('div');
+            badge.className = 'call-tile-badge';
+            badge.textContent = 'Presenting';
             tile.appendChild(video);
             tile.appendChild(av);
             tile.appendChild(name);
+            tile.appendChild(badge);
             grid.appendChild(tile);
         }
         const video = tile.querySelector('video');
@@ -641,10 +677,11 @@ Object.assign(NYM.prototype, {
         const av = tile.querySelector('.call-tile-avatar');
         av.src = this.getAvatarUrl(pubkey);
         tile.querySelector('.call-tile-name').textContent = label || '';
+        tile.classList.toggle('presenting', !!sharing);
 
         const hasVideo = this.activeCall.kind === 'video'
             && stream && stream.getVideoTracks().length > 0
-            && !(isLocal && this.activeCall.cameraOff);
+            && (sharing || !(isLocal && this.activeCall.cameraOff));
         tile.classList.toggle('no-video', !hasVideo);
     },
 
@@ -709,6 +746,429 @@ Object.assign(NYM.prototype, {
     _setCallStatus(t) {
         const el = document.getElementById('callStatus');
         if (el) el.textContent = t;
+    },
+
+    _initCallExtras(ac) {
+        ac.sharing = false;
+        ac.screenStream = null;
+        ac.sharingPeers = new Set();
+        ac.shareRestricted = false;
+        ac.presenter = null;
+        ac.chatLog = [];
+        ac.chatUnread = 0;
+        ac.presentRequests = new Set();
+    },
+
+    _isCallMod() {
+        const ac = this.activeCall;
+        return !!(ac && ac.isGroup && this._canModerate(ac.groupId, this.pubkey));
+    },
+
+    canShareScreen() {
+        const ac = this.activeCall;
+        if (!ac || ac.kind !== 'video') return false;
+        if (!ac.isGroup) return true;
+        if (this._canModerate(ac.groupId, this.pubkey)) return true;
+        if (!ac.shareRestricted) return true;
+        return ac.presenter === this.pubkey;
+    },
+
+    async toggleScreenShare() {
+        const ac = this.activeCall;
+        if (!ac || ac.kind !== 'video') return;
+        if (ac.sharing) { this._stopScreenShare(); return; }
+        if (!this.canShareScreen()) { this.requestToPresent(); return; }
+        await this._startScreenShare();
+    },
+
+    async _startScreenShare() {
+        const ac = this.activeCall;
+        if (!ac || ac.sharing) return;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+            this.displaySystemMessage('Screen sharing is not supported on this device');
+            return;
+        }
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        } catch (e) { return; }
+        if (!this.activeCall || this.activeCall !== ac) { stream.getTracks().forEach(t => t.stop()); return; }
+        const track = stream.getVideoTracks()[0];
+        if (!track) { stream.getTracks().forEach(t => t.stop()); return; }
+        ac.screenStream = stream;
+        ac.sharing = true;
+        ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(track); } catch (e) { /* ignore */ } } });
+        track.addEventListener('ended', () => this._stopScreenShare());
+        const others = ac.members.filter(pk => pk !== this.pubkey);
+        this._broadcastCallSignal(others, { type: 'share', callId: ac.callId, on: true });
+        this._updateCallControls();
+        this._renderCallGrid();
+    },
+
+    _stopScreenShare() {
+        const ac = this.activeCall;
+        if (!ac || !ac.sharing) return;
+        const cam = ac.localStream ? (ac.localStream.getVideoTracks()[0] || null) : null;
+        ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(cam); } catch (e) { /* ignore */ } } });
+        if (ac.screenStream) ac.screenStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { /* ignore */ } });
+        ac.screenStream = null;
+        ac.sharing = false;
+        const others = ac.members.filter(pk => pk !== this.pubkey);
+        this._broadcastCallSignal(others, { type: 'share', callId: ac.callId, on: false });
+        this._updateCallControls();
+        this._renderCallGrid();
+    },
+
+    _onCallShare(sender, data) {
+        const ac = this.activeCall;
+        if (!ac || ac.callId !== data.callId) return;
+        if (data.on) ac.sharingPeers.add(sender); else ac.sharingPeers.delete(sender);
+        this._renderCallGrid();
+    },
+
+    requestToPresent() {
+        const ac = this.activeCall;
+        if (!ac || !ac.isGroup) return;
+        const mods = ac.members.filter(pk => pk !== this.pubkey && this._canModerate(ac.groupId, pk));
+        if (!mods.length) { this.displaySystemMessage('No moderator available to grant presenting'); return; }
+        this._broadcastCallSignal(mods, { type: 'present-request', callId: ac.callId });
+        this.displaySystemMessage('Requested to present');
+    },
+
+    _onPresentRequest(sender, data) {
+        const ac = this.activeCall;
+        if (!ac || ac.callId !== data.callId || !this._isCallMod()) return;
+        ac.presentRequests.add(sender);
+        this.displaySystemMessage((data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender)) + ' requested to present');
+        this._renderPresenterMenu();
+        this._updateCallControls();
+    },
+
+    _broadcastPresentState() {
+        const ac = this.activeCall;
+        if (!ac) return;
+        const others = ac.members.filter(pk => pk !== this.pubkey);
+        this._broadcastCallSignal(others, { type: 'present-state', callId: ac.callId, restricted: !!ac.shareRestricted, presenter: ac.presenter || null });
+    },
+
+    _onPresentState(sender, data) {
+        const ac = this.activeCall;
+        if (!ac || ac.callId !== data.callId || !ac.isGroup) return;
+        if (!this._canModerate(ac.groupId, sender)) return;
+        const wasPresenter = ac.presenter === this.pubkey;
+        ac.shareRestricted = !!data.restricted;
+        ac.presenter = data.presenter || null;
+        this._enforceShareRestriction();
+        if (!wasPresenter && ac.presenter === this.pubkey) this.displaySystemMessage('You can now share your screen');
+        this._updateCallControls();
+        this._renderPresenterMenu();
+    },
+
+    setScreenShareRestricted(on) {
+        const ac = this.activeCall;
+        if (!ac || !this._isCallMod()) return;
+        ac.shareRestricted = !!on;
+        this._broadcastPresentState();
+        this._enforceShareRestriction();
+        this._renderPresenterMenu();
+        this._updateCallControls();
+    },
+
+    toggleScreenShareRestricted() {
+        const ac = this.activeCall;
+        if (!ac) return;
+        this.setScreenShareRestricted(!ac.shareRestricted);
+    },
+
+    assignPresenter(pubkey) {
+        const ac = this.activeCall;
+        if (!ac || !this._isCallMod()) return;
+        ac.presenter = pubkey || null;
+        if (pubkey) ac.presentRequests.delete(pubkey);
+        this._broadcastPresentState();
+        this._renderPresenterMenu();
+        this._updateCallControls();
+    },
+
+    _enforceShareRestriction() {
+        const ac = this.activeCall;
+        if (ac && ac.sharing && !this.canShareScreen()) this._stopScreenShare();
+    },
+
+    _callReactionDefaults() { return ['👍', '❤️', '😂', '😮', '👏', '🎉', '🙌', '🔥']; },
+
+    // Last-used first (shared with the message reaction picker), padded with
+    // defaults, dropping any custom shortcode whose pack is no longer known.
+    _callReactionBarEmojis() {
+        const out = [];
+        const seen = new Set();
+        const known = (e) => {
+            if (typeof e !== 'string') return false;
+            const m = e.match(/^:([a-zA-Z0-9_]+):$/);
+            return !m || (this.customEmojis && this.customEmojis.has(m[1]));
+        };
+        const add = (e) => { if (e && known(e) && !seen.has(e)) { seen.add(e); out.push(e); } };
+        (Array.isArray(this.recentEmojis) ? this.recentEmojis : []).forEach(add);
+        this._callReactionDefaults().forEach(add);
+        return out.slice(0, 8);
+    },
+
+    _renderCallReactionsBar() {
+        const bar = document.getElementById('callReactionsBar');
+        if (!bar) return;
+        bar.innerHTML = '';
+        this._callReactionBarEmojis().forEach(em => {
+            const b = document.createElement('button');
+            b.className = 'call-react-btn';
+            b.type = 'button';
+            b.dataset.action = 'sendCallReaction';
+            b.dataset.emoji = em;
+            b.innerHTML = this.renderReactionEmoji(em);
+            bar.appendChild(b);
+        });
+        const more = document.createElement('button');
+        more.className = 'call-react-btn call-react-more';
+        more.type = 'button';
+        more.dataset.action = 'openCallReactionPicker';
+        more.title = 'More emoji';
+        more.textContent = '＋';
+        bar.appendChild(more);
+    },
+
+    openCallReactionPicker() {
+        const btn = document.getElementById('callReactBtn');
+        if (!btn || typeof this.showEnhancedReactionPicker !== 'function') return;
+        this._closeCallReactions();
+        this.showEnhancedReactionPicker(null, btn, (emoji) => this.sendCallReaction(emoji));
+    },
+
+    sendCallReaction(emoji) {
+        const ac = this.activeCall;
+        if (!ac || !emoji) return;
+        if (typeof this.addToRecentEmojis === 'function') this.addToRecentEmojis(emoji);
+        const tags = typeof this.customEmojiTagsForContent === 'function' ? this.customEmojiTagsForContent(emoji) : [];
+        const payload = { type: 'reaction', callId: ac.callId, emoji };
+        if (tags.length) payload.emojiTags = tags;
+        const others = ac.members.filter(pk => pk !== this.pubkey);
+        this._broadcastCallSignal(others, payload);
+        this._showFlyReaction(emoji, 'You');
+        this._closeCallReactions();
+    },
+
+    _onCallReaction(sender, data) {
+        const ac = this.activeCall;
+        if (!ac || ac.callId !== data.callId || !data.emoji) return;
+        if (data.emojiTags && typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(data.emojiTags);
+        const who = data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender);
+        this._showFlyReaction(String(data.emoji), who);
+    },
+
+    _showFlyReaction(emoji, who) {
+        const layer = document.getElementById('callReactionsFly');
+        if (!layer) return;
+        const el = document.createElement('div');
+        el.className = 'call-react-fly-item';
+        el.style.left = (8 + Math.random() * 74) + '%';
+        const e = document.createElement('span');
+        e.className = 'call-react-emoji';
+        e.innerHTML = this.renderReactionEmoji(String(emoji).slice(0, 64));
+        const w = document.createElement('span');
+        w.className = 'call-react-who';
+        w.textContent = who || '';
+        el.appendChild(e);
+        el.appendChild(w);
+        layer.appendChild(el);
+        setTimeout(() => { try { layer.removeChild(el); } catch (_) { } }, 3200);
+    },
+
+    sendCallChat() {
+        const ac = this.activeCall;
+        const input = document.getElementById('callChatInput');
+        if (!ac || !input) return;
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        const others = ac.members.filter(pk => pk !== this.pubkey);
+        this._broadcastCallSignal(others, { type: 'chat', callId: ac.callId, text: text.slice(0, 2000) });
+        this._appendCallChat('You', text, true);
+    },
+
+    handleCallChatKeydown(e) {
+        if (e && e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            this.sendCallChat();
+        }
+    },
+
+    _onCallChat(sender, data) {
+        const ac = this.activeCall;
+        if (!ac || ac.callId !== data.callId || !data.text) return;
+        const who = data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender);
+        this._appendCallChat(who, String(data.text).slice(0, 2000), false);
+        const panel = document.getElementById('callChatPanel');
+        if (!panel || !panel.classList.contains('active')) {
+            ac.chatUnread = (ac.chatUnread || 0) + 1;
+            this._updateCallControls();
+        }
+    },
+
+    _appendCallChat(who, text, isSelf) {
+        const ac = this.activeCall;
+        if (ac) ac.chatLog.push({ who, text, isSelf });
+        const list = document.getElementById('callChatMessages');
+        if (!list) return;
+        const row = document.createElement('div');
+        row.className = 'call-chat-msg' + (isSelf ? ' self' : '');
+        const n = document.createElement('span');
+        n.className = 'call-chat-from';
+        n.textContent = who;
+        const t = document.createElement('span');
+        t.className = 'call-chat-text';
+        t.textContent = text;
+        row.appendChild(n);
+        row.appendChild(t);
+        list.appendChild(row);
+        list.scrollTop = list.scrollHeight;
+    },
+
+    toggleCallChat() {
+        const panel = document.getElementById('callChatPanel');
+        if (!panel) return;
+        const open = panel.classList.toggle('active');
+        if (open && this.activeCall) {
+            this.activeCall.chatUnread = 0;
+            this._updateCallControls();
+            const input = document.getElementById('callChatInput');
+            if (input) setTimeout(() => { try { input.focus(); } catch (_) { } }, 30);
+        }
+        this._closeCallReactions();
+        this._closePresenterMenu();
+    },
+
+    toggleCallReactions() {
+        const bar = document.getElementById('callReactionsBar');
+        if (!bar) return;
+        if (!bar.classList.contains('active')) this._renderCallReactionsBar();
+        bar.classList.toggle('active');
+        this._closePresenterMenu();
+    },
+
+    _closeCallReactions() {
+        const bar = document.getElementById('callReactionsBar');
+        if (bar) bar.classList.remove('active');
+    },
+
+    toggleCallPresenterMenu() {
+        const menu = document.getElementById('callPresenterMenu');
+        if (!menu) return;
+        const open = menu.classList.toggle('active');
+        if (open) this._renderPresenterMenu();
+        this._closeCallReactions();
+    },
+
+    _closePresenterMenu() {
+        const menu = document.getElementById('callPresenterMenu');
+        if (menu) menu.classList.remove('active');
+    },
+
+    _updateCallControls() {
+        const ac = this.activeCall;
+        const video = !!(ac && ac.kind === 'video');
+
+        const shareBtn = document.getElementById('callShareBtn');
+        if (shareBtn) {
+            shareBtn.classList.toggle('nm-call-hidden', !video);
+            shareBtn.classList.toggle('active', !!(ac && ac.sharing));
+            const allowed = this.canShareScreen();
+            if (ac && ac.sharing) shareBtn.title = 'Stop sharing screen';
+            else shareBtn.title = allowed ? 'Share screen' : 'Request to present';
+            shareBtn.classList.toggle('request-mode', !!(ac && !ac.sharing && !allowed));
+        }
+
+        const chatBtn = document.getElementById('callChatBtn');
+        if (chatBtn) {
+            const badge = chatBtn.querySelector('.call-btn-badge');
+            const n = ac ? (ac.chatUnread || 0) : 0;
+            if (badge) {
+                badge.textContent = n > 9 ? '9+' : String(n);
+                badge.classList.toggle('nm-call-hidden', n <= 0);
+            }
+        }
+
+        const presenterBtn = document.getElementById('callPresenterBtn');
+        if (presenterBtn) {
+            const show = video && this._isCallMod();
+            presenterBtn.classList.toggle('nm-call-hidden', !show);
+            const badge = presenterBtn.querySelector('.call-btn-badge');
+            const n = ac ? ac.presentRequests.size : 0;
+            if (badge) {
+                badge.textContent = n > 9 ? '9+' : String(n);
+                badge.classList.toggle('nm-call-hidden', n <= 0);
+            }
+        }
+    },
+
+    _renderPresenterMenu() {
+        const menu = document.getElementById('callPresenterMenu');
+        const ac = this.activeCall;
+        if (!menu || !ac) return;
+        if (!this._isCallMod()) { menu.classList.remove('active'); menu.innerHTML = ''; return; }
+
+        menu.innerHTML = '';
+
+        const restrictRow = document.createElement('label');
+        restrictRow.className = 'call-presenter-restrict';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!ac.shareRestricted;
+        cb.dataset.action = 'toggleScreenShareRestricted';
+        const rl = document.createElement('span');
+        rl.textContent = 'Only the presenter can share';
+        restrictRow.appendChild(cb);
+        restrictRow.appendChild(rl);
+        menu.appendChild(restrictRow);
+
+        const reqs = Array.from(ac.presentRequests).filter(pk => ac.members.includes(pk));
+        if (reqs.length) {
+            const h = document.createElement('div');
+            h.className = 'call-presenter-head';
+            h.textContent = 'Requests';
+            menu.appendChild(h);
+            reqs.forEach(pk => menu.appendChild(this._presenterRow(pk, true)));
+        }
+
+        const head = document.createElement('div');
+        head.className = 'call-presenter-head';
+        head.textContent = 'Participants';
+        menu.appendChild(head);
+        ac.members.forEach(pk => menu.appendChild(this._presenterRow(pk, false)));
+    },
+
+    _presenterRow(pk, isRequest) {
+        const ac = this.activeCall;
+        const row = document.createElement('div');
+        row.className = 'call-presenter-row';
+        const name = document.createElement('span');
+        name.className = 'call-presenter-name';
+        name.textContent = (pk === this.pubkey ? 'You' : this._nymForPubkey(pk)) + (ac.presenter === pk ? ' · presenter' : '');
+        row.appendChild(name);
+        if (ac.presenter === pk) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'call-presenter-action clear';
+            btn.textContent = 'Clear';
+            btn.dataset.action = 'clearCallPresenter';
+            row.appendChild(btn);
+        } else {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'call-presenter-action';
+            btn.textContent = isRequest ? 'Approve' : 'Make presenter';
+            btn.dataset.action = 'makeCallPresenter';
+            btn.dataset.pubkey = pk;
+            row.appendChild(btn);
+        }
+        return row;
     },
 
 });
