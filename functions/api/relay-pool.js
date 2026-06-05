@@ -102,6 +102,17 @@ export async function onRequest(context) {
   const ARCHIVE_FLUSH_MAX = 400;
   const ARCHIVE_BATCH = 100;
   const archiveBuf = new Map();   // eventId -> { id, channel, kind, pubkey, created_at, json }
+  const ARCHIVE_SEEN_HOST = 'https://nymchat-archive.invalid';
+  const ARCHIVE_SEEN_TTL = 600;
+
+  function archiveSeenCache() {
+    try { return (typeof caches !== 'undefined' && caches.default) ? caches.default : null; }
+    catch { return null; }
+  }
+
+  function archiveSeenRequest(id) {
+    return new Request(ARCHIVE_SEEN_HOST + '/' + id, { method: 'GET' });
+  }
 
   function trimDedup() {
     if (++dedupCounter < 500) return;
@@ -589,15 +600,42 @@ export async function onRequest(context) {
     if (!archiveEnabled || archiveBuf.size === 0) return;
     const rows = Array.from(archiveBuf.values());
     archiveBuf.clear();
+
+    // Per-colo dedup: skip events another connection in this colo already
+    // archived. Fail-open — a miss still inserts, and the id PK guards races.
+    const cache = archiveSeenCache();
+    let pending = rows;
+    if (cache) {
+      try {
+        const hits = await Promise.all(rows.map(
+          (r) => cache.match(archiveSeenRequest(r.id)).then((h) => !!h).catch(() => false)
+        ));
+        pending = rows.filter((_, i) => !hits[i]);
+      } catch { pending = rows; }
+    }
+    if (pending.length === 0) return;
+
     const stmt = CHANNELS_DB.prepare(
       'INSERT OR IGNORE INTO events (id, channel, kind, pubkey, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     const now = Date.now();
-    for (let i = 0; i < rows.length; i += ARCHIVE_BATCH) {
-      const chunk = rows.slice(i, i + ARCHIVE_BATCH).map(
+    const inserted = [];
+    for (let i = 0; i < pending.length; i += ARCHIVE_BATCH) {
+      const slice = pending.slice(i, i + ARCHIVE_BATCH);
+      const chunk = slice.map(
         (r) => stmt.bind(r.id, r.channel, r.kind, r.pubkey, r.created_at, r.json, now)
       );
-      try { await CHANNELS_DB.batch(chunk); } catch { /* best-effort */ }
+      try { await CHANNELS_DB.batch(chunk); for (const r of slice) inserted.push(r); } catch { /* best-effort */ }
+    }
+
+    if (cache && inserted.length) {
+      const headers = new Headers();
+      headers.set('Cache-Control', 'public, max-age=' + ARCHIVE_SEEN_TTL);
+      try {
+        await Promise.all(inserted.map(
+          (r) => cache.put(archiveSeenRequest(r.id), new Response('1', { headers })).catch(() => {})
+        ));
+      } catch { /* best-effort */ }
     }
   }
 
