@@ -166,7 +166,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       else misses.push(pair[0]);
     });
     if (misses.length) {
-      var actives = await shopGetActiveMany(env.DB_SHOP, misses);
+      var actives = await shopGetActiveMany(replica(env.DB_SHOP), misses);
       misses.forEach(function (pk) {
         var st = { active: actives[pk].active, updatedAt: actives[pk].updatedAt };
         statuses[pk] = st;
