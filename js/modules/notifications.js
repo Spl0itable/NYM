@@ -376,7 +376,7 @@ Object.assign(NYM.prototype, {
                 if (pubkey) {
                     const avatarSrc = this.getAvatarUrl(pubkey);
                     const safePk = this._safePubkey(pubkey);
-                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">`;
+                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
                     // Use live profile lookup, fall back to stored senderNym
                     const user = this.users.get(pubkey);
                     const baseNym = user

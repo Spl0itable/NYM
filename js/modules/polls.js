@@ -248,7 +248,7 @@ Object.assign(NYM.prototype, {
                 const vAvatar = this.getAvatarUrl(vpk);
                 const vNym = this.getNymFromPubkey(vpk);
                 const vSuffix = this.getPubkeySuffix(vpk);
-                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" title="${this.escapeHtml(vNym)}" alt="" loading="lazy">`;
+                return `<img src="${this.escapeHtml(vAvatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" title="${this.escapeHtml(vNym)}" alt="" decoding="async" loading="lazy">`;
             }).join('');
             const extraCount = count > 8 ? `<span class="poll-voter-extra">+${count - 8}</span>` : '';
 
@@ -278,7 +278,7 @@ Object.assign(NYM.prototype, {
         });
 
         const safePk = this._safePubkey(pubkey);
-        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
 
         const isMobile = window.innerWidth <= 768;
         const hoverButtons = !isMobile ? `
@@ -465,7 +465,7 @@ Object.assign(NYM.prototype, {
             const avatar = this.getAvatarUrl(pubkey);
             const sk = this._safePubkey(pubkey);
             return `<div class="reactors-modal-user poll-voters-row" data-pubkey="${pubkey}">
-                <img src="${this.escapeHtml(avatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">
+                <img src="${this.escapeHtml(avatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">
                 <span class="reactors-modal-nym">${this.escapeHtml(nym)}<span class="nym-suffix">#${suffix}</span></span>
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
                 <span class="poll-voters-choice">${this.escapeHtml(choice)}</span>

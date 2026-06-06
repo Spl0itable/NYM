@@ -4,12 +4,10 @@ const _RX_REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 const _RX_HTML_TAG = /<[^>]*>/g;
 const _RX_DUP_SUFFIX = /@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi;
 const _RX_WHITESPACE = /\s/g;
+const _RX_FORMAT_TRIGGERS = /[^\x20-\x7E\n]|[*_~`#>@:;/\\&<>"]/;
 const _EMOJI_UNIT = '(?:[\\u{1F1E0}-\\u{1F1FF}]{2})|(?:[#*0-9]\\u{FE0F}?\\u{20E3})|(?:(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?(?:\\u{200D}(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?)*)(?:[\\u{E0020}-\\u{E007E}]+\\u{E007F})?';
 const _RX_EMOJI_ONLY = new RegExp(`^(?:${_EMOJI_UNIT}){1,6}$`, 'u');
 
-// Mention pattern is per-identity; cache so we recompile only when the active nym changes.
-// A "@nym#xxxx" mention only counts as ours when xxxx is our own pubkey suffix, so
-// identically-named users with different pubkeys aren't cross-notified.
 let _mentionPatternCache = { key: null, pattern: null };
 function _getMentionPattern(cleanNym, suffix) {
     const key = JSON.stringify([cleanNym, suffix || '']);
@@ -79,6 +77,17 @@ Object.assign(NYM.prototype, {
             if (dm !== 0) return dm;
         }
         return (a._seq || 0) - (b._seq || 0);
+    },
+
+    _insertMessageSorted(arr, msg) {
+        let lo = 0, hi = arr.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (this._compareMessages(arr[mid], msg) <= 0) lo = mid + 1;
+            else hi = mid;
+        }
+        arr.splice(lo, 0, msg);
+        return lo;
     },
 
     hasBlockedKeyword(text, nickname) {
@@ -486,10 +495,10 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                // Add message and sort chronologically: created_at seconds, then
-                // the millisecond 'ms' stamp, then arrival sequence as a tiebreaker.
-                this.messages.get(storageKey).push(message);
-                this.messages.get(storageKey).sort((a, b) => this._compareMessages(a, b));
+                // Add message in chronological order (created_at seconds, then the
+                // millisecond 'ms' stamp, then arrival sequence) via binary insert
+                // into the already-sorted array — no full re-sort per event.
+                this._insertMessageSorted(this.messages.get(storageKey), message);
 
                 const messages = this.messages.get(storageKey);
                 if (messages && messages.length > this.channelMessageLimit) {
@@ -632,7 +641,7 @@ Object.assign(NYM.prototype, {
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk = this._safePubkey(message.pubkey);
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
 
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
@@ -737,7 +746,7 @@ Object.assign(NYM.prototype, {
             const baseNym = this.parseNymFromDisplay(message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk2 = this._safePubkey(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -1128,12 +1137,26 @@ Object.assign(NYM.prototype, {
         // insert makes channel switching quadratic.
         if (!this._bulkAppending) {
             const domMessages = container.querySelectorAll('[data-message-id]');
-            const domLimit = message.isPM ? this.pmStorageLimit : this.channelMessageLimit;
+            const domLimit = this.userScrolledUp
+                ? (message.isPM ? this.pmStorageLimit : this.channelMessageLimit)
+                : (message.isPM ? this.pmDomNodeLimit : this.channelDomNodeLimit);
             if (domMessages.length > domLimit) {
                 const toRemove = domMessages.length - domLimit;
                 for (let i = 0; i < toRemove; i++) {
                     this._revokeNodeBlobs(domMessages[i]);
                     domMessages[i].remove();
+                }
+                const startMap = message.isPM ? this.pmRenderedStart : this.channelRenderedStart;
+                if (startMap) {
+                    const renderKey = message.isPM
+                        ? (this.currentGroup
+                            ? this.getGroupConversationKey(this.currentGroup)
+                            : (this.currentPM ? this.getPMConversationKey(this.currentPM) : null))
+                        : (this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel);
+                    if (renderKey != null) {
+                        const cur = startMap.get(renderKey);
+                        if (typeof cur === 'number') startMap.set(renderKey, cur + toRemove);
+                    }
                 }
                 const firstAfterPrune = container.querySelector('[data-message-id]');
                 if (firstAfterPrune) this._updateBubbleGrouping(firstAfterPrune);
@@ -1378,7 +1401,7 @@ Object.assign(NYM.prototype, {
                 const avatarSrc = this.getAvatarUrl(pubkey);
                 const flairHtml = this.getFlairForUser(pubkey) || '';
                 return `<span class="action-mention nm-mention">`
-                    + `<img src="${escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy">`
+                    + `<img src="${escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`
                     + `${namePart}<span class="nym-suffix">${suffixPart}</span>${flairHtml}`
                     + `</span>`;
             }
@@ -1394,6 +1417,10 @@ Object.assign(NYM.prototype, {
     },
 
     formatMessage(content) {
+        if (!_RX_FORMAT_TRIGGERS.test(content)) {
+            return content.indexOf('\n') === -1 ? content : content.replace(/\n/g, '<br>');
+        }
+
         let formatted = content;
 
         // Deduplicate suffixes in mentions from external apps (e.g., @user#abcd#abcd -> @user#abcd)
@@ -1799,9 +1826,11 @@ Object.assign(NYM.prototype, {
         const wrappers = Array.from(container.children).filter(c => c.classList && c.classList.contains('message-group'));
         const salvagedAvatars = new Map();
         for (const wrapper of wrappers) {
-            if (wrapper._resizeObserver) {
-                wrapper._resizeObserver.disconnect();
-                wrapper._resizeObserver = null;
+            // Stop observing this wrapper's stack with the shared ResizeObserver
+            // before it is torn down and its messages are re-parented.
+            if (this._groupResizeObserver) {
+                const oldStack = wrapper.querySelector(':scope > .message-group-stack');
+                if (oldStack) this._groupResizeObserver.unobserve(oldStack);
             }
             const pk = wrapper.dataset.pubkey || '';
             const avatarImg = wrapper.querySelector(':scope > .message-group-avatar > img.avatar-bubble');
@@ -1887,31 +1916,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _syncMessageGroupAvatarOffset(wrapper) {
-        if (!wrapper) return;
-        const avatarBox = wrapper.querySelector(':scope > .message-group-avatar');
-        const stack = wrapper.querySelector(':scope > .message-group-stack');
-        if (!avatarBox || !stack) return;
-        const lastMsg = stack.lastElementChild;
-        if (!lastMsg) {
-            avatarBox.style.marginBottom = '';
-            return;
-        }
-        const contentEl = lastMsg.querySelector(':scope > .message-content');
-        if (!contentEl) {
-            avatarBox.style.marginBottom = '';
-            return;
-        }
-        // Align the avatar's bottom flush with the bubble's bottom. Use
-        // bounding rects so the .message's margin-bottom and any siblings
-        // below the bubble (reactions row, edited indicator) are accounted
-        // for, which offsetTop/offsetHeight on its own misses.
-        const wrapperRect = wrapper.getBoundingClientRect();
-        const contentRect = contentEl.getBoundingClientRect();
-        const below = wrapperRect.bottom - contentRect.bottom;
-        avatarBox.style.marginBottom = below > 0 ? below + 'px' : '';
-    },
-
     _createMessageGroupWrapper(firstMessageEl, reusableAvatarImg = null) {
         const wrapper = document.createElement('div');
         wrapper.className = 'message-group';
@@ -1955,13 +1959,31 @@ Object.assign(NYM.prototype, {
         wrapper.appendChild(avatarBox);
         wrapper.appendChild(stack);
 
-        if (typeof ResizeObserver !== 'undefined') {
-            const ro = new ResizeObserver(() => this._syncMessageGroupAvatarOffset(wrapper));
-            ro.observe(stack);
-            wrapper._resizeObserver = ro;
-        }
+        // One shared ResizeObserver for every group instead of one per group.
+        const sharedRo = this._ensureGroupResizeObserver();
+        if (sharedRo) sharedRo.observe(stack);
 
         return wrapper;
+    },
+
+    _ensureGroupResizeObserver() {
+        if (this._groupResizeObserver || typeof ResizeObserver === 'undefined') {
+            return this._groupResizeObserver || null;
+        }
+        this._groupResizeObserver = new ResizeObserver((entries) => {
+            const wrappers = [];
+            const seen = new Set();
+            for (const entry of entries) {
+                const wrapper = entry.target.parentElement; // stack -> message-group
+                if (wrapper && wrapper.classList && wrapper.classList.contains('message-group')
+                    && !seen.has(wrapper)) {
+                    seen.add(wrapper);
+                    wrappers.push(wrapper);
+                }
+            }
+            if (wrappers.length) this._syncAllAvatarOffsets(wrappers);
+        });
+        return this._groupResizeObserver;
     },
 
     setQuoteReply(author, text) {
@@ -2779,11 +2801,6 @@ Object.assign(NYM.prototype, {
     },
 
     // Compute a fingerprint of messages for cache invalidation
-    _computeMessageFingerprint(messages) {
-        if (!messages || messages.length === 0) return '';
-        return messages.map(m => `${m.id}:${m._originalCreatedAt || m.created_at || 0}:${m.isEdited ? 'e' : ''}`).join('|');
-    },
-
     _resolveMentionPubkey(mentionEl) {
         if (!mentionEl) return null;
         const direct = mentionEl.getAttribute('data-mention-pubkey');

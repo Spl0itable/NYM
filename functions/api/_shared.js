@@ -2860,13 +2860,13 @@ const BOT_CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type"
 };
 
-const NYMCHAT_APP_ORIGINS = new Set([
-  "https://web.nymchat.app",
-  "https://nym-staging.pages.dev"
-]);
 function isNymchatBotClient(request) {
-  const origin = (request.headers.get("Origin") || "").toLowerCase();
-  if (NYMCHAT_APP_ORIGINS.has(origin)) return true;
+  const origin = request.headers.get("Origin") || "";
+  if (origin) {
+    try {
+      if (new URL(origin).host.toLowerCase() === new URL(request.url).host.toLowerCase()) return true;
+    } catch (_) {}
+  }
   const ua = request.headers.get("User-Agent") || "";
   return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
 }
@@ -2903,6 +2903,5 @@ export {
   schnorr,
   BOT_LIGHTNING_ADDRESS,
   BOT_CORS_HEADERS,
-  NYMCHAT_APP_ORIGINS,
   isNymchatBotClient
 };

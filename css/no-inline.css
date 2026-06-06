@@ -203,5 +203,5 @@
 .nm-panic-grid { font-size: 14px; line-height: 1.35; white-space: pre; opacity: 0.55; max-width: 88vw; overflow: hidden; text-align: center; color: var(--primary); filter: drop-shadow(0 0 6px rgb(from var(--primary) r g b / 0.4)); }
 .nm-panic-status { font-size: 13px; opacity: 0.95; min-height: 16px; letter-spacing: 0.5px; color: var(--text-bright); }
 .nm-panic-bar { width: min(320px, 80vw); height: 3px; background: rgb(from var(--primary) r g b / 0.18); overflow: hidden; border-radius: 2px; }
-.nm-panic-fill { height: 100%; width: 30%; background: var(--primary); border-radius: 2px; box-shadow: 0 0 8px rgb(from var(--primary) r g b / 0.6); animation: nmPanicSlide 1.2s linear infinite; }
-@keyframes nmPanicSlide { from { margin-left: -30%; } to { margin-left: 100%; } }
+.nm-panic-fill { height: 100%; width: 30%; background: var(--primary); border-radius: 2px; box-shadow: 0 0 8px rgb(from var(--primary) r g b / 0.6); animation: nmPanicSlide 1.2s linear infinite; will-change: transform; }
+@keyframes nmPanicSlide { from { transform: translateX(-100%); } to { transform: translateX(333.33%); } }

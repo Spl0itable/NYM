@@ -11,21 +11,6 @@ Object.assign(NYM.prototype, {
         return id;
     },
 
-    _clearManagedInterval(key) {
-        if (!this._appIntervals) return;
-        const id = this._appIntervals.get(key);
-        if (id) {
-            clearInterval(id);
-            this._appIntervals.delete(key);
-        }
-    },
-
-    _clearAllManagedIntervals() {
-        if (!this._appIntervals) return;
-        for (const id of this._appIntervals.values()) clearInterval(id);
-        this._appIntervals.clear();
-    },
-
     _scheduleIdle(fn, timeout = 1000) {
         if (typeof window.requestIdleCallback === 'function') {
             return window.requestIdleCallback(fn, { timeout });

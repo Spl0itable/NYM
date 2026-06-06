@@ -22,14 +22,13 @@
 //   ["POOL:RELAY_BAN", relayUrl, reason] - relay permanently dropped (auth, restricted, etc.)
 //   ["POOL:STATUS", { connected, count, latency, events }]
 
-const NYMCHAT_APP_ORIGINS = new Set([
-  'https://web.nymchat.app',
-  'https://nym-staging.pages.dev'
-]);
-
 function isNymchatClient(request) {
-  const origin = (request.headers.get('Origin') || '').toLowerCase();
-  if (NYMCHAT_APP_ORIGINS.has(origin)) return true;
+  const origin = request.headers.get('Origin') || '';
+  if (origin) {
+    try {
+      if (new URL(origin).host.toLowerCase() === new URL(request.url).host.toLowerCase()) return true;
+    } catch (_) {}
+  }
   const ua = request.headers.get('User-Agent') || '';
   return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
 }

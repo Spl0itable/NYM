@@ -1189,20 +1189,6 @@ Object.assign(NYM.prototype, {
             || (this.nostrLoginMethod === 'nip46' && !!(_nip46State && _nip46State.connected));
     },
 
-    _sendGiftWraps(members, rumor, expirationTs, groupId = null) {
-        const sharedId = this.getNymMessageId(rumor);
-        for (const pubkey of members) {
-            const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
-            const wrapped = this.nip59WrapEvent(rumor, this.privkey, encryptTo, expirationTs);
-            this.sendDMToRelays(['EVENT', wrapped]);
-            this._recordGiftWrapId(sharedId, wrapped.id);
-
-            if (this.activeCosmetics?.has('cosmetic-redacted')) {
-                setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
-            }
-        }
-    },
-
     _recordGiftWrapId(sharedId, wrappedId) {
         if (!sharedId || !wrappedId) return;
         if (!this._giftWrapsForSharedId) this._giftWrapsForSharedId = new Map();
@@ -1903,7 +1889,7 @@ Object.assign(NYM.prototype, {
         const avatarStackHtml = displayMembers.length > 0
             ? `<div class="group-avatar-stack">${displayMembers.map((pk) => {
                 const sk = this._safePubkey(pk);
-                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
+                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
             }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
             : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
@@ -1988,7 +1974,7 @@ Object.assign(NYM.prototype, {
         const overflow = readersMap.size - MAX_VISIBLE;
         const avatarHtml = visible.map(([pk, name]) => {
             const sk = this._safePubkey(pk);
-            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy">`;
+            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" decoding="async" loading="lazy">`;
         }).join('');
         const overflowHtml = overflow > 0
             ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
@@ -2189,7 +2175,7 @@ Object.assign(NYM.prototype, {
             const safePk = this._safePubkey(pubkey);
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(pubkey));
             return `<div class="reactors-modal-user readers-modal-user" data-pubkey="${safePk}">
-                <img src="${avatarSrc}" class="readers-modal-avatar" data-avatar-pubkey="${safePk}" loading="lazy">
+                <img src="${avatarSrc}" class="readers-modal-avatar" data-avatar-pubkey="${safePk}" decoding="async" loading="lazy">
                 <span class="reactors-modal-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span></span>
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
             </div>`;
@@ -2268,7 +2254,7 @@ Object.assign(NYM.prototype, {
                         const headerAvatars = displayPks.map((sk, i) => {
                             const pk = otherMembers[i];
                             const src = this.getAvatarUrl(pk);
-                            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
+                            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
                         }).join('');
                         const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
                         const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
@@ -2316,7 +2302,7 @@ Object.assign(NYM.prototype, {
         const headerAvatars = displayPks.map((sk, i) => {
             const pk = otherMembers[i];
             const src = this.getAvatarUrl(pk);
-            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" loading="lazy">`;
+            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
         }).join('');
 
         const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
@@ -2533,7 +2519,7 @@ Object.assign(NYM.prototype, {
             const labelHtml = labels.length
                 ? `<span class="group-info-label">${labels.join(', ')}</span>`
                 : '';
-            return `<div class="group-info-member"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
+            return `<div class="group-info-member"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
         };
         const membersHtml = sorted.map(memberRow).join('');
         const html = `<div class="group-info"><div class="group-info-title">Group: "${this.escapeHtml(group.name)}"</div><div class="group-info-count">Members (${group.members.length})</div><div class="group-info-members">${membersHtml}</div></div>`;

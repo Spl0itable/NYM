@@ -7,7 +7,7 @@ Object.assign(NYM.prototype, {
             ? this.getEffectiveUserStatus(pubkey) : 'offline';
         const isHidden = status === 'hidden';
         const dotStatus = isHidden ? 'offline' : status;
-        return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="user-status-dot status-${dotStatus}"></span></span>`;
+        return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="user-status-dot status-${dotStatus}"></span></span>`;
     },
 
     refreshPMHeaderStatus() {
@@ -1583,7 +1583,7 @@ Object.assign(NYM.prototype, {
         });
         const time = this.settings.showTimestamps ? bubbleTime : '';
         const verifiedBadge = '<span class="verified-badge" title="Nymchat Bot">✓</span>';
-        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(botNym)}<span class="nym-suffix">#${suffix}</span>`;
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(botNym)}<span class="nym-suffix">#${suffix}</span>`;
 
         const el = document.createElement('div');
         el.className = 'message pm';
@@ -2066,12 +2066,12 @@ Object.assign(NYM.prototype, {
             if (clickable) {
                 if (clickable.dataset.authorSig === authorSig) return;
                 clickable.dataset.authorSig = authorSig;
-                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
+                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
             } else {
                 // Fallback: full rewrite with author-clickable wrapper for older messages missing it
                 const bubbleTime = el.querySelector('.bubble-time');
                 const bubbleHtml = bubbleTime ? bubbleTime.outerHTML : '';
-                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span><span class="nym-bracket">&gt;</span>`;
+                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span><span class="nym-bracket">&gt;</span>`;
                 const newClickable = el.querySelector('.author-clickable');
                 if (newClickable) {
                     newClickable.style.cursor = 'pointer';
@@ -2082,7 +2082,7 @@ Object.assign(NYM.prototype, {
                     newClickable.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
                         this.showContextMenu(e, displayAuthor, pubkey, rawContent, msgId, false, isPM ? msgId : null);
                         return false;
                     });
@@ -2161,7 +2161,7 @@ Object.assign(NYM.prototype, {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             const safePk = this._safePubkey(pubkey);
             item.innerHTML = `
-<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" loading="lazy">
+<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">
 <span class="pm-name">${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
 <span class="unread-badge nm-hidden">0</span>

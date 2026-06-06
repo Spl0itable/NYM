@@ -2830,6 +2830,20 @@ body.chat-bubbles .message:not(.bubble-grouped) + .message.bubble-grouped {
     body.chat-bubbles .message.bubble-snap {
         animation: none;
     }
+    .message.style-matrix .message-content,
+    .message.style-neon .message-content,
+    .message.style-ghost .message-content,
+    .message.style-fire .message-content,
+    .message.style-rainbow .message-content,
+    .message.style-glitch .message-content,
+    .message.style-aurora .message-content,
+    .style-preview-aurora,
+    .style-preview-rainbow,
+    .call-chat-msg .call-chat-text,
+    .user-item .style-rainbow,
+    .user-item .style-aurora {
+        animation: none !important;
+    }
 }
 
 body.chat-bubbles .message.bubble-grouped .message-content {

@@ -93,8 +93,29 @@ async function run() {
   // Service worker: stamp a per-build cache version so each deploy gets a fresh
   // cache and old ones are pruned on activate.
   const swVersion = sha8([...assetMap.values()].sort().join('|'));
+
+  // Critical shell assets to precache on SW install (hashed names)
+  const criticalSources = [
+    'css/styles-core.css', 'css/styles-shell.css', 'css/styles-chat.css',
+    'css/styles-components.css', 'css/styles-themes-responsive.css', 'css/no-inline.css',
+    'js/defer-css.js', 'js/theme-init.js', 'js/setup-modal-init.js',
+    'js/modules/inline-bindings.js', 'js/modules/dialog.js', 'js/nostr-tools.js',
+    'js/app.js', 'js/nym-crypto.js', 'js/modules/crypto-pool.js',
+    'js/modules/persistence.js', 'js/modules/key-vault.js', 'js/modules/panic.js',
+    'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/users.js',
+    'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',
+    'js/modules/pms.js', 'js/modules/groups.js', 'js/modules/ui-context.js',
+    'js/modules/init.js',
+  ];
+  const precache = criticalSources
+    .map((rel) => assetMap.get(rel))
+    .filter(Boolean)
+    .map((hashed) => '/' + hashed);
+
   const swSrc = await fs.readFile(path.join(root, 'sw.js'), 'utf8');
-  await emit('sw.js', swSrc.replace('__CACHE_VERSION__', swVersion));
+  await emit('sw.js', swSrc
+    .replace('__CACHE_VERSION__', swVersion)
+    .replace('__PRECACHE_ASSETS__', JSON.stringify(precache)));
 
   // _headers + immutable caching for hashed assets, no-cache for entry.
   const headers = await fs.readFile(path.join(root, '_headers'), 'utf8');

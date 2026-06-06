@@ -324,13 +324,6 @@ Object.assign(NYM.prototype, {
         }, 15000);
     },
 
-    stopAppRelayWatchdog() {
-        if (this._appRelayWatchdog) {
-            clearInterval(this._appRelayWatchdog);
-            this._appRelayWatchdog = null;
-        }
-    },
-
     // Ensure the first 5 broadcast relays are always connected regardless of channel
     async ensureDefaultRelaysConnected() {
         // Pool mode: proxy manages all connections
@@ -1031,17 +1024,12 @@ Object.assign(NYM.prototype, {
                     } catch (poolErr) {
                         console.warn(`[NYM] Relay pool attempt ${attempt + 1}/${maxRetries} failed:`, poolErr.message);
                         if (attempt === maxRetries - 1) {
-                            // All retries exhausted — fall back to direct connections on any host
+                            // All retries exhausted — temporarily use direct relay
+                            // connections and keep retrying the pool in the background.
                             console.warn('[NYM] Relay pool failed, falling back to direct connections');
-                            if (!this._isCloudflareHost) {
-                                this._fallbackToLocal();
-                            } else {
-                                // Temporarily disable pool mode to allow direct connections,
-                                // but schedule background reconnect to restore pool mode later
-                                this.useRelayProxy = false;
-                                this._poolFallbackActive = true;
-                                this._schedulePoolReconnectInBackground();
-                            }
+                            this.useRelayProxy = false;
+                            this._poolFallbackActive = true;
+                            this._schedulePoolReconnectInBackground();
                             // Fall through to direct relay connection code below
                         }
                     }
@@ -1532,16 +1520,6 @@ Object.assign(NYM.prototype, {
         this.failedRelays.delete(relayUrl);
     },
 
-    _detectCloudflareHost() {
-        try {
-            const host = window.location.hostname;
-            if (host === 'web.nymchat.app' || host === 'nym-staging.pages.dev') return true;
-        } catch {
-            // Not in a browser context
-        }
-        return false;
-    },
-
     // True when the page is served from the app's own domain, so the browser
     // can connect straight to wss://relay.nymchat.app instead of hopping
     // through the relay-pool worker.
@@ -1556,25 +1534,14 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Returns the host to use for API endpoints, or null when this instance
-    // can't reach the proxy (local dev, third-party host, etc.).
     _getApiHost() {
-        if (this._isCloudflareHost) return window.location.host;
+        try {
+            const p = window.location.protocol;
+            if (p === 'https:' || p === 'http:') return window.location.host || null;
+        } catch (_) {}
         return null;
     },
 
-    // Mark the remote API as unavailable and fall back to local/direct
-    _fallbackToLocal() {
-        if (this._isCloudflareHost || this._remoteApiFailed) return;
-        this._remoteApiFailed = true;
-        this.useRelayProxy = false;
-        this._poolFallbackActive = true;
-        console.warn('[NYM] Remote API unreachable, falling back to direct connections');
-        this._schedulePoolReconnectInBackground();
-    },
-
-    // Fall back from pool mode to direct relay connections (works on any host including Cloudflare).
-    // Unlike _fallbackToLocal, this does NOT mark the remote API as failed — only disables pool mode.
     _fallbackToDirectConnections() {
         if (!this.useRelayProxy) return; // Already in direct mode
 
@@ -1612,7 +1579,7 @@ Object.assign(NYM.prototype, {
     // Try to restore pool mode in the background
     _schedulePoolReconnectInBackground(immediate = false) {
         if (!this._poolFallbackActive) return;
-        if (!this._isCloudflareHost) return;
+        if (!this._getApiHost()) return;
         if (this._bgPoolReconnectInFlight) return;
 
         if (this._bgPoolReconnectTimer) {
@@ -1844,7 +1811,7 @@ Object.assign(NYM.prototype, {
     _schedulePoolReconnect() {
         if (this._poolReconnecting) return;
         if (!this.useRelayProxy) return;
-        if (!this._isCloudflareHost) return;
+        if (!this._getApiHost()) return;
 
         // Debounce: prevent rapid-fire reconnect scheduling from multiple event handlers
         const now = Date.now();
@@ -1905,7 +1872,7 @@ Object.assign(NYM.prototype, {
     // health check (_ensureAllShardsConnected) acts as a final safety net.
     _reconnectPoolShard(shard) {
         if (!this.useRelayProxy) return;
-        if (!this._isCloudflareHost) return;
+        if (!this._getApiHost()) return;
         const shardId = shard.id;
 
         if (!this._shardReconnecting) this._shardReconnecting = new Set();
@@ -1976,7 +1943,7 @@ Object.assign(NYM.prototype, {
     // Reconnect any expected shard that's missing, not OPEN, or a "zombie"
     _ensureAllShardsConnected() {
         if (!this.useRelayProxy) return;
-        if (!this._isCloudflareHost) return;
+        if (!this._getApiHost()) return;
         if (!navigator.onLine) return;
         if (!this._isAnyPoolOpen()) return;
 
@@ -3852,6 +3819,12 @@ Object.assign(NYM.prototype, {
         if (!Array.isArray(msg)) return;
 
         const [type, ...data] = msg;
+
+        // Per-subscription side-handlers (e.g. batched profile fetch)
+        if (this._subscriptionHandlers && this._subscriptionHandlers.size) {
+            const handler = this._subscriptionHandlers.get(data[0]);
+            if (handler) handler(type, data, relayUrl);
+        }
 
         switch (type) {
             case 'EVENT':

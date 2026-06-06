@@ -1666,10 +1666,6 @@ Object.assign(NYM.prototype, {
         return window.NymCrypto.encryptBitchat(plaintext, senderPrivateKey, recipientPublicKey);
     },
 
-    bitchatWrapEvent(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
-        return window.NymCrypto.bitchatWrap(event, senderPrivateKey, recipientPublicKey);
-    },
-
     nip59WrapEvent(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
         return window.NymCrypto.nip59Wrap(event, senderPrivateKey, recipientPublicKey, expirationTs);
     },
@@ -2195,26 +2191,23 @@ Object.assign(NYM.prototype, {
 
         // Fetch profiles for pubkeys
 
+        const subId = "profile-batch-" + Math.random().toString(36).substring(7);
+
         const timeout = setTimeout(() => {
+            if (this._subscriptionHandlers) this._subscriptionHandlers.delete(subId);
             resolvers.forEach(resolveList => {
                 resolveList.forEach(resolve => resolve());
             });
         }, 3000);
+        if (!this._subscriptionHandlers) this._subscriptionHandlers = new Map();
 
-        const subId = "profile-batch-" + Math.random().toString(36).substring(7);
-        const originalHandler = this.handleRelayMessage.bind(this);
-        const foundPubkeys = new Set();
-
-        this.handleRelayMessage = (msg, relayUrl) => {
-            if (!Array.isArray(msg)) return;
-
-            const [type, ...data] = msg;
-
+        // Registered as a side-handler on the real handleRelayMessage (keyed by
+        // subId) instead of replacing the method. Normal event processing still
+        // runs for every message — this only adds the profile-specific work.
+        const profileHandler = (type, data) => {
             if (type === 'EVENT' && data[0] === subId) {
                 const event = data[1];
                 if (event && event.kind === 0 && resolvers.has(event.pubkey)) {
-                    foundPubkeys.add(event.pubkey);
-
                     try {
                         const profile = JSON.parse(event.content);
 
@@ -2323,16 +2316,16 @@ Object.assign(NYM.prototype, {
                 }
             } else if (type === 'EOSE' && data[0] === subId) {
                 clearTimeout(timeout);
-                this.handleRelayMessage = originalHandler;
+                this._subscriptionHandlers.delete(subId);
 
                 // Resolve any remaining unfound profiles
                 resolvers.forEach(resolveList => {
                     resolveList.forEach(resolve => resolve());
                 });
             }
-
-            originalHandler(msg, relayUrl);
         };
+
+        this._subscriptionHandlers.set(subId, profileHandler);
 
         const subscription = [
             "REQ",

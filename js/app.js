@@ -484,8 +484,7 @@ class NYM {
 
     constructor() {
         this.relayPool = new Map();
-        this._isCloudflareHost = this._detectCloudflareHost();
-        this.useRelayProxy = this._isCloudflareHost;
+        this.useRelayProxy = !!this._getApiHost();
         this.poolSockets = [];
         this.poolSocket = null;
         this.poolConnectedRelays = [];
@@ -645,6 +644,8 @@ class NYM {
         this.pmPageSize = 50;
         this.pmLoadMoreSize = 50;
         this.pmRenderedStart = new Map();
+        this.channelDomNodeLimit = 200;
+        this.pmDomNodeLimit = 200;
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
         if (this.settings.groupChatPMOnlyMode) {
             // In PM-only mode, don't default to a geohash channel
@@ -1486,7 +1487,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
 // Global instance.
 // Instantiated inside DOMContentLoaded so that all module files (which attach
 // methods to NYM.prototype via Object.assign) have been parsed first.
-// The constructor invokes methods like _detectCloudflareHost() and fetchGeoRelays(),
+// The constructor invokes methods like _getApiHost() and fetchGeoRelays(),
 // so those methods must be present on the prototype before `new NYM()` runs.
 let nym;
 
@@ -2578,34 +2579,6 @@ function verifyDevNsec() {
     }
 }
 
-async function changeRelay() {
-    const relaySelect = document.getElementById('connectedRelaySelect').value;
-    const customRelay = document.getElementById('customConnectedRelay').value;
-
-    const newRelayUrl = relaySelect === 'custom' ? customRelay : relaySelect;
-
-    if (!newRelayUrl) {
-        window.showAppAlert('Please select or enter a relay URL');
-        return;
-    }
-
-    nym.displaySystemMessage('Switching relay...');
-    try {
-        if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
-            // Pool mode: add this relay to the pool config
-            if (!nym.allRelayUrls.includes(newRelayUrl)) {
-                nym.allRelayUrls.push(newRelayUrl);
-            }
-            nym._poolSendRelayConfig();
-            nym.displaySystemMessage(`Added ${newRelayUrl} to relay pool.`);
-        } else {
-            await nym.connectToRelay(newRelayUrl);
-        }
-    } catch (_) {
-        nym.displaySystemMessage('Failed to connect to relay.');
-    }
-}
-
 async function showSettings() {
     nym.updateRelayStatus();
     window.restoreSettingsSectionState();
@@ -3606,7 +3579,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.452';
+const NYMCHAT_VERSION = 'v3.69.453';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4199,16 +4172,6 @@ async function initializeNym() {
 }
 
 // Disconnect/logout function
-function disconnectNym() {
-    // Disconnect from relay
-    if (nym && nym.ws) {
-        nym.disconnect();
-    }
-
-    // Reload page to start fresh
-    window.location.reload();
-}
-
 // Nostr Login
 function isNymchatApp() {
     return /NymchatApp\//i.test(navigator.userAgent);
@@ -6156,7 +6119,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const messagesScroller = document.getElementById('messagesScroller');
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
     if (messagesScroller && scrollToBottomBtn) {
-        messagesScroller.addEventListener('scroll', () => {
+        // rAF-coalesce: scroll fires up to the display refresh rate; doing the
+        // layout reads (scrollTop/scrollHeight/clientHeight) + branching once per
+        // frame avoids forced reflows on every tick during fast mobile scrolling.
+        let _scrollRafPending = false;
+        const processScroll = () => {
+            _scrollRafPending = false;
             // Reverse-column container: scrollTop is 0 at the bottom (newest)
             // and negative scrolling up. Math.abs gives distance from bottom.
             const distanceFromBottom = Math.abs(messagesScroller.scrollTop);
@@ -6232,6 +6200,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             } else {
                 scrollToBottomBtn.classList.remove('visible');
             }
+        };
+        messagesScroller.addEventListener('scroll', () => {
+            if (_scrollRafPending) return;
+            _scrollRafPending = true;
+            requestAnimationFrame(processScroll);
         }, { passive: true });
     }
 
@@ -6402,6 +6375,9 @@ function formatBytes(b) {
 
 function renderRelayStats() {
     if (typeof nym === 'undefined') return;
+    // Skip the per-second DOM reads + canvas redraw while the tab is hidden; the
+    // loop is already modal-scoped, but a backgrounded tab need not wake the CPU.
+    if (document.hidden) return;
     syncLowDataToggleFromState();
     const s = nym.relayStats;
     const pool = nym.relayPool;

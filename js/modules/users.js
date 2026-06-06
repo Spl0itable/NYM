@@ -631,19 +631,45 @@ Object.assign(NYM.prototype, {
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);
         if (!safePk) return;
-        const fallback = this.generateAvatarSvg(safePk);
-        document.querySelectorAll(`img[data-avatar-pubkey="${safePk}"]`).forEach(img => {
-            // Skip if already showing the desired URL — avoids cancelling
-            // an in-flight load and triggering a spurious error → SVG swap.
-            if (img.getAttribute('src') === avatarUrl) return;
+        if (!this._avatarUpdateQueue) this._avatarUpdateQueue = new Map();
+        this._avatarUpdateQueue.set(safePk, { url: avatarUrl, pubkey });
+        if (this._avatarUpdateRaf) return;
+        this._avatarUpdateRaf = requestAnimationFrame(() => this._flushAvatarUpdates());
+    },
+
+    _flushAvatarUpdates() {
+        this._avatarUpdateRaf = null;
+        const queue = this._avatarUpdateQueue;
+        if (!queue || queue.size === 0) return;
+        this._avatarUpdateQueue = new Map();
+        const fallbackCache = new Map();
+        const fallbackFor = (pk) => {
+            let f = fallbackCache.get(pk);
+            if (f === undefined) { f = this.generateAvatarSvg(pk); fallbackCache.set(pk, f); }
+            return f;
+        };
+        // One scan of the document handles every pending pubkey at once.
+        document.querySelectorAll('img[data-avatar-pubkey]').forEach(img => {
+            const pk = img.getAttribute('data-avatar-pubkey');
+            const entry = queue.get(pk);
+            if (!entry) return;
+            // Skip if already showing the desired URL — avoids cancelling an
+            // in-flight load and triggering a spurious error → SVG swap.
+            if (img.getAttribute('src') === entry.url) return;
+            const fallback = fallbackFor(pk);
             img.onerror = function () { this.onerror = null; this.src = fallback; };
-            img.src = avatarUrl;
+            img.src = entry.url;
         });
-        // Update context menu avatar if open for this user
+        // Update context menu avatar if open for one of the updated users.
         const ctxImg = document.getElementById('ctxAvatarImg');
-        if (ctxImg && this.contextMenuData?.pubkey === pubkey && ctxImg.getAttribute('src') !== avatarUrl) {
-            ctxImg.onerror = function () { this.onerror = null; this.src = fallback; };
-            ctxImg.src = avatarUrl;
+        const ctxPk = this.contextMenuData ? this._safePubkey(this.contextMenuData.pubkey) : null;
+        if (ctxImg && ctxPk && queue.has(ctxPk)) {
+            const entry = queue.get(ctxPk);
+            if (ctxImg.getAttribute('src') !== entry.url) {
+                const fallback = fallbackFor(ctxPk);
+                ctxImg.onerror = function () { this.onerror = null; this.src = fallback; };
+                ctxImg.src = entry.url;
+            }
         }
     },
 

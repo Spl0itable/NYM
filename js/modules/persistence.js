@@ -6,6 +6,7 @@
     const STORES = ['meta', 'profiles', 'channels', 'pms', 'reactions', 'avatars', 'banners'];
 
     const PERSIST_DEBOUNCE_MS = 1500;
+    const MSG_PERSIST_DEBOUNCE_MS = 6000;
 
     const STORE_LIMITS = {
         profiles: 2000,
@@ -150,7 +151,17 @@
 
         // Strip non-serialisable / volatile fields before writing
         _serialiseMessage(m) {
-            return {
+            const c = m.__serCache;
+            if (c
+                && c.content === m.content
+                && c.isEdited === m.isEdited
+                && c.deliveryStatus === m.deliveryStatus
+                && c.nymMessageId === m.nymMessageId
+                && c.senderVerified === m.senderVerified
+                && c.isHistorical === m.isHistorical) {
+                return c.ser;
+            }
+            const ser = {
                 id: m.id,
                 author: m.author,
                 pubkey: m.pubkey,
@@ -179,6 +190,23 @@
                 fileOffer: m.fileOffer,
                 isBot: m.isBot
             };
+            // Non-enumerable so it never leaks into JSON/structured-clone of the
+            // live message object elsewhere.
+            Object.defineProperty(m, '__serCache', {
+                value: {
+                    ser,
+                    content: m.content,
+                    isEdited: m.isEdited,
+                    deliveryStatus: m.deliveryStatus,
+                    nymMessageId: m.nymMessageId,
+                    senderVerified: m.senderVerified,
+                    isHistorical: m.isHistorical
+                },
+                writable: true,
+                configurable: true,
+                enumerable: false
+            });
+            return ser;
         },
 
         _hydrateMessage(m) {
@@ -541,10 +569,25 @@
             }
         },
 
+        _scheduleMsgPersist(category, key, fn) {
+            this._ensurePersistState();
+            this._pendingPersists.set(`${category}:${key}`, fn);
+            if (!this._pendingPersistTimer && !this._pendingMsgPersistTimer) {
+                this._pendingMsgPersistTimer = setTimeout(
+                    () => this.flushPendingPersists(),
+                    MSG_PERSIST_DEBOUNCE_MS
+                );
+            }
+        },
+
         flushPendingPersists() {
             if (this._pendingPersistTimer) {
                 clearTimeout(this._pendingPersistTimer);
                 this._pendingPersistTimer = null;
+            }
+            if (this._pendingMsgPersistTimer) {
+                clearTimeout(this._pendingMsgPersistTimer);
+                this._pendingMsgPersistTimer = null;
             }
             if (!this._pendingPersists || this._pendingPersists.size === 0) return;
             const fns = Array.from(this._pendingPersists.values());
@@ -556,7 +599,7 @@
 
         persistChannelMessages(key) {
             if (!key || this._cacheDisabled) return;
-            this._schedulePersist('ch', key, () => {
+            this._scheduleMsgPersist('ch', key, () => {
                 const messages = this.messages.get(key);
                 if (!messages || messages.length === 0) {
                     this._cacheDelete('channels', key);
@@ -577,7 +620,7 @@
             // Honour the opt-out setting: don't write decrypted PM/group
             // content to disk if the user disabled it.
             if (this.settings && this.settings.cachePMs === false) return;
-            this._schedulePersist('pm', key, () => {
+            this._scheduleMsgPersist('pm', key, () => {
                 const messages = this.pmMessages.get(key);
                 if (!messages || messages.length === 0) {
                     this._cacheDelete('pms', key);

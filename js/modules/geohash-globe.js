@@ -1190,21 +1190,18 @@ Object.assign(NYM.prototype, {
                 updateHeatmapButton();
                 requestDraw();
             },
-            isHeatmap: () => heatmapMode,
             toggleDaynight: () => {
                 daynightMode = !daynightMode;
                 this._daynightPreference = daynightMode;
                 updateDaynightButton();
                 requestDraw();
             },
-            isDaynight: () => daynightMode,
             toggleGeohashGrid: () => {
                 geohashGridMode = !geohashGridMode;
                 this._geohashGridPreference = geohashGridMode;
                 updateGeohashGridButton();
                 requestDraw();
             },
-            isGeohashGrid: () => geohashGridMode,
             zoomToBounds: (bounds, padding = 0.7) => {
                 const lngSpan = Math.max(1e-6, bounds.lng[1] - bounds.lng[0]);
                 const latSpan = Math.max(1e-6, bounds.lat[1] - bounds.lat[0]);

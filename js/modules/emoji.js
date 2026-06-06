@@ -247,7 +247,7 @@ Object.assign(NYM.prototype, {
         const safeUrl = this.escapeHtml(this.getProxiedEmojiUrl(url));
         const safeCode = this.escapeHtml(shortcode);
         const cls = 'custom-emoji' + (extraClass ? ' ' + extraClass : '');
-        return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" loading="lazy" draggable="false">`;
+        return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" decoding="async" loading="lazy" draggable="false">`;
     },
 
     // Build NIP-30 emoji tags for every known custom shortcode used in content

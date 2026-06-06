@@ -161,11 +161,6 @@ Object.assign(NYM.prototype, {
         } catch (e) { /* ignore */ }
     },
 
-    loadCachedShopItems() {
-        this._restoreShopRecordFromCache();
-        this.applyShopStylesToOwnMessages();
-    },
-
     // Pull the authoritative record from R2 for the current pubkey
     async loadShopFromServer() {
         if (!this.pubkey) return;

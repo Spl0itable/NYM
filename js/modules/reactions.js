@@ -1195,14 +1195,6 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
         }
     },
 
-    closeReactionPicker() {
-        if (this.activeReactionPicker) {
-            this.activeReactionPicker.remove();
-            this.activeReactionPicker = null;
-            this.activeReactionPickerButton = null;
-        }
-    },
-
     setupEmojiPicker() {
         const picker = document.getElementById('emojiPicker');
         if (!picker) return;

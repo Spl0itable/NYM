@@ -44,7 +44,6 @@ import {
   schnorr,
   BOT_LIGHTNING_ADDRESS,
   BOT_CORS_HEADERS,
-  NYMCHAT_APP_ORIGINS,
   isNymchatBotClient
 } from "./_shared.js";
 

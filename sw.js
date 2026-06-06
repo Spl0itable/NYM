@@ -1,11 +1,19 @@
 const CACHE = 'nym-' + '__CACHE_VERSION__';
 const ASSET_RE = /\/(js|css)\//;
+let PRECACHE = [];
+try { PRECACHE = JSON.parse('__PRECACHE_ASSETS__'); } catch (_) { }
 
 self.addEventListener('install', (e) => {
     e.waitUntil((async () => {
         try {
             const c = await caches.open(CACHE);
+            // Entry document plus the critical JS/CSS bundle.
             await c.add(new Request('/', { cache: 'reload' }));
+            if (PRECACHE.length) {
+                await Promise.all(PRECACHE.map((u) =>
+                    c.add(new Request(u, { cache: 'reload' })).catch(() => { })
+                ));
+            }
         } catch (_) { }
         self.skipWaiting();
     })());
@@ -27,11 +35,13 @@ self.addEventListener('fetch', (e) => {
 
     if (req.mode === 'navigate') {
         e.respondWith((async () => {
-            try {
-                return await fetch(req);
-            } catch (_) {
-                return (await caches.match(req)) || (await caches.match('/')) || Response.error();
-            }
+            const cache = await caches.open(CACHE);
+            const cached = (await cache.match(req)) || (await cache.match('/'));
+            const network = fetch(req).then((resp) => {
+                if (resp && resp.ok) cache.put('/', resp.clone());
+                return resp;
+            }).catch(() => null);
+            return cached || (await network) || Response.error();
         })());
         return;
     }

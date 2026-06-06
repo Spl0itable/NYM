@@ -765,11 +765,11 @@ Object.assign(NYM.prototype, {
         if (!meta || (!meta.title && !meta.description)) return '';
 
         const imageHtml = meta.image
-            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.image))}" class="link-preview-image" loading="lazy" data-error-action="errorHideElement">`
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.image))}" class="link-preview-image" decoding="async" loading="lazy" data-error-action="errorHideElement">`
             : '';
 
         const faviconHtml = meta.favicon
-            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.favicon))}" class="link-preview-favicon" loading="lazy" data-error-action="errorHideElement">`
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.favicon))}" class="link-preview-favicon" decoding="async" loading="lazy" data-error-action="errorHideElement">`
             : '';
 
         const siteNameHtml = meta.siteName
@@ -2046,7 +2046,7 @@ Object.assign(NYM.prototype, {
         const favLabel = fav ? 'Unfavorite GIF' : 'Favorite GIF';
         return `
     <div class="gif-item" data-gif-url="${safeOriginal}" data-gif-title="${safeTitle}">
-        <img src="${safeProxied}" alt="${safeTitle}" loading="lazy">
+        <img src="${safeProxied}" alt="${safeTitle}" decoding="async" loading="lazy">
         <button class="gif-fav-btn${fav ? ' active' : ''}" data-gif-fav="${safeOriginal}" title="${favLabel}" aria-label="${favLabel}">
             <svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg>
         </button>
