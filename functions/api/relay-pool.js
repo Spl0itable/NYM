@@ -22,6 +22,8 @@
 //   ["POOL:RELAY_BAN", relayUrl, reason] - relay permanently dropped (auth, restricted, etc.)
 //   ["POOL:STATUS", { connected, count, latency, events }]
 
+import { getEventHash, schnorr } from './_shared.js';
+
 function isNymchatClient(request) {
   const origin = request.headers.get('Origin') || '';
   if (origin) {
@@ -593,6 +595,19 @@ export async function onRequest(context) {
       typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
   }
 
+  // Only archive cryptographically valid events: the id must match the event
+  // hash and the schnorr signature must verify, so forged channel events can't
+  // be persisted. Parsed once per unique event, in the background flush path.
+  function archiveEventValid(jsonStr) {
+    try {
+      const ev = JSON.parse(jsonStr);
+      if (!ev || typeof ev.id !== 'string' || typeof ev.sig !== 'string' || typeof ev.pubkey !== 'string') return false;
+      if (!Array.isArray(ev.tags)) return false;
+      if (getEventHash(ev) !== ev.id) return false;
+      return schnorr.verify(ev.sig, ev.id, ev.pubkey);
+    } catch { return false; }
+  }
+
   // Flush buffered events as batched INSERT OR IGNORE statements. The id primary
   // key drops duplicates; an occasional failed flush is backfilled by relays.
   async function flushArchive() {
@@ -620,7 +635,8 @@ export async function onRequest(context) {
     const now = Date.now();
     const inserted = [];
     for (let i = 0; i < pending.length; i += ARCHIVE_BATCH) {
-      const slice = pending.slice(i, i + ARCHIVE_BATCH);
+      const slice = pending.slice(i, i + ARCHIVE_BATCH).filter((r) => archiveEventValid(r.json));
+      if (slice.length === 0) continue;
       const chunk = slice.map(
         (r) => stmt.bind(r.id, r.channel, r.kind, r.pubkey, r.created_at, r.json, now)
       );

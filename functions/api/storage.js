@@ -597,6 +597,7 @@ function pmIsValidWrapForUser(ev, pubkey) {
     if (ev.kind !== 1059 && ev.kind !== 1060) return false;
     if (typeof ev.id !== "string" || typeof ev.sig !== "string" || typeof ev.pubkey !== "string") return false;
     if (typeof ev.content !== "string" || !Array.isArray(ev.tags)) return false;
+    if (ev.tags.some(function (t) { return Array.isArray(t) && t[0] === "d"; })) return false;
     var addressed = ev.tags.some(function (t) {
       return Array.isArray(t) && t[0] === "p" && typeof t[1] === "string" && t[1].toLowerCase() === pubkey;
     });

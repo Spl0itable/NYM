@@ -598,9 +598,6 @@ Object.assign(NYM.prototype, {
             this.processedPMEventIds.add(event.id);
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
-            // Mirror the gift wrap to R2 so PMs restore on other devices
-            if (!fromR2) this._archivePMEvent(event);
-
             // Update lastPMSyncTime to track newest received PM
             if (event.created_at && event.created_at > this.lastPMSyncTime) {
                 this.lastPMSyncTime = event.created_at;
@@ -957,6 +954,9 @@ Object.assign(NYM.prototype, {
             if (rumor.kind === 69420) {
                 return;
             }
+
+            // Archive only durable content; settings/signaling/typing/receipts already returned.
+            if (!fromR2) this._archivePMEvent(event);
 
             // Fetch profile for any PM sender we don't have (await to get nickname)
             if (!isOwn && !this.users.has(senderPubkey)) {
