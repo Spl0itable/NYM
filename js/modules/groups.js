@@ -1927,44 +1927,43 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Build a map: readerPubkey -> latest nymMessageId they've read
-        // by iterating own messages from newest to oldest
-        const latestReadByReader = new Map(); // pubkey -> nymMessageId
-        const ownMessages = messages
-            .filter(m => m.isOwn && m.nymMessageId && this.groupMessageReaders.has(m.nymMessageId))
-            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()); // newest first
+        const displayReaders = this._computeWaterfallReaders(
+            messages, this.groupMessageReaders, m => m.nymMessageId, m => m.timestamp.getTime());
 
-        for (const msg of ownMessages) {
-            const readers = this.groupMessageReaders.get(msg.nymMessageId);
-            if (!readers) continue;
-            for (const [pk] of readers) {
-                if (!latestReadByReader.has(pk)) {
-                    latestReadByReader.set(pk, msg.nymMessageId);
-                }
-            }
-        }
-
-        // Now for each own message, compute which readers to DISPLAY on it
-        // (only those whose latest-read message is THIS message)
-        const displayReaders = new Map(); // nymMessageId -> Map(pk -> nym)
-        for (const [pk, msgId] of latestReadByReader) {
-            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
-            const readers = this.groupMessageReaders.get(msgId);
-            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
-            displayReaders.get(msgId).set(pk, name);
-        }
-
-        // Update each visible own message's reader avatars
-        for (const msg of ownMessages) {
+        for (const msg of messages) {
+            if (!msg.isOwn || !msg.nymMessageId || !this.groupMessageReaders.has(msg.nymMessageId)) continue;
             const el = document.querySelector(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
             if (!el) continue;
-            const waterfallReaders = displayReaders.get(msg.nymMessageId);
-            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+            const hasReaders = this._syncReaderAvatars(el, displayReaders.get(msg.nymMessageId));
             if (hasReaders && !el._readerLongPressBound) {
                 this._bindReaderLongPress(el, msg.nymMessageId);
                 el._readerLongPressBound = true;
             }
         }
+    },
+
+    _computeWaterfallReaders(messages, readersStore, idOf, tsOf) {
+        const latestReadByReader = new Map(); // pubkey -> messageId
+        const ownMessages = (messages || [])
+            .filter(m => m.isOwn && idOf(m) && readersStore.has(idOf(m)))
+            .sort((a, b) => tsOf(b) - tsOf(a)); // newest first
+
+        for (const msg of ownMessages) {
+            const readers = readersStore.get(idOf(msg));
+            if (!readers) continue;
+            for (const [pk] of readers) {
+                if (!latestReadByReader.has(pk)) latestReadByReader.set(pk, idOf(msg));
+            }
+        }
+
+        const displayReaders = new Map(); // messageId -> Map(pk -> nym)
+        for (const [pk, msgId] of latestReadByReader) {
+            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
+            const readers = readersStore.get(msgId);
+            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
+            displayReaders.get(msgId).set(pk, name);
+        }
+        return displayReaders;
     },
 
     // Fallback: update a single message's reader avatars without waterfall
@@ -2060,32 +2059,14 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const latestReadByReader = new Map();
-        const ownMessages = messages
-            .filter(m => m.isOwn && m.id && this.channelMessageReaders.has(m.id))
-            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        const displayReaders = this._computeWaterfallReaders(
+            messages, this.channelMessageReaders, m => m.id, m => (m.created_at || 0));
 
-        for (const msg of ownMessages) {
-            const readers = this.channelMessageReaders.get(msg.id);
-            if (!readers) continue;
-            for (const [pk] of readers) {
-                if (!latestReadByReader.has(pk)) latestReadByReader.set(pk, msg.id);
-            }
-        }
-
-        const displayReaders = new Map();
-        for (const [pk, msgId] of latestReadByReader) {
-            if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
-            const readers = this.channelMessageReaders.get(msgId);
-            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
-            displayReaders.get(msgId).set(pk, name);
-        }
-
-        for (const msg of ownMessages) {
+        for (const msg of messages) {
+            if (!msg.isOwn || !msg.id || !this.channelMessageReaders.has(msg.id)) continue;
             const el = document.querySelector(`.channel-readers[data-msg-id="${msg.id}"]`);
             if (!el) continue;
-            const waterfallReaders = displayReaders.get(msg.id);
-            const hasReaders = this._syncReaderAvatars(el, waterfallReaders);
+            const hasReaders = this._syncReaderAvatars(el, displayReaders.get(msg.id));
             if (hasReaders && !el._readerLongPressBound) {
                 this._bindChannelReaderLongPress(el, msg.id);
                 el._readerLongPressBound = true;
@@ -2106,9 +2087,20 @@ Object.assign(NYM.prototype, {
     },
 
     _buildChannelReadersHtml(messageId) {
-        const readers = this.channelMessageReaders.get(messageId);
+        const readers = this._waterfallReadersForChannel(messageId);
         if (!readers || readers.size === 0) return '';
         return this._buildGroupReadersHtmlFromMap(readers);
+    },
+
+    // Resolve the waterfalled reader set for a single channel message so the
+    // initial render only shows avatars on each reader's latest seen message.
+    _waterfallReadersForChannel(messageId) {
+        if (this.inPMMode || !this.currentGeohash) return this.channelMessageReaders.get(messageId) || null;
+        const messages = this.messages.get(`#${this.currentGeohash}`);
+        if (!messages) return this.channelMessageReaders.get(messageId) || null;
+        const displayReaders = this._computeWaterfallReaders(
+            messages, this.channelMessageReaders, m => m.id, m => (m.created_at || 0));
+        return displayReaders.get(messageId) || null;
     },
 
     _bindChannelReaderLongPress(el, messageId) {
@@ -2141,20 +2133,20 @@ Object.assign(NYM.prototype, {
 
     // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
     _buildGroupReadersHtml(nymMessageId) {
-        const MAX_VISIBLE = 3;
-        const readers = this.groupMessageReaders.get(nymMessageId);
+        const readers = this._waterfallReadersForGroup(nymMessageId);
         if (!readers || readers.size === 0) return '';
-        const entries = Array.from(readers.entries());
-        const visible = entries.slice(0, MAX_VISIBLE);
-        const overflow = readers.size - MAX_VISIBLE;
-        const avatarHtml = visible.map(([pk, name]) => {
-            const sk = this._safePubkey(pk);
-            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" loading="lazy">`;
-        }).join('');
-        const overflowHtml = overflow > 0
-            ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
-            : '';
-        return avatarHtml + overflowHtml;
+        return this._buildGroupReadersHtmlFromMap(readers);
+    },
+
+    // Resolve the waterfalled reader set for a single group message so the
+    // initial render only shows avatars on each reader's latest seen message.
+    _waterfallReadersForGroup(nymMessageId) {
+        if (!this.inPMMode || !this.currentGroup) return this.groupMessageReaders.get(nymMessageId) || null;
+        const messages = this.pmMessages.get(this.getGroupConversationKey(this.currentGroup));
+        if (!messages) return this.groupMessageReaders.get(nymMessageId) || null;
+        const displayReaders = this._computeWaterfallReaders(
+            messages, this.groupMessageReaders, m => m.nymMessageId, m => m.timestamp.getTime());
+        return displayReaders.get(nymMessageId) || null;
     },
 
     // Attach a 500ms long-press to a .group-readers element to open the readers modal

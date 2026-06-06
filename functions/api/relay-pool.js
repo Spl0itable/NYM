@@ -856,6 +856,11 @@ export async function onRequest(context) {
   }
 
   // Channel spam suppression at the pool boundary
+  const RX_BLOCKED_CONTENT_BLOB = /"content":"(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}"/;
+  function hasBlockedContentPrefix(raw) {
+    return RX_BLOCKED_CONTENT_BLOB.test(raw);
+  }
+
   let droppedSpamCount = 0;
   function isSpamEventFrame(raw) {
     const kind = extractEventKind(raw);
@@ -1038,7 +1043,7 @@ export async function onRequest(context) {
             seenEvents.set(eventId, 1);
             trimDedup();
           }
-          if (isSpamEventFrame(raw)) {
+          if (hasBlockedContentPrefix(raw) || isSpamEventFrame(raw)) {
             droppedSpamCount++;
             return;
           }

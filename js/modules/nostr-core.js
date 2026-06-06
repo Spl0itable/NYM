@@ -1,5 +1,8 @@
 // nostr-core.js - Event signing, NIP-44/59 encryption, gift wraps, profile fetch, presence, typing indicators
 
+// Relayed media/encoded blobs leaking into public channels: a known prefix
+// followed by a contiguous base64-style token (not plain text like "enc: note")
+const _RX_BLOCKED_CONTENT_BLOB = /^(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}$/;
 const _RX_REGEX_ESCAPE_NC = /[.*+?^${}()|[\]\\]/g;
 const _quoteMentionCache = new Map();
 function _getQuoteMentionPattern(author) {
@@ -264,6 +267,8 @@ Object.assign(NYM.prototype, {
         if (typeof event.created_at !== 'number' || !Number.isFinite(event.created_at)) {
             event.created_at = Math.floor(Date.now() / 1000);
         }
+
+        if (this.hasBlockedContentPrefix(event.content)) return;
 
         // Early deduplication for channel messages to prevent re-processing on reconnect
         if (event.kind === 20000 || event.kind === 23333) {
@@ -873,6 +878,12 @@ Object.assign(NYM.prototype, {
         if (emojiMatches.length >= 4 && letterCount > 0) score += 1;
 
         return score;
+    },
+
+    // Relayed media/encoded blobs we never render: drop them outright
+    hasBlockedContentPrefix(content) {
+        if (typeof content !== 'string') return false;
+        return _RX_BLOCKED_CONTENT_BLOB.test(content.trimStart());
     },
 
     isSpamMessage(content) {

@@ -475,9 +475,14 @@ Object.assign(NYM.prototype, {
             const sender = pc.addTrack(t, this.activeCall.localStream);
             if (t.kind === 'video') entry.videoSender = sender;
         });
-        if (this.activeCall.sharing && this.activeCall.screenStream && entry.videoSender) {
+        if (this.activeCall.sharing && this.activeCall.screenStream) {
             const st = this.activeCall.screenStream.getVideoTracks()[0];
-            if (st) { try { entry.videoSender.replaceTrack(st); } catch (e) { /* ignore */ } }
+            if (st) {
+                try {
+                    if (entry.videoSender) entry.videoSender.replaceTrack(st);
+                    else entry.videoSender = pc.addTrack(st, this.activeCall.screenStream);
+                } catch (e) { /* ignore */ }
+            }
             this._sendCallSignal(peerPubkey, { type: 'share', callId: this.activeCall.callId, on: true });
         }
         if (this._isCallMod() && (this.activeCall.shareRestricted || this.activeCall.presenter)) {
@@ -750,9 +755,8 @@ Object.assign(NYM.prototype, {
         }
         tile.classList.toggle('presenting', !!sharing);
 
-        const hasVideo = this.activeCall.kind === 'video'
-            && stream && stream.getVideoTracks().length > 0
-            && (sharing || !(isLocal && this.activeCall.cameraOff));
+        const hasVideo = stream && stream.getVideoTracks().length > 0
+            && (sharing || (this.activeCall.kind === 'video' && !(isLocal && this.activeCall.cameraOff)));
         tile.classList.toggle('no-video', !hasVideo);
     },
 
@@ -844,7 +848,7 @@ Object.assign(NYM.prototype, {
 
     canShareScreen() {
         const ac = this.activeCall;
-        if (!ac || ac.kind !== 'video') return false;
+        if (!ac) return false;
         if (!ac.isGroup) return true;
         if (this._canModerate(ac.groupId, this.pubkey)) return true;
         if (!ac.shareRestricted) return true;
@@ -853,7 +857,7 @@ Object.assign(NYM.prototype, {
 
     async toggleScreenShare() {
         const ac = this.activeCall;
-        if (!ac || ac.kind !== 'video') return;
+        if (!ac) return;
         if (ac.sharing) { this._stopScreenShare(); return; }
         if (!this.canShareScreen()) { this.requestToPresent(); return; }
         await this._startScreenShare();
@@ -875,7 +879,16 @@ Object.assign(NYM.prototype, {
         if (!track) { stream.getTracks().forEach(t => t.stop()); return; }
         ac.screenStream = stream;
         ac.sharing = true;
-        ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(track); } catch (e) { /* ignore */ } } });
+        ac.peers.forEach((entry, pk) => {
+            if (entry.videoSender) {
+                try { entry.videoSender.replaceTrack(track); } catch (e) { /* ignore */ }
+            } else {
+                try {
+                    entry.videoSender = entry.pc.addTrack(track, stream);
+                    this._makeOffer(pk);
+                } catch (e) { /* ignore */ }
+            }
+        });
         track.addEventListener('ended', () => this._stopScreenShare());
         const others = ac.members.filter(pk => pk !== this.pubkey);
         this._broadcastCallSignal(others, { type: 'share', callId: ac.callId, on: true });
@@ -1621,11 +1634,10 @@ Object.assign(NYM.prototype, {
 
     _updateCallControls() {
         const ac = this.activeCall;
-        const video = !!(ac && ac.kind === 'video');
 
         const shareBtn = document.getElementById('callShareBtn');
         if (shareBtn) {
-            shareBtn.classList.toggle('nm-call-hidden', !video);
+            shareBtn.classList.toggle('nm-call-hidden', !ac);
             shareBtn.classList.toggle('active', !!(ac && ac.sharing));
             const allowed = this.canShareScreen();
             if (ac && ac.sharing) shareBtn.title = 'Stop sharing screen';
@@ -1645,7 +1657,7 @@ Object.assign(NYM.prototype, {
 
         const presenterBtn = document.getElementById('callPresenterBtn');
         if (presenterBtn) {
-            const show = video && this._isCallMod();
+            const show = this._isCallMod();
             presenterBtn.classList.toggle('nm-call-hidden', !show);
             const badge = presenterBtn.querySelector('.call-btn-badge');
             const n = ac ? ac.presentRequests.size : 0;
