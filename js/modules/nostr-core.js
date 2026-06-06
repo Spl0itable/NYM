@@ -2,7 +2,7 @@
 
 // Relayed media/encoded blobs leaking into public channels: a known prefix
 // followed by a contiguous base64-style token (not plain text like "enc: note")
-const _RX_BLOCKED_CONTENT_BLOB = /^(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}$/;
+const _RX_BLOCKED_CONTENT_BLOB = /^(?:(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}|test_\d+_\d+)$/;
 const _RX_REGEX_ESCAPE_NC = /[.*+?^${}()|[\]\\]/g;
 const _quoteMentionCache = new Map();
 function _getQuoteMentionPattern(author) {

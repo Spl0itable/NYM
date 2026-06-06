@@ -871,7 +871,7 @@ export async function onRequest(context) {
   }
 
   // Channel spam suppression at the pool boundary
-  const RX_BLOCKED_CONTENT_BLOB = /"content":"(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}"/;
+  const RX_BLOCKED_CONTENT_BLOB = /"content":"(?:(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}|test_\d+_\d+)"/;
   function hasBlockedContentPrefix(raw) {
     return RX_BLOCKED_CONTENT_BLOB.test(raw);
   }
