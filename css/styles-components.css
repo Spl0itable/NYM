@@ -667,7 +667,7 @@
 }
 
 .emoji-item-emoji {
-    font-size: 18px;
+    font-size: 23px;
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', sans-serif;
 }
 
@@ -1147,7 +1147,7 @@
     border-radius: var(--radius-xs);
     padding: 8px;
     cursor: pointer;
-    font-size: 18px;
+    font-size: 23px;
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', sans-serif;
     transition: all var(--transition);
     text-align: center;
@@ -1987,7 +1987,7 @@ body.chat-bubbles .crypto-lock-irc {
     border-radius: var(--radius-xs);
     padding: 6px;
     cursor: pointer;
-    font-size: 18px;
+    font-size: 23px;
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', 'EmojiSymbols', sans-serif;
     transition: all var(--transition);
     text-align: center;

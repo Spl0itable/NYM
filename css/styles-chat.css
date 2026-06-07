@@ -546,7 +546,7 @@
 }
 
 .reactors-modal-emoji {
-    font-size: 32px;
+    font-size: 40px;
     line-height: 1;
     display: inline-flex;
     align-items: center;
@@ -841,42 +841,42 @@ body.chat-bubbles .read-more-btn {
 }
 
 .emoji-only .emoji {
-    font-size: 2em;
+    font-size: 2.5em;
 }
 
 .custom-emoji {
     display: inline-block;
-    width: 1.4em;
-    height: 1.4em;
+    width: 1.75em;
+    height: 1.75em;
     object-fit: contain;
-    vertical-align: -0.3em;
+    vertical-align: -0.375em;
     margin: 0 1px;
 }
 
 .emoji-only .custom-emoji {
-    width: 2.2em;
-    height: 2.2em;
+    width: 2.75em;
+    height: 2.75em;
     vertical-align: middle;
 }
 
 .custom-emoji-reaction {
-    width: 1.15em;
-    height: 1.15em;
-    vertical-align: -0.2em;
+    width: 1.45em;
+    height: 1.45em;
+    vertical-align: -0.25em;
     margin: 0;
 }
 
 .emoji-option .custom-emoji,
 .emoji-btn .custom-emoji {
-    width: 24px;
-    height: 24px;
+    width: 30px;
+    height: 30px;
     vertical-align: middle;
     margin: 0;
 }
 
 .emoji-item-emoji .custom-emoji {
-    width: 20px;
-    height: 20px;
+    width: 25px;
+    height: 25px;
     vertical-align: middle;
     margin: 0;
 }
@@ -1517,21 +1517,21 @@ body.chat-bubbles .edited-indicator-irc {
 }
 
 .swipe-reply-indicator .swipe-react-emoji {
-    font-size: 18px;
+    font-size: 23px;
     line-height: 1;
 }
 
 .swipe-reply-indicator .swipe-react-emoji-img,
 .swipe-reply-indicator img.custom-emoji {
-    width: 22px;
-    height: 22px;
+    width: 28px;
+    height: 28px;
     object-fit: contain;
 }
 
 .swipe-react-emoji-preview-img,
 #swipeReactEmojiPreview img.custom-emoji {
-    width: 26px;
-    height: 26px;
+    width: 33px;
+    height: 33px;
     object-fit: contain;
     vertical-align: middle;
 }
