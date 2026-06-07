@@ -670,9 +670,9 @@ Object.assign(NYM.prototype, {
             }
             // Apply cosmetics (message-level glow)
             if (Array.isArray(userShopItems?.cosmetics)) {
-                if (userShopItems.cosmetics.includes('cosmetic-aura-gold')) {
-                    classes.push('cosmetic-aura-gold');
-                }
+                userShopItems.cosmetics.forEach(c => {
+                    if (c && c !== 'cosmetic-redacted') classes.push(c);
+                });
             }
 
             messageEl.className = classes.join(' ');
@@ -984,9 +984,6 @@ Object.assign(NYM.prototype, {
             }
             if (this.activeCosmetics && this.activeCosmetics.size > 0) {
                 this.activeCosmetics.forEach(c => {
-                    if (c === 'cosmetic-aura-gold') {
-                        messageEl.classList.add('cosmetic-aura-gold');
-                    }
                     if (c === 'cosmetic-redacted') {
                         const auth = messageEl.querySelector('.message-author');
                         if (auth) auth.classList.add('cosmetic-redacted');
@@ -999,6 +996,8 @@ Object.assign(NYM.prototype, {
                                 contentEl.textContent = '';
                             }, 10000);
                         }
+                    } else if (c) {
+                        messageEl.classList.add(c);
                     }
                 });
             }

@@ -734,6 +734,38 @@ Object.assign(NYM.prototype, {
         this._maybeFetchSupply();
     },
 
+    _renderActiveItemsPreview() {
+        const supporterActive = this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false;
+        const cosmetics = this.activeCosmetics ? Array.from(this.activeCosmetics) : [];
+        const flairs = this.getActiveFlairs();
+        const hasActive = !!this.activeMessageStyle || supporterActive || cosmetics.length || flairs.length;
+        if (!hasActive) return '';
+
+        const classes = ['message', 'self', 'shop-preview-message'];
+        if (this.activeMessageStyle) classes.push(this.activeMessageStyle);
+        if (supporterActive) classes.push('supporter-style');
+        cosmetics.forEach(c => { if (c && c !== 'cosmetic-redacted') classes.push(c); });
+
+        const colorClass = this.getUserColorClass(this.pubkey);
+        const authorExtra = cosmetics.includes('cosmetic-redacted') ? ' cosmetic-redacted' : '';
+        const nym = this.escapeHtml(this.nym || 'You');
+        const suffix = this.escapeHtml(this.getPubkeySuffix(this.pubkey));
+        const editions = this._ownEditions();
+        const flairHtml = flairs.map(f => `<span class="flair-badge ${f.id}">${this._flairIconHtml(f.id, editions[f.id])}</span>`).join('');
+        const supporterBadge = supporterActive
+            ? `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`
+            : '';
+
+        return `
+<div class="shop-active-items shop-preview-block">
+    <div class="shop-active-items-title">Preview</div>
+    <div class="${classes.join(' ')}">
+        <span class="message-author self ${colorClass}${authorExtra}"><span class="nym-bracket">&lt;</span>${nym}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}<span class="nym-bracket">&gt;</span></span>
+        <span class="message-content ${colorClass}">This is how your messages look.</span>
+    </div>
+</div>`;
+    },
+
     renderInventoryTab(container) {
         let html = '<div class="shop-category-title">My Items</div>';
 
@@ -742,6 +774,8 @@ Object.assign(NYM.prototype, {
             container.innerHTML = html;
             return;
         }
+
+        html += this._renderActiveItemsPreview();
 
         const activeStyle = this.getActiveMessageStyle();
         if (activeStyle) {
