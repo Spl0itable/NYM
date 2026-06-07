@@ -136,7 +136,9 @@ Object.assign(NYM.prototype, {
                     at: (p.timestamp || 0) * 1000,
                     amountSats: p.amount || 0,
                     code: p.code || null,
-                    gift: !!p.gift
+                    gift: !!p.gift,
+                    edition: p.edition || null,
+                    editionMax: p.editionMax || 0
                 };
             });
             localStorage.setItem('nym_shop_record', JSON.stringify({
@@ -195,7 +197,9 @@ Object.assign(NYM.prototype, {
                     timestamp: Math.floor((info.at || Date.now()) / 1000),
                     amount: info.amountSats || 0,
                     code: info.code || null,
-                    gift: !!info.gift
+                    gift: !!info.gift,
+                    edition: info.edition || null,
+                    editionMax: info.editionMax || 0
                 });
             });
         }
@@ -267,7 +271,8 @@ Object.assign(NYM.prototype, {
                     style: active.style || null,
                     flair: Array.isArray(active.flair) ? active.flair : [],
                     cosmetics: Array.isArray(active.cosmetics) ? active.cosmetics : [],
-                    supporter: !!active.supporter
+                    supporter: !!active.supporter,
+                    editions: (active.editions && typeof active.editions === 'object') ? active.editions : {}
                 };
                 const prev = this.shopItemsCache.get(pk);
                 const updatedAt = (st && st.updatedAt) || 0;
@@ -295,9 +300,6 @@ Object.assign(NYM.prototype, {
         if (style) msg.classList.add(style);
         if (supporter) msg.classList.add('supporter-style');
         (cosmetics || []).forEach(c => {
-            if (c === 'cosmetic-aura-gold') {
-                msg.classList.add('cosmetic-aura-gold');
-            }
             if (c === 'cosmetic-redacted') {
                 const auth = msg.querySelector('.message-author');
                 if (auth) auth.classList.add('cosmetic-redacted');
@@ -308,32 +310,51 @@ Object.assign(NYM.prototype, {
                         contentEl.textContent = '';
                     }, 10000);
                 }
+            } else if (c) {
+                // Purely visual cosmetics map directly to a message CSS class
+                // (cosmetic-aura-gold, cosmetic-aura-neon, cosmetic-aura-rainbow, cosmetic-frost)
+                msg.classList.add(c);
             }
         });
     },
 
-    _applyFlairBadgesToMessage(msg, flairIds, supporter) {
+    _applyFlairBadgesToMessage(msg, flairIds, supporter, editions) {
         const authorEl = msg.querySelector('.message-author');
         if (!authorEl) return;
         authorEl.querySelectorAll('.flair-badge').forEach(el => el.remove());
+        authorEl.classList.remove('has-genesis-flair');
         const suffix = authorEl.querySelector('.nym-suffix');
         let anchor = suffix;
+        editions = editions || {};
         (flairIds || []).forEach(id => {
             const flairItem = this.getShopItemById(id);
             if (!flairItem) return;
             const span = document.createElement('span');
             span.className = `flair-badge ${id}`;
-            span.innerHTML = flairItem.icon;
+            span.innerHTML = this._flairIconHtml(id, editions[id]);
             if (anchor) { anchor.after(span); anchor = span; }
+            if (id === 'flair-genesis') authorEl.classList.add('has-genesis-flair');
         });
         const existingSupporter = authorEl.querySelector('.supporter-badge');
         if (existingSupporter) existingSupporter.remove();
         if (supporter) {
             const badge = document.createElement('span');
             badge.className = 'supporter-badge';
-            badge.innerHTML = '<span class="supporter-badge-icon">\u{1F3C6}</span><span class="supporter-badge-text">Supporter</span>';
+            badge.innerHTML = `<span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span>`;
             authorEl.insertBefore(badge, authorEl.lastChild);
         }
+        // Safeguard: never leave more than one verified/supporter badge behind
+        // (a re-render race could otherwise stack two checkmarks).
+        this._dedupeAuthorBadges(authorEl);
+    },
+
+    // Keep at most one of each singleton badge inside an author element.
+    _dedupeAuthorBadges(authorEl) {
+        if (!authorEl) return;
+        ['.verified-badge', '.supporter-badge', '.friend-badge'].forEach(sel => {
+            const found = authorEl.querySelectorAll(sel);
+            for (let i = 1; i < found.length; i++) found[i].remove();
+        });
     },
 
     applyShopStylesToUserMessages(pubkey, items) {
@@ -341,7 +362,7 @@ Object.assign(NYM.prototype, {
         const messages = document.querySelectorAll(`.message[data-pubkey="${pubkey}"]`);
         messages.forEach(msg => {
             this._applyShopClassesToMessage(msg, items.style, items.cosmetics, items.supporter);
-            this._applyFlairBadgesToMessage(msg, items.flair, items.supporter);
+            this._applyFlairBadgesToMessage(msg, items.flair, items.supporter, items.editions);
         });
     },
 
@@ -350,9 +371,10 @@ Object.assign(NYM.prototype, {
         const supporterActive = this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false;
         const cosmetics = Array.from(this.activeCosmetics || []);
         const flairs = Array.from(this.activeFlairs || []);
+        const editions = this._ownEditions();
         document.querySelectorAll(`.message[data-pubkey="${this.pubkey}"]`).forEach(msg => {
             this._applyShopClassesToMessage(msg, this.activeMessageStyle, cosmetics, supporterActive);
-            this._applyFlairBadgesToMessage(msg, flairs, supporterActive);
+            this._applyFlairBadgesToMessage(msg, flairs, supporterActive, editions);
         });
     },
 
@@ -462,7 +484,7 @@ Object.assign(NYM.prototype, {
         if (event && event.target) {
             event.target.classList.add('active');
         } else {
-            const idx = ['styles', 'flair', 'special', 'inventory'].indexOf(tab) + 1;
+            const idx = ['styles', 'flair', 'special', 'limited', 'inventory'].indexOf(tab) + 1;
             const btn = document.querySelector(`.shop-tab:nth-child(${idx})`);
             if (btn) btn.classList.add('active');
         }
@@ -472,6 +494,7 @@ Object.assign(NYM.prototype, {
             case 'styles': this.renderStylesTab(shopBody); break;
             case 'flair': this.renderFlairTab(shopBody); break;
             case 'special': this.renderSpecialTab(shopBody); break;
+            case 'limited': this.renderLimitedTab(shopBody); break;
             case 'inventory': this.renderInventoryTab(shopBody); break;
         }
     },
@@ -496,19 +519,23 @@ Object.assign(NYM.prototype, {
         </div>`;
     },
 
+    // A live sample bubble for a message style
+    _shopStyleDemo(item) {
+        return `<div class="shop-msg-demo"><div class="message ${item.id}"><div class="message-content"><span>Preview message</span></div></div></div>`;
+    },
+
     renderStylesTab(container) {
         let html = '<div class="shop-category-title">Message Styles</div>';
         html += '<div class="shop-items">';
         this.shopItems.styles.forEach(item => {
             const isPurchased = this.userPurchases.has(item.id);
             html += `
-    <div class="shop-item ${isPurchased ? 'purchased' : ''}">
+    <div class="shop-item ${isPurchased ? 'purchased' : ''} ${item.tier === 'legendary' ? 'shop-item-legendary' : ''}">
+        ${this._legendaryRibbon(item)}
         <div class="shop-item-icon">${item.icon}</div>
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
-        <div class="shop-item-preview">
-            <span class="${item.preview}">Preview Message</span>
-        </div>
+        ${this._shopStyleDemo(item)}
         ${isPurchased ? this._shopItemOwnedHtml(item, true) : this._shopItemActionsHtml(item, false)}
     </div>
 `;
@@ -523,7 +550,8 @@ Object.assign(NYM.prototype, {
         this.shopItems.flair.forEach(item => {
             const isPurchased = this.userPurchases.has(item.id);
             html += `
-    <div class="shop-item ${isPurchased ? 'purchased' : ''}">
+    <div class="shop-item ${isPurchased ? 'purchased' : ''} ${item.tier === 'legendary' ? 'shop-item-legendary' : ''}">
+        ${this._legendaryRibbon(item)}
         <div class="shop-item-icon">${item.icon}</div>
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
@@ -538,27 +566,172 @@ Object.assign(NYM.prototype, {
         container.innerHTML = html;
     },
 
+    // Small "LEGENDARY" ribbon for tier:'legendary' items.
+    _legendaryRibbon(item) {
+        return item && item.tier === 'legendary' ? '<div class="shop-legendary-ribbon">LEGENDARY</div>' : '';
+    },
+
+    // A live sample message bubble showing how a special item looks. It reuses
+    // the real cosmetic classes, so it reflects the user's current bubble mode.
+    _shopCosmeticDemo(item) {
+        const text = 'Preview message';
+        if (item.id === 'cosmetic-redacted') {
+            return `<div class="shop-msg-demo"><div class="message"><div class="message-content cosmetic-redacted-message">${text}</div></div></div>`;
+        }
+        if (item.type === 'supporter') {
+            const badge = `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`;
+            return `<div class="shop-item-preview"><span><strong>Your_Nick</strong> ${badge}</span></div><div class="shop-msg-demo"><div class="message supporter-style"><div class="message-content">${text}</div></div></div>`;
+        }
+        const cls = item.cssClass || '';
+        return `<div class="shop-msg-demo"><div class="message ${cls}"><div class="message-content">${text}</div></div></div>`;
+    },
+
     renderSpecialTab(container) {
         let html = '<div class="shop-category-title">Special Items</div>';
         html += '<div class="shop-items">';
         this.shopItems.special.forEach(item => {
             const isPurchased = this.userPurchases.has(item.id);
+            const legend = item.tier === 'legendary';
             html += `
-    <div class="shop-item ${isPurchased ? 'purchased' : ''}">
+    <div class="shop-item ${isPurchased ? 'purchased' : ''} ${legend ? 'shop-item-legendary' : ''}">
+        ${this._legendaryRibbon(item)}
         <div class="shop-item-icon">${item.icon}</div>
         <div class="shop-item-name">${item.name}</div>
         <div class="shop-item-description">${item.description}</div>
-        ${item.benefits ? `
-            <div class="shop-item-preview nm-shop-1">
-                ${item.benefits.map(b => `• ${b}`).join('<br>')}
-            </div>
-        ` : ''}
+        ${this._shopCosmeticDemo(item)}
         ${isPurchased ? this._shopItemOwnedHtml(item, true) : this._shopItemActionsHtml(item, false)}
     </div>
 `;
         });
         html += '</div>';
         container.innerHTML = html;
+    },
+
+    // Availability for a limited/dropped item given cached supply.
+    // Returns { state, label } where state is one of:
+    // available | soon | ended | soldout.
+    _shopItemAvailability(item, supply) {
+        const now = Date.now();
+        if (typeof item.startsAt === 'number' && now < item.startsAt) {
+            return { state: 'soon', label: 'Starts ' + new Date(item.startsAt).toLocaleDateString() };
+        }
+        if (typeof item.endsAt === 'number' && now > item.endsAt) {
+            return { state: 'ended', label: 'Drop ended' };
+        }
+        if (item.maxSupply) {
+            const s = supply && supply[item.id];
+            if (s && typeof s.remaining === 'number') {
+                if (s.remaining <= 0) return { state: 'soldout', label: 'Sold out' };
+                return { state: 'available', label: `${s.remaining} / ${item.maxSupply} left` };
+            }
+            return { state: 'available', label: `Limited · ${item.maxSupply}` };
+        }
+        return { state: 'available', label: '' };
+    },
+
+    // Fetch remaining supply for limited items (public, no auth).
+    async fetchShopSupply(itemIds) {
+        try {
+            const data = await this._shopApiRequest('shop-supply', { itemIds }, false);
+            this._shopSupply = Object.assign(this._shopSupply || {}, data.supply || {});
+        } catch (e) { /* keep last known */ }
+        return this._shopSupply || {};
+    },
+
+    _maybeFetchSupply() {
+        const ids = (this.shopItems.limited || []).filter(i => i.maxSupply).map(i => i.id);
+        if (!ids.length || this._shopSupplyFetching) return;
+        if (this._shopSupplyTs && Date.now() - this._shopSupplyTs < 30000) return;
+        this._shopSupplyFetching = true;
+        this.fetchShopSupply(ids).then(() => {
+            this._shopSupplyTs = Date.now();
+            this._shopSupplyFetching = false;
+            if (this.activeShopTab === 'limited') {
+                const body = document.getElementById('shopBody');
+                if (body) this.renderLimitedTab(body);
+            }
+        }).catch(() => { this._shopSupplyFetching = false; });
+    },
+
+    _renderLimitedCard(item, supply) {
+        const isPurchased = this.userPurchases.has(item.id);
+        const avail = this._shopItemAvailability(item, supply);
+        const supplyBadge = avail.label
+            ? `<div class="shop-supply-badge shop-supply-${avail.state}">${avail.label}</div>` : '';
+        let preview = '';
+        if (item.type === 'nickname-flair') {
+            const sampleEdition = item.id === 'flair-genesis' ? 69 : null;
+            preview = `<div class="shop-item-preview"><span><strong>Your_Nick</strong> <span class="flair-badge ${item.id}">${this._flairIconHtml(item.id, sampleEdition)}</span></span></div>`;
+        } else if (item.type === 'message-style') {
+            preview = this._shopStyleDemo(item);
+        }
+        let footer;
+        if (isPurchased) footer = this._shopItemOwnedHtml(item, false);
+        else if (avail.state === 'available') footer = this._shopItemActionsHtml(item, false);
+        else footer = `<div class="shop-item-price"><span class="shop-price-amount">${avail.label}</span></div>`;
+        return `
+    <div class="shop-item ${isPurchased ? 'purchased' : ''} ${item.tier === 'legendary' ? 'shop-item-legendary' : ''}">
+        ${this._legendaryRibbon(item)}
+        <div class="shop-item-icon">${item.icon}</div>
+        <div class="shop-item-name">${item.name}</div>
+        <div class="shop-item-description">${item.description}</div>
+        ${supplyBadge}
+        ${preview}
+        ${footer}
+    </div>
+`;
+    },
+
+    _renderBundleCard(item) {
+        const all = item.bundle || [];
+        const CHIP_CAP = 10;
+        const shown = all.slice(0, CHIP_CAP);
+        let contents = shown.map(id => {
+            const ci = this.getShopItemById(id);
+            return ci ? `<span class="shop-bundle-chip">${ci.icon}<span>${ci.name}</span></span>` : '';
+        }).join('');
+        if (all.length > CHIP_CAP) {
+            contents += `<span class="shop-bundle-chip shop-bundle-more">+${all.length - CHIP_CAP} more</span>`;
+        }
+        const sum = (item.bundle || []).reduce((t, id) => {
+            const ci = this.getShopItemById(id);
+            return t + (ci ? ci.price : 0);
+        }, 0);
+        const savePct = sum > item.price ? Math.round((1 - item.price / sum) * 100) : 0;
+        const save = savePct > 0
+            ? `<div class="shop-supply-badge shop-supply-available">Save ${savePct}% · ${sum} sats value</div>` : '';
+        return `
+    <div class="shop-item ${item.tier === 'legendary' ? 'shop-item-legendary' : ''}">
+        ${this._legendaryRibbon(item)}
+        <div class="shop-item-icon">${item.icon}</div>
+        <div class="shop-item-name">${item.name}</div>
+        <div class="shop-item-description">${item.description}</div>
+        ${save}
+        <div class="shop-bundle-contents">${contents}</div>
+        ${this._shopItemActionsHtml(item, false)}
+    </div>
+`;
+    },
+
+    renderLimitedTab(container) {
+        const supply = this._shopSupply || {};
+        let html = '';
+        const limited = this.shopItems.limited || [];
+        if (limited.length) {
+            html += '<div class="shop-category-title">Limited Editions</div>';
+            html += '<div class="shop-items">';
+            limited.forEach(item => { html += this._renderLimitedCard(item, supply); });
+            html += '</div>';
+        }
+        const bundles = this.shopItems.bundles || [];
+        if (bundles.length) {
+            html += '<div class="shop-category-title nm-shop-3">Bundles</div>';
+            html += '<div class="shop-items">';
+            bundles.forEach(item => { html += this._renderBundleCard(item); });
+            html += '</div>';
+        }
+        container.innerHTML = html;
+        this._maybeFetchSupply();
     },
 
     renderInventoryTab(container) {
@@ -605,10 +778,13 @@ Object.assign(NYM.prototype, {
             const item = this.getShopItemById(itemId);
             if (!item) return;
 
+            const editionNo = purchase.edition
+                ? ` <span class="shop-edition-no">#${purchase.edition}${purchase.editionMax ? '/' + purchase.editionMax : ''}</span>` : '';
             html += `
-    <div class="shop-item purchased">
+    <div class="shop-item purchased ${item.tier === 'legendary' ? 'shop-item-legendary' : ''}">
+        ${this._legendaryRibbon(item)}
         <div class="shop-item-icon">${item.icon}</div>
-        <div class="shop-item-name">${item.name}</div>
+        <div class="shop-item-name">${item.name}${editionNo}</div>
         <div class="shop-item-description">${item.description}</div>
         <div class="nm-shop-4">
             Acquired: ${new Date((purchase.timestamp || 0) * 1000).toLocaleDateString()}
@@ -635,7 +811,7 @@ ${isOn ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
             } else if (item.type === 'supporter') {
                 const isActive = this.supporterBadgeActive !== false;
-                html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span></div>`;
+                html += `<div class="shop-item-preview"><span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span></div>`;
                 html += `
 <button class="shop-buy-btn nm-shop-5" data-action="activateSupporter">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
@@ -664,9 +840,27 @@ TRANSFER TO PUBKEY
         const allItems = [
             ...this.shopItems.styles,
             ...this.shopItems.flair,
-            ...this.shopItems.special
+            ...this.shopItems.special,
+            ...(this.shopItems.limited || []),
+            ...(this.shopItems.bundles || [])
         ];
         return allItems.find(item => item.id === itemId);
+    },
+
+    // Inline SVG trophy used for the supporter badge so the rendered flair
+    // matches the SVG icon shown in the shop preview (instead of an emoji).
+    getSupporterTrophyIcon() {
+        const item = this.getShopItemById('supporter-badge');
+        if (item && item.icon) return item.icon;
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" role="img" aria-label="Trophy"><title>Trophy</title><path d="M7 4h10v6a5 5 0 0 1-10 0V4z"/><path d="M7 6H4.5a2.5 2.5 0 0 0 2.5 2.5"/><path d="M17 6h2.5a2.5 2.5 0 0 1-2.5 2.5"/><path d="M12 15v3"/><path d="M9 21h6"/><path d="M10 18h4l.5 3h-5z"/></svg>';
+    },
+
+    // Edition numbers for the current user's owned items (id -> number),
+    // used to stamp numbered editions (e.g. Genesis) onto their flair.
+    _ownEditions() {
+        const out = {};
+        this.userPurchases.forEach((p, id) => { if (p && p.edition) out[id] = p.edition; });
+        return out;
     },
 
     getUserShopItems(pubkey) {
@@ -675,7 +869,8 @@ TRANSFER TO PUBKEY
                 style: this.activeMessageStyle,
                 flair: Array.from(this.activeFlairs || []),
                 supporter: this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false,
-                cosmetics: Array.from(this.activeCosmetics || [])
+                cosmetics: Array.from(this.activeCosmetics || []),
+                editions: this._ownEditions()
             };
         }
         this._queueShopStatusFetch(pubkey);
@@ -685,16 +880,30 @@ TRANSFER TO PUBKEY
             style: items.style || null,
             flair: Array.isArray(items.flair) ? items.flair : [],
             supporter: !!items.supporter,
-            cosmetics: Array.isArray(items.cosmetics) ? items.cosmetics : []
+            cosmetics: Array.isArray(items.cosmetics) ? items.cosmetics : [],
+            editions: (items.editions && typeof items.editions === 'object') ? items.editions : {}
         };
+    },
+
+    // Flair SVG for a badge, stamping the edition number inside numbered
+    // editions (Genesis shows the owner's number at the base of the pyramid).
+    _flairIconHtml(id, edition) {
+        const item = this.getShopItemById(id);
+        if (!item) return '';
+        if (id === 'flair-genesis' && edition) {
+            const txt = `<text x="12" y="19.4" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">${edition}</text>`;
+            return item.icon.replace('</svg>', txt + '</svg>');
+        }
+        return item.icon;
     },
 
     getFlairForUser(pubkey) {
         const userItems = this.getUserShopItems(pubkey);
         if (!userItems || !userItems.flair || !userItems.flair.length) return '';
+        const editions = userItems.editions || {};
         return userItems.flair.map(id => {
             const flairItem = this.getShopItemById(id);
-            return flairItem ? `<span class="flair-badge ${id}">${flairItem.icon}</span>` : '';
+            return flairItem ? `<span class="flair-badge ${id}">${this._flairIconHtml(id, editions[id])}</span>` : '';
         }).join('');
     },
 
@@ -969,8 +1178,16 @@ TRANSFER TO PUBKEY
         if (data.alreadyClaimed) return;
         this._applyShopClaim(data, item);
         const name = item ? item.name : 'item';
-        if (data.gift) this.displaySystemMessage(`Gift purchase completed: ${name}.`);
-        else this.displaySystemMessage(`Purchase completed: ${name}.` + (data.code ? ` Recovery code: ${data.code}` : ''));
+        if (data.gift) {
+            this.displaySystemMessage(`Gift purchase completed: ${name}.`);
+        } else {
+            let msg = `Purchase completed: ${name}`;
+            if (data.edition && data.edition.n) msg += ` #${data.edition.n}/${data.edition.max}`;
+            msg += '.';
+            if (Array.isArray(data.bundle) && data.bundle.length) msg += ` Unlocked ${data.bundle.length} items.`;
+            else if (data.code) msg += ` Recovery code: ${data.code}`;
+            this.displaySystemMessage(msg);
+        }
     },
 
     async _reconcileCreditEntry(entry) {
@@ -1081,7 +1298,9 @@ TRANSFER TO PUBKEY
             const data = await this._claimShopPurchase(inv.invoiceId, inv.receipt);
             this._applyShopClaim(data, item);
             this._removePendingPurchase(inv.invoiceId);
-            this._renderShopSuccess(item, data.gift, data.gift ? null : data.code);
+            // A limited purchase changes remaining supply; force a refresh.
+            this._shopSupplyTs = 0;
+            this._renderShopSuccess(item, data.gift, data.gift ? null : data.code, data);
         } catch (e) {
             if (zapStatus) {
                 zapStatus.className = 'zap-status error';
@@ -1090,8 +1309,21 @@ TRANSFER TO PUBKEY
         }
     },
 
-    _renderShopSuccess(item, isGift, code) {
+    _renderShopSuccess(item, isGift, code, data) {
         const zapStatus = document.getElementById('zapStatus');
+        data = data || {};
+        const edition = data.edition && data.edition.n
+            ? `<div class="nm-shop-11">Edition #${data.edition.n} of ${data.edition.max}</div>` : '';
+        // Bundle component recovery codes (only for the buyer, not when gifting).
+        const bundleCodes = (!isGift && Array.isArray(data.bundle) && data.bundle.length)
+            ? `<div class="nm-shop-12">
+    <div class="nm-shop-13">⚠️ SAVE YOUR RECOVERY CODES</div>
+    ${data.bundle.map(b => {
+                const ci = this.getShopItemById(b.itemId);
+                return `<div class="nm-shop-14">${ci ? ci.name : b.itemId}</div>
+    <div class="nm-shop-15" data-action="copyTextFromData" data-copy-text="${b.code}" title="Click to copy">${b.code}</div>`;
+            }).join('')}
+</div>` : '';
         if (zapStatus) {
             zapStatus.style.display = 'block';
             zapStatus.className = 'zap-status paid';
@@ -1099,12 +1331,13 @@ TRANSFER TO PUBKEY
 <div class="nm-shop-10">✅</div>
 <div>${isGift ? 'Gift sent!' : 'Purchase successful!'}</div>
 <div class="nm-shop-11">${item ? item.name : ''}</div>
-${code ? `
+${edition}
+${bundleCodes || (code ? `
 <div class="nm-shop-12">
     <div class="nm-shop-13">⚠️ SAVE YOUR RECOVERY CODE</div>
     <div class="nm-shop-14">Use this code to restore this item on another pubkey:</div>
     <div class="nm-shop-15" data-action="copyTextFromData" data-copy-text="${code}" title="Click to copy">${code}</div>
-</div>` : ''}
+</div>` : '')}
 `;
         }
         const modalActions = document.querySelector('#zapModal .modal-actions');

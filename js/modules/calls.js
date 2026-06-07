@@ -29,7 +29,7 @@ Object.assign(NYM.prototype, {
             : '';
         const shop = typeof this.getUserShopItems === 'function' ? this.getUserShopItems(pubkey) : null;
         const supporterBadge = (shop && shop.supporter)
-            ? '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>'
+            ? `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`
             : '';
         const friendHtml = (typeof this.getFriendBadgeHtml === 'function' && this.getFriendBadgeHtml(pubkey)) || '';
         return `${this.escapeHtml(base)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendHtml}`;

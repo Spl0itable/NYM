@@ -2057,7 +2057,7 @@ Object.assign(NYM.prototype, {
         const avatarSrc = this.getAvatarUrl(pubkey);
         const userShopItems = this.getUserShopItems(pubkey);
         const supporterBadge = userShopItems?.supporter ?
-            '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span></span>' : '';
+            `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span></span>` : '';
         const safePk = this._safePubkey(pubkey);
         const authorSig = `${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterBadge}`;
         document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {

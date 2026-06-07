@@ -1092,6 +1092,7 @@ class NYM {
                     price: 21420,
                     preview: 'style-preview-satoshi',
                     type: 'message-style',
+                    tier: 'legendary',
                     icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 width="1em" height="1em" fill="none" stroke="currentColor"
@@ -1099,11 +1100,11 @@ stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Satoshi (Bitcoin)">
 <title>Satoshi (Bitcoin)</title>
 <circle cx="12" cy="12" r="9"/>
-<path d="M10 6v12"/>
-<path d="M10 7H13C15.1 7 16.5 8.2 16.5 9.8C16.5 11.4 15.1 12.5 13 12.5H10"/>
-<path d="M10 12.5H13C15.1 12.5 16.5 13.7 16.5 15.3C16.5 16.9 15.1 18 13 18H10"/>
-<path d="M12.5 5v2"/>
-<path d="M12.5 17v2"/>
+<path d="M9.3 6.8V17.2"/>
+<path d="M9.3 6.8H13C15 6.8 16.2 7.9 16.2 9.6C16.2 11.3 15 12 13 12H9.3"/>
+<path d="M9.3 12H13.4C15.5 12 16.7 13 16.7 14.6C16.7 16.2 15.5 17.2 13.4 17.2H9.3"/>
+<path d="M11.2 5V6.8M13 5V6.8"/>
+<path d="M11.2 17.2V19M13 17.2V19"/>
 </svg>`
                 },
                 {
@@ -1183,6 +1184,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Ghost">
                     price: 1337,
                     preview: 'style-preview-matrix',
                     type: 'message-style',
+                    tier: 'legendary',
                     icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 width="1em" height="1em" fill="none" stroke="currentColor"
@@ -1247,6 +1249,176 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Rainbow">
 <path d="M6.5 16a5.5 5.5 0 0 1 11 0"/>
 <path d="M9 16a3 3 0 0 1 6 0"/>
 </svg>`
+                },
+                {
+                    id: 'style-ocean',
+                    name: 'Ocean',
+                    description: 'Deep sea blue with drifting waves',
+                    price: 1500,
+                    preview: 'style-preview-ocean',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Ocean">
+<title>Ocean</title>
+<path d="M2 8 Q5 5 8 8 T14 8 T20 8 T22 8"/>
+<path d="M2 13 Q5 10 8 13 T14 13 T20 13 T22 13"/>
+<path d="M2 18 Q5 15 8 18 T14 18 T20 18 T22 18"/>
+</svg>`
+                },
+                {
+                    id: 'style-sakura',
+                    name: 'Sakura',
+                    description: 'Soft pink cherry blossoms',
+                    price: 3000,
+                    preview: 'style-preview-sakura',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Sakura">
+<title>Sakura</title>
+<path d="M12 12c0-3-1.5-5-3-6 2 0 4 1.2 4 3.5"/>
+<path d="M12 12c2.4-1.7 3-4.1 3-6 1.2 1.6 1.4 4-.5 5.4"/>
+<path d="M12 12c2.9.6 5.2-.3 6.8-1.5-.4 2-2.3 3.4-4.6 3.1"/>
+<path d="M12 12c1.1 2.7.6 5.1-.5 6.9-1.2-1.6-1.3-4 .2-5.6"/>
+<path d="M12 12c-2.6 1.5-3.7 3.8-4.1 5.9-1.2-1.7-.9-4 1-5.3"/>
+<circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/>
+</svg>`
+                },
+                {
+                    id: 'style-galaxy',
+                    name: 'Galaxy',
+                    description: 'Cosmic purple starfield',
+                    price: 4444,
+                    preview: 'style-preview-galaxy',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Galaxy">
+<title>Galaxy</title>
+<circle cx="12" cy="12" r="5"/>
+<ellipse cx="12" cy="12" rx="10" ry="3.5" transform="rotate(-25 12 12)"/>
+<circle cx="4" cy="6" r="0.6" fill="currentColor" stroke="none"/>
+<circle cx="20" cy="18" r="0.6" fill="currentColor" stroke="none"/>
+</svg>`
+                },
+                {
+                    id: 'style-toxic',
+                    name: 'Toxic',
+                    description: 'Radioactive green hazard glow',
+                    price: 1300,
+                    preview: 'style-preview-toxic',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Toxic">
+<title>Toxic</title>
+<circle cx="12" cy="12" r="2.2"/>
+<path d="M12 9.8V4.5a7.5 7.5 0 0 0-6.5 3.8l4.6 2.6"/>
+<path d="M13.9 13l4.6 2.6A7.5 7.5 0 0 0 18.5 8.3L13.9 11"/>
+<path d="M10.1 13l-4.6 2.6A7.5 7.5 0 0 0 12 19.5V14.2"/>
+</svg>`
+                },
+                {
+                    id: 'style-gold',
+                    name: 'Midas',
+                    description: 'Luxurious shimmering gold',
+                    price: 8888,
+                    preview: 'style-preview-gold',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Midas">
+<title>Midas</title>
+<circle cx="12" cy="12" r="8"/>
+<circle cx="12" cy="12" r="5"/>
+<path d="M12 9.5v5M10.5 11h2.2a1.2 1.2 0 0 1 0 2.4H10.5"/>
+</svg>`
+                },
+                {
+                    id: 'style-vapor',
+                    name: 'Vaporwave',
+                    description: 'Retro pink and cyan sunset',
+                    price: 1995,
+                    preview: 'style-preview-vapor',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Vaporwave">
+<title>Vaporwave</title>
+<path d="M6 11a6 6 0 0 1 12 0"/>
+<path d="M7 7.5h10M6.4 9.2h11.2M6 11h12"/>
+<path d="M3 15h18M5 18h14M8 21h8"/>
+</svg>`
+                },
+                {
+                    id: 'style-blood',
+                    name: 'Blood',
+                    description: 'Dark crimson dripping text',
+                    price: 1313,
+                    preview: 'style-preview-blood',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Blood">
+<title>Blood</title>
+<path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11Z"/>
+<path d="M12 16a2.5 2.5 0 0 1-2.5-2.5"/>
+</svg>`
+                },
+                {
+                    id: 'style-royal',
+                    name: 'Royal',
+                    description: 'Regal purple with gold accents',
+                    price: 6000,
+                    preview: 'style-preview-royal',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Royal">
+<title>Royal</title>
+<path d="M4 8l3 9h10l3-9-4.5 3.5L12 6 8.5 11.5Z"/>
+<circle cx="4" cy="8" r="1.2" fill="currentColor" stroke="none"/>
+<circle cx="20" cy="8" r="1.2" fill="currentColor" stroke="none"/>
+<circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none"/>
+</svg>`
+                },
+                {
+                    id: 'style-circuit',
+                    name: 'Circuit',
+                    description: 'Cyber circuit-board traces',
+                    price: 2048,
+                    preview: 'style-preview-circuit',
+                    type: 'message-style',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Circuit">
+<title>Circuit</title>
+<rect x="8" y="8" width="8" height="8" rx="1"/>
+<path d="M12 8V4M12 20v-4M8 12H4M20 12h-4"/>
+<circle cx="12" cy="4" r="1" fill="currentColor" stroke="none"/>
+<circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/>
+<circle cx="20" cy="12" r="1" fill="currentColor" stroke="none"/>
+<circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/>
+</svg>`
                 }
             ],
             flair: [
@@ -1273,6 +1445,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Crown">
                     description: 'Sparkling diamond badge',
                     price: 10000,
                     type: 'nickname-flair',
+                    tier: 'legendary',
                     icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 width="1em" height="1em" fill="none" stroke="currentColor"
@@ -1296,12 +1469,11 @@ width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Skull">
 <title>Skull</title>
-<circle cx="12" cy="10" r="5.5"/>
-<rect x="8" y="14.5" width="8" height="4" rx="1.2"/>
-<circle cx="9.5" cy="10" r="1.2"/>
-<circle cx="14.5" cy="10" r="1.2"/>
-<path d="M11.2 12.8 12 11.2 12.8 12.8Z"/>
-<path d="M10 14.5v2M12 14.5v2M14 14.5v2"/>
+<path d="M12 3a8 8 0 0 0-8 8c0 2.6 1.3 4.6 3 5.7V19a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 17 19v-2.3c1.7-1.1 3-3.1 3-5.7a8 8 0 0 0-8-8Z"/>
+<circle cx="9" cy="11" r="1.8" fill="currentColor" stroke="none"/>
+<circle cx="15" cy="11" r="1.8" fill="currentColor" stroke="none"/>
+<path d="M11 15.2 12 13.5l1 1.7Z"/>
+<path d="M9.5 20.5v-2.5M12 20.5v-2.5M14.5 20.5v-2.5"/>
 </svg>`
                 },
                 {
@@ -1361,6 +1533,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Heart">
                     description: 'Anonymous mask badge',
                     price: 4200,
                     type: 'nickname-flair',
+                    tier: 'legendary',
                     icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 width="1em" height="1em" fill="none" stroke="currentColor"
@@ -1386,12 +1559,10 @@ width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Rocket">
 <title>Rocket</title>
-<polygon points="12 3 15 8 9 8"/>
-<rect x="9" y="8" width="6" height="7" rx="3"/>
-<circle cx="12" cy="11.5" r="1.6"/>
-<polygon points="9 13 6.5 15 9 16"/>
-<polygon points="15 13 17.5 15 15 16"/>
-<polygon points="12 15.5 10.7 19 12 18 13.3 19"/>
+<path d="M12 2.5c2.8 2 4.5 5.2 4.5 9 0 1.6-.3 3.1-.9 4.5H8.4A11 11 0 0 1 7.5 11.5c0-3.8 1.7-7 4.5-9Z"/>
+<circle cx="12" cy="10" r="1.8"/>
+<path d="M8.4 16 5.5 18l1.8.5L7.5 21l2-1.8"/>
+<path d="M15.6 16l2.9 2-1.8.5.2 2.5-2-1.8"/>
 </svg>`
                 },
                 {
@@ -1409,6 +1580,159 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Shield">
 <path d="M12 3l7 3v5c0 5-3.3 8.2-7 9.6C8.3 19.2 5 16 5 11V6l7-3Z"/>
 <path d="M12 5v13"/>
 </svg>`
+                },
+                {
+                    id: 'flair-flame',
+                    name: 'Flame',
+                    description: 'Blazing fire badge',
+                    price: 1200,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Flame">
+<title>Flame</title>
+<path d="M12 3c3 3 5.5 5.6 5.5 9.5A5.5 5.5 0 0 1 6.5 12.5C6.5 9.5 9 7 12 3Z"/>
+<path d="M12 9c1.5 1.5 2.5 2.8 2.5 4.3A2.5 2.5 0 0 1 9.5 13c0-1 .6-2 2.5-4Z"/>
+</svg>`
+                },
+                {
+                    id: 'flair-snowflake',
+                    name: 'Snowflake',
+                    description: 'Frosty winter badge',
+                    price: 1400,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Snowflake">
+<title>Snowflake</title>
+<g transform="rotate(0 12 12)"><path d="M12 12V2.5"/><path d="M12 5 9.9 3M12 5 14.1 3"/><path d="M12 7.6 10.3 6.1M12 7.6 13.7 6.1"/></g>
+<g transform="rotate(60 12 12)"><path d="M12 12V2.5"/><path d="M12 5 9.9 3M12 5 14.1 3"/><path d="M12 7.6 10.3 6.1M12 7.6 13.7 6.1"/></g>
+<g transform="rotate(120 12 12)"><path d="M12 12V2.5"/><path d="M12 5 9.9 3M12 5 14.1 3"/><path d="M12 7.6 10.3 6.1M12 7.6 13.7 6.1"/></g>
+<g transform="rotate(180 12 12)"><path d="M12 12V2.5"/><path d="M12 5 9.9 3M12 5 14.1 3"/><path d="M12 7.6 10.3 6.1M12 7.6 13.7 6.1"/></g>
+<g transform="rotate(240 12 12)"><path d="M12 12V2.5"/><path d="M12 5 9.9 3M12 5 14.1 3"/><path d="M12 7.6 10.3 6.1M12 7.6 13.7 6.1"/></g>
+<g transform="rotate(300 12 12)"><path d="M12 12V2.5"/><path d="M12 5 9.9 3M12 5 14.1 3"/><path d="M12 7.6 10.3 6.1M12 7.6 13.7 6.1"/></g>
+</svg>`
+                },
+                {
+                    id: 'flair-moon',
+                    name: 'Moon',
+                    description: 'Mystic crescent moon badge',
+                    price: 1600,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Moon">
+<title>Moon</title>
+<path d="M20 13.5A8 8 0 1 1 10.5 4a6.5 6.5 0 0 0 9.5 9.5Z"/>
+<path d="M17 4.5 17.6 6 19 6.6 17.6 7.2 17 8.7 16.4 7.2 15 6.6 16.4 6Z" fill="currentColor" stroke="none"/>
+</svg>`
+                },
+                {
+                    id: 'flair-sun',
+                    name: 'Sun',
+                    description: 'Radiant sun badge',
+                    price: 1500,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Sun">
+<title>Sun</title>
+<circle cx="12" cy="12" r="4"/>
+<path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/>
+</svg>`
+                },
+                {
+                    id: 'flair-leaf',
+                    name: 'Leaf',
+                    description: 'Natural green leaf badge',
+                    price: 900,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Leaf">
+<title>Leaf</title>
+<path d="M5 19c0-8 5-13 14-13 0 9-5 14-13 14-1 0-1-1-1-1Z"/>
+<path d="M5 19C8 15 12 12 16 10"/>
+</svg>`
+                },
+                {
+                    id: 'flair-music',
+                    name: 'Music',
+                    description: 'Melodic music note badge',
+                    price: 1100,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Music">
+<title>Music</title>
+<circle cx="7" cy="17" r="2.5"/>
+<circle cx="17" cy="15" r="2.5"/>
+<path d="M9.5 17V6l10-2v11"/>
+<path d="M9.5 8.5 19.5 6.5"/>
+</svg>`
+                },
+                {
+                    id: 'flair-eye',
+                    name: 'All-Seeing',
+                    description: 'Watchful all-seeing eye badge',
+                    price: 1800,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="All-Seeing Eye">
+<title>All-Seeing Eye</title>
+<path d="M2 12s4-6.5 10-6.5S22 12 22 12s-4 6.5-10 6.5S2 12 2 12Z"/>
+<circle cx="12" cy="12" r="3"/>
+<circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>
+</svg>`
+                },
+                {
+                    id: 'flair-anchor',
+                    name: 'Anchor',
+                    description: 'Steadfast anchor badge',
+                    price: 1000,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Anchor">
+<title>Anchor</title>
+<circle cx="12" cy="5" r="2"/>
+<path d="M12 7v13"/>
+<path d="M8 11h8"/>
+<path d="M5 13a7 7 0 0 0 14 0"/>
+</svg>`
+                },
+                {
+                    id: 'flair-gem',
+                    name: 'Ruby',
+                    description: 'Precious ruby gem badge',
+                    price: 3300,
+                    type: 'nickname-flair',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Ruby">
+<title>Ruby</title>
+<path d="M7 4h10l4 5-9 11L3 9Z"/>
+<path d="M3 9h18M7 4 9 9l3 11 3-11 2-5"/>
+</svg>`
                 }
 
             ],
@@ -1425,11 +1749,12 @@ width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Trophy">
 <title>Trophy</title>
-<path d="M8 21H16"/>
-<path d="M12 17V21"/>
-<path d="M7 9h10v2a5 5 0 0 1-5 5a5 5 0 0 1-5-5V9z"/>
-<path d="M5 9H3a3 3 0 0 0 3 3"/>
-<path d="M19 9h2a3 3 0 0 1-3 3"/>
+<path d="M7 4h10v6a5 5 0 0 1-10 0V4z"/>
+<path d="M7 6H4.5a2.5 2.5 0 0 0 2.5 2.5"/>
+<path d="M17 6h2.5a2.5 2.5 0 0 1-2.5 2.5"/>
+<path d="M12 15v3"/>
+<path d="M9 21h6"/>
+<path d="M10 18h4l.5 3h-5z"/>
 </svg>`
                 },
                 {
@@ -1466,9 +1791,253 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
 <line x1="4" y1="12" x2="16" y2="12"/>
 <line x1="4" y1="16" x2="18" y2="16"/>
 </svg>`
+                },
+                {
+                    id: 'cosmetic-aura-neon',
+                    name: 'Neon Aura',
+                    description: 'Electric cyan glow around your messages',
+                    price: 3200,
+                    type: 'cosmetic',
+                    cssClass: 'cosmetic-aura-neon',
+                    benefits: ['Pulsing neon-cyan glow', 'Stands out in any channel'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Neon Aura">
+<title>Neon Aura</title>
+<rect x="6" y="6" width="12" height="12" rx="3"/>
+<path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4"/>
+</svg>`
+                },
+                {
+                    id: 'cosmetic-aura-rainbow',
+                    name: 'Prism Aura',
+                    description: 'Legendary rainbow ring that wraps your whole message',
+                    price: 11000,
+                    type: 'cosmetic',
+                    tier: 'legendary',
+                    cssClass: 'cosmetic-aura-rainbow',
+                    benefits: ['Full rainbow ring', 'Legendary tier flex'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Prism Aura">
+<title>Prism Aura</title>
+<path d="M12 4 19 17H5Z"/>
+<path d="M2 10.5 9 12.4"/>
+<path d="M13.4 12.6 21.5 10.2"/>
+<path d="M13.7 13.9 21.5 13.4"/>
+<path d="M13.9 15.2 21.5 16.6"/>
+<path d="M14.1 16.4 20.5 19.4"/>
+</svg>`
+                },
+                {
+                    id: 'cosmetic-frost',
+                    name: 'Frostbite',
+                    description: 'Frosted-glass message with icy snowflake accents',
+                    price: 2600,
+                    type: 'cosmetic',
+                    cssClass: 'cosmetic-frost',
+                    benefits: ['Frosted-glass message backdrop', 'Subtle snowflake pattern'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Frostbite">
+<title>Frostbite</title>
+<rect x="4" y="6" width="16" height="12" rx="2"/>
+<path d="M12 8.5v7M9 10l6 3.5M15 10l-6 3.5"/>
+</svg>`
+                },
+                {
+                    id: 'cosmetic-aura-phoenix',
+                    name: 'Phoenix Aura',
+                    description: 'Legendary rising-flame aura around your messages',
+                    price: 12000,
+                    type: 'cosmetic',
+                    tier: 'legendary',
+                    cssClass: 'cosmetic-aura-phoenix',
+                    benefits: ['Animated rising-ember glow', 'Legendary tier flex'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Phoenix Aura">
+<title>Phoenix Aura</title>
+<path d="M12 3c2.5 2.5 4 5 4 7.5a4 4 0 0 1-8 0C8 8 9.5 5.5 12 3Z"/>
+<path d="M5 12c-1 2 0 4 2 5M19 12c1 2 0 4-2 5"/>
+<path d="M8.5 18c1.2 1.2 2.2 1.6 3.5 1.6s2.3-.4 3.5-1.6"/>
+</svg>`
+                },
+                {
+                    id: 'cosmetic-aura-cosmic',
+                    name: 'Cosmic Aura',
+                    description: 'Twinkling starfield aura around your messages',
+                    price: 5000,
+                    type: 'cosmetic',
+                    cssClass: 'cosmetic-aura-cosmic',
+                    benefits: ['Animated starfield halo', 'Deep-space glow'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Cosmic Aura">
+<title>Cosmic Aura</title>
+<circle cx="11" cy="12" r="4.5"/>
+<ellipse cx="11" cy="12" rx="9" ry="3" transform="rotate(-22 11 12)"/>
+<path d="M19 5.5 19.6 7.1 21.2 7.7 19.6 8.3 19 9.9 18.4 8.3 16.8 7.7 18.4 7.1Z" fill="currentColor" stroke="none"/>
+<circle cx="4.5" cy="6" r="0.7" fill="currentColor" stroke="none"/>
+</svg>`
+                },
+                {
+                    id: 'cosmetic-bubble-hologram',
+                    name: 'Hologram Bubble',
+                    description: 'Legendary holographic shimmer on your message bubbles',
+                    price: 13500,
+                    type: 'cosmetic',
+                    tier: 'legendary',
+                    cssClass: 'cosmetic-bubble-hologram',
+                    benefits: ['Iridescent holographic bubble', 'Legendary tier flex'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Hologram Bubble">
+<title>Hologram Bubble</title>
+<path d="M5 5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7l-4 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/>
+<path d="M8 9.5h8M8 12.5h5"/>
+</svg>`
+                }
+            ],
+            limited: [
+                {
+                    id: 'flair-genesis',
+                    name: 'Genesis',
+                    description: 'Founders-only numbered emblem. Only 100 will ever exist.',
+                    price: 25000,
+                    type: 'nickname-flair',
+                    tier: 'legendary',
+                    maxSupply: 100,
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Genesis">
+<title>Genesis</title>
+<path d="M12 2.5 22 21H2Z"/>
+</svg>`
+                },
+                {
+                    id: 'style-eclipse',
+                    name: 'Eclipse',
+                    description: 'A rare eclipse-themed message style. Limited drop of 1,000.',
+                    price: 9000,
+                    type: 'message-style',
+                    maxSupply: 1000,
+                    startsAt: 1735689600000,
+                    endsAt: 1798761600000,
+                    preview: 'style-preview-eclipse',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Eclipse">
+<title>Eclipse</title>
+<circle cx="12" cy="12" r="8"/>
+<path d="M15 5.2a8 8 0 0 1 0 13.6 8 8 0 0 0 0-13.6Z" fill="currentColor" stroke="none"/>
+</svg>`
+                },
+                {
+                    id: 'style-crt',
+                    name: 'CRT',
+                    description: 'A limited drop of 250. Amber-phosphor terminal text with rolling scanlines.',
+                    price: 12000,
+                    type: 'message-style',
+                    tier: 'legendary',
+                    maxSupply: 250,
+                    startsAt: 1735689600000,
+                    endsAt: 1798761600000,
+                    preview: 'style-preview-crt',
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="CRT monitor">
+<title>CRT</title>
+<rect x="3" y="4" width="18" height="13" rx="2"/>
+<path d="M8 21h8M12 17v4"/>
+<path d="M6 7.5h9M6 10.5h7M6 13.5h5"/>
+</svg>`
+                }
+            ],
+            bundles: [
+                {
+                    id: 'bundle-starter',
+                    name: 'Starter Pack',
+                    description: 'Flame flair, Ice style and Frostbite cosmetic at a discount.',
+                    price: 3000,
+                    type: 'bundle',
+                    bundle: ['flair-flame', 'style-ice', 'cosmetic-frost'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Starter Pack">
+<title>Starter Pack</title>
+<path d="M4 8h16v3H4zM5 11h14v9H5zM12 8v12"/>
+<path d="M12 8C10 8 8 7 8 5.5S10 4 12 8ZM12 8c2 0 4-1 4-2.5S14 4 12 8Z"/>
+</svg>`
+                },
+                {
+                    id: 'bundle-legendary',
+                    name: 'Legendary Vault',
+                    description: 'All three legendary cosmetics together — best value.',
+                    price: 30000,
+                    type: 'bundle',
+                    bundle: ['cosmetic-aura-phoenix', 'cosmetic-aura-rainbow', 'cosmetic-bubble-hologram'],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Legendary Vault">
+<title>Legendary Vault</title>
+<path d="M4 9h16v3H4zM5 12h14v8H5zM12 9v11"/>
+<path d="M6 9 9 4l3 5 3-5 3 5"/>
+</svg>`
+                },
+                {
+                    id: 'bundle-everything',
+                    name: 'Everything Pack',
+                    description: 'Every message style, flair and special item in one go — the ultimate discount. (Excludes limited numbered editions.)',
+                    price: 149999,
+                    type: 'bundle',
+                    // Components filled in below from the full catalog.
+                    bundle: [],
+                    icon: `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+width="1em" height="1em" fill="none" stroke="currentColor"
+stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+vector-effect="non-scaling-stroke" role="img" aria-label="Everything Pack">
+<title>Everything Pack</title>
+<path d="M3 8h18v3H3zM4 11h16v9H4zM12 8v12"/>
+<path d="M12 8C9.5 8 7 6.8 7 5S9.5 3 12 8ZM12 8c2.5 0 5-1.2 5-3S14.5 3 12 8Z"/>
+<path d="M9 14.5l1.5 1.5L9 17.5M15 14.5l-1.5 1.5 1.5 1.5"/>
+</svg>`
                 }
             ]
         };
+
+        // The Everything Pack grants every non-limited, non-bundle item. Build
+        // its component list from the catalog so it can't drift out of sync.
+        const _everythingIds = [
+            ...this.shopItems.styles,
+            ...this.shopItems.flair,
+            ...this.shopItems.special
+        ].filter(it => !it.maxSupply).map(it => it.id);
+        const _everything = this.shopItems.bundles.find(b => b.id === 'bundle-everything');
+        if (_everything) _everything.bundle = _everythingIds;
 
         this.userPurchases = new Map();
         this.activeShopTab = 'styles';
@@ -3579,7 +4148,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.456';
+const NYMCHAT_VERSION = 'v3.69.457';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');

@@ -226,7 +226,7 @@ Object.assign(NYM.prototype, {
         const userShopItems = this.getUserShopItems(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
         const supporterBadge = userShopItems?.supporter ?
-            '<span class="supporter-badge"><span class="supporter-badge-icon">🏆</span><span class="supporter-badge-text">Supporter</span></span>' : '';
+            `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>` : '';
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
             ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
             : this.isVerifiedBot(pubkey)

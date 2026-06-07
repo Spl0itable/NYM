@@ -47,30 +47,84 @@ import {
   isNymchatBotClient
 } from "./_shared.js";
 
-// Shop: message styles, nickname flair, cosmetics and the supporter badge
 var SHOP_CATALOG = {
-  "style-satoshi": { price: 21420, type: "message-style" },
+  "style-satoshi": { price: 21420, type: "message-style", tier: "legendary" },
   "style-glitch": { price: 10101, type: "message-style" },
   "style-aurora": { price: 2424, type: "message-style" },
   "style-neon": { price: 1984, type: "message-style" },
   "style-ghost": { price: 666, type: "message-style" },
-  "style-matrix": { price: 1337, type: "message-style" },
+  "style-matrix": { price: 1337, type: "message-style", tier: "legendary" },
   "style-fire": { price: 911, type: "message-style" },
   "style-ice": { price: 777, type: "message-style" },
   "style-rainbow": { price: 2222, type: "message-style" },
+  "style-ocean": { price: 1500, type: "message-style" },
+  "style-sakura": { price: 3000, type: "message-style" },
+  "style-galaxy": { price: 4444, type: "message-style" },
+  "style-toxic": { price: 1300, type: "message-style" },
+  "style-gold": { price: 8888, type: "message-style" },
+  "style-vapor": { price: 1995, type: "message-style" },
+  "style-blood": { price: 1313, type: "message-style" },
+  "style-royal": { price: 6000, type: "message-style" },
+  "style-circuit": { price: 2048, type: "message-style" },
   "flair-crown": { price: 5000, type: "nickname-flair" },
-  "flair-diamond": { price: 10000, type: "nickname-flair" },
+  "flair-diamond": { price: 10000, type: "nickname-flair", tier: "legendary" },
   "flair-skull": { price: 1666, type: "nickname-flair" },
   "flair-star": { price: 2500, type: "nickname-flair" },
   "flair-lightning": { price: 2100, type: "nickname-flair" },
   "flair-heart": { price: 1111, type: "nickname-flair" },
-  "flair-mask": { price: 4200, type: "nickname-flair" },
+  "flair-mask": { price: 4200, type: "nickname-flair", tier: "legendary" },
   "flair-rocket": { price: 2300, type: "nickname-flair" },
   "flair-shield": { price: 1900, type: "nickname-flair" },
+  "flair-flame": { price: 1200, type: "nickname-flair" },
+  "flair-snowflake": { price: 1400, type: "nickname-flair" },
+  "flair-moon": { price: 1600, type: "nickname-flair" },
+  "flair-sun": { price: 1500, type: "nickname-flair" },
+  "flair-leaf": { price: 900, type: "nickname-flair" },
+  "flair-music": { price: 1100, type: "nickname-flair" },
+  "flair-eye": { price: 1800, type: "nickname-flair" },
+  "flair-anchor": { price: 1000, type: "nickname-flair" },
+  "flair-gem": { price: 3300, type: "nickname-flair" },
   "supporter-badge": { price: 42069, type: "supporter" },
   "cosmetic-aura-gold": { price: 3500, type: "cosmetic" },
-  "cosmetic-redacted": { price: 2800, type: "cosmetic" }
+  "cosmetic-redacted": { price: 2800, type: "cosmetic" },
+  "cosmetic-aura-neon": { price: 3200, type: "cosmetic" },
+  "cosmetic-aura-rainbow": { price: 11000, type: "cosmetic", tier: "legendary" },
+  "cosmetic-frost": { price: 2600, type: "cosmetic" },
+  "cosmetic-aura-cosmic": { price: 5000, type: "cosmetic" },
+  // Legendary tier — premium animated cosmetics
+  "cosmetic-aura-phoenix": { price: 12000, type: "cosmetic", tier: "legendary" },
+  "cosmetic-bubble-hologram": { price: 13500, type: "cosmetic", tier: "legendary" },
+  // Limited numbered editions
+  "flair-genesis": { price: 25000, type: "nickname-flair", tier: "legendary", maxSupply: 100 },
+  "style-eclipse": { price: 9000, type: "message-style", maxSupply: 1000, startsAt: 1735689600000, endsAt: 1798761600000 },
+  "style-crt": { price: 12000, type: "message-style", tier: "legendary", maxSupply: 250, startsAt: 1735689600000, endsAt: 1798761600000 },
+  // Bundles (granted as their component items, at a discount)
+  "bundle-starter": { price: 3000, type: "bundle", bundle: ["flair-flame", "style-ice", "cosmetic-frost"] },
+  "bundle-legendary": { price: 30000, type: "bundle", bundle: ["cosmetic-aura-phoenix", "cosmetic-aura-rainbow", "cosmetic-bubble-hologram"] },
+  // Everything Pack: components filled in below from the full catalog.
+  "bundle-everything": { price: 149999, type: "bundle", bundle: [] }
 };
+
+// The Everything Pack grants every non-limited, non-bundle item. Derive its
+// component list from the catalog so it can never drift out of sync.
+SHOP_CATALOG["bundle-everything"].bundle = Object.keys(SHOP_CATALOG).filter(function (id) {
+  var c = SHOP_CATALOG[id];
+  return c.type !== "bundle" && !c.maxSupply;
+});
+
+// Availability for a catalog entry given the current time. Returns null when
+// purchasable, or an { error, status } describing why it is not.
+function shopItemAvailability(cat, now) {
+  if (!cat) return { error: "Unknown shop item.", status: 400 };
+  if (typeof cat.startsAt === "number" && now < cat.startsAt) {
+    return { error: "This item isn't available yet.", status: 409 };
+  }
+  if (typeof cat.endsAt === "number" && now > cat.endsAt) {
+    return { error: "This limited drop has ended.", status: 409 };
+  }
+  return null;
+}
+
 
 function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
@@ -175,6 +229,33 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     return json({ statuses: statuses });
   }
 
+  // Public: remaining supply for limited (maxSupply) items so clients can show
+  // "X left" / "Sold out". No auth — read-only and non-sensitive.
+  if (body.action === "shop-supply") {
+    var wantIds = Array.isArray(body.itemIds) ? body.itemIds.slice(0, 50) : [];
+    var limitedIds = [];
+    wantIds.forEach(function (id) {
+      var c = SHOP_CATALOG[String(id)];
+      if (c && c.maxSupply) limitedIds.push(String(id));
+    });
+    var supply = {};
+    if (limitedIds.length) {
+      var sup = await ledgerCall(env, { op: "shop-supply", itemIds: limitedIds });
+      var counts = (sup && sup.counts) || {};
+      limitedIds.forEach(function (id) {
+        var max = SHOP_CATALOG[id].maxSupply;
+        var c = counts[id] || { minted: 0, reserved: 0 };
+        var used = (c.minted || 0) + (c.reserved || 0);
+        supply[id] = {
+          max: max,
+          minted: c.minted || 0,
+          remaining: Math.max(0, max - used)
+        };
+      });
+    }
+    return json({ supply: supply });
+  }
+
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
@@ -207,11 +288,18 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var nextCos = Array.isArray(want.cosmetics) ? want.cosmetics.filter(function (id) {
       return rec.owned[id] && SHOP_CATALOG[id] && SHOP_CATALOG[id].type === "cosmetic";
     }) : [];
+    // Authoritative edition numbers (from owned entries) for any active
+    // numbered-edition item, so other clients can render e.g. Genesis #42.
+    var nextEditions = {};
+    [nextStyle].concat(nextFlair).forEach(function (id) {
+      if (id && rec.owned[id] && rec.owned[id].edition) nextEditions[id] = rec.owned[id].edition;
+    });
     rec.active = {
       style: nextStyle,
       flair: nextFlair,
       cosmetics: nextCos,
-      supporter: !!want.supporter && !!rec.owned["supporter-badge"]
+      supporter: !!want.supporter && !!rec.owned["supporter-badge"],
+      editions: nextEditions
     };
     await shopPut(env.DB_SHOP, userPubkey, rec);
     readCachePut(context, "/shop-status/" + userPubkey, { st: { active: rec.active, updatedAt: rec.updatedAt } }, SHOP_READ_TTL);
@@ -222,6 +310,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var itemId = String(body.itemId || "");
     var cat = SHOP_CATALOG[itemId];
     if (!cat) return json({ error: "Unknown shop item." }, 400);
+    var availErr = shopItemAvailability(cat, Date.now());
+    if (availErr) return json({ error: availErr.error }, availErr.status);
     var giftTo = null;
     if (body.recipientPubkey && /^[0-9a-f]{64}$/i.test(body.recipientPubkey)) {
       giftTo = body.recipientPubkey.toLowerCase();
@@ -229,6 +319,14 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var inv = await botGenerateInvoice(env, cat.price, body.zapRequest, body.comment);
     if (inv.error) return json({ error: inv.error }, inv.status || 502);
     var invoiceId = bytesToHex(sha256(utf8ToBytes(inv.pr)));
+    // Limited editions: hold a supply slot for this invoice. The reservation
+    // expires (and frees the slot) if the invoice is never paid.
+    if (cat.maxSupply) {
+      var resv = await ledgerCall(env, { op: "shop-reserve", itemId: itemId, max: cat.maxSupply, invoiceId: invoiceId, user: userPubkey, ttl: 1800 });
+      if (resv && resv._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+      if (resv && resv.soldOut) return json({ error: "This limited edition is sold out." }, 409);
+      if (!resv || resv.error) return json({ error: (resv && resv.error) || "Could not reserve this item." }, 400);
+    }
     await invoicePut(env.DB_INVOICES, "shop", "pending", invoiceId, {
       pubkey: userPubkey,
       recipientPubkey: giftTo,
@@ -272,7 +370,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!await invoicePaymentConfirmed(env, pending, body.receipt)) {
       return json({ error: "Payment not confirmed yet." }, 402);
     }
-    if (!SHOP_CATALOG[pending.itemId]) return json({ error: "Unknown shop item." }, 400);
+    var claimCat = SHOP_CATALOG[pending.itemId];
+    if (!claimCat) return json({ error: "Unknown shop item." }, 400);
     var recipient = userPubkey;
     var isGift = false;
     if (pending.recipientPubkey && /^[0-9a-f]{64}$/i.test(pending.recipientPubkey) &&
@@ -280,11 +379,20 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       recipient = pending.recipientPubkey.toLowerCase();
       isGift = true;
     }
+    // Bundles grant each component item, each with its own recovery code.
+    var bundleItems = null;
+    if (Array.isArray(claimCat.bundle) && claimCat.bundle.length) {
+      bundleItems = claimCat.bundle
+        .filter(function (bid) { return SHOP_CATALOG[bid]; })
+        .map(function (bid) { return { itemId: bid, code: shopGenerateCode() }; });
+    }
     var code = shopGenerateCode();
     // Atomic claim-and-grant via the ledger DO (single-use invoice gate).
     var claimRes = await ledgerCall(env, {
       op: "shop-claim", invoiceId: invoiceId, recipient: recipient, itemId: pending.itemId,
       code: code, amountSats: pending.amountSats, gift: isGift,
+      bundle: bundleItems,
+      edition: claimCat.maxSupply ? { max: claimCat.maxSupply } : null,
       claimData: { paidBy: userPubkey, gift: isGift }
     });
     if (claimRes && claimRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
@@ -308,6 +416,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     }
     return json({
       itemId: pending.itemId, code: code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
+      edition: claimRes.edition || null,
+      bundle: bundleItems || null,
       owned: isGift ? undefined : crec.owned, active: isGift ? undefined : crec.active
     });
   }

@@ -26,6 +26,14 @@ export class NymLedger {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS claims (id TEXT PRIMARY KEY, kind TEXT NOT NULL, at INTEGER NOT NULL);"
     );
+    // Limited-edition supply: minted count per item, plus TTL'd reservations
+    // (one per pending invoice) that hold a slot until paid or expired.
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS edition_minted (item TEXT PRIMARY KEY, n INTEGER NOT NULL);"
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS edition_resv (invoice TEXT PRIMARY KEY, item TEXT NOT NULL, user TEXT, exp INTEGER NOT NULL);"
+    );
   }
 
   // Serialize op handlers so an R2 read-modify-write can't interleave with
@@ -61,6 +69,8 @@ export class NymLedger {
       case "shop-claim": return this._shopClaim(a);
       case "shop-transfer": return this._shopTransfer(a);
       case "shop-redeem": return this._shopRedeem(a);
+      case "shop-reserve": return this._shopReserve(a);
+      case "shop-supply": return this._shopSupply(a);
       default: return { error: "unknown op" };
     }
   }
@@ -91,6 +101,72 @@ export class NymLedger {
     if (existing.length) return false;
     this.sql.exec("INSERT INTO claims (id, kind, at) VALUES (?, ?, ?);", id, kind, Date.now());
     return true;
+  }
+
+  // Limited-edition supply (numbered drops)
+  _editionMinted(item) {
+    const r = this.sql.exec("SELECT n FROM edition_minted WHERE item = ? LIMIT 1;", item).toArray();
+    return r.length ? (r[0].n || 0) : 0;
+  }
+
+  _editionLiveReservations(item, now) {
+    const r = this.sql.exec("SELECT COUNT(*) AS c FROM edition_resv WHERE item = ? AND exp > ?;", item, now).toArray();
+    return r.length ? (r[0].c || 0) : 0;
+  }
+
+  // Hold a supply slot for a pending invoice. Counts existing mints + live
+  // reservations against maxSupply so a drop can never oversell.
+  _shopReserve(a) {
+    const item = String(a.itemId || a.item || "");
+    const max = Math.floor(Number(a.max) || 0);
+    const invoice = String(a.invoiceId || a.invoice || "");
+    const user = String(a.user || "").toLowerCase();
+    const ttl = Math.floor(Number(a.ttl) || 1800);
+    if (!item || max <= 0 || !/^[0-9a-f]{64}$/i.test(invoice)) return { error: "Invalid reservation." };
+    const now = Date.now();
+    this.sql.exec("DELETE FROM edition_resv WHERE exp <= ?;", now);
+    // Re-reserving the same invoice is idempotent (it already holds a slot).
+    const existing = this.sql.exec("SELECT item FROM edition_resv WHERE invoice = ? LIMIT 1;", invoice).toArray();
+    if (existing.length) return { ok: true, reused: true };
+    // Cap each user to one live reservation per item so nobody can lock up a
+    // drop by repeatedly opening the buy dialog. Freeing the old slot first
+    // keeps the count honest before we re-check supply.
+    if (/^[0-9a-f]{64}$/.test(user)) {
+      this.sql.exec("DELETE FROM edition_resv WHERE item = ? AND user = ?;", item, user);
+    }
+    const minted = this._editionMinted(item);
+    const live = this._editionLiveReservations(item, now);
+    if (minted + live >= max) return { soldOut: true, remaining: 0 };
+    this.sql.exec("INSERT INTO edition_resv (invoice, item, user, exp) VALUES (?, ?, ?, ?);", invoice, item, user || null, now + ttl * 1000);
+    return { ok: true, remaining: Math.max(0, max - minted - live - 1) };
+  }
+
+  // Read minted + live reservation counts for display ("X left").
+  _shopSupply(a) {
+    const ids = Array.isArray(a.itemIds) ? a.itemIds.slice(0, 50) : [];
+    const now = Date.now();
+    this.sql.exec("DELETE FROM edition_resv WHERE exp <= ?;", now);
+    const counts = {};
+    ids.forEach((raw) => {
+      const item = String(raw);
+      counts[item] = { minted: this._editionMinted(item), reserved: this._editionLiveReservations(item, now) };
+    });
+    return { counts };
+  }
+
+  // Consume a paid invoice's reservation and assign the next edition number.
+  // Returns the number, or null if no slot remains (degrades to unnumbered so a
+  // paid claim never fails — only possible if the reservation expired first).
+  _allocateEdition(item, invoice, max) {
+    this.sql.exec("DELETE FROM edition_resv WHERE invoice = ?;", invoice);
+    const minted = this._editionMinted(item);
+    if (max > 0 && minted >= max) return null;
+    const n = minted + 1;
+    this.sql.exec(
+      "INSERT INTO edition_minted (item, n) VALUES (?, ?) ON CONFLICT(item) DO UPDATE SET n = ?;",
+      item, n, n
+    );
+    return n;
   }
 
   // D1 credit/shop helpers
@@ -196,15 +272,48 @@ export class NymLedger {
       return { alreadyClaimed: true, prev };
     }
     const crec = await this._getShop(recipient);
-    crec.owned[itemId] = { at: Date.now(), amountSats: Number(a.amountSats) || 0, gift: !!a.gift, code };
+
+    // Bundle: grant each component item, each with its own recovery code.
+    if (Array.isArray(a.bundle) && a.bundle.length) {
+      const granted = [];
+      for (const comp of a.bundle) {
+        const cid = String((comp && comp.itemId) || "");
+        const ccode = String((comp && comp.code) || "");
+        if (!cid) continue;
+        crec.owned[cid] = { at: Date.now(), amountSats: 0, gift: !!a.gift, code: ccode, fromBundle: itemId };
+        granted.push({ itemId: cid, code: ccode });
+      }
+      await this._putShop(recipient, crec);
+      for (const g of granted) {
+        if (g.code) { try { await codePut(this.env.DB_CODES, g.code, g.itemId, recipient, Date.now()); } catch {} }
+      }
+      try {
+        await invoicePut(this.env.DB_INVOICES, "shop", "claimed", invoiceId,
+          Object.assign({ itemId, pubkey: recipient, code, bundle: granted, at: Date.now() }, a.claimData || {}));
+      } catch {}
+      try { await invoiceDelete(this.env.DB_INVOICES, "shop", "pending", invoiceId); } catch {}
+      return { itemId, code, recipient, bundle: granted, owned: crec.owned, active: crec.active };
+    }
+
+    // Limited edition: consume the reservation and assign a numbered slot.
+    let edition = null;
+    let editionMax = 0;
+    if (a.edition && Number(a.edition.max) > 0) {
+      editionMax = Math.floor(Number(a.edition.max));
+      edition = this._allocateEdition(itemId, invoiceId, editionMax);
+    }
+
+    const entry = { at: Date.now(), amountSats: Number(a.amountSats) || 0, gift: !!a.gift, code };
+    if (edition) { entry.edition = edition; entry.editionMax = editionMax; }
+    crec.owned[itemId] = entry;
     await this._putShop(recipient, crec);
     try { await codePut(this.env.DB_CODES, code, itemId, recipient, Date.now()); } catch {}
     try {
       await invoicePut(this.env.DB_INVOICES, "shop", "claimed", invoiceId,
-        Object.assign({ itemId, pubkey: recipient, code, at: Date.now() }, a.claimData || {}));
+        Object.assign({ itemId, pubkey: recipient, code, edition: edition || null, editionMax, at: Date.now() }, a.claimData || {}));
     } catch {}
     try { await invoiceDelete(this.env.DB_INVOICES, "shop", "pending", invoiceId); } catch {}
-    return { itemId, code, recipient, owned: crec.owned, active: crec.active };
+    return { itemId, code, recipient, edition: edition ? { n: edition, max: editionMax } : null, owned: crec.owned, active: crec.active };
   }
 
   async _shopTransfer(a) {
@@ -220,6 +329,8 @@ export class NymLedger {
     this._pruneActive(fromRec);
     const toRec = await this._getShop(to);
     toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: entry.code, transferredFrom: from };
+    // Numbered editions keep their number when traded.
+    if (entry.edition) { toRec.owned[itemId].edition = entry.edition; toRec.owned[itemId].editionMax = entry.editionMax || 0; }
     await this._putShop(from, fromRec);
     await this._putShop(to, toRec);
     if (entry.code) {
