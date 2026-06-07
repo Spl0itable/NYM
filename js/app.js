@@ -1866,9 +1866,11 @@ width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Phoenix Aura">
 <title>Phoenix Aura</title>
-<path d="M12 3c2.5 2.5 4 5 4 7.5a4 4 0 0 1-8 0C8 8 9.5 5.5 12 3Z"/>
-<path d="M5 12c-1 2 0 4 2 5M19 12c1 2 0 4-2 5"/>
-<path d="M8.5 18c1.2 1.2 2.2 1.6 3.5 1.6s2.3-.4 3.5-1.6"/>
+<path d="M12 6.2a1.7 1.7 0 0 1 1.7-1.7c0 .8-.3 1.4-.9 1.8"/>
+<path d="M12 6.8C9 4.2 5.4 4 3 5.8c2 .3 2.9 1.6 2.7 3.3 1.7-1.1 3.4-.8 4.5.8"/>
+<path d="M12 6.8C15 4.2 18.6 4 21 5.8c-2 .3-2.9 1.6-2.7 3.3-1.7-1.1-3.4-.8-4.5.8"/>
+<path d="M12 7v7"/>
+<path d="M12 14c-1.9 1.3-2.5 3.3-1.7 5.2.8-.6 1.2-1.1 1.7-2.1.5 1 .9 1.5 1.7 2.1.8-1.9.2-3.9-1.7-5.2z"/>
 </svg>`
                 },
                 {
