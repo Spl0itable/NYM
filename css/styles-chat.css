@@ -1583,6 +1583,9 @@ div.message-input:empty::before {
 
 div.message-input .custom-emoji {
     cursor: text;
+    width: 1.4em;
+    height: 1.4em;
+    vertical-align: -0.3em;
 }
 
 .message-input-row {
