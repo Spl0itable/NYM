@@ -111,6 +111,8 @@ Object.assign(NYM.prototype, {
                     pr: invoiceData.pr,
                     successAction: invoiceData.successAction,
                     verify: invoiceData.verify,
+                    // Provider's Nostr pubkey lets the worker validate the NIP-57 receipt
+                    providerPubkey: lnurlData.nostrPubkey || null,
                     amount: amountSats
                 };
             } else {
@@ -593,10 +595,9 @@ Object.assign(NYM.prototype, {
                 this.currentZapTarget && this.currentZapTarget.isBotCreditPurchase) {
                 const paid = await this._checkBotInvoicePaid(this.currentZapInvoice.invoiceId);
                 if (paid) { this.handleZapPaymentSuccess(this.currentZapInvoice.amount); return; }
-            } else if (this.currentZapInvoice && this.currentZapInvoice.verify) {
-                const response = await this.proxiedJsonFetch(this.currentZapInvoice.verify);
-                const data = await response.json();
-                if (data.settled || data.paid) { this.handleZapPaymentSuccess(this.currentZapInvoice.amount); return; }
+            } else if (this.currentZapInvoice && (this.currentZapInvoice.verify || this.currentZapInvoice.providerPubkey || this.currentZapInvoice.receipt)) {
+                const paid = await this._serverVerifyZapPaid(this.currentZapInvoice);
+                if (paid) { this.handleZapPaymentSuccess(this.currentZapInvoice.amount); return; }
             }
             if (el) {
                 el.className = 'zap-status';
@@ -837,10 +838,35 @@ Object.assign(NYM.prototype, {
         if (sendBtn) { sendBtn.style.display = 'none'; sendBtn.onclick = null; }
     },
 
-    // Check if payment was made
+    // Ask the worker whether a zap invoice was paid
+    async _serverVerifyZapPaid(invoice, receipt) {
+        if (!invoice) return false;
+        const base = this._getProxyBaseUrl();
+        if (!base) return false;
+        try {
+            const resp = await fetch(`${base}?action=zap-verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pr: invoice.pr,
+                    verifyUrl: invoice.verify || null,
+                    providerPubkey: invoice.providerPubkey || null,
+                    receipt: receipt || invoice.receipt || null
+                })
+            });
+            const data = await resp.json().catch(() => ({}));
+            return !!(data && data.paid);
+        } catch (_) {
+            return false;
+        }
+    },
+
+    // Check if payment was made. The LUD-21 verify URL is the authoritative,
+    // invoice-scoped signal, confirmed server-side. Only when the provider
+    // returns no verify URL do we fall back to the NIP-57 receipt
     async checkZapPayment(invoice) {
         if (!invoice.verify) {
-            // No verify URL, just wait for zap receipt event
+            // No verify URL, fall back to the (best-effort) zap receipt
             this.listenForZapReceipt();
             return;
         }
@@ -852,35 +878,32 @@ Object.assign(NYM.prototype, {
         }
 
         let checkCount = 0;
-        const maxChecks = 60; // Check for up to 60 seconds
+        const maxChecks = 180; // Poll for up to 3 minutes
 
         this.zapCheckInterval = setInterval(async () => {
             checkCount++;
 
-            try {
-                const response = await this.proxiedJsonFetch(invoice.verify);
-                const data = await response.json();
-
-                if (data.settled || data.paid) {
-                    // Payment confirmed!
-                    clearInterval(this.zapCheckInterval);
-                    this.handleZapPaymentSuccess(invoice.amount);
-                } else if (checkCount >= maxChecks) {
-                    // Timeout
-                    clearInterval(this.zapCheckInterval);
-                    const zapStatusEl = document.getElementById('zapStatus');
-                    if (zapStatusEl) {
-                        zapStatusEl.style.display = 'block';
-                        zapStatusEl.className = 'zap-status';
-                        zapStatusEl.innerHTML = 'Payment timeout - please check your wallet';
-                    }
+            const paid = await this._serverVerifyZapPaid(invoice);
+            if (paid) {
+                clearInterval(this.zapCheckInterval);
+                this.zapCheckInterval = null;
+                this.handleZapPaymentSuccess(invoice.amount);
+            } else if (checkCount >= maxChecks) {
+                clearInterval(this.zapCheckInterval);
+                this.zapCheckInterval = null;
+                const zapStatusEl = document.getElementById('zapStatus');
+                if (zapStatusEl) {
+                    zapStatusEl.style.display = 'block';
+                    zapStatusEl.className = 'zap-status';
+                    zapStatusEl.innerHTML = 'Payment timeout - please check your wallet';
                 }
-            } catch (error) {
             }
         }, 1000); // Check every second
     },
 
-    // Listen for the NIP-57 zap receipt and confirm payment
+    // Listen for the NIP-57 zap receipt and confirm payment by matching the
+    // receipt's bolt11 to our invoice. Works for both message zaps and direct
+    // profile zaps (which carry no event id)
     listenForZapReceipt() {
         const target = this.currentZapTarget;
         const invoice = this.currentZapInvoice;
@@ -1024,6 +1047,8 @@ Object.assign(NYM.prototype, {
                 if (this.zapReceiptSubId === wait.subId) this.zapReceiptSubId = null;
             }
             const amount = wait.amount || this.parseAmountFromBolt11(boltTag[1]);
+            // Keep the receipt so the worker can validate it (e.g. on "I've paid")
+            if (this.currentZapInvoice) this.currentZapInvoice.receipt = event;
             // Show the zap badge on our own message for message zaps
             if (wait.messageId) this._recordMessageZap(wait.messageId, this.pubkey, amount, event.id);
             this.handleZapPaymentSuccess(amount);

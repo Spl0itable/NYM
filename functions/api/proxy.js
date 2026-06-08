@@ -10,6 +10,9 @@
 //   PUT  /api/proxy?action=mirror&server=<host>  — Ask a Blossom host to mirror a blob from a source URL
 //   GET  /api/proxy?action=geo-relays            — Fetch bitchat geo-relay CSV (edge-cached)
 //   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
+//   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt)
+
+import { validateZapReceipt } from './_shared.js';
 
 const ALLOWED_MEDIA_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
@@ -76,6 +79,8 @@ export async function onRequest(context) {
       return await handleGiphy(url.searchParams, context);
     } else if (action === 'json') {
       return await handleJsonProxy(url.searchParams.get('url'), request);
+    } else if (action === 'zap-verify') {
+      return await handleZapVerify(request);
     } else {
       return await handleMediaProxy(url.searchParams.get('url'), request, url.searchParams.get('emoji') === '1');
     }
@@ -223,6 +228,40 @@ async function handleJsonProxy(targetUrl, request) {
   headers.set('Content-Type', resp.headers.get('content-type') || 'application/json');
   headers.set('X-Content-Type-Options', 'nosniff');
   return new Response(text, { status: resp.status, headers });
+}
+
+// Server-side confirmation that a zap invoice was paid
+async function handleZapVerify(request) {
+  if (request.method !== 'POST') return jsonResponse({ error: 'POST required' }, 405);
+  let body;
+  try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid body' }, 400); }
+
+  const pr = typeof body.pr === 'string' ? body.pr : '';
+  const providerPubkey = typeof body.providerPubkey === 'string' ? body.providerPubkey.toLowerCase() : '';
+
+  // NIP-57 receipt: pure crypto, no outbound request.
+  if (body.receipt && pr && /^[0-9a-f]{64}$/.test(providerPubkey)) {
+    try {
+      if (!validateZapReceipt(body.receipt, { providerPubkey, pr })) return jsonResponse({ paid: true });
+    } catch { /* fall through to the verify URL */ }
+  }
+
+  // LUD-21 verify URL: poll it through the redirect-revalidating SSRF guard.
+  const verifyUrl = typeof body.verifyUrl === 'string' ? body.verifyUrl : '';
+  if (verifyUrl && /^https:\/\//i.test(verifyUrl) && !isPrivateUrl(verifyUrl)) {
+    try {
+      const resp = await ssrfSafeFetch(verifyUrl, { headers: { Accept: 'application/json' } });
+      const text = await readBounded(resp, MAX_JSON_SIZE);
+      if (text) {
+        const data = JSON.parse(text);
+        if (data && (data.settled || data.paid)) return jsonResponse({ paid: true });
+      }
+    } catch (err) {
+      if (err && err.ssrfBlocked) return jsonResponse({ error: 'Blocked URL' }, 403);
+    }
+  }
+
+  return jsonResponse({ paid: false });
 }
 
 const ALLOWED_BLOSSOM_HOSTS = new Set([
