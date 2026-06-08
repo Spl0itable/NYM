@@ -840,9 +840,23 @@ async function handleChannelAction(context, body) {
     var rows = [];
     try {
       rows = (await replica(env.DB_CHANNELS).prepare(
-        "SELECT json FROM events WHERE channel = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500"
+        "SELECT id, kind, json FROM events WHERE channel = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500"
       ).bind(name, floorSec).all()).results || [];
     } catch (e) { rows = []; }
+    var zapRows = [];
+    if (rows.length) {
+      var targetIds = rows.filter(function (r) {
+        return (r.kind === 20000 || r.kind === 23333) && typeof r.id === "string";
+      }).map(function (r) { return r.id; });
+      if (targetIds.length) {
+        try {
+          var zph = targetIds.map(function () { return "?"; }).join(",");
+          zapRows = (await replica(env.DB_CHANNELS).prepare(
+            "SELECT json FROM zaps WHERE target_id IN (" + zph + ") ORDER BY created_at DESC LIMIT 1000"
+          ).bind(...targetIds).all()).results || [];
+        } catch (e) { zapRows = []; }
+      }
+    }
     var encoder = new TextEncoder();
     var cacheBuf = !since ? [] : null;
     var stream = new ReadableStream({
@@ -851,6 +865,11 @@ async function handleChannelAction(context, body) {
           var line = rows[i].json + "\n";
           controller.enqueue(encoder.encode(line));
           if (cacheBuf) cacheBuf.push(line);
+        }
+        for (var z = 0; z < zapRows.length; z++) {
+          var zline = zapRows[z].json + "\n";
+          controller.enqueue(encoder.encode(zline));
+          if (cacheBuf) cacheBuf.push(zline);
         }
         try { controller.close(); } catch (_) { }
         if (cacheBuf) {
