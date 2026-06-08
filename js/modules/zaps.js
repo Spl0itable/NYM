@@ -727,6 +727,10 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
             this.zapReceiptSubId = null;
         }
+        if (this._zapReceiptWait) {
+            if (this._zapReceiptWait.timer) clearTimeout(this._zapReceiptWait.timer);
+            this._zapReceiptWait = null;
+        }
         this.currentZapInvoice = null;
 
         // Get amount
@@ -876,37 +880,55 @@ Object.assign(NYM.prototype, {
         }, 1000); // Check every second
     },
 
-    // Listen for zap receipt events
+    // Listen for the NIP-57 zap receipt and confirm payment
     listenForZapReceipt() {
+        const target = this.currentZapTarget;
+        const invoice = this.currentZapInvoice;
+        if (!target || !invoice) return;
+
         // Close any existing zap receipt subscription to prevent stale matching
         if (this.zapReceiptSubId) {
             this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
             this.zapReceiptSubId = null;
         }
+        if (this._zapReceiptWait && this._zapReceiptWait.timer) {
+            clearTimeout(this._zapReceiptWait.timer);
+        }
 
-        // Subscribe to zap receipt events (kind 9735) for this specific event
         const subId = "zap-receipt-" + Math.random().toString(36).substring(7);
         this.zapReceiptSubId = subId;
-        const subscription = [
-            "REQ",
+        this._zapReceiptWait = {
             subId,
-            {
-                kinds: [9735],
-                "#e": [this.currentZapTarget.messageId],
-                since: Math.floor(Date.now() / 1000) - 300, // Last 5 minutes
-                limit: 10
-            }
-        ];
+            pr: invoice.pr,
+            amount: invoice.amount,
+            messageId: target.messageId || null,
+            timer: null
+        };
 
-        this.sendToRelay(subscription);
+        // Filter by recipient pubkey (always p-tagged on the receipt) rather
+        // than event id, so profile zaps resolve too. bolt11 disambiguates.
+        this.sendToRelay(["REQ", subId, {
+            kinds: [9735],
+            "#p": [target.recipientPubkey],
+            since: Math.floor(Date.now() / 1000) - 60,
+            limit: 25
+        }]);
 
-        // Also close the subscription after 60 seconds
-        setTimeout(() => {
+        this._zapReceiptWait.timer = setTimeout(() => {
             if (this.zapReceiptSubId === subId) {
                 this.sendToRelay(["CLOSE", subId]);
                 this.zapReceiptSubId = null;
             }
-        }, 60000);
+            if (this._zapReceiptWait && this._zapReceiptWait.subId === subId) {
+                this._zapReceiptWait = null;
+                const el = document.getElementById('zapStatus');
+                if (el) {
+                    el.style.display = 'block';
+                    el.className = 'zap-status';
+                    el.innerHTML = 'Payment not detected yet — if you paid, it may take a moment to confirm.';
+                }
+            }
+        }, 180000);
     },
 
     // Handle successful payment
@@ -989,6 +1011,25 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        // Direct message/profile zap (no LUD-21 verify): match the receipt to
+        // the pending invoice by bolt11, then finalize the modal. Profile zaps
+        // have no e tag, so bolt11 is the only reliable match.
+        if (this._zapReceiptWait && boltTag && boltTag[1] &&
+            String(boltTag[1]).toLowerCase() === String(this._zapReceiptWait.pr).toLowerCase()) {
+            const wait = this._zapReceiptWait;
+            this._zapReceiptWait = null;
+            if (wait.timer) clearTimeout(wait.timer);
+            if (wait.subId) {
+                this.sendToRelay(["CLOSE", wait.subId]);
+                if (this.zapReceiptSubId === wait.subId) this.zapReceiptSubId = null;
+            }
+            const amount = wait.amount || this.parseAmountFromBolt11(boltTag[1]);
+            // Show the zap badge on our own message for message zaps
+            if (wait.messageId) this._recordMessageZap(wait.messageId, this.pubkey, amount, event.id);
+            this.handleZapPaymentSuccess(amount);
+            return;
+        }
+
         if (!boltTag) return;
 
         // Profile zap (no e tag): if it's tagged to us, notify and exit.
@@ -1031,30 +1072,10 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Initialize zaps tracking for this message if needed
-            if (!this.zaps.has(messageId)) {
-                this.zaps.set(messageId, {
-                    receipts: new Set(), // Track receipt IDs to prevent duplicates
-                    amounts: new Map()   // Map of pubkey -> total amount
-                });
-            }
-
-            const messageZaps = this.zaps.get(messageId);
-
-            // Check if we've already processed this receipt (deduplication)
-            if (messageZaps.receipts.has(event.id)) {
-                return; // Already processed this zap receipt
-            }
-
-            // Mark this receipt as processed
-            messageZaps.receipts.add(event.id);
-
-            // Update the amount for this zapper
-            const currentAmount = messageZaps.amounts.get(zapperPubkey) || 0;
-            messageZaps.amounts.set(zapperPubkey, currentAmount + amount);
-
-            // Update display for this message
-            this.updateMessageZaps(messageId);
+            // Track the zap and refresh the message badge (deduped by receipt id)
+            const existing = this.zaps.get(messageId);
+            if (existing && existing.receipts.has(event.id)) return;
+            this._recordMessageZap(messageId, zapperPubkey, amount, event.id);
 
             // Check if this is for our current pending zap
             if (this.currentZapTarget &&
@@ -1234,6 +1255,20 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    // Record a zap against a message and refresh its badge (deduped by receipt)
+    _recordMessageZap(messageId, zapperPubkey, amount, receiptId) {
+        if (!messageId || !amount) return;
+        if (!this.zaps.has(messageId)) {
+            this.zaps.set(messageId, { receipts: new Set(), amounts: new Map() });
+        }
+        const messageZaps = this.zaps.get(messageId);
+        if (receiptId && messageZaps.receipts.has(receiptId)) return;
+        if (receiptId) messageZaps.receipts.add(receiptId);
+        const currentAmount = messageZaps.amounts.get(zapperPubkey) || 0;
+        messageZaps.amounts.set(zapperPubkey, currentAmount + amount);
+        this.updateMessageZaps(messageId);
+    },
+
     // Update message with zap display
     updateMessageZaps(messageId) {
         const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
@@ -1360,6 +1395,10 @@ Object.assign(NYM.prototype, {
         if (this.zapReceiptSubId) {
             this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
             this.zapReceiptSubId = null;
+        }
+        if (this._zapReceiptWait) {
+            if (this._zapReceiptWait.timer) clearTimeout(this._zapReceiptWait.timer);
+            this._zapReceiptWait = null;
         }
 
         // Reset modal state for regular zaps
