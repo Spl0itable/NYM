@@ -3164,6 +3164,8 @@ Object.assign(NYM.prototype, {
         // guarantees grouping is consistent for the whole batch.
         this._recomputeAllBubbleGrouping(container);
 
+        this._scheduleZapResubscribe();
+
         // Scroll to bottom if requested. The reverse-column container keeps
         // the bottom pinned as media loads afterwards, so no follow-up is needed.
         if (scrollToBottom && this.settings.autoscroll) {

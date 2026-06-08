@@ -1201,6 +1201,8 @@ Object.assign(NYM.prototype, {
             this.pmMessages.set(conversationKey, list);
             this.persistPMMessages(conversationKey);
 
+            this._scheduleZapResubscribe();
+
             // Send DELIVERED receipt back to Bitchat user
             if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
                 this.sendBitchatReceipt(parsed.messageId, 0x03, senderPubkey); // 0x03 = DELIVERED

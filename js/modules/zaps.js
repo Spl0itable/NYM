@@ -9,7 +9,7 @@ Object.assign(NYM.prototype, {
         if (this._zapReceiptEventIds.size === 0) return null;
         // Limit to 500 event IDs to stay within relay filter size limits
         const ids = [...this._zapReceiptEventIds].slice(0, 500);
-        return { kinds: [9735], "#e": ids, limit: 100 };
+        return { kinds: [9735], "#e": ids, limit: 500 };
     },
 
     // Debounced update of the zap receipt subscription (called when messages change)
@@ -18,7 +18,7 @@ Object.assign(NYM.prototype, {
         this._zapResubscribeTimer = setTimeout(() => {
             this._zapResubscribeTimer = null;
             this._updateZapReceiptSubscription();
-        }, 10000); // 10-second debounce
+        }, 1500);
     },
 
     // Send an updated zap receipt subscription to critical relays only
@@ -1319,7 +1319,8 @@ Object.assign(NYM.prototype, {
 
     // Record a zap against a message and refresh its badge (deduped by receipt)
     _recordMessageZap(messageId, zapperPubkey, amount, receiptId) {
-        if (!messageId || !amount) return;
+        const sats = Number(amount) || 0;
+        if (!messageId || !sats) return;
         if (!this.zaps.has(messageId)) {
             this.zaps.set(messageId, { receipts: new Set(), amounts: new Map() });
         }
@@ -1327,7 +1328,7 @@ Object.assign(NYM.prototype, {
         if (receiptId && messageZaps.receipts.has(receiptId)) return;
         if (receiptId) messageZaps.receipts.add(receiptId);
         const currentAmount = messageZaps.amounts.get(zapperPubkey) || 0;
-        messageZaps.amounts.set(zapperPubkey, currentAmount + amount);
+        messageZaps.amounts.set(zapperPubkey, currentAmount + sats);
         this.updateMessageZaps(messageId);
     },
 
