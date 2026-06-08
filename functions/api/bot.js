@@ -693,7 +693,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.69.458";
+var NYMCHAT_VERSION = "3.69.459";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -1160,7 +1160,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Notify Friends Only: only receive notifications from friends",
   "- Blocked Keywords/Phrases, Hide Non-Pinned Channels, Hidden/Blocked Channels, Blocked Users",
   "- Low Data Mode: reduces relay connections",
-  "- Performance Mode: auto/enabled/disabled — reduces visual effects (disables blur, simplifies animations, lowers world map quality) for better performance on older or low-end devices. Auto mode detects device capabilities and activates automatically on weaker hardware",
+  "- Performance Mode: auto/enabled/disabled — reduces visual effects (disables blur, reduces motion, lowers world map quality) for better performance on older or low-end devices. Auto mode detects device capabilities and activates automatically on weaker hardware",
   "- Transfer Settings to Another User, Pending Transfers",
   "- Clear Local Storage Cache: resets settings to defaults",
   "",
@@ -1199,7 +1199,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "=== PANIC MODE (emergency wipe) ===",
   "Press and hold the 'Your Nym' section in the sidebar (your nym/avatar) for 2 seconds to trigger an emergency wipe. A normal tap/click just opens the profile editor; only the 2-second hold fires Panic Mode.",
   "What it does: drops all in-memory secrets, encrypts every local storage value under a random throwaway key that is immediately discarded, overwrites everything with junk, shreds all IndexedDB databases and caches, unregisters service workers, clears cookies, then reloads to a pristine first-run state. The leftover bytes are unrecoverable ciphertext.",
-  "It shows a full-screen encryption-scramble animation while it works. This is irreversible — the identity and all local data are destroyed. It's a quick way to hide and protect yourself if you need to.",
+  "It shows a full-screen encryption-scramble effect while it works. This is irreversible — the identity and all local data are destroyed. It's a quick way to hide and protect yourself if you need to.",
   "",
   "=== MESSAGE SENDER VERIFICATION (lock icon) ===",
   "Received private and group messages show a small lock icon next to the sender's nym indicating whether the sender could be cryptographically verified.",
@@ -1251,41 +1251,41 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "NICKNAME FLAIR (badges displayed next to your nym as SVG icons with colored glow):",
   "- Crown (5,000 sats) — Royal golden crown badge (gold #ffd700 glow)",
-  "- Diamond (10,000 sats) — Legendary sparkling diamond badge (cyan #00ffff glow)",
+  "- Diamond (10,000 sats) — Legendary diamond badge (cyan #00ffff glow)",
   "- Skull (1,666 sats) — Badass skull badge (red #ff0000 glow)",
-  "- Star (2,500 sats) — Shining star badge that twinkles (yellow #ffff00 glow)",
-  "- Lightning (2,100 sats) — Electric lightning bolt badge that flickers (orange #f7931a glow)",
-  "- Heart (1,111 sats) — Loving heart badge that beats (deep pink #ff1493 glow)",
+  "- Star (2,500 sats) — Shining star badge (yellow #ffff00 glow)",
+  "- Lightning (2,100 sats) — Electric lightning bolt badge (orange #f7931a glow)",
+  "- Heart (1,111 sats) — Loving heart badge (deep pink #ff1493 glow)",
   "- Fawkes (4,200 sats) — Legendary pseudonymous mask badge (white #ffffff glow)",
   "- Rocket (2,300 sats) — To the moon badge (red #ff6b6b glow)",
   "- Shield (1,900 sats) — Supporter of encryption badge (green #52ff9d glow)",
-  "- Flame (1,200 sats) — Blazing fire badge that flickers (orange #ff7a1a glow)",
+  "- Flame (1,200 sats) — Blazing fire badge (orange #ff7a1a glow)",
   "- Snowflake (1,400 sats) — Frosty winter badge (icy #7fdfff glow)",
   "- Moon (1,600 sats) — Mystic crescent moon badge (pale #cdd6ff glow)",
-  "- Sun (1,500 sats) — Radiant spinning sun badge (gold #ffc93c glow)",
+  "- Sun (1,500 sats) — Radiant sun badge (gold #ffc93c glow)",
   "- Leaf (900 sats) — Natural leaf badge (green #5fd35f glow)",
-  "- Music (1,100 sats) — Melodic music note badge that wiggles (purple #b388ff glow)",
+  "- Music (1,100 sats) — Melodic music note badge (purple #b388ff glow)",
   "- All-Seeing (1,800 sats) — Watchful eye badge (icy white #e0f7ff glow)",
   "- Anchor (1,000 sats) — Steadfast anchor badge (blue #5b9dff glow)",
   "- Ruby (3,300 sats) — Precious ruby gem badge (red-pink #ff3b6b glow)",
   "",
-  "MESSAGE STYLES (change how your messages appear to everyone — animated text effects, many with matching background patterns):",
+  "MESSAGE STYLES (change how your messages appear to everyone — colored text effects, many with matching background patterns):",
   "- Satoshi (21,420 sats) — Legendary Bitcoin-themed orange glow with BTC symbol watermark",
   "- Glitch (10,101 sats) — Digital glitch effect with red/cyan offset shadows",
-  "- Aurora (2,424 sats) — Shifting neon aurora gradient (cyan → blue → magenta cycling)",
-  "- Neon (1,984 sats) — Cyberpunk neon purple with pulsing glow aura",
-  "- Ghost (666 sats) — Mysterious ethereal fade with floating transparency and ghost watermark",
-  "- Matrix (1,337 sats) — Legendary green terminal glow with falling binary (0/1) watermark",
-  "- Fire (911 sats) — Burning hot flame effect with flame watermark and flicker",
+  "- Aurora (2,424 sats) — Neon aurora gradient (cyan, blue, magenta)",
+  "- Neon (1,984 sats) — Cyberpunk neon purple with glow aura",
+  "- Ghost (666 sats) — Mysterious ethereal translucent text with ghost watermark",
+  "- Matrix (1,337 sats) — Legendary green terminal glow with binary (0/1) watermark",
+  "- Fire (911 sats) — Burning hot flame effect with flame watermark",
   "- Ice (777 sats) — Cool frozen cyan text with faint snowflake watermark",
-  "- Rainbow (2,222 sats) — Animated rainbow gradient cycling through spectrum colors",
-  "- Ocean (1,500 sats) — Deep sea blue with drifting wave pattern",
-  "- Sakura (3,000 sats) — Soft pink with falling cherry-blossom petals",
+  "- Rainbow (2,222 sats) — Violet text with a rainbow-arc watermark pattern",
+  "- Ocean (1,500 sats) — Deep sea blue with wave pattern",
+  "- Sakura (3,000 sats) — Soft pink with cherry-blossom petal pattern",
   "- Galaxy (4,444 sats) — Cosmic purple with starfield pattern",
   "- Toxic (1,300 sats) — Radioactive green with hazard pattern",
-  "- Midas (8,888 sats) — Luxurious shimmering gold with sparkle pattern",
+  "- Midas (8,888 sats) — Luxurious gold with sparkle pattern",
   "- Vaporwave (1,995 sats) — Retro pink and cyan with perspective grid",
-  "- Blood (1,313 sats) — Dark crimson with dripping droplet pattern",
+  "- Blood (1,313 sats) — Dark crimson with droplet pattern",
   "- Royal (6,000 sats) — Regal purple with gold diamond-lattice pattern",
   "- Circuit (2,048 sats) — Cyber teal with circuit-board trace pattern",
   "",
@@ -1293,19 +1293,19 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Nymchat Supporter (42,069 sats) — Premium supporter badge (SVG trophy) with golden message styling",
   "- Gold Aura (3,500 sats) — Golden glow border around your messages",
   "- Redacted (2,800 sats) — Messages auto-disappear after 10 seconds for others",
-  "- Neon Aura (3,200 sats) — Pulsing electric-cyan glow around your messages",
-  "- Cosmic Aura (5,000 sats) — Twinkling indigo starfield aura around your messages",
+  "- Neon Aura (3,200 sats) — Electric-cyan glow around your messages",
+  "- Cosmic Aura (5,000 sats) — Indigo starfield aura around your messages",
   "- Frostbite (2,600 sats) — Frosted-glass message backdrop with snowflake pattern",
   "",
-  "LEGENDARY TIER (premium animated cosmetics, in Special Items):",
-  "- Phoenix Aura (12,000 sats) — Animated rising-ember glow around your messages",
-  "- Prism Aura (11,000 sats) — Animated rainbow ring that wraps your whole message",
-  "- Hologram Bubble (13,500 sats) — Iridescent holographic shimmer on your message bubbles",
+  "LEGENDARY TIER (premium cosmetics, in Special Items):",
+  "- Phoenix Aura (12,000 sats) — Rising-ember glow around your messages",
+  "- Prism Aura (11,000 sats) — Rainbow ring that wraps your whole message",
+  "- Holographic (13,500 sats) — Iridescent holographic finish on whole message",
   "",
   "LIMITED & BUNDLES (the 'Limited & Bundles' shop tab):",
   "- Genesis (25,000 sats) — Legendary numbered flair, only 100 will ever exist; bold nickname + your edition number shown inside the pyramid",
   "- Eclipse (9,000 sats) — Limited message style, a drop of 1,000 numbered editions",
-  "- CRT (12,000 sats) — Legendary limited message style (drop of 250); amber-phosphor terminal text with rolling scanlines",
+  "- CRT (12,000 sats) — Legendary limited message style (drop of 250); amber-phosphor terminal text with scanlines",
   "- Starter Pack bundle (3,000 sats) — Flame flair + Ice style + Frostbite cosmetic at a discount",
   "- Legendary Vault bundle (30,000 sats) — All three legendary cosmetics together, best value",
   "- Everything Pack bundle (149,999 sats) — Every message style, flair and special item at once (excludes limited numbered editions)",
@@ -1367,7 +1367,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.69.458 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.69.459 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -2192,7 +2192,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.69.458")
+  // Prefix match (e.g. "3.61" matches "3.69.459")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -2247,7 +2247,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.69.458", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.69.459", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

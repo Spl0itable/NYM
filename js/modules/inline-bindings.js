@@ -22,24 +22,6 @@ window.NYM_CDN = {
     webtorrent: 'https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js'
 };
 
-// Shared observer that pauses cosmetic animations while their element is
-// off-screen. Detached (pruned) targets are unobserved automatically.
-window._animObserver = ('IntersectionObserver' in window)
-    ? new IntersectionObserver((entries, obs) => {
-        for (const e of entries) {
-            if (!e.target.isConnected) { obs.unobserve(e.target); continue; }
-            e.target.classList.toggle('nym-anim-paused', !e.isIntersecting);
-        }
-    }, { rootMargin: '100px' })
-    : null;
-
-window.nymObserveAnim = function (el) {
-    if (window._animObserver && el) {
-        el.classList.add('nym-anim-paused');
-        window._animObserver.observe(el);
-    }
-};
-
 // Collapsed/expanded state of the Settings modal category sections, persisted
 // per section key so the user's layout sticks across opens and reloads.
 window.persistSettingsSectionState = function (key, collapsed) {

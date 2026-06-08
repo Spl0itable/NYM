@@ -2131,54 +2131,6 @@ body.chat-bubbles .crypto-lock-irc {
     border-color: rgb(from var(--primary) r g b / 0.2);
 }
 
-@keyframes rainbowTextLight {
-    0% {
-        color: #cc0000;
-    }
-
-    16% {
-        color: #cc5500;
-    }
-
-    33% {
-        color: #888800;
-    }
-
-    50% {
-        color: #007700;
-    }
-
-    66% {
-        color: #005599;
-    }
-
-    83% {
-        color: #442299;
-    }
-
-    100% {
-        color: #cc0000;
-    }
-}
-
-@keyframes auroraTextLight {
-    0% {
-        color: #007766;
-    }
-
-    33% {
-        color: #334499;
-    }
-
-    66% {
-        color: #880066;
-    }
-
-    100% {
-        color: #007766;
-    }
-}
-
 .shop-modal {
     display: none;
     position: fixed;

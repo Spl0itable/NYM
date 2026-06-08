@@ -1285,7 +1285,6 @@ Object.assign(NYM.prototype, {
 
             // Insert at beginning of reactions row
             reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);
-            if (window.nymObserveAnim) window.nymObserveAnim(zapBadge);
 
             // Add quick zap button ONLY if zaps exist and not own message
             const pubkey = messageEl.dataset.pubkey;

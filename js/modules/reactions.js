@@ -456,9 +456,7 @@ Object.assign(NYM.prototype, {
 
         // Re-add zap badge first if it exists
         if (zapBadge) {
-            zapBadge.classList.remove('nym-anim-paused');
             reactionsRow.appendChild(zapBadge);
-            if (window.nymObserveAnim) window.nymObserveAnim(zapBadge);
         }
 
         // Re-add quick zap button ONLY if it already existed (meaning there are zaps)

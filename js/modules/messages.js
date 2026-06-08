@@ -676,7 +676,6 @@ Object.assign(NYM.prototype, {
             }
 
             messageEl.className = classes.join(' ');
-            if (userShopItems?.style && window.nymObserveAnim) window.nymObserveAnim(messageEl);
             // For PM messages use nymMessageId as the stable shared key (gift wrap IDs differ per recipient)
             messageEl.dataset.messageId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             messageEl.dataset.author = message.author;
@@ -977,7 +976,6 @@ Object.assign(NYM.prototype, {
 
             if (activeStyle) {
                 messageEl.classList.add(activeStyle);
-                if (window.nymObserveAnim) window.nymObserveAnim(messageEl);
             }
             if (this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false) {
                 messageEl.classList.add('supporter-style');

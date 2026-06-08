@@ -821,7 +821,8 @@ body.light-mode .style-preview-ice {
 }
 
 body.light-mode .message.style-rainbow .message-content {
-    animation: rainbowTextLight 3s linear infinite;
+    color: #8a3fd0 !important;
+    text-shadow: none;
 }
 
 body.light-mode .style-preview-rainbow {
@@ -839,7 +840,10 @@ body.light-mode .style-preview-glitch {
 }
 
 body.light-mode .message.style-aurora .message-content {
-    animation: auroraTextLight 6s linear infinite;
+    background: linear-gradient(120deg, #007766, #334499, #880066, #007766);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
     text-shadow: none;
 }
 
@@ -1377,9 +1381,7 @@ body.light-mode.chat-bubbles .message:hover {
 }
 
 body.light-mode.chat-bubbles .message.style-fire .message-content,
-body.light-mode.chat-bubbles .message.style-ice .message-content,
-body.light-mode.chat-bubbles .message.style-rainbow .message-content,
-body.light-mode.chat-bubbles .message.style-aurora .message-content {
+body.light-mode.chat-bubbles .message.style-ice .message-content {
     background: rgba(0, 0, 0, 0.08) !important;
 }
 
@@ -1584,11 +1586,6 @@ body.performance-mode .status-dot {
 body.performance-mode .message {
     animation: none;
     transition: none;
-}
-
-.nym-anim-paused,
-.nym-anim-paused .message-content {
-    animation-play-state: paused !important;
 }
 
 body.performance-mode .message:hover {
@@ -1806,15 +1803,13 @@ body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self .message-content
 
 body.solid-ui.chat-bubbles .message.style-fire .message-content,
 body.solid-ui.chat-bubbles .message.style-ice .message-content,
-body.solid-ui.chat-bubbles .message.style-rainbow .message-content,
-body.solid-ui.chat-bubbles .message.style-aurora .message-content {
+body.solid-ui.chat-bubbles .message.style-rainbow .message-content {
     background: #2a2a3a !important;
 }
 
 body.solid-ui.chat-bubbles .message.self.style-fire .message-content,
 body.solid-ui.chat-bubbles .message.self.style-ice .message-content,
-body.solid-ui.chat-bubbles .message.self.style-rainbow .message-content,
-body.solid-ui.chat-bubbles .message.self.style-aurora .message-content {
+body.solid-ui.chat-bubbles .message.self.style-rainbow .message-content {
     background: color-mix(in srgb, var(--primary) 22%, #2a2a3a) !important;
 }
 
@@ -1832,15 +1827,13 @@ body.solid-ui.chat-bubbles .message.cosmetic-aura-gold .message-content {
 
 body.solid-ui.light-mode.chat-bubbles .message.style-fire .message-content,
 body.solid-ui.light-mode.chat-bubbles .message.style-ice .message-content,
-body.solid-ui.light-mode.chat-bubbles .message.style-rainbow .message-content,
-body.solid-ui.light-mode.chat-bubbles .message.style-aurora .message-content {
+body.solid-ui.light-mode.chat-bubbles .message.style-rainbow .message-content {
     background: #e6e6e0 !important;
 }
 
 body.solid-ui.light-mode.chat-bubbles .message.self.style-fire .message-content,
 body.solid-ui.light-mode.chat-bubbles .message.self.style-ice .message-content,
-body.solid-ui.light-mode.chat-bubbles .message.self.style-rainbow .message-content,
-body.solid-ui.light-mode.chat-bubbles .message.self.style-aurora .message-content {
+body.solid-ui.light-mode.chat-bubbles .message.self.style-rainbow .message-content {
     background: color-mix(in srgb, var(--primary) 22%, #e6e6e0) !important;
 }
 
@@ -1887,7 +1880,6 @@ body.solid-ui.light-mode:not(.chat-bubbles) .message.cosmetic-aura-gold {
 body.solid-ui.theme-ghost.chat-bubbles .message.style-fire .message-content,
 body.solid-ui.theme-ghost.chat-bubbles .message.style-ice .message-content,
 body.solid-ui.theme-ghost.chat-bubbles .message.style-rainbow .message-content,
-body.solid-ui.theme-ghost.chat-bubbles .message.style-aurora .message-content,
 body.solid-ui.theme-ghost.chat-bubbles .message.style-satoshi .message-content,
 body.solid-ui.theme-ghost.chat-bubbles .message.supporter-style .message-content,
 body.solid-ui.theme-ghost.chat-bubbles .message.cosmetic-aura-gold .message-content {
@@ -1896,15 +1888,13 @@ body.solid-ui.theme-ghost.chat-bubbles .message.cosmetic-aura-gold .message-cont
 
 body.solid-ui.theme-ghost.chat-bubbles .message.self.style-fire .message-content,
 body.solid-ui.theme-ghost.chat-bubbles .message.self.style-ice .message-content,
-body.solid-ui.theme-ghost.chat-bubbles .message.self.style-rainbow .message-content,
-body.solid-ui.theme-ghost.chat-bubbles .message.self.style-aurora .message-content {
+body.solid-ui.theme-ghost.chat-bubbles .message.self.style-rainbow .message-content {
     background: #444444 !important;
 }
 
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-fire .message-content,
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-ice .message-content,
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-rainbow .message-content,
-body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-aurora .message-content,
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.style-satoshi .message-content,
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.supporter-style .message-content,
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.cosmetic-aura-gold .message-content {
@@ -1913,8 +1903,7 @@ body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.cosmetic-aura-gold .m
 
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-fire .message-content,
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-ice .message-content,
-body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-rainbow .message-content,
-body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-aurora .message-content {
+body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self.style-rainbow .message-content {
     background: #bbbbbb !important;
 }
 

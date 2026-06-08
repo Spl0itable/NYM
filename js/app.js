@@ -1127,7 +1127,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Glitch">
                 {
                     id: 'style-aurora',
                     name: 'Aurora',
-                    description: 'Shifting neon aurora gradient',
+                    description: 'Neon aurora gradient',
                     price: 2424,
                     preview: 'style-preview-aurora',
                     type: 'message-style',
@@ -1235,7 +1235,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Ice">
                 {
                     id: 'style-rainbow',
                     name: 'Rainbow',
-                    description: 'Animated rainbow gradient',
+                    description: 'Violet text with rainbow-arc watermark',
                     price: 2222,
                     preview: 'style-preview-rainbow',
                     type: 'message-style',
@@ -1253,7 +1253,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Rainbow">
                 {
                     id: 'style-ocean',
                     name: 'Ocean',
-                    description: 'Deep sea blue with drifting waves',
+                    description: 'Deep sea blue with waves',
                     price: 1500,
                     preview: 'style-preview-ocean',
                     type: 'message-style',
@@ -1330,7 +1330,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Toxic">
                 {
                     id: 'style-gold',
                     name: 'Midas',
-                    description: 'Luxurious shimmering gold',
+                    description: 'Luxurious gold',
                     price: 8888,
                     preview: 'style-preview-gold',
                     type: 'message-style',
@@ -1366,7 +1366,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Vaporwave">
                 {
                     id: 'style-blood',
                     name: 'Blood',
-                    description: 'Dark crimson dripping text',
+                    description: 'Dark crimson blood-drop text',
                     price: 1313,
                     preview: 'style-preview-blood',
                     type: 'message-style',
@@ -1442,7 +1442,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Crown">
                 {
                     id: 'flair-diamond',
                     name: 'Diamond',
-                    description: 'Sparkling diamond badge',
+                    description: 'Brilliant diamond badge',
                     price: 10000,
                     type: 'nickname-flair',
                     tier: 'legendary',
@@ -1799,7 +1799,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Redacted">
                     price: 3200,
                     type: 'cosmetic',
                     cssClass: 'cosmetic-aura-neon',
-                    benefits: ['Pulsing neon-cyan glow', 'Stands out in any channel'],
+                    benefits: ['Neon-cyan glow', 'Stands out in any channel'],
                     icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 width="1em" height="1em" fill="none" stroke="currentColor"
@@ -1859,7 +1859,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Frostbite">
                     type: 'cosmetic',
                     tier: 'legendary',
                     cssClass: 'cosmetic-aura-phoenix',
-                    benefits: ['Animated rising-ember glow', 'Legendary tier flex'],
+                    benefits: ['Rising-ember glow', 'Legendary tier flex'],
                     icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 width="1em" height="1em" fill="none" stroke="currentColor"
@@ -1876,11 +1876,11 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Phoenix Aura">
                 {
                     id: 'cosmetic-aura-cosmic',
                     name: 'Cosmic Aura',
-                    description: 'Twinkling starfield aura around your messages',
+                    description: 'Starfield aura around your messages',
                     price: 5000,
                     type: 'cosmetic',
                     cssClass: 'cosmetic-aura-cosmic',
-                    benefits: ['Animated starfield halo', 'Deep-space glow'],
+                    benefits: ['Starfield halo', 'Deep-space glow'],
                     icon: `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 width="1em" height="1em" fill="none" stroke="currentColor"
@@ -1895,8 +1895,8 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Cosmic Aura">
                 },
                 {
                     id: 'cosmetic-bubble-hologram',
-                    name: 'Hologram Bubble',
-                    description: 'Legendary holographic shimmer on your message bubbles',
+                    name: 'Holographic',
+                    description: 'Legendary holographic finish on your whole message',
                     price: 13500,
                     type: 'cosmetic',
                     tier: 'legendary',
@@ -1907,7 +1907,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Cosmic Aura">
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Hologram Bubble">
-<title>Hologram Bubble</title>
+<title>Holographic</title>
 <path d="M5 5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7l-4 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/>
 <path d="M8 9.5h8M8 12.5h5"/>
 </svg>`
@@ -1954,7 +1954,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Eclipse">
                 {
                     id: 'style-crt',
                     name: 'CRT',
-                    description: 'A limited drop of 250. Amber-phosphor terminal text with rolling scanlines.',
+                    description: 'A limited drop of 250. Amber-phosphor terminal text with scanlines.',
                     price: 12000,
                     type: 'message-style',
                     tier: 'legendary',
@@ -4150,7 +4150,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.458';
+const NYMCHAT_VERSION = 'v3.69.459';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');

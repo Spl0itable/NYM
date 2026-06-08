@@ -968,5 +968,7 @@ body.sidebar-reorder-mode .nav-title {
     flex-direction: column-reverse;
     font-size: 14px;
     background-color: rgba(0, 0, 0, 0.15);
-    contain: layout style paint;
+    contain: layout style;
+    transform: translateZ(0);
+    backface-visibility: hidden;
 }

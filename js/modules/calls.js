@@ -1295,7 +1295,7 @@ Object.assign(NYM.prototype, {
         // the call-chat row, mirroring how channel/PM messages render cosmetics.
         const shop = pubkey && typeof this.getUserShopItems === 'function' ? this.getUserShopItems(pubkey) : null;
         if (shop) {
-            if (shop.style) { row.classList.add(shop.style); if (window.nymObserveAnim) window.nymObserveAnim(row); }
+            if (shop.style) { row.classList.add(shop.style); }
             if (shop.supporter) row.classList.add('supporter-style');
             if (Array.isArray(shop.cosmetics) && shop.cosmetics.includes('cosmetic-aura-gold')) row.classList.add('cosmetic-aura-gold');
         }

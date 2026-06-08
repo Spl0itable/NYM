@@ -127,6 +127,7 @@ body::before {
         radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.2) 100%);
     pointer-events: none;
     z-index: 0;
+    transform: translateZ(0);
 }
 
 body::after {
@@ -139,6 +140,7 @@ body::after {
     background: none;
     pointer-events: none;
     z-index: 0;
+    transform: translateZ(0);
 }
 
 #wallpaperLayer {
@@ -149,4 +151,5 @@ body::after {
     height: 100%;
     pointer-events: none;
     z-index: 0;
+    transform: translateZ(0);
 }

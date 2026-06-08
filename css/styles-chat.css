@@ -155,20 +155,8 @@
     gap: 4px;
     color: var(--lightning);
     font-weight: 600;
-    animation: zapGlow 2s infinite;
+    box-shadow: 0 0 10px rgba(247, 147, 26, 0.5);
     backdrop-filter: blur(10px);
-}
-
-@keyframes zapGlow {
-
-    0%,
-    100% {
-        box-shadow: 0 0 5px rgba(247, 147, 26, 0.3);
-    }
-
-    50% {
-        box-shadow: 0 0 10px rgba(247, 147, 26, 0.5);
-    }
 }
 
 .zap-icon {
