@@ -964,6 +964,14 @@ Object.assign(NYM.prototype, {
         const botCreditReceipt = (this.currentZapInvoice && this.currentZapInvoice.receipt) || null;
         const botCreditGiftNym = this.currentZapTarget.giftRecipientNym || null;
 
+        if (!isBotCreditPurchase && this.currentZapTarget.messageId) {
+            this._recordOwnMessageZap(
+                this.currentZapTarget.messageId,
+                amount,
+                this.currentZapInvoice && this.currentZapInvoice.pr
+            );
+        }
+
         window.nymHapticTap && window.nymHapticTap();
 
         // Clear check interval
@@ -1047,10 +1055,10 @@ Object.assign(NYM.prototype, {
                 if (this.zapReceiptSubId === wait.subId) this.zapReceiptSubId = null;
             }
             const amount = wait.amount || this.parseAmountFromBolt11(boltTag[1]);
-            // Keep the receipt so the worker can validate it (e.g. on "I've paid")
+            // Keep the receipt so the worker can validate it (e.g. on "I've paid").
+            // handleZapPaymentSuccess records the message badge (deduped by bolt11).
             if (this.currentZapInvoice) this.currentZapInvoice.receipt = event;
-            // Show the zap badge on our own message for message zaps
-            if (wait.messageId) this._recordMessageZap(wait.messageId, this.pubkey, amount, event.id);
+            this._rebroadcastZapReceipt(event);
             this.handleZapPaymentSuccess(amount);
             return;
         }
@@ -1100,14 +1108,20 @@ Object.assign(NYM.prototype, {
             // Track the zap and refresh the message badge (deduped by receipt id)
             const existing = this.zaps.get(messageId);
             if (existing && existing.receipts.has(event.id)) return;
-            this._recordMessageZap(messageId, zapperPubkey, amount, event.id);
 
-            // Check if this is for our current pending zap
-            if (this.currentZapTarget &&
-                this.currentZapTarget.messageId === messageId &&
-                zapperPubkey === this.pubkey) {
-                this.handleZapPaymentSuccess(amount);
+            // Our own zap: dedup by bolt11 since handleZapPaymentSuccess may have
+            // already counted it via the verify-URL confirmation.
+            if (zapperPubkey === this.pubkey) {
+                this._rebroadcastZapReceipt(event);
+                if (this.currentZapTarget && this.currentZapTarget.messageId === messageId) {
+                    this.handleZapPaymentSuccess(amount);
+                } else {
+                    this._recordOwnMessageZap(messageId, amount, bolt11);
+                }
+                return;
             }
+
+            this._recordMessageZap(messageId, zapperPubkey, amount, event.id);
 
             if (pTag && pTag[1] === this.pubkey && zapperPubkey !== this.pubkey) {
                 this._notifyZapToOurMessage(messageId, amount, zapperPubkey, event);
@@ -1278,6 +1292,29 @@ Object.assign(NYM.prototype, {
             }
         }
         return null;
+    },
+
+    // Re-broadcast a zap receipt for our own zap to our full relay set, so more
+    // clients pick it up than wherever the LNURL server originally published it.
+    // Deduped by receipt id so we only republish once.
+    _rebroadcastZapReceipt(event) {
+        if (!event || event.kind !== 9735 || !event.id) return;
+        if (!this._rebroadcastedZapReceipts) this._rebroadcastedZapReceipts = new Set();
+        if (this._rebroadcastedZapReceipts.has(event.id)) return;
+        this._rebroadcastedZapReceipts.add(event.id);
+        try { this.sendToRelay(["EVENT", event]); } catch (_) { }
+    },
+
+    // Record our own zap against a message, deduped by the invoice's bolt11 so
+    // the verify-URL confirmation and a later NIP-57 receipt for the same
+    // payment don't both count it.
+    _recordOwnMessageZap(messageId, amount, bolt11) {
+        if (!messageId || !amount) return;
+        if (!this._selfCountedZapInvoices) this._selfCountedZapInvoices = new Set();
+        const key = bolt11 ? String(bolt11).toLowerCase() : ('amt:' + messageId + ':' + amount);
+        if (this._selfCountedZapInvoices.has(key)) return;
+        this._selfCountedZapInvoices.add(key);
+        this._recordMessageZap(messageId, this.pubkey, amount, 'self:' + key);
     },
 
     // Record a zap against a message and refresh its badge (deduped by receipt)
