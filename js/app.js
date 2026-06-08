@@ -1047,9 +1047,6 @@ class NYM {
         this.localActiveStyle = null;
         this.shopItemsLoaded = false;
         this.zaps = new Map();
-        this._zapReceiptEventIds = new Set();
-        this._zapResubscribeTimer = null;
-        this._zapReceiptSubId = null;
         this.currentZapTarget = null;
         this.currentZapInvoice = null;
         this.pendingLightningWaiters = new Map();

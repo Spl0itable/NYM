@@ -2676,8 +2676,6 @@ Object.assign(NYM.prototype, {
         if (channelMode) {
             filters.push({ kinds: [5], "#k": ["20000", "23333", "1059"], since: since24h, limit: 100 });
         }
-        const zapFilter = this._buildZapReceiptFilter();
-        if (zapFilter) filters.push(zapFilter);
         if (this.pubkey) {
             filters.push({
                 kinds: [9735],
@@ -2687,6 +2685,10 @@ Object.assign(NYM.prototype, {
                 limit: 200
             });
         }
+        if (channelMode) {
+            filters.push({ kinds: [9735], "#k": ["20000", "23333"], since: since24h, limit: 100 });
+        }
+        filters.push({ kinds: [9735], "#k": ["1059"], since: since24h, limit: 100 });
 
         // Less critical — anything past position 9 is bundled into a single sub upstream
         if (this.pubkey) {
@@ -2719,22 +2721,6 @@ Object.assign(NYM.prototype, {
 
     _isNostrHex64(s) {
         return typeof s === 'string' && s.length === 64 && /^[0-9a-f]{64}$/i.test(s);
-    },
-
-    _collectVisibleEventIds() {
-        this._zapReceiptEventIds.clear();
-        this.messages.forEach((msgs) => {
-            for (const msg of msgs) {
-                if (this._isNostrHex64(msg.id)) this._zapReceiptEventIds.add(msg.id);
-            }
-        });
-        if (this.pmMessages) {
-            this.pmMessages.forEach((msgs) => {
-                for (const msg of msgs) {
-                    if (this._isNostrHex64(msg.id)) this._zapReceiptEventIds.add(msg.id);
-                }
-            });
-        }
     },
 
     _poolSubscribe() {

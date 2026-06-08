@@ -515,9 +515,6 @@ Object.assign(NYM.prototype, {
                 // history is available instantly on next launch.
                 this.persistChannelMessages(storageKey);
 
-                // Schedule zap receipt subscription update with new event IDs
-                this._scheduleZapResubscribe();
-
                 if (this.geohashMap && message.geohash && this.isValidGeohash && this.isValidGeohash(message.geohash)) {
                     this._scheduleGeohashMapUpdate();
                 }
@@ -3164,7 +3161,7 @@ Object.assign(NYM.prototype, {
         // guarantees grouping is consistent for the whole batch.
         this._recomputeAllBubbleGrouping(container);
 
-        this._scheduleZapResubscribe();
+        this._backfillZapReceipts(renderMessages.map(m => m.id));
 
         // Scroll to bottom if requested. The reverse-column container keeps
         // the bottom pinned as media loads afterwards, so no follow-up is needed.

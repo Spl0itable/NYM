@@ -2,55 +2,23 @@
 
 Object.assign(NYM.prototype, {
 
-    // Build a zap receipt filter scoped to visible message event IDs.
-    // Returns null if no event IDs are available (caller should skip zap filter).
-    _buildZapReceiptFilter() {
-        this._collectVisibleEventIds();
-        if (this._zapReceiptEventIds.size === 0) return null;
-        // Limit to 500 event IDs to stay within relay filter size limits
-        const ids = [...this._zapReceiptEventIds].slice(0, 500);
-        return { kinds: [9735], "#e": ids, limit: 500 };
-    },
-
-    // Debounced update of the zap receipt subscription (called when messages change)
-    _scheduleZapResubscribe() {
-        if (this._zapResubscribeTimer) return; // already scheduled
-        this._zapResubscribeTimer = setTimeout(() => {
-            this._zapResubscribeTimer = null;
-            this._updateZapReceiptSubscription();
-        }, 1500);
-    },
-
-    // Send an updated zap receipt subscription to critical relays only
-    _updateZapReceiptSubscription() {
-        const zapFilter = this._buildZapReceiptFilter();
-        if (!zapFilter) return;
-
-        const newSubId = Math.random().toString(36).substring(2);
-
-        if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            // Close previous zap subscription
-            if (this._zapReceiptSubId) {
-                this._poolSendToRole('critical', ["CLOSE", this._zapReceiptSubId]);
+    _backfillZapReceipts(messageIds) {
+        if (!Array.isArray(messageIds)) return;
+        const seen = new Set();
+        const ids = [];
+        for (const id of messageIds) {
+            if (this._isNostrHex64(id) && !seen.has(id)) {
+                seen.add(id);
+                ids.push(id);
+                if (ids.length >= 500) break;
             }
-            this._zapReceiptSubId = newSubId;
-            this._poolSendToRole('critical', ["REQ", newSubId, zapFilter]);
-        } else {
-            // Direct mode: send to default + DM relays only
-            const msg = JSON.stringify(["REQ", newSubId, zapFilter]);
-            const closeMsg = this._zapReceiptSubId ? JSON.stringify(["CLOSE", this._zapReceiptSubId]) : null;
-            this._zapReceiptSubId = newSubId;
-
-            this.relayPool.forEach((relay, url) => {
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN &&
-                    relay.type !== 'write' && !this._isGeoOrDiscoveredRelay(url)) {
-                    if (closeMsg) try { relay.ws.send(closeMsg); } catch (_) { }
-                    if (!relay.subscriptions) relay.subscriptions = new Set();
-                    relay.subscriptions.add(newSubId);
-                    try { relay.ws.send(msg); } catch (_) { }
-                }
-            });
         }
+        if (ids.length === 0) return;
+        const subId = 'zap-bf-' + Math.random().toString(36).slice(2, 9);
+        try {
+            this.sendToRelay(["REQ", subId, { kinds: [9735], "#e": ids, limit: 500 }]);
+            setTimeout(() => { try { this.sendToRelay(["CLOSE", subId]); } catch (_) { } }, 10000);
+        } catch (_) { }
     },
 
     // Fetch invoice from LNURL
