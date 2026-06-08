@@ -19,6 +19,66 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(["REQ", subId, { kinds: [9735], "#e": ids, limit: 500 }]);
             setTimeout(() => { try { this.sendToRelay(["CLOSE", subId]); } catch (_) { } }, 10000);
         } catch (_) { }
+        this._backfillZapReceiptsFromD1(ids, this.inPMMode ? 'pm' : 'channel');
+    },
+
+    async _backfillZapReceiptsFromD1(ids, scope) {
+        if (!Array.isArray(ids) || ids.length === 0) return;
+        if (!this._getApiHost || !this._getApiHost()) return;
+        if (typeof this._storageApiStream !== 'function') return;
+        try {
+            const resp = await this._storageApiStream('zap-get', { scope, ids }, false);
+            await this._readNdjsonStream(resp, (ev) => {
+                try { this.handleZapReceipt(ev); } catch (_) { }
+            });
+        } catch (_) { }
+    },
+
+    _archiveZapReceipt(event, eTag, descriptionTag) {
+        if (!event || event.kind !== 9735 || typeof event.id !== 'string') return;
+        if (!this.pubkey || !this._getApiHost || !this._getApiHost()) return;
+        const targetId = eTag && eTag[1];
+        if (!targetId || !this._isNostrHex64(targetId)) return;
+        let scope = null;
+        if (descriptionTag && descriptionTag[1]) {
+            try {
+                const req = JSON.parse(descriptionTag[1]);
+                const kTag = req && Array.isArray(req.tags) && req.tags.find(t => t[0] === 'k');
+                if (kTag) {
+                    if (kTag[1] === '20000' || kTag[1] === '23333') scope = 'channel';
+                    else if (kTag[1] === '1059') scope = 'pm';
+                }
+            } catch (_) { }
+        }
+        if (!scope) return;
+        if (!this._zapArchivedIds) this._zapArchivedIds = new Set();
+        if (this._zapArchivedIds.has(event.id)) return;
+        this._zapArchivedIds.add(event.id);
+        if (this._zapArchivedIds.size > 6000) {
+            this._zapArchivedIds = new Set(Array.from(this._zapArchivedIds).slice(-4000));
+        }
+        if (!this._zapArchiveQueue) this._zapArchiveQueue = [];
+        this._zapArchiveQueue.push(event);
+        if (this._zapArchiveQueue.length > 300) this._zapArchiveQueue.shift();
+        if (this._zapArchiveFlushTimer) return;
+        this._zapArchiveFlushTimer = setTimeout(() => {
+            this._zapArchiveFlushTimer = null;
+            this._flushZapArchive();
+        }, 4000);
+    },
+
+    async _flushZapArchive() {
+        if (!this._zapArchiveQueue || this._zapArchiveQueue.length === 0) return;
+        const batch = this._zapArchiveQueue.splice(0, 100);
+        try {
+            await this._storageApiRequest('zap-put', { events: batch });
+        } catch (_) { }
+        if (this._zapArchiveQueue.length > 0 && !this._zapArchiveFlushTimer) {
+            this._zapArchiveFlushTimer = setTimeout(() => {
+                this._zapArchiveFlushTimer = null;
+                this._flushZapArchive();
+            }, 4000);
+        }
     },
 
     // Fetch invoice from LNURL
@@ -983,6 +1043,8 @@ Object.assign(NYM.prototype, {
         const pTag = event.tags.find(t => t[0] === 'p');
         const boltTag = event.tags.find(t => t[0] === 'bolt11');
         const descriptionTag = event.tags.find(t => t[0] === 'description');
+
+        if (eTag && boltTag) this._archiveZapReceipt(event, eTag, descriptionTag);
 
         // Nymbot credit purchase (no LUD-21 verify): match the receipt to the
         // pending invoice by bolt11. This is a profile zap, so it has no e tag.

@@ -3161,7 +3161,12 @@ Object.assign(NYM.prototype, {
         // guarantees grouping is consistent for the whole batch.
         this._recomputeAllBubbleGrouping(container);
 
-        this._backfillZapReceipts(renderMessages.map(m => m.id));
+        const zapBackfillIds = [];
+        for (const m of renderMessages) {
+            if (m.id) zapBackfillIds.push(m.id);
+            if (m.isPM && m.nymMessageId && m.nymMessageId !== m.id) zapBackfillIds.push(m.nymMessageId);
+        }
+        this._backfillZapReceipts(zapBackfillIds);
 
         // Scroll to bottom if requested. The reverse-column container keeps
         // the bottom pinned as media loads afterwards, so no follow-up is needed.

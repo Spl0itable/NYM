@@ -644,6 +644,7 @@ async function handleProfileAction(context, body) {
 var PM_EVENT_MAX = 96 * 1024;
 var CHANNEL_EVENT_MAX = 64 * 1024;
 var CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
+var ZAP_EVENT_MAX = 32 * 1024;
 
 // Read-through edge cache for PUBLIC reads (channel-get, profile-get) so many
 // stateless workers serve them from the per-colo cache instead of hitting D1.
@@ -937,6 +938,148 @@ async function handleChannelAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
+function zapIsValidReceipt(ev) {
+  try {
+    if (!ev || typeof ev !== "object") return false;
+    if (ev.kind !== 9735) return false;
+    if (typeof ev.id !== "string" || typeof ev.sig !== "string" || typeof ev.pubkey !== "string") return false;
+    if (typeof ev.content !== "string" || !Array.isArray(ev.tags)) return false;
+    if (getEventHash(ev) !== ev.id) return false;
+    return schnorr.verify(ev.sig, ev.id, ev.pubkey);
+  } catch (e) { return false; }
+}
+
+function zapTargetId(ev) {
+  var tags = ev.tags || [];
+  var e = tags.find(function (t) {
+    return Array.isArray(t) && t[0] === "e" && typeof t[1] === "string" && /^[0-9a-f]{64}$/i.test(t[1]);
+  });
+  if (e) return e[1].toLowerCase();
+  var d = tags.find(function (t) { return Array.isArray(t) && t[0] === "description" && typeof t[1] === "string"; });
+  if (d) {
+    try {
+      var req = JSON.parse(d[1]);
+      if (req && Array.isArray(req.tags)) {
+        var re = req.tags.find(function (t) {
+          return Array.isArray(t) && t[0] === "e" && typeof t[1] === "string" && /^[0-9a-f]{64}$/i.test(t[1]);
+        });
+        if (re) return re[1].toLowerCase();
+      }
+    } catch (e2) { }
+  }
+  return null;
+}
+
+function zapScopeFromDescription(ev) {
+  var d = (ev.tags || []).find(function (t) { return Array.isArray(t) && t[0] === "description" && typeof t[1] === "string"; });
+  if (!d) return null;
+  var req;
+  try { req = JSON.parse(d[1]); } catch (e) { return null; }
+  if (!req || !Array.isArray(req.tags)) return null;
+  var k = req.tags.find(function (t) { return Array.isArray(t) && t[0] === "k"; });
+  if (!k || typeof k[1] !== "string") return null;
+  if (k[1] === "20000" || k[1] === "23333") return "channel";
+  if (k[1] === "1059") return "pm";
+  return null;
+}
+
+function zapClassify(ev) {
+  var scope = zapScopeFromDescription(ev);
+  if (!scope) return null;
+  var targetId = zapTargetId(ev);
+  if (!targetId) return null;
+  return { scope: scope, targetId: targetId };
+}
+
+async function zapInsert(db, rows, now) {
+  if (!hasD1(db) || rows.length === 0) return 0;
+  var stmt = db.prepare("INSERT OR IGNORE INTO zaps (id, target_id, pubkey, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?)");
+  var batch = rows.map(function (r) {
+    return stmt.bind(r.ev.id, r.targetId, typeof r.ev.pubkey === "string" ? r.ev.pubkey : null, r.ev.created_at || 0, JSON.stringify(r.ev), now);
+  });
+  var added = 0;
+  try {
+    var res = await db.batch(batch);
+    res.forEach(function (x) { added += (x.meta && x.meta.changes) || 0; });
+  } catch (e) { }
+  return added;
+}
+
+async function handleZapAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    });
+  };
+
+  if (body.action === "zap-get") {
+    var scope = body.scope === "pm" ? "pm" : "channel";
+    var db = scope === "pm" ? env.DB_PM : env.DB_CHANNELS;
+    var rawIds = Array.isArray(body.ids) ? body.ids : [];
+    var ids = [];
+    var seen = new Set();
+    for (var i = 0; i < rawIds.length && ids.length < 500; i++) {
+      var id = rawIds[i];
+      if (typeof id === "string" && /^[0-9a-f]{64}$/i.test(id)) {
+        var lo = id.toLowerCase();
+        if (!seen.has(lo)) { seen.add(lo); ids.push(lo); }
+      }
+    }
+    var rows = [];
+    if (ids.length && hasD1(db)) {
+      try {
+        var ph = ids.map(function () { return "?"; }).join(",");
+        rows = (await replica(db).prepare(
+          "SELECT json FROM zaps WHERE target_id IN (" + ph + ") ORDER BY created_at DESC LIMIT 1000"
+        ).bind(...ids).all()).results || [];
+      } catch (e) { rows = []; }
+    }
+    var zapEncoder = new TextEncoder();
+    var zapStream = new ReadableStream({
+      start(controller) {
+        for (var j = 0; j < rows.length; j++) {
+          controller.enqueue(zapEncoder.encode(rows[j].json + "\n"));
+        }
+        try { controller.close(); } catch (_) { }
+      }
+    });
+    return new Response(zapStream, {
+      status: 200,
+      headers: { "Content-Type": "application/x-ndjson", ...BOT_CORS_HEADERS }
+    });
+  }
+
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
+  userPubkey = userPubkey.toLowerCase();
+  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+
+  if (body.action === "zap-put") {
+    var events = Array.isArray(body.events) ? body.events.slice(0, 100)
+      : (body.event ? [body.event] : []);
+    var now = Date.now();
+    var chan = [];
+    var pm = [];
+    for (var n = 0; n < events.length; n++) {
+      var ev = events[n];
+      if (!zapIsValidReceipt(ev)) continue;
+      if (JSON.stringify(ev).length > ZAP_EVENT_MAX) continue;
+      var info = zapClassify(ev);
+      if (!info) continue;
+      if (info.scope === "channel") chan.push({ ev: ev, targetId: info.targetId });
+      else if (info.scope === "pm") pm.push({ ev: ev, targetId: info.targetId });
+    }
+    var added = 0;
+    added += await zapInsert(env.DB_CHANNELS, chan, now);
+    added += await zapInsert(env.DB_PM, pm, now);
+    return json({ ok: true, added: added });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
 async function onRequest(context) {
   const { request } = context;
 
@@ -999,6 +1142,17 @@ async function onRequest(context) {
   if (body && typeof body.action === "string" && body.action.indexOf("channel-") === 0) {
     try {
       return await handleChannelAction(context, body);
+    } catch (e) {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("zap-") === 0) {
+    try {
+      return await handleZapAction(context, body);
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
