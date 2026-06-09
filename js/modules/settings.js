@@ -166,6 +166,19 @@ Object.assign(NYM.prototype, {
         return `${prefix}-${String(groupId).toLowerCase()}`;
     },
 
+    // Opaque per-account token for the OUTER gift-wrap tags. The real routing
+    // d-tag stays in the encrypted seal; relays only see this digest, so two
+    // members' self-sync wraps for the same group do not share a d-tag that
+    // would expose group membership.
+    async _syncOuterDTag(dTag) {
+        const data = new TextEncoder().encode(`${this.pubkey}:${dTag}`);
+        const buf = await crypto.subtle.digest('SHA-256', data);
+        const b = new Uint8Array(buf);
+        let s = '';
+        for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, '0');
+        return s;
+    },
+
     // On leaving a group, clear its ephemeral keys blob (security-relevant) but
     // keep the time-bucketed history wraps so the user's own backlog stays
     // durable and isn't dropped from D1.
@@ -535,8 +548,9 @@ Object.assign(NYM.prototype, {
         }
 
         // 'k' marker lets the Nostr fallback REQ match every settings gift wrap
-        // (including dynamic per-group d-tags) with one filter.
-        const outerTags = [['p', this.pubkey], ['d', dTag], ['k', 'nym-sync']];
+        // with one filter; the d-tag is digested so it can't be correlated
+        // across accounts (the real d-tag rides encrypted in the inner rumor).
+        const outerTags = [['p', this.pubkey], ['d', await this._syncOuterDTag(dTag)], ['k', 'nym-sync']];
 
         if (this.privkey) {
             const ckSeal = NT.nip44.getConversationKey(this.privkey, this.pubkey);

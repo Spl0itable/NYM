@@ -1149,7 +1149,8 @@ Object.assign(NYM.prototype, {
         // Always include self as a member
         const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
 
-        const groupId = this.generateUUID();
+        // CSPRNG (32-byte hex)
+        const groupId = this._generateSharedEventId();
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this._generateSharedEventId();
         const inviteContent = `You've been added to group "${name}" (${allMembers.length} members).`;
