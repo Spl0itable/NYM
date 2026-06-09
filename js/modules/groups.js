@@ -1134,7 +1134,7 @@ Object.assign(NYM.prototype, {
 
         // Send read receipt back to sender so they can show our avatar as "read"
         if (!isOwn && !msg.isHistorical && this._canSendGiftWraps() && nymMsgId) {
-            this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group');
+            this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group', groupId);
             this.recordOwnActivity();
         }
     },

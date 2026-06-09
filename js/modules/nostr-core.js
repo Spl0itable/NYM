@@ -1198,7 +1198,7 @@ Object.assign(NYM.prototype, {
     // Uses NIP-17 gift wrap with a special rumor format for receipts
     // Format: rumor with kind 69420 (custom), content empty, tags include ['x', messageId] and ['receipt', type]
     // Using kind 69420 instead of 14 to avoid showing blank DMs in other NIP-17 clients
-    async sendNymReceipt(messageId, receiptType, recipientPubkey, context = 'pm') {
+    async sendNymReceipt(messageId, receiptType, recipientPubkey, context = 'pm', groupId = null) {
         if (!this._canSendGiftWraps()) return;
 
         if (receiptType === 'read' && !this.isReadReceiptAllowedFor(context)) {
@@ -1217,6 +1217,14 @@ Object.assign(NYM.prototype, {
             content: '',  // Empty content for receipts
             pubkey: this.pubkey
         };
+
+        // Group receipts encrypt to the recipient's ephemeral key (via groupId)
+        // so they don't expose the real-pubkey membership set; PM receipts stay
+        // addressed to the real pubkey.
+        if (context === 'group' && groupId) {
+            await this._sendGiftWrapsAsync([recipientPubkey], rumor, null, groupId);
+            return;
+        }
 
         // Wrap using standard NIP-59 format
         if (this.privkey) {
@@ -1299,7 +1307,9 @@ Object.assign(NYM.prototype, {
             if (otherMembers.length === 0) return;
 
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
-            await this._sendGiftWrapsAsync(otherMembers, rumor, null);
+            // Encrypt to members' ephemeral keys (via groupId) so typing wraps
+            // don't expose the real-pubkey membership set to relays.
+            await this._sendGiftWrapsAsync(otherMembers, rumor, null, this.currentGroup);
         } else if (this.currentPM) {
             tags.push(['p', this.currentPM]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
