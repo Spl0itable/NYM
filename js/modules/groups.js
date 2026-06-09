@@ -345,6 +345,7 @@ Object.assign(NYM.prototype, {
                     banner: group.banner || null,
                     avatar: group.avatar || null,
                     description: group.description || null,
+                    allowMemberInvites: group.allowMemberInvites !== false,
                     metaUpdatedAt: group.metaUpdatedAt || 0,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
                 };
@@ -364,6 +365,15 @@ Object.assign(NYM.prototype, {
     },
     _canModerate(groupId, pubkey) {
         return this._isGroupOwner(groupId, pubkey) || this._isGroupMod(groupId, pubkey);
+    },
+    // Whether a user may add new members. The owner always can; everyone else
+    // only when the group's "allow member invites" setting is enabled (the
+    // default for groups created before this setting existed).
+    _canAddMembers(groupId, pubkey) {
+        const g = this.groupConversations.get(groupId);
+        if (!g) return false;
+        if (this._isGroupOwner(groupId, pubkey)) return true;
+        return g.allowMemberInvites !== false;
     },
     _appendModLog(group, entry) {
         if (!group) return;
@@ -439,6 +449,7 @@ Object.assign(NYM.prototype, {
                         if (group.banner) g.banner = group.banner;
                         if (group.avatar) g.avatar = group.avatar;
                         if (group.description) g.description = group.description;
+                        if (group.allowMemberInvites === false) g.allowMemberInvites = false;
                         if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                     }
@@ -604,6 +615,7 @@ Object.assign(NYM.prototype, {
             const bannerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner');
             const avatarTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar');
             const descTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description');
+            const allowInvTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'allow_invites');
             let changed = false;
             if (subjectTag && subjectTag[1] && subjectTag[1] !== grp.name) { grp.name = subjectTag[1]; changed = true; }
             if (bannerTag) {
@@ -617,6 +629,10 @@ Object.assign(NYM.prototype, {
             if (descTag) {
                 const newDesc = descTag[1] || null;
                 if (newDesc !== (grp.description || null)) { grp.description = newDesc; changed = true; }
+            }
+            if (allowInvTag) {
+                const newAllow = allowInvTag[1] !== '0';
+                if (newAllow !== (grp.allowMemberInvites !== false)) { grp.allowMemberInvites = newAllow; changed = true; }
             }
             if (changed) {
                 grp.metaUpdatedAt = metaTs;
@@ -651,13 +667,15 @@ Object.assign(NYM.prototype, {
             const inviteAvatar = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar' && t[1])?.[1] || null;
             const inviteBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
             const inviteDesc = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description' && t[1])?.[1] || null;
+            const inviteAllowInvTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'allow_invites');
+            const inviteAllowInvites = inviteAllowInvTag ? inviteAllowInvTag[1] !== '0' : undefined;
             if (!this.groupConversations.has(groupId)) {
                 this.addGroupConversation(
                     groupId,
                     groupName,
                     inviteMembers,
                     (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc }
+                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites }
                 );
             }
             const grp = this.groupConversations.get(groupId);
@@ -670,6 +688,7 @@ Object.assign(NYM.prototype, {
             if (grp && inviteAvatar && !grp.avatar) grp.avatar = inviteAvatar;
             if (grp && inviteBanner && !grp.banner) grp.banner = inviteBanner;
             if (grp && inviteDesc && !grp.description) grp.description = inviteDesc;
+            if (grp && inviteAllowInvites !== undefined) grp.allowMemberInvites = inviteAllowInvites;
             if (grp) {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
@@ -721,6 +740,7 @@ Object.assign(NYM.prototype, {
             const addAvatar = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar' && t[1])?.[1] || null;
             const addBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
             const addDesc = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description' && t[1])?.[1] || null;
+            const addAllowInvTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'allow_invites');
             const existingGroup = this.groupConversations.get(groupId);
             const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey;
             // Refuse to bootstrap a brand-new group entry from a non-owner;
@@ -738,13 +758,15 @@ Object.assign(NYM.prototype, {
                     mods: senderIsClaimedOwner ? addMods : [],
                     avatar: senderIsClaimedOwner ? addAvatar : undefined,
                     banner: senderIsClaimedOwner ? addBanner : undefined,
-                    description: senderIsClaimedOwner ? addDesc : undefined
+                    description: senderIsClaimedOwner ? addDesc : undefined,
+                    allowMemberInvites: senderIsClaimedOwner && addAllowInvTag ? addAllowInvTag[1] !== '0' : undefined
                 }
             );
             const grpAdd = this.groupConversations.get(groupId);
             if (senderIsClaimedOwner && grpAdd && addAvatar && !grpAdd.avatar) grpAdd.avatar = addAvatar;
             if (senderIsClaimedOwner && grpAdd && addBanner && !grpAdd.banner) grpAdd.banner = addBanner;
             if (senderIsClaimedOwner && grpAdd && addDesc && !grpAdd.description) grpAdd.description = addDesc;
+            if (senderIsClaimedOwner && grpAdd && addAllowInvTag) grpAdd.allowMemberInvites = addAllowInvTag[1] !== '0';
             if (senderIsClaimedOwner && grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
                 grpAdd.mods = [...addMods];
             }
@@ -1134,6 +1156,7 @@ Object.assign(NYM.prototype, {
         const groupAvatar = opts.avatar || null;
         const groupBanner = opts.banner || null;
         const groupDescription = opts.description || null;
+        const allowMemberInvites = opts.allowMemberInvites !== false;
 
         const tags = allMembers.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
@@ -1143,6 +1166,7 @@ Object.assign(NYM.prototype, {
         if (groupAvatar) tags.push(['avatar', groupAvatar]);
         if (groupBanner) tags.push(['banner', groupBanner]);
         if (groupDescription) tags.push(['description', groupDescription]);
+        tags.push(['allow_invites', allowMemberInvites ? '1' : '0']);
         tags.push(['x', nymMessageId]);
 
         // Bootstrap ephemeral keys: include our first ephemeral pk so members
@@ -1159,7 +1183,7 @@ Object.assign(NYM.prototype, {
         this._saveEphemeralKeys();
 
         // addGroupConversation creates the sidebar item with us marked as owner
-        this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner, description: groupDescription });
+        this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner, description: groupDescription, allowMemberInvites });
         // Defensive: ensure createdBy is set even if a relay echo created the entry first
         const grp = this.groupConversations.get(groupId);
         if (grp && grp.createdBy !== this.pubkey) grp.createdBy = this.pubkey;
@@ -1178,6 +1202,10 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) {
             this.displaySystemMessage('Group not found');
+            return false;
+        }
+        if (!this._canAddMembers(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can add new members to this group.');
             return false;
         }
         if (group.members.includes(newMemberPubkey)) {
@@ -1219,6 +1247,7 @@ Object.assign(NYM.prototype, {
         if (group.avatar) tags.push(['avatar', group.avatar]);
         if (group.banner) tags.push(['banner', group.banner]);
         if (group.description) tags.push(['description', group.description]);
+        tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
         tags.push(['x', nymMessageId]);
 
         // Include our ephemeral pk so the new member (and existing members) learn it
@@ -1858,6 +1887,7 @@ Object.assign(NYM.prototype, {
         tags.push(['banner', group.banner || '']);
         tags.push(['avatar', group.avatar || '']);
         tags.push(['description', group.description || '']);
+        tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
         tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content: '', pubkey: this.pubkey };
         await this._sendGiftWrapsAsync(others, rumor, null, groupId);
@@ -1901,6 +1931,28 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         await this._broadcastGroupMetadata(groupId);
         this.displaySystemMessage('Group description updated.');
+    },
+
+    // Owner-only: toggle whether regular members may add new members, then
+    // propagate to the rest of the group.
+    async setGroupAllowMemberInvites(groupId, allow) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can change this setting.');
+            return;
+        }
+        const next = !!allow;
+        if (next === (group.allowMemberInvites !== false)) return;
+        group.allowMemberInvites = next;
+        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        await this._broadcastGroupMetadata(groupId);
+        this.displaySystemMessage(next
+            ? 'Group members can now add new users.'
+            : 'Only the group owner can add new users now.');
     },
 
     // Owner-only: persist a group image (kind = 'avatar' | 'banner') and
@@ -2049,6 +2101,7 @@ Object.assign(NYM.prototype, {
                 banner: opts.banner || null,
                 avatar: opts.avatar || null,
                 description: opts.description || null,
+                allowMemberInvites: opts.allowMemberInvites !== false,
                 modLog: []
             });
             const pmList = document.getElementById('pmList');
@@ -2087,6 +2140,7 @@ Object.assign(NYM.prototype, {
             if (opts.banner !== undefined && opts.banner !== null) next.banner = opts.banner;
             if (opts.avatar !== undefined && opts.avatar !== null) next.avatar = opts.avatar;
             if (opts.description !== undefined && opts.description !== null) next.description = opts.description;
+            if (opts.allowMemberInvites !== undefined) next.allowMemberInvites = opts.allowMemberInvites;
             this.groupConversations.set(groupId, next);
             this.updateGroupConversationUI(groupId);
         }
@@ -2582,7 +2636,16 @@ Object.assign(NYM.prototype, {
         if (iAmOwner && group.members.length > 1) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxTransferOwner">${icon('<circle cx="8" cy="5" r="2.5"/><path d="M 2 14 C 2 10 4 9 8 9 C 12 9 14 10 14 14" stroke-linecap="round"/><path d="M 12 4 L 15 4 L 13.5 2 M 15 4 L 13.5 6" stroke-linecap="round" stroke-linejoin="round"/>')}Transfer Ownership</div>`);
         }
-        actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
+        if (iAmOwner) {
+            const allowOn = group.allowMemberInvites !== false;
+            const boxIcon = allowOn
+                ? '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                : '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>';
+            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInvites">${icon(boxIcon)}Allow members to add others</div>`);
+        }
+        if (this._canAddMembers(groupId, this.pubkey)) {
+            actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
+        }
         actions.push(`<div class="context-menu-item danger" data-action="groupCtxLeave">${icon('<path d="M 6 2 L 3 2 C 2.5 2 2 2.5 2 3 L 2 13 C 2 13.5 2.5 14 3 14 L 6 14" stroke-linecap="round" stroke-linejoin="round"/><path d="M 10 11 L 13 8 L 10 5" stroke-linecap="round" stroke-linejoin="round"/><line x1="13" y1="8" x2="6" y2="8" stroke-linecap="round"/>')}Leave Group</div>`);
         document.getElementById('grpCtxActions').innerHTML = actions.join('');
 
@@ -2725,6 +2788,15 @@ Object.assign(NYM.prototype, {
         const groupId = this._groupCtxGroupId;
         this.closeGroupContextMenu();
         this.openAddMembersModal(groupId);
+    },
+
+    // Owner action: flip the "members can add others" permission.
+    groupCtxToggleInvites() {
+        const groupId = this._groupCtxGroupId;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this.closeGroupContextMenu();
+        this.setGroupAllowMemberInvites(groupId, group.allowMemberInvites === false);
     },
 
     async groupCtxLeave() {

@@ -44,6 +44,51 @@ window.restoreSettingsSectionState = function () {
     });
 };
 
+// Filter the Settings modal options live as the user types. Matches each
+// option's visible text (labels, hints, dropdown options) plus input
+// placeholders against the query; sections with no match are hidden, and
+// sections with matches are force-expanded so the result is visible. An empty
+// query restores the saved collapsed/expanded layout.
+window.filterSettings = function (query) {
+    var q = (query || '').trim().toLowerCase();
+    var modal = document.getElementById('settingsModal');
+    if (!modal) return;
+    var sections = modal.querySelectorAll('.settings-section[data-section-key]');
+    var anyResult = false;
+    sections.forEach(function (sec) {
+        var headerSpan = sec.querySelector('.settings-section-header span');
+        var sectionTitle = headerSpan ? headerSpan.textContent.toLowerCase() : '';
+        var sectionMatches = !!q && sectionTitle.indexOf(q) !== -1;
+        var groups = sec.querySelectorAll('.settings-section-body > .form-group');
+        var anyVisible = false;
+        groups.forEach(function (g) {
+            var text = (g.textContent || '').toLowerCase();
+            var placeholders = '';
+            g.querySelectorAll('[placeholder]').forEach(function (el) {
+                placeholders += ' ' + (el.getAttribute('placeholder') || '');
+            });
+            var match = !q || sectionMatches || text.indexOf(q) !== -1 ||
+                placeholders.toLowerCase().indexOf(q) !== -1;
+            g.style.display = match ? '' : 'none';
+            if (match) anyVisible = true;
+        });
+        if (!q) {
+            sec.style.display = '';
+        } else {
+            sec.style.display = anyVisible ? '' : 'none';
+            if (anyVisible) {
+                sec.classList.remove('collapsed');
+                var btn = sec.querySelector('.settings-section-header');
+                if (btn) btn.setAttribute('aria-expanded', 'true');
+                anyResult = true;
+            }
+        }
+    });
+    var noResults = document.getElementById('settingsNoResults');
+    if (noResults) noResults.classList.toggle('nm-hidden', !q || anyResult);
+    if (!q) window.restoreSettingsSectionState();
+};
+
 // Short haptic pulse used to confirm a long-press fired on mobile
 window.nymHapticTap = function (ms) {
     try {
@@ -154,6 +199,7 @@ window.nymHapticTap = function (ms) {
         'showAboutAndCloseSidebar':   function () { window.showAbout(); nym().closeSidebar(); },
         'signOutAndCloseSidebar':     function () { window.signOut(); nym().closeSidebar(); },
         'showSettings':               function () { window.showSettings(); },
+        'filterSettingsFromInput':    function (_e, t) { window.filterSettings(t.value); },
         'toggleSettingsSection':      function (_e, t) {
             var sec = t.closest('.settings-section');
             if (!sec) return;
@@ -457,6 +503,7 @@ window.nymHapticTap = function (ms) {
         'groupCtxChangeAvatar':       function () { nym().groupCtxChangeAvatar(); },
         'groupCtxRemoveAvatar':       function () { nym().groupCtxRemoveAvatar(); },
         'groupCtxAddMembers':         function () { nym().groupCtxAddMembers(); },
+        'groupCtxToggleInvites':      function () { nym().groupCtxToggleInvites(); },
         'groupCtxTransferOwner':      function () { nym().groupCtxTransferOwner(); },
         'groupCtxLeave':              function () { nym().groupCtxLeave(); },
         'groupCtxMemberClick':        function (_e, t) {

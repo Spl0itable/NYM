@@ -133,6 +133,38 @@
     margin-bottom: 20px;
 }
 
+.settings-search {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 -32px 4px;
+    padding: 4px 32px 14px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+}
+
+.settings-search-icon {
+    position: absolute;
+    left: 44px;
+    color: var(--text-dim);
+    pointer-events: none;
+}
+
+.settings-search .form-input {
+    padding-left: 36px;
+}
+
+.settings-no-results {
+    padding: 18px 0 6px;
+    color: var(--text-dim);
+    font-size: 13px;
+    text-align: center;
+}
+
 .settings-section {
     margin: 0 -32px;
     border-bottom: 1px solid var(--glass-border);

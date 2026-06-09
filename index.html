@@ -328,6 +328,13 @@
                     <label class="form-label">Description <span class="nm-h-2">(optional)</span></label>
                     <textarea class="form-textarea nm-h-4" id="newGroupDescInput" maxlength="500" placeholder="What's this group about?"></textarea>
                 </div>
+                <div class="form-group nm-hidden" id="newGroupAllowInvitesGroup">
+                    <label class="nm-h-78">
+                        <input type="checkbox" id="newGroupAllowInvites" class="nm-h-79" checked>
+                        Allow members to add others
+                    </label>
+                    <div class="form-hint">When off, only you (the group owner) can add new members.</div>
+                </div>
                 <div class="form-group nm-h-3">
                     <label class="form-label">Message <span class="nm-h-2">(optional)</span></label>
                     <textarea class="form-textarea nm-h-4" id="pmInitialMessage" placeholder="Start the conversation..."></textarea>
@@ -1281,6 +1288,11 @@
             <button class="modal-close" data-action="closeModal" data-modal-id="settingsModal">✕</button>
             <div class="modal-header">Settings</div>
             <div class="modal-body">
+                <div class="settings-search">
+                    <svg class="settings-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
+                    <input type="text" class="form-input" id="settingsSearchInput" placeholder="Search settings..." data-on-input="filterSettingsFromInput" autocomplete="off">
+                </div>
+                <div class="settings-no-results nm-hidden" id="settingsNoResults">No settings match your search.</div>
                 <div class="settings-section" data-settings-section data-section-key="appearance">
                     <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
                         <span>Appearance</span>

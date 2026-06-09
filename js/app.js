@@ -3149,6 +3149,9 @@ function verifyDevNsec() {
 
 async function showSettings() {
     nym.updateRelayStatus();
+    const settingsSearchInput = document.getElementById('settingsSearchInput');
+    if (settingsSearchInput) settingsSearchInput.value = '';
+    window.filterSettings('');
     window.restoreSettingsSectionState();
 
     // Load color mode setting (auto-save and auto-apply on click)
@@ -4147,7 +4150,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.464';
+const NYMCHAT_VERSION = 'v3.69.465';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');

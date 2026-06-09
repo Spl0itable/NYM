@@ -2743,6 +2743,8 @@ Object.assign(NYM.prototype, {
         document.getElementById('pmSuggestions').style.display = 'none';
         document.getElementById('pmGroupNameInput').value = '';
         document.getElementById('newGroupDescInput').value = '';
+        const allowInvitesEl = document.getElementById('newGroupAllowInvites');
+        if (allowInvitesEl) allowInvitesEl.checked = true;
         document.getElementById('pmInitialMessage').value = '';
         document.getElementById('pmInitialMessage').closest('.form-group').style.display = '';
         document.getElementById('pmStartBtn').disabled = true;
@@ -2777,6 +2779,7 @@ Object.assign(NYM.prototype, {
         document.getElementById('pmGroupNameGroup').style.display = groupMode ? 'block' : 'none';
         document.getElementById('newGroupMediaGroup').style.display = groupMode ? 'block' : 'none';
         document.getElementById('newGroupDescGroup').style.display = groupMode ? 'block' : 'none';
+        document.getElementById('newGroupAllowInvitesGroup').style.display = groupMode ? 'block' : 'none';
     },
 
     // Title reflects the current mode: add-members, group (2+), or 1:1.
@@ -3043,7 +3046,8 @@ Object.assign(NYM.prototype, {
                 [this.getNymFromPubkey(this.pubkey), ...this._newPMRecipients.slice(0, 2).map(r => r.nym)].join(', ');
             const memberPubkeys = this._newPMRecipients.map(r => r.pubkey);
             const groupDesc = (document.getElementById('newGroupDescInput').value || '').trim().slice(0, 500) || null;
-            const groupOpts = { avatar: this._newGroupAvatar || null, banner: this._newGroupBanner || null, description: groupDesc };
+            const allowMemberInvites = document.getElementById('newGroupAllowInvites')?.checked !== false;
+            const groupOpts = { avatar: this._newGroupAvatar || null, banner: this._newGroupBanner || null, description: groupDesc, allowMemberInvites };
             this._newGroupAvatar = null;
             this._newGroupBanner = null;
             this.displaySystemMessage(`Creating group "${groupName}"...`);
