@@ -850,14 +850,8 @@ Object.assign(NYM.prototype, {
                                 const prev = buf.byTag[dTag];
                                 if (!prev || rumorTs > prev.ts) buf.byTag[dTag] = { ts: rumorTs, settings: s };
                                 if (rumorTs > buf.newestTs) buf.newestTs = rumorTs;
-                            } else {
-                                // Live path: apply each section's newest payload once
-                                // (per d-tag) so a multi-section save all at the same
-                                // timestamp applies fully, without re-applying echoes.
+                            } else if (dTag !== 'nymchat-settings') {
                                 const appliedTs = (this._appliedSectionTs || (this._appliedSectionTs = {}));
-                                // Per-d-tag newest, and never older than the newest core
-                                // settings already applied, so a stale legacy blob can't
-                                // clobber newer split sections.
                                 if (rumorTs > (appliedTs[dTag] || 0) && rumorTs >= (this._lastSettingsSyncTs || 0)) {
                                     appliedTs[dTag] = rumorTs;
                                     if (rumorTs > (this._lastSettingsSyncTs || 0)) {
