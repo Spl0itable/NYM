@@ -699,11 +699,11 @@ Object.assign(NYM.prototype, {
             let _lockExtraClass = '';
             let _lockTitle = '';
             let _lockSvgInner = '';
-            if (!message.isOwn && message.senderVerified === true) {
+            if (message.senderVerified === true) {
                 _lockVerified = 'true';
                 _lockTitle = 'Cryptographically verified sender — tap for details';
                 _lockSvgInner = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M8.5 16.5l2.5 2.5 4.5-4.5"></path>';
-            } else if (!message.isOwn && message.senderVerified === false) {
+            } else if (message.senderVerified === false) {
                 _lockVerified = 'false';
                 _lockExtraClass = ' unverified';
                 _lockTitle = 'Unverified sender — tap for details';

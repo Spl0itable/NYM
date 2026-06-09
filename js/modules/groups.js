@@ -1501,6 +1501,7 @@ Object.assign(NYM.prototype, {
             conversationPubkey: null,
             eventKind: 1059,
             nymMessageId,
+            senderVerified: true,
             deliveryStatus: 'sent'
         };
 

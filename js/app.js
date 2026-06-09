@@ -713,6 +713,8 @@ class NYM {
         this.P2P_SIGNALING_KIND = 25051;
         this.P2P_FILE_STATUS_KIND = 25052;
         this.CALL_SIGNALING_KIND = 25053;
+        this.FRIEND_PRESENCE_KIND = 25054;
+        this.friendsSharingStatus = new Set();
         this.activeCall = null;
         this.incomingCall = null;
         this.PRESENCE_KIND = 30078;
@@ -3497,7 +3499,8 @@ async function showSettings() {
     // Fill in show-status toggle
     const showStatusSel = document.getElementById('showStatusSelect');
     if (showStatusSel) {
-        showStatusSel.value = nym.settings.showStatus !== false ? 'true' : 'false';
+        showStatusSel.value = nym.settings.showStatus === false ? 'false'
+            : (nym.settings.showStatus === 'friends' ? 'friends' : 'true');
     }
 
     // Fill in cache-PMs toggle
@@ -3774,13 +3777,17 @@ async function saveSettings() {
     // broadcast to other clients so they suppress this user's status dot.
     const showStatusEl = document.getElementById('showStatusSelect');
     if (showStatusEl) {
-        const showStatus = showStatusEl.value === 'true';
-        const wasShown = nym.settings.showStatus !== false;
+        const val = showStatusEl.value; // 'true' | 'friends' | 'false'
+        const showStatus = val === 'false' ? false : (val === 'friends' ? 'friends' : true);
+        const prev = nym.settings.showStatus;
         nym.settings.showStatus = showStatus;
         localStorage.setItem('nym_show_status', String(showStatus));
-        document.body.classList.toggle('status-hidden', !showStatus);
-        if (wasShown !== showStatus && typeof nym.publishStatusVisibility === 'function') {
-            nym.publishStatusVisibility(!showStatus);
+        // Only fully-disabled suppresses others' indicators in our own view.
+        document.body.classList.toggle('status-hidden', showStatus === false);
+        if (prev !== showStatus) {
+            if (typeof nym.publishStatusVisibility === 'function') nym.publishStatusVisibility();
+            if (typeof nym.refreshPMHeaderStatus === 'function') nym.refreshPMHeaderStatus();
+            if (typeof nym.updateUserList === 'function') nym.updateUserList();
         }
     }
 
@@ -4150,7 +4157,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.467';
+const NYMCHAT_VERSION = 'v3.69.468';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5923,10 +5930,10 @@ async function applyNostrSettings(s) {
     }
 
     // Show status indicators
-    if (typeof s.showStatus === 'boolean') {
+    if (typeof s.showStatus === 'boolean' || s.showStatus === 'friends') {
         nym.settings.showStatus = s.showStatus;
         localStorage.setItem('nym_show_status', String(s.showStatus));
-        document.body.classList.toggle('status-hidden', !s.showStatus);
+        document.body.classList.toggle('status-hidden', s.showStatus === false);
     }
 
     // Nick style
@@ -6593,8 +6600,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (nym._initialStatusVisibilityBroadcast) return;
         if (!nym.connected || !nym.pubkey) return;
         nym._initialStatusVisibilityBroadcast = true;
-        if (nym.settings.showStatus === false && typeof nym.publishStatusVisibility === 'function') {
-            nym.publishStatusVisibility(true);
+        if (nym.settings.showStatus !== true && typeof nym.publishStatusVisibility === 'function') {
+            nym.publishStatusVisibility();
         }
     }, 2000);
 

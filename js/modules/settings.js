@@ -148,7 +148,7 @@ Object.assign(NYM.prototype, {
             acceptCalls: this.settings.acceptCalls || 'enabled',
             seenCalls: this._seenCallsForSync(),
             syncMLSHistory: this.settings.syncMLSHistory !== false,
-            showStatus: this.settings.showStatus !== false,
+            showStatus: this.settings.showStatus === false ? false : (this.settings.showStatus === 'friends' ? 'friends' : true),
             cachePMs: this.settings.cachePMs !== false,
             tutorialSeen: localStorage.getItem('nym_tutorial_seen') === 'true',
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
@@ -1031,7 +1031,10 @@ Object.assign(NYM.prototype, {
             acceptCalls: localStorage.getItem('nym_accept_calls') || 'enabled',
             cachePMs: localStorage.getItem('nym_cache_pms') !== 'false', // default true
             syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false', // default true
-            showStatus: localStorage.getItem('nym_show_status') !== 'false' // default true
+            showStatus: (() => {
+                const v = localStorage.getItem('nym_show_status');
+                return v === 'false' ? false : (v === 'friends' ? 'friends' : true); // default true
+            })()
         };
     },
 

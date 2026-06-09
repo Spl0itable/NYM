@@ -1049,7 +1049,10 @@ Object.assign(NYM.prototype, {
     // — callers should suppress the status indicator entirely in that case.
     getEffectiveUserStatus(pubkey) {
         if (!pubkey) return 'offline';
-        if (this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey)) return 'hidden';
+        // A friend who privately shared their real status with us (their
+        // "Friends only" mode) overrides the 'hidden' they broadcast publicly.
+        const sharesWithUs = this.friendsSharingStatus && this.friendsSharingStatus.has(pubkey);
+        if (!sharesWithUs && this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey)) return 'hidden';
         if (this.verifiedBotPubkeys && this.verifiedBotPubkeys.has(pubkey)) return 'online';
         const user = this.users.get(pubkey);
         const now = Date.now();
@@ -1059,6 +1062,49 @@ Object.assign(NYM.prototype, {
         if (this.awayMessages && this.awayMessages.has(pubkey)) return 'away';
         if (user && user.status === 'away') return 'away';
         return isRecent ? 'online' : 'offline';
+    },
+
+    // A friend running in "Friends only" mode shared their real status with us
+    // via a private gift wrap. Record it and let it override the public 'hidden'.
+    handleFriendPresenceRumor(rumor, pubkey) {
+        if (!pubkey || pubkey === this.pubkey) return;
+        // Only honor presence from someone we already know or have friended, so
+        // a stranger can't inject themselves into our user list as "online".
+        if (!this.isFriend?.(pubkey) && !this.users.has(pubkey)) return;
+        const statusTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'status');
+        const status = statusTag ? statusTag[1] : null;
+        if (!status || status === 'hidden') return;
+
+        if (!this.friendsSharingStatus) this.friendsSharingStatus = new Set();
+        this.friendsSharingStatus.add(pubkey);
+        if (this.statusHiddenUsers) this.statusHiddenUsers.delete(pubkey);
+
+        const awayTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'away');
+        if (status === 'away' && awayTag) {
+            this.awayMessages.set(pubkey, awayTag[1]);
+        } else if (status === 'online') {
+            this.awayMessages.delete(pubkey);
+        }
+
+        const now = Date.now();
+        if (this.users.has(pubkey)) {
+            const user = this.users.get(pubkey);
+            user.status = status;
+            user.lastSeen = now;
+        } else {
+            const nymTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'n');
+            this.users.set(pubkey, {
+                nym: nymTag ? this.stripPubkeySuffix(nymTag[1]) : this.getNymFromPubkey(pubkey),
+                pubkey,
+                lastSeen: now,
+                status,
+                channels: new Set()
+            });
+        }
+        this.updateUserList();
+        if (this.inPMMode && this.currentPM === pubkey && typeof this.refreshPMHeaderStatus === 'function') {
+            this.refreshPMHeaderStatus();
+        }
     },
 
     handlePresenceEvent(event) {
@@ -1112,7 +1158,11 @@ Object.assign(NYM.prototype, {
         // Track users who have opted to hide their status indicator
         if (!this.statusHiddenUsers) this.statusHiddenUsers = new Set();
         if (status === 'hidden') {
-            this.statusHiddenUsers.add(pubkey);
+            // A friend in "Friends only" mode broadcasts 'hidden' publicly but
+            // shares the real status with us privately — don't hide those.
+            if (!(this.friendsSharingStatus && this.friendsSharingStatus.has(pubkey))) {
+                this.statusHiddenUsers.add(pubkey);
+            }
             this.awayMessages.delete(pubkey);
         } else {
             this.statusHiddenUsers.delete(pubkey);
@@ -1330,14 +1380,19 @@ Object.assign(NYM.prototype, {
 
         this._updateUserListViewMoreButton(userListContent, totalCount, renderCap, isExpanded, EXPANDED_STEP);
 
+        const aggregateHidden = this.settings && this.settings.showStatus === false;
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
-            userListTitle.textContent = `Nyms (${this.abbreviateNumber(activeCount)} online)`;
+            userListTitle.textContent = aggregateHidden
+                ? 'Nyms'
+                : `Nyms (${this.abbreviateNumber(activeCount)} online)`;
         }
 
         if (!this.inPMMode) {
             const meta = document.getElementById('channelMeta');
-            if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} online nyms`;
+            if (meta) meta.textContent = aggregateHidden
+                ? ''
+                : `${this.abbreviateNumber(channelUserCount)} online nyms`;
         }
 
         this.refreshAutocompleteIfOpen();

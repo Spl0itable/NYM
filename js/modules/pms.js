@@ -5,7 +5,7 @@ Object.assign(NYM.prototype, {
     _pmHeaderAvatarHtml(pubkey, avatarSrc, safePk) {
         const status = (typeof this.getEffectiveUserStatus === 'function')
             ? this.getEffectiveUserStatus(pubkey) : 'offline';
-        const isHidden = status === 'hidden';
+        const isHidden = (this.settings && this.settings.showStatus === false) || status === 'hidden';
         const dotStatus = isHidden ? 'offline' : status;
         return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="user-status-dot status-${dotStatus}"></span></span>`;
     },
@@ -18,7 +18,7 @@ Object.assign(NYM.prototype, {
         if (dot) {
             const status = (typeof this.getEffectiveUserStatus === 'function')
                 ? this.getEffectiveUserStatus(this.currentPM) : 'offline';
-            const isHidden = status === 'hidden';
+            const isHidden = (this.settings && this.settings.showStatus === false) || status === 'hidden';
             const dotStatus = isHidden ? 'offline' : status;
             const wrap = dot.parentElement;
             if (wrap) wrap.classList.toggle('no-status', isHidden);
@@ -35,8 +35,10 @@ Object.assign(NYM.prototype, {
     // the contact is active/away, otherwise the relative time we last saw them.
     _pmLastSeenText(pubkey) {
         if (this.isVerifiedBot(pubkey)) return 'Always at your service';
+        if (this.settings && this.settings.showStatus === false) return '';
         const status = (typeof this.getEffectiveUserStatus === 'function')
             ? this.getEffectiveUserStatus(pubkey) : 'offline';
+        if (status === 'hidden') return '';
         if (status === 'online') return 'Active now';
         if (status === 'away') return 'Away';
         const user = this.users.get(pubkey);
@@ -378,6 +380,7 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 bitchatMessageId,  // For tracking Bitchat delivery/read receipts
                 nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
+                senderVerified: true,
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
             pmList.sort((a, b) => {
@@ -498,6 +501,7 @@ Object.assign(NYM.prototype, {
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
                 nymMessageId,  // For tracking Nymchat delivery/read receipts
+                senderVerified: true,
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
             extPmList.sort((a, b) => {
@@ -771,7 +775,7 @@ Object.assign(NYM.prototype, {
             // Accept kind 14 (DM), kind 15 (file), kind 69420 (Nymchat receipt),
             // kind 7 (group reaction gift-wrapped to the group),
             // kind 30078 (encrypted settings sync), and CALL_SIGNALING_KIND (audio/video call signaling)
-            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 30078 && rumor.kind !== this.CALL_SIGNALING_KIND)) {
+            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 30078 && rumor.kind !== this.CALL_SIGNALING_KIND && rumor.kind !== this.FRIEND_PRESENCE_KIND)) {
                 return;
             }
 
@@ -785,6 +789,13 @@ Object.assign(NYM.prototype, {
             if (isBitchatWrap) {
                 senderVerified = false;
             } else if (!seal || seal.pubkey !== rumor.pubkey || !NT.verifyEvent(seal)) {
+                return;
+            }
+
+            // Route private friend-presence rumors (status shared by a friend
+            // who runs in "Friends only" mode). Verified senders only.
+            if (rumor.kind === this.FRIEND_PRESENCE_KIND) {
+                if (senderVerified) this.handleFriendPresenceRumor(rumor, rumor.pubkey);
                 return;
             }
 
@@ -1472,6 +1483,7 @@ Object.assign(NYM.prototype, {
                 conversationKey,
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
+                senderVerified: true,
                 deliveryStatus: 'failed'
             };
             const failList = this.pmMessages.get(conversationKey);

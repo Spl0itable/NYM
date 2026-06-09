@@ -2649,17 +2649,31 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Resolve the status-visibility mode from settings: 'enabled' (everyone),
+    // 'friends' (only marked friends, via private gift wraps), or 'disabled'.
+    _statusMode() {
+        const s = this.settings ? this.settings.showStatus : true;
+        if (s === false) return 'disabled';
+        if (s === 'friends') return 'friends';
+        return 'enabled';
+    },
+
     async publishPresence(status, awayMessage = '') {
         try {
             if (!this.connected) return;
+
+            const mode = this._statusMode();
+            // The public replaceable event is real only when fully enabled;
+            // otherwise it broadcasts 'hidden' so non-friends see nothing.
+            const publicStatus = mode === 'enabled' ? status : 'hidden';
 
             const tags = [
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
                 ['n', this.nym],
-                ['status', status]
+                ['status', publicStatus]
             ];
-            if (status === 'away' && awayMessage) {
+            if (mode === 'enabled' && status === 'away' && awayMessage) {
                 tags.push(['away', awayMessage]);
             }
 
@@ -2674,8 +2688,35 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(["EVENT", signedEvent]);
             this._lastPresenceBroadcast = Date.now();
+
+            // Friends-only: deliver our real status privately to each friend.
+            if (mode === 'friends') this._sendFriendPresence(status, awayMessage);
         } catch (error) {
             // Silently fail - presence is best-effort
+        }
+    },
+
+    // Gift-wrap our real presence to each friend so only they can read it.
+    // Mirrors the typing/call-signaling ephemeral rumor pattern.
+    async _sendFriendPresence(status, awayMessage = '') {
+        try {
+            if (!this._canSendGiftWraps()) return;
+            if (!this.friends || this.friends.size === 0) return;
+            const recipients = Array.from(this.friends).filter(pk => pk && pk !== this.pubkey);
+            if (recipients.length === 0) return;
+
+            const tags = [['status', status], ['n', this.nym]];
+            if (status === 'away' && awayMessage) tags.push(['away', awayMessage]);
+            const rumor = {
+                kind: this.FRIEND_PRESENCE_KIND,
+                created_at: Math.floor(Date.now() / 1000),
+                tags,
+                content: '',
+                pubkey: this.pubkey
+            };
+            await this._sendGiftWrapsAsync(recipients, rumor, null);
+        } catch (_) {
+            // Best-effort.
         }
     },
 
@@ -2708,6 +2749,10 @@ Object.assign(NYM.prototype, {
         // Refresh user list UI (debounced via RAF inside updateUserList).
         if (typeof this.updateUserList === 'function') this.updateUserList();
 
+        // When fully disabled, never re-assert presence — otherwise a routine
+        // send would re-broadcast 'online' and undo the hidden state.
+        if (this._statusMode() === 'disabled') return;
+
         // Throttle presence broadcasts to once every 60s; skip while away
         // (cmdAway/cmdBack handle those transitions explicitly).
         const PRESENCE_BROADCAST_THROTTLE_MS = 60000;
@@ -2717,30 +2762,13 @@ Object.assign(NYM.prototype, {
         this.publishPresence('online');
     },
 
-    // Broadcast whether this user wants their status indicator hidden from
-    // other clients. Other clients track this in `statusHiddenUsers` and
-    // suppress the status dot / context-menu status row accordingly.
-    async publishStatusVisibility(hidden) {
-        try {
-            if (!this.connected) return;
-            const tags = [
-                ['d', 'nym-presence'],
-                ['t', 'nym-presence'],
-                ['n', this.nym],
-                ['status', hidden ? 'hidden' : 'online']
-            ];
-            const event = {
-                kind: 30078,
-                created_at: Math.floor(Date.now() / 1000),
-                tags,
-                content: '',
-                pubkey: this.pubkey
-            };
-            const signedEvent = await this.signEvent(event);
-            this.sendToRelay(["EVENT", signedEvent]);
-        } catch (_) {
-            // Best-effort broadcast.
-        }
+    // Re-assert our current presence under the active visibility mode. Used on
+    // startup and when the setting changes. publishPresence handles the public
+    // 'hidden' broadcast plus private friend delivery for 'friends' mode.
+    async publishStatusVisibility() {
+        const away = this.awayMessages && this.awayMessages.has(this.pubkey);
+        const awayMsg = away ? (this.awayMessages.get(this.pubkey) || '') : '';
+        return this.publishPresence(away ? 'away' : 'online', awayMsg);
     },
 
     async publishAvatarUpdate(avatarUrl) {
@@ -2751,7 +2779,7 @@ Object.assign(NYM.prototype, {
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
                 ['n', this.nym],
-                ['status', 'online'],
+                ['status', this._statusMode() === 'enabled' ? 'online' : 'hidden'],
                 ['avatar-update', avatarUrl]
             ];
 
@@ -2780,7 +2808,7 @@ Object.assign(NYM.prototype, {
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
                 ['n', this.nym],
-                ['status', 'online'],
+                ['status', this._statusMode() === 'enabled' ? 'online' : 'hidden'],
                 ['shop-update', '1']
             ];
 
