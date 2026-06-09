@@ -66,10 +66,10 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // From R2 activity counts (channels we know of but may never have opened,
+        // From D1 activity counts (channels we know of but may never have opened,
         // so the explorer reflects real activity without loading their messages).
-        if (this._geohashR2Activity) {
-            this._geohashR2Activity.forEach((_buckets, name) => {
+        if (this._geohashD1Activity) {
+            this._geohashD1Activity.forEach((_buckets, name) => {
                 if (this.isValidGeohash(name)) allGeohashes.add(name.toLowerCase());
             });
         }
@@ -82,7 +82,7 @@ Object.assign(NYM.prototype, {
         allGeohashes.forEach(geohash => {
             try {
                 // Bucket locally stored messages into 24 hourly slots aligned with
-                // the R2 activity buckets (index 0 = the most recent hour).
+                // the D1 activity buckets (index 0 = the most recent hour).
                 const localBuckets = new Array(24).fill(0);
                 const allMsgs = this.messages.get(`#${geohash}`) || [];
                 for (const m of allMsgs) {
@@ -93,7 +93,7 @@ Object.assign(NYM.prototype, {
                     if (ageH < 0) ageH = 0;
                     if (ageH < 24) localBuckets[ageH]++;
                 }
-                // Mix local + R2 counts
+                // Mix local + D1 counts
                 const recentCount = this._combineGeohashActivity(geohash, localBuckets, windowHours);
                 if (recentCount < 1) return;
                 const coords = this.decodeGeohash(geohash);
@@ -109,23 +109,23 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Combine locally stored and R2-archived activity for a geohash
+    // Combine locally stored and D1-archived activity for a geohash
     _combineGeohashActivity(geohash, localBuckets, windowHours) {
-        const r2 = this._geohashR2Activity
-            ? this._geohashR2Activity.get(String(geohash).toLowerCase())
+        const d1 = this._geohashD1Activity
+            ? this._geohashD1Activity.get(String(geohash).toLowerCase())
             : null;
         const n = Math.max(1, Math.min(24, windowHours | 0));
         let total = 0;
         for (let i = 0; i < n; i++) {
             const local = (localBuckets && localBuckets[i]) || 0;
-            const r2c = (Array.isArray(r2) && r2[i]) || 0;
-            total += Math.max(local, r2c);
+            const d1c = (Array.isArray(d1) && d1[i]) || 0;
+            total += Math.max(local, d1c);
         }
         return total;
     },
 
     // Quietly fetch recent-activity counts for all known geohash channels
-    async fetchGeohashActivityFromR2() {
+    async fetchGeohashActivityFromD1() {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiRequest !== 'function') return;
         const now = Date.now();
@@ -148,10 +148,10 @@ Object.assign(NYM.prototype, {
             const data = await this._storageApiRequest('channel-activity', { channels: list }, false);
             const activity = data && data.activity;
             if (!activity || typeof activity !== 'object') return;
-            if (!this._geohashR2Activity) this._geohashR2Activity = new Map();
+            if (!this._geohashD1Activity) this._geohashD1Activity = new Map();
             for (const [name, buckets] of Object.entries(activity)) {
                 if (Array.isArray(buckets)) {
-                    this._geohashR2Activity.set(String(name).toLowerCase(), buckets);
+                    this._geohashD1Activity.set(String(name).toLowerCase(), buckets);
                 }
             }
             // Refresh the explorer view if it's open.
@@ -966,14 +966,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Replay a channel's archived events (messages, reactions, edits) through
     // handleEvent, which dedupes. Oldest-first so edits and reaction add/remove
     // net correctly. Throttled per channel.
-    async channelRestoreFromR2(channelName) {
+    async channelRestoreFromD1(channelName) {
         if (!channelName) return;
         if (!this._getApiHost || !this._getApiHost()) return;
         const name = String(channelName).toLowerCase();
-        if (!this._channelR2FetchedAt) this._channelR2FetchedAt = new Map();
-        const last = this._channelR2FetchedAt.get(name) || 0;
+        if (!this._channelD1FetchedAt) this._channelD1FetchedAt = new Map();
+        const last = this._channelD1FetchedAt.get(name) || 0;
         if (Date.now() - last < 60000) return;
-        this._channelR2FetchedAt.set(name, Date.now());
+        this._channelD1FetchedAt.set(name, Date.now());
         const events = [];
         try {
             const resp = await this._storageApiStream('channel-get', { channel: name }, false);
@@ -1041,11 +1041,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.currentGeohash = geohash;
         this.userScrolledUp = false;
 
-        // Hydrate recent history from the R2 channel archive (best-effort). This
+        // Hydrate recent history from the D1 channel archive (best-effort). This
         // feeds the same event handler as the relays, so the two merge and sort
         // by created_at + the millisecond 'ms' tag.
-        if (typeof this.channelRestoreFromR2 === 'function') {
-            this.channelRestoreFromR2(geohash || channel);
+        if (typeof this.channelRestoreFromD1 === 'function') {
+            this.channelRestoreFromD1(geohash || channel);
         }
         this.clearQuoteReply();
         if (this.pendingEdit) this.cancelEditMessage();

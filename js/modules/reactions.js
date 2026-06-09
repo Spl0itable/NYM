@@ -998,7 +998,7 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             if (reactionGeohash) {
                 reactionTags.push(['g', reactionGeohash]);
             } else if (originalKind === '23333' && this.currentChannel) {
-                // Carry the named-channel id so the R2 archive can key the reaction.
+                // Carry the named-channel id so the D1 archive can key the reaction.
                 reactionTags.push(['d', this.currentChannel]);
             }
 

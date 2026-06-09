@@ -351,7 +351,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    showContextMenu(e, nym, pubkey, content = null, messageId = null, profileOnly = false, reactionId = null) {
+    showContextMenu(e, nym, pubkey, content = null, messageId = null, profileOnly = false, reactionId = null, backToGroupId = null) {
         e.preventDefault();
         e.stopPropagation();
 
@@ -365,6 +365,12 @@ Object.assign(NYM.prototype, {
 
         // reactionId is the DOM-facing ID (nymMessageId for PMs), messageId is the real event ID
         this.contextMenuData = { nym: baseNym, pubkey, content, messageId, reactionId: reactionId || messageId };
+
+        // Back button: shown only when this menu was opened from a group context
+        // menu, to return to it. Cleared for all other entry points.
+        this._ctxBackToGroup = backToGroupId || null;
+        const ctxBackBtn = document.getElementById('ctxBackBtn');
+        if (ctxBackBtn) ctxBackBtn.classList.toggle('nm-hidden', !backToGroupId);
 
         // Populate banner if available
         const ctxBannerImg = document.getElementById('ctxBannerImg');

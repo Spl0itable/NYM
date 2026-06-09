@@ -1038,8 +1038,8 @@ class NYM {
         this._proxyFetchActive = 0;
         this._proxyFetchMaxConcurrent = 3;
         this.profileFetchedAt = new Map();
-        this._r2ProfileCache = new Map();
-        this.R2_PROFILE_CACHE_TTL = 5 * 60 * 1000;
+        this._d1ProfileCache = new Map();
+        this.D1_PROFILE_CACHE_TTL = 5 * 60 * 1000;
         this.profileFetchQueue = [];
         this.profileFetchTimer = null;
         this.profileFetchBatchDelay = 100;
@@ -4147,7 +4147,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.461';
+const NYMCHAT_VERSION = 'v3.69.462';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4448,7 +4448,7 @@ async function checkSavedConnection() {
             nym._loadLastPMSyncTime();
             nym._loadLeftGroups();
 
-            // Load synced settings from R2 (encrypted), falling back to relays
+            // Load synced settings from D1 (encrypted), falling back to relays
             settingsLoad();
 
             if (isDeveloperLogin) {
@@ -4580,7 +4580,7 @@ async function initializeNym() {
         localStorage.setItem('nym_auto_ephemeral', 'true');
         if (nymInput) {
             localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
-            // Mark this as a user-chosen nick so it qualifies for R2 mirroring
+            // Mark this as a user-chosen nick so it qualifies for D1 mirroring
             try { localStorage.setItem('nym_custom_nick', nym.parseNymFromDisplay(nymInput)); } catch (e) { }
             // If developer verified, also save nsec for auto-login
             if (nym.isReservedNick(nymInput)) {
@@ -4644,7 +4644,7 @@ async function initializeNym() {
         nym._loadLastPMSyncTime();
         nym._loadLeftGroups();
 
-        // Load synced settings from R2 (encrypted), falling back to relays
+        // Load synced settings from D1 (encrypted), falling back to relays
         settingsLoad();
 
         if (isDeveloperLogin) {
@@ -5379,12 +5379,12 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // events for this identity flow through the main event handler
     nym.resubscribeAllRelays();
 
-    // Load settings (R2-first, relay fallback) and shop purchases for this identity
+    // Load settings (D1-first, relay fallback) and shop purchases for this identity
     settingsLoad();
     nym.loadShopFromServer();
-    // Restore PMs archived in R2 so private messages reappear across devices.
-    if (typeof nym.pmRestoreFromR2 === 'function') {
-        nym.pmRestoreFromR2().catch(() => { });
+    // Restore PMs archived in D1 so private messages reappear across devices.
+    if (typeof nym.pmRestoreFromD1 === 'function') {
+        nym.pmRestoreFromD1().catch(() => { });
     }
 }
 
@@ -5418,7 +5418,7 @@ function nostrLogout() {
     nym.userBios = new Map();
     nym.userBanners = new Map();
     nym.userAvatars = new Map();
-    nym._r2ProfileCache = new Map();
+    nym._d1ProfileCache = new Map();
     if (typeof nym.resetCache === 'function') {
         nym.resetCache().catch(() => { });
     }
@@ -5454,12 +5454,12 @@ async function nostrSettingsSave() {
     }
 }
 
-// Load settings from R2 first, falling back to the Nostr
-// gift-wrap load only when R2 can't be read or has no record yet.
+// Load settings from D1 first, falling back to the Nostr
+// gift-wrap load only when D1 can't be read or has no record yet.
 async function settingsLoad() {
     let loaded = false;
-    if (nym && typeof nym.settingsLoadFromR2 === 'function') {
-        try { loaded = await nym.settingsLoadFromR2(); } catch (_) { loaded = false; }
+    if (nym && typeof nym.settingsLoadFromD1 === 'function') {
+        try { loaded = await nym.settingsLoadFromD1(); } catch (_) { loaded = false; }
     }
     if (!loaded) nostrSettingsLoad();
     // Safety net: never block saves indefinitely if neither source responds.
@@ -5475,11 +5475,13 @@ function nostrSettingsLoad() {
     if (!pubkey) return;
 
     const subId = Math.random().toString(36).substring(2);
+    // Match every settings gift wrap via the shared 'k' marker so dynamic
+    // per-group and per-section d-tags are all covered by one filter.
     const filter = {
         kinds: [1059],
         '#p': [pubkey],
-        '#d': ['nymchat-settings', 'nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications'],
-        limit: 24
+        '#k': ['nym-sync'],
+        limit: 200
     };
 
     // Buffer settings events during the initial REQ
@@ -5686,12 +5688,14 @@ async function applyNostrSettingsAdditive(s) {
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
             if (!nym.groupConversations.has(groupId)) {
-                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy });
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy, banner: group.banner, avatar: group.avatar });
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
                     g.mods = Array.isArray(group.mods) ? [...group.mods] : [];
                     g.banned = Array.isArray(group.banned) ? [...group.banned] : [];
+                    if (group.banner) g.banner = group.banner;
+                    if (group.avatar) g.avatar = group.avatar;
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
             } else {
@@ -5700,6 +5704,8 @@ async function applyNostrSettingsAdditive(s) {
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (!g.createdBy && group.createdBy) g.createdBy = group.createdBy;
+                    if (!g.banner && group.banner) g.banner = group.banner;
+                    if (!g.avatar && group.avatar) g.avatar = group.avatar;
                     if (Array.isArray(group.mods)) {
                         const cur = new Set(Array.isArray(g.mods) ? g.mods : []);
                         for (const pk of group.mods) cur.add(pk);
@@ -6269,11 +6275,17 @@ async function applyNostrSettings(s) {
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
             if (!nym.groupConversations.has(groupId)) {
-                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now());
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { banner: group.banner, avatar: group.avatar });
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
+                    if (group.banner) g.banner = group.banner;
+                    if (group.avatar) g.avatar = group.avatar;
                 }
+            } else {
+                const g = nym.groupConversations.get(groupId);
+                if (g && !g.banner && group.banner) g.banner = group.banner;
+                if (g && !g.avatar && group.avatar) g.avatar = group.avatar;
             }
         }
         nym._saveGroupConversations();
@@ -6713,7 +6725,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             });
                         } else if ((startIdx === 0 || startIdx === undefined)
                             && typeof nym.pmLazyLoadOlderForConversation === 'function'
-                            && !nym._pmR2NoMore && !nym._pmR2Loading) {
+                            && !nym._pmD1NoMore && !nym._pmD1Loading) {
                             nym._pmLoadingOlder = true;
                             nym.pmLazyLoadOlderForConversation(convKey)
                                 .catch(() => { })

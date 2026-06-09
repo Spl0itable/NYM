@@ -77,6 +77,9 @@
 
     <!-- Context Menu Sidebar -->
     <div class="context-menu" id="contextMenu">
+        <button class="context-menu-back nm-hidden" id="ctxBackBtn" data-action="ctxBack" title="Back to group" aria-label="Back to group">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        </button>
         <button class="context-menu-close" id="ctxCloseBtn" title="Close">&#x2715;</button>
         <img id="ctxBannerImg" class="context-menu-banner nm-hidden" src="" alt="" decoding="async" loading="lazy"
             data-action="expandImageFromSrcStop">
@@ -264,11 +267,28 @@
         </div>
     </div>
 
+    <!-- Group Context Menu Sidebar -->
+    <div class="context-menu-overlay" id="groupContextMenuOverlay" data-action="closeGroupContextMenu"></div>
+    <div class="context-menu" id="groupContextMenu">
+        <button class="context-menu-close" id="grpCtxCloseBtn" data-action="closeGroupContextMenu" title="Close">&#x2715;</button>
+        <div id="grpCtxDefaultBanner" class="context-menu-banner group-ctx-default-banner nm-hidden"></div>
+        <img id="grpCtxBannerImg" class="context-menu-banner nm-hidden" src="" alt="" decoding="async" loading="lazy">
+        <div class="context-menu-avatar-header">
+            <div class="group-ctx-icon" id="grpCtxIcon"></div>
+            <div class="context-menu-avatar-nym" id="grpCtxName"></div>
+            <div class="ctx-status-row" id="grpCtxMemberCount"></div>
+        </div>
+        <div class="context-menu-actions" id="grpCtxActions"></div>
+        <div class="group-ctx-members-title" id="grpCtxMembersTitle"></div>
+        <div class="group-ctx-members" id="grpCtxMembers"></div>
+        <input type="file" id="grpBannerFileInput" accept="image/*" class="nm-hidden">
+    </div>
+
     <!-- PM / Group Modal -->
     <div class="modal" id="newPMModal">
         <div class="modal-content nm-h-1">
             <button class="modal-close" data-action="closeModal" data-modal-id="newPMModal">&#x2715;</button>
-            <div class="modal-header">New Message</div>
+            <div class="modal-header" id="newPMModalTitle">New Message</div>
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">To</label>
@@ -285,6 +305,23 @@
                 <div class="form-group nm-hidden" id="pmGroupNameGroup">
                     <label class="form-label">Group Name <span class="nm-h-2">(optional)</span></label>
                     <input type="text" class="form-input" id="pmGroupNameInput" placeholder="Enter a group name...">
+                </div>
+                <div class="form-group nm-hidden" id="newGroupMediaGroup">
+                    <label class="form-label">Group Avatar/Banner <span class="nm-h-2">(optional)</span></label>
+                    <div class="new-group-media" id="newGroupMedia">
+                        <div class="new-group-banner" id="newGroupBannerPreview" data-action="newGroupPickBanner" title="Add a banner image">
+                            <span class="new-group-media-hint">Add banner</span>
+                        </div>
+                        <div class="new-group-avatar" id="newGroupAvatarPreview" data-action="newGroupPickAvatar" title="Add a group avatar">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>
+                        </div>
+                    </div>
+                    <div class="upload-progress new-group-progress" id="newGroupUploadProgress">
+                        <div id="newGroupUploadLabel">Uploading…</div>
+                        <div class="progress-bar"><div class="progress-fill" id="newGroupProgressFill"></div></div>
+                    </div>
+                    <input type="file" id="newGroupAvatarInput" accept="image/*" class="nm-hidden">
+                    <input type="file" id="newGroupBannerInput" accept="image/*" class="nm-hidden">
                 </div>
                 <div class="form-group nm-h-3">
                     <label class="form-label">Message <span class="nm-h-2">(optional)</span></label>

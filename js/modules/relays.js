@@ -524,7 +524,7 @@ Object.assign(NYM.prototype, {
                         this.markVisibleChannelMessagesRead();
                     }
 
-                    this.backfillFromR2OnReconnect();
+                    this.backfillFromD1OnReconnect();
                 }, delay);
             } else {
                 this._backgroundedAt = Date.now();
@@ -570,7 +570,7 @@ Object.assign(NYM.prototype, {
                     this.markVisibleChannelMessagesRead();
                 }
 
-                this.backfillFromR2OnReconnect();
+                this.backfillFromD1OnReconnect();
             }, delay);
         });
 
@@ -604,7 +604,7 @@ Object.assign(NYM.prototype, {
                         }
                     }
 
-                    this.backfillFromR2OnReconnect();
+                    this.backfillFromD1OnReconnect();
                 }, 200);
             });
         }
@@ -2708,7 +2708,7 @@ Object.assign(NYM.prototype, {
             ? Array.from(this.pmConversations.keys()).filter(pk => typeof pk === 'string' && pk.length === 64)
             : [];
         // Keep a live kind 0 subscription on our own pubkey so profile edits made
-        // in another Nostr client arrive in real time and get mirrored to R2.
+        // in another Nostr client arrive in real time and get mirrored to D1.
         if (this.pubkey && !profileAuthors.includes(this.pubkey)) {
             profileAuthors.push(this.pubkey);
         }
@@ -2852,25 +2852,25 @@ Object.assign(NYM.prototype, {
             this.loadJoinedChannelsFromRelays();
         }, 1000);
 
-        this.backfillFromR2OnReconnect();
+        this.backfillFromD1OnReconnect();
     },
 
-    backfillFromR2OnReconnect() {
+    backfillFromD1OnReconnect() {
         if (!this._getApiHost || !this._getApiHost()) return;
         const now = Date.now();
-        if (this._lastR2BackfillAt && now - this._lastR2BackfillAt < 30000) return;
-        this._lastR2BackfillAt = now;
+        if (this._lastD1BackfillAt && now - this._lastD1BackfillAt < 30000) return;
+        this._lastD1BackfillAt = now;
 
-        if (typeof this.pmRestoreFromR2 === 'function') {
-            this.pmRestoreFromR2().catch(() => { });
+        if (typeof this.pmRestoreFromD1 === 'function') {
+            this.pmRestoreFromD1().catch(() => { });
         }
 
-        if (typeof this.channelRestoreFromR2 === 'function') {
+        if (typeof this.channelRestoreFromD1 === 'function') {
             const channels = new Set();
             const current = this.currentGeohash || this.currentChannel;
             if (current) channels.add(current);
             if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => channels.add(k));
-            channels.forEach(name => this.channelRestoreFromR2(name).catch(() => { }));
+            channels.forEach(name => this.channelRestoreFromD1(name).catch(() => { }));
         }
     },
 

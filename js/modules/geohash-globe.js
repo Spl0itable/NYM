@@ -286,10 +286,10 @@ Object.assign(NYM.prototype, {
         if (!modal) return;
         modal.style.display = 'flex';
         setTimeout(() => this.initializeGeohashMap(), 30);
-        // Quietly pull recent-activity counts from R2 so the globe reflects real
+        // Quietly pull recent-activity counts from D1 so the globe reflects real
         // activity (especially the default 24h view) without loading messages.
-        if (typeof this.fetchGeohashActivityFromR2 === 'function') {
-            this.fetchGeohashActivityFromR2();
+        if (typeof this.fetchGeohashActivityFromD1 === 'function') {
+            this.fetchGeohashActivityFromD1();
         }
     },
 
@@ -1118,10 +1118,10 @@ Object.assign(NYM.prototype, {
 
         const activeWindowTimer = setInterval(() => {
             if (!this.geohashMap) return;
-            // Refresh R2 activity counts too (throttled internally) so the globe
+            // Refresh D1 activity counts too (throttled internally) so the globe
             // stays current for channels we aren't actively loading.
-            if (typeof this.fetchGeohashActivityFromR2 === 'function') {
-                this.fetchGeohashActivityFromR2();
+            if (typeof this.fetchGeohashActivityFromD1 === 'function') {
+                this.fetchGeohashActivityFromD1();
             }
             this.updateGeohashChannels();
             requestDraw();

@@ -1,5 +1,6 @@
 /* Shared base classes (used across index.html and multiple JS modules) */
-.nm-hidden { display: none; }
+
+html .nm-hidden { display: none; }
 .nm-vam { vertical-align: middle; }
 .nm-ico8 { vertical-align: middle; margin-right: 8px; }
 .nm-ico4 { vertical-align: middle; margin-right: 4px; }

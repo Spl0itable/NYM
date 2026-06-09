@@ -163,7 +163,7 @@ Object.assign(NYM.prototype, {
         } catch (e) { /* ignore */ }
     },
 
-    // Pull the authoritative record from R2 for the current pubkey
+    // Pull the authoritative record from D1 for the current pubkey
     async loadShopFromServer() {
         if (!this.pubkey) return;
         try {
@@ -185,7 +185,7 @@ Object.assign(NYM.prototype, {
         this.loadShopFromServer();
     },
 
-    // Apply a {owned, active} record (from R2 or cache) to local state
+    // Apply a {owned, active} record (from D1 or cache) to local state
     _applyOwnShopRecord(data) {
         if (!data || typeof data !== 'object') return;
         if (data.owned && typeof data.owned === 'object') {
@@ -228,7 +228,7 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Push the current user's active items to R2 so other clients can read them
+    // Push the current user's active items to D1 so other clients can read them
     async publishActiveShopItems() {
         this._cacheShopRecord();
         if (!this.pubkey) return;

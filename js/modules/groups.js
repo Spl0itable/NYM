@@ -342,6 +342,8 @@ Object.assign(NYM.prototype, {
                     createdBy: group.createdBy,
                     mods: Array.isArray(group.mods) ? group.mods : [],
                     banned: Array.isArray(group.banned) ? group.banned : [],
+                    banner: group.banner || null,
+                    avatar: group.avatar || null,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
                 };
             }
@@ -432,6 +434,8 @@ Object.assign(NYM.prototype, {
                         if (group.createdBy) g.createdBy = group.createdBy;
                         g.mods = Array.isArray(group.mods) ? [...group.mods] : [];
                         g.banned = Array.isArray(group.banned) ? [...group.banned] : [];
+                        if (group.banner) g.banner = group.banner;
+                        if (group.avatar) g.avatar = group.avatar;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                     }
                 }
@@ -586,6 +590,33 @@ Object.assign(NYM.prototype, {
         const subjectTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'subject' && t[1]);
         const groupName = subjectTag ? subjectTag[1] : 'Group';
 
+        // group-metadata: owner changed the group name, banner, and/or avatar.
+        if (typeTag && typeTag[1] === 'group-metadata') {
+            const grp = this.groupConversations.get(groupId);
+            if (!grp) return;
+            if (grp.createdBy !== senderPubkey) return; // owner-issued only
+            const bannerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner');
+            const avatarTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar');
+            let changed = false;
+            if (subjectTag && subjectTag[1] && subjectTag[1] !== grp.name) { grp.name = subjectTag[1]; changed = true; }
+            if (bannerTag) {
+                const newBanner = bannerTag[1] || null;
+                if (newBanner !== (grp.banner || null)) { grp.banner = newBanner; changed = true; }
+            }
+            if (avatarTag) {
+                const newAvatar = avatarTag[1] || null;
+                if (newAvatar !== (grp.avatar || null)) { grp.avatar = newAvatar; changed = true; }
+            }
+            if (changed) {
+                this.groupConversations.set(groupId, grp);
+                this.updateGroupConversationUI(groupId);
+                this._saveGroupConversations();
+                this._debouncedNostrSettingsSave();
+                if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
+            }
+            return;
+        }
+
         // group-invite: the rumor author is always the group creator — persist this so
         // non-creating members know who owns the group without relying on local state.
         if (typeTag && typeTag[1] === 'group-invite') {
@@ -605,13 +636,15 @@ Object.assign(NYM.prototype, {
             const inviteMods = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'mod' && t[1])
                 .map(t => t[1]);
+            const inviteAvatar = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar' && t[1])?.[1] || null;
+            const inviteBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
             if (!this.groupConversations.has(groupId)) {
                 this.addGroupConversation(
                     groupId,
                     groupName,
                     inviteMembers,
                     (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                    { createdBy: senderPubkey, mods: inviteMods }
+                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner }
                 );
             }
             const grp = this.groupConversations.get(groupId);
@@ -621,6 +654,8 @@ Object.assign(NYM.prototype, {
             if (grp && inviteMods.length > 0 && (!Array.isArray(grp.mods) || grp.mods.length === 0)) {
                 grp.mods = [...inviteMods];
             }
+            if (grp && inviteAvatar && !grp.avatar) grp.avatar = inviteAvatar;
+            if (grp && inviteBanner && !grp.banner) grp.banner = inviteBanner;
             if (grp) {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
@@ -669,6 +704,8 @@ Object.assign(NYM.prototype, {
                 .filter(t => Array.isArray(t) && t[0] === 'mod' && t[1])
                 .map(t => t[1]);
             const claimedOwner = ownerTag ? ownerTag[1] : null;
+            const addAvatar = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar' && t[1])?.[1] || null;
+            const addBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
             const existingGroup = this.groupConversations.get(groupId);
             const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey;
             // Refuse to bootstrap a brand-new group entry from a non-owner;
@@ -683,10 +720,14 @@ Object.assign(NYM.prototype, {
                 (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
                 {
                     createdBy: senderIsClaimedOwner ? claimedOwner : undefined,
-                    mods: senderIsClaimedOwner ? addMods : []
+                    mods: senderIsClaimedOwner ? addMods : [],
+                    avatar: senderIsClaimedOwner ? addAvatar : undefined,
+                    banner: senderIsClaimedOwner ? addBanner : undefined
                 }
             );
             const grpAdd = this.groupConversations.get(groupId);
+            if (senderIsClaimedOwner && grpAdd && addAvatar && !grpAdd.avatar) grpAdd.avatar = addAvatar;
+            if (senderIsClaimedOwner && grpAdd && addBanner && !grpAdd.banner) grpAdd.banner = addBanner;
             if (senderIsClaimedOwner && grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
                 grpAdd.mods = [...addMods];
             }
@@ -1060,7 +1101,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Create a new private group and send invites to all members via NIP-17 gift wraps.
-    async createGroup(name, memberPubkeys) {
+    async createGroup(name, memberPubkeys, opts = {}) {
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Creating groups requires a logged-in account (not pseudonymous mode)');
             return null;
@@ -1073,12 +1114,16 @@ Object.assign(NYM.prototype, {
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this._generateSharedEventId();
         const inviteContent = `You've been added to group "${name}" (${allMembers.length} members).`;
+        const groupAvatar = opts.avatar || null;
+        const groupBanner = opts.banner || null;
 
         const tags = allMembers.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
         tags.push(['subject', name]);
         tags.push(['type', 'group-invite']);
         tags.push(['owner', this.pubkey]);
+        if (groupAvatar) tags.push(['avatar', groupAvatar]);
+        if (groupBanner) tags.push(['banner', groupBanner]);
         tags.push(['x', nymMessageId]);
 
         // Bootstrap ephemeral keys: include our first ephemeral pk so members
@@ -1095,7 +1140,7 @@ Object.assign(NYM.prototype, {
         this._saveEphemeralKeys();
 
         // addGroupConversation creates the sidebar item with us marked as owner
-        this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey });
+        this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner });
         // Defensive: ensure createdBy is set even if a relay echo created the entry first
         const grp = this.groupConversations.get(groupId);
         if (grp && grp.createdBy !== this.pubkey) grp.createdBy = this.pubkey;
@@ -1152,6 +1197,8 @@ Object.assign(NYM.prototype, {
         if (Array.isArray(group.mods)) {
             for (const modPk of group.mods) tags.push(['mod', modPk]);
         }
+        if (group.avatar) tags.push(['avatar', group.avatar]);
+        if (group.banner) tags.push(['banner', group.banner]);
         tags.push(['x', nymMessageId]);
 
         // Include our ephemeral pk so the new member (and existing members) learn it
@@ -1215,21 +1262,45 @@ Object.assign(NYM.prototype, {
         return !!rumor && (rumor.kind === 14 || rumor.kind === 7);
     },
 
-    // Mirror a group rumor to R2 as a self-addressed gift wrap (to our real
+    // Mirror a group rumor to D1 as a self-addressed gift wrap (to our real
     // pubkey) so group chats restore on other devices like 1:1 PMs. Local-key
     // path only, matching how 1:1 PM archival works.
-    _archiveGroupRumorSelf(rumor, expirationTs) {
+    async _archiveGroupRumorSelf(rumor, expirationTs) {
         try {
-            if (!this.privkey) return;
             if (!this._isArchivableGroupRumor(rumor)) return;
             if (typeof this._pmArchiveAllowed !== 'function' || !this._pmArchiveAllowed()) return;
-            const wrap = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+            let wrap = null;
+            if (this.privkey) {
+                wrap = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+            } else {
+                // Extension / NIP-46: seal via the signer, wrap with a local ephemeral.
+                const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
+                const useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
+                if (!useExt && !useN46) return;
+                const NT = window.NostrTools;
+                const r = { ...rumor };
+                r.id = NT.getEventHash(r);
+                const rumorJson = JSON.stringify(r);
+                const sealContent = useExt
+                    ? await window.nostr.nip44.encrypt(this.pubkey, rumorJson)
+                    : await _nip46Encrypt(this.pubkey, rumorJson);
+                const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
+                const seal = useExt
+                    ? await window.nostr.signEvent(sealUnsigned)
+                    : await _nip46SignEvent(sealUnsigned);
+                const ephSk = NT.generateSecretKey();
+                const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
+                const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+                const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: [['p', this.pubkey]] };
+                if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
+                wrap = NT.finalizeEvent(wrapUnsigned, ephSk);
+            }
             if (wrap) this._archivePMEvent(wrap);
         } catch (_) { }
     },
 
     async _sendGiftWrapsAsync(members, rumor, expirationTs, groupId = null) {
-        // Archive-only self copy so group messages also hydrate from R2.
+        // Archive-only self copy so group messages also hydrate from D1.
         if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
 
         // Fast path — local key available. Offload each wrap to the crypto
@@ -1466,6 +1537,7 @@ Object.assign(NYM.prototype, {
         // Clean up ephemeral keys for this group
         this.groupEphemeralKeys.delete(groupId);
         this._saveEphemeralKeys();
+        if (typeof this._clearGroupSyncData === 'function') this._clearGroupSyncData(groupId);
 
         // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) { }
@@ -1740,6 +1812,90 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(content);
     },
 
+    // Owner-only: broadcast a name/banner change to every member.
+    async _broadcastGroupMetadata(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group || !this._canSendGiftWraps()) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can change group name or banner.');
+            return;
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-metadata']);
+        tags.push(['banner', group.banner || '']);
+        tags.push(['avatar', group.avatar || '']);
+        tags.push(['x', this._generateSharedEventId()]);
+        const rumor = { kind: 14, created_at: now, tags, content: '', pubkey: this.pubkey };
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+    },
+
+    // Owner-only: rename the group and propagate to members.
+    async setGroupName(groupId, name) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can rename the group.');
+            return;
+        }
+        const trimmed = (name || '').trim().slice(0, 100);
+        if (!trimmed || trimmed === group.name) return;
+        group.name = trimmed;
+        this.groupConversations.set(groupId, group);
+        this.updateGroupConversationUI(groupId);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
+        await this._broadcastGroupMetadata(groupId);
+        this.displaySystemMessage(`Group renamed to "${trimmed}".`);
+    },
+
+    // Owner-only: persist a group image (kind = 'avatar' | 'banner') and
+    // propagate to members. Re-renders the sidebar item too for avatar changes.
+    async _applyGroupImage(groupId, kind, url) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        group[kind] = url;
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (kind === 'avatar') this.updateGroupConversationUI(groupId);
+        if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
+        await this._broadcastGroupMetadata(groupId);
+    },
+
+    // Owner-only: upload and set a group avatar/banner, then propagate.
+    async _setGroupImage(groupId, kind, file) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage(`Only the group owner can change the ${kind}.`);
+            return;
+        }
+        try {
+            const { url } = await this._uploadFileWithProgress(file, `Uploading group ${kind}…`);
+            await this._applyGroupImage(groupId, kind, url);
+            this.displaySystemMessage(`Group ${kind} updated.`);
+        } catch (error) {
+            if (!(error && error.name === 'AbortError')) this.displaySystemMessage(`Failed to upload ${kind}: ` + (error?.message || error));
+        }
+    },
+
+    // Owner-only: clear a group avatar/banner.
+    async _clearGroupImage(groupId, kind) {
+        const group = this.groupConversations.get(groupId);
+        if (!group || !this._isGroupOwner(groupId, this.pubkey)) return;
+        await this._applyGroupImage(groupId, kind, null);
+        this.displaySystemMessage(`Group ${kind} removed.`);
+    },
+
+    uploadGroupBanner(groupId, file) { return this._setGroupImage(groupId, 'banner', file); },
+    removeGroupBanner(groupId) { return this._clearGroupImage(groupId, 'banner'); },
+    uploadGroupAvatar(groupId, file) { return this._setGroupImage(groupId, 'avatar', file); },
+    removeGroupAvatar(groupId) { return this._clearGroupImage(groupId, 'avatar'); },
+
     // Owner or moderator: delete a message in the current group for everyone.
     async modDeleteGroupMessage(messageId, authorPubkey) {
         this.closeContextMenu();
@@ -1838,6 +1994,8 @@ Object.assign(NYM.prototype, {
                 createdBy: opts.createdBy || null,
                 mods: Array.isArray(opts.mods) ? [...opts.mods] : [],
                 banned: Array.isArray(opts.banned) ? [...opts.banned] : [],
+                banner: opts.banner || null,
+                avatar: opts.avatar || null,
                 modLog: []
             });
             const pmList = document.getElementById('pmList');
@@ -1873,9 +2031,18 @@ Object.assign(NYM.prototype, {
             };
             // Adopt createdBy if missing and provided
             if (!next.createdBy && opts.createdBy) next.createdBy = opts.createdBy;
+            if (opts.banner !== undefined && opts.banner !== null) next.banner = opts.banner;
+            if (opts.avatar !== undefined && opts.avatar !== null) next.avatar = opts.avatar;
             this.groupConversations.set(groupId, next);
             this.updateGroupConversationUI(groupId);
         }
+    },
+
+    // Proxied URL of a group's custom avatar, or null when none is set.
+    getGroupAvatarUrl(groupId) {
+        const g = this.groupConversations.get(groupId);
+        if (!g || !g.avatar) return null;
+        return this.getProxiedMediaUrl(g.avatar);
     },
 
     // Rebuild the inner HTML of a group PM list item
@@ -1886,12 +2053,15 @@ Object.assign(NYM.prototype, {
 
         const groupSvg = `<svg class="group-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
 
-        const avatarStackHtml = displayMembers.length > 0
-            ? `<div class="group-avatar-stack">${displayMembers.map((pk) => {
-                const sk = this._safePubkey(pk);
-                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
-            }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
-            : `<div class="group-icon-wrap">${groupSvg}</div>`;
+        const customAvatar = this.getGroupAvatarUrl(groupId);
+        const avatarStackHtml = customAvatar
+            ? `<div class="group-avatar-wrap"><img src="${this.escapeHtml(customAvatar)}" class="group-custom-avatar" alt="" decoding="async" loading="lazy" data-error-action="groupImgError"></div>`
+            : displayMembers.length > 0
+                ? `<div class="group-avatar-stack">${displayMembers.map((pk) => {
+                    const sk = this._safePubkey(pk);
+                    return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
+                }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
+                : `<div class="group-icon-wrap">${groupSvg}</div>`;
 
         return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span></div>`;
     },
@@ -2211,7 +2381,40 @@ Object.assign(NYM.prototype, {
         if (!group) return '';
         const otherMembers = (group.members || []).filter(pk => pk !== this.pubkey);
         const displayPks = otherMembers.slice(0, 3).map(pk => this._safePubkey(pk)).join(',');
-        return `${displayPks}|${group.members ? group.members.length : 0}|${group.name || ''}`;
+        return `${displayPks}|${group.members ? group.members.length : 0}|${group.name || ''}|${group.avatar || ''}`;
+    },
+
+    // Signature for the in-chat group header; changes force a header re-render.
+    _groupHeaderSig(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return '';
+        const displayPks = group.members.filter(pk => pk !== this.pubkey)
+            .slice(0, 4).map(pk => this._safePubkey(pk));
+        return `${displayPks.join(',')}|${group.members.length}|${group.name || ''}|${group.avatar || ''}`;
+    },
+
+    // Build the in-chat group header: custom avatar when set, else the stacked
+    // member avatars + group glyph.
+    _buildGroupHeaderHtml(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return '';
+        const otherMembers = group.members.filter(pk => pk !== this.pubkey);
+        const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+        const customAvatar = this.getGroupAvatarUrl(groupId);
+        let iconPart;
+        if (customAvatar) {
+            iconPart = `<span class="group-header-custom-wrap"><img src="${this.escapeHtml(customAvatar)}" class="group-header-custom-avatar" alt="" decoding="async" loading="lazy" data-error-action="groupImgError"></span>`;
+        } else {
+            const displayPks = otherMembers.slice(0, 4).map(pk => this._safePubkey(pk));
+            const headerAvatars = displayPks.map((sk, i) => {
+                const pk = otherMembers[i];
+                return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
+            }).join('');
+            iconPart = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}`;
+        }
+        const nameCls = (customAvatar || otherMembers.length > 0) ? 'nm-grp-ml8' : '';
+        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
+        return `<span class="group-header-row">${iconPart}<span class="group-name-text ${nameCls}">${this.escapeHtml(group.name)}</span></span>${memberLabel}`;
     },
 
     // Re-render a group item's inner HTML (e.g., after member list changes)
@@ -2247,24 +2450,224 @@ Object.assign(NYM.prototype, {
             if (this.inPMMode && this.currentGroup === groupId) {
                 const channelEl = document.getElementById('currentChannel');
                 if (channelEl) {
-                    const otherMembers = group.members.filter(pk => pk !== this.pubkey);
-                    const displayPks = otherMembers.slice(0, 4).map(pk => this._safePubkey(pk));
-                    const sig = `${displayPks.join(',')}|${group.members.length}|${group.name || ''}`;
+                    const sig = this._groupHeaderSig(groupId);
                     if (channelEl.dataset.groupHeaderSig !== sig) {
-                        const headerAvatars = displayPks.map((sk, i) => {
-                            const pk = otherMembers[i];
-                            const src = this.getAvatarUrl(pk);
-                            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
-                        }).join('');
-                        const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-                        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
-                        const headerHtml = `<span class="group-header-row"><span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="group-name-text ${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span></span>${memberLabel}`;
-                        channelEl.innerHTML = headerHtml;
+                        channelEl.innerHTML = this._buildGroupHeaderHtml(groupId);
                         channelEl.dataset.groupHeaderSig = sig;
+                        this._wireGroupHeaderClick(channelEl, groupId);
                     }
                 }
             }
         }
+    },
+
+    // Make the group chat header open the group context menu on click.
+    _wireGroupHeaderClick(channelEl, groupId) {
+        const row = channelEl.querySelector('.group-header-row');
+        if (!row) return;
+        row.classList.add('header-clickable');
+        row.onclick = (e) => { e.preventDefault(); e.stopPropagation(); this.showGroupContextMenu(groupId); };
+    },
+
+    // Build and open the group info / management context menu.
+    showGroupContextMenu(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this._groupCtxGroupId = groupId;
+        this._groupCtxTransferMode = false;
+        const iAmOwner = this._isGroupOwner(groupId, this.pubkey);
+        const iAmMod = this._isGroupMod(groupId, this.pubkey);
+
+        const menu = document.getElementById('groupContextMenu');
+        const overlay = document.getElementById('groupContextMenuOverlay');
+        if (!menu || !overlay) return;
+
+        // Banner: custom image when set, otherwise a default gradient background.
+        const bannerImg = document.getElementById('grpCtxBannerImg');
+        const defaultBanner = document.getElementById('grpCtxDefaultBanner');
+        menu.classList.add('has-banner');
+        if (group.banner) {
+            bannerImg.src = this.getProxiedMediaUrl(group.banner);
+            bannerImg.classList.remove('nm-hidden');
+            if (defaultBanner) defaultBanner.classList.add('nm-hidden');
+            bannerImg.onerror = () => {
+                bannerImg.classList.add('nm-hidden');
+                if (defaultBanner) defaultBanner.classList.remove('nm-hidden');
+            };
+        } else {
+            bannerImg.classList.add('nm-hidden');
+            if (defaultBanner) defaultBanner.classList.remove('nm-hidden');
+        }
+
+        // Icon: custom group avatar, else stacked member avatars over a glyph.
+        const groupSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+        const grpCtxIcon = document.getElementById('grpCtxIcon');
+        const customAvatar = this.getGroupAvatarUrl(groupId);
+        if (customAvatar) {
+            grpCtxIcon.classList.add('has-image');
+            grpCtxIcon.innerHTML = `<img src="${this.escapeHtml(customAvatar)}" class="group-ctx-custom-avatar" alt="" decoding="async" data-error-action="groupImgError">`;
+        } else {
+            grpCtxIcon.classList.remove('has-image');
+            grpCtxIcon.innerHTML = groupSvg;
+        }
+
+        document.getElementById('grpCtxName').textContent = group.name || 'Group';
+        document.getElementById('grpCtxMemberCount').textContent = `${group.members.length} member${group.members.length === 1 ? '' : 's'}`;
+
+        // Role-based action buttons
+        const icon = (p) => `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico8">${p}</svg>`;
+        const actions = [];
+        if (iAmOwner) {
+            actions.push(`<div class="context-menu-item" data-action="groupCtxEditName">${icon('<path d="M 11.5 2.5 L 13.5 4.5 L 5 13 L 2 14 L 3 11 Z" stroke-linejoin="round"/><path d="M 10 4 L 12 6" stroke-linecap="round"/>')}Edit Group Name</div>`);
+            actions.push(`<div class="context-menu-item" data-action="groupCtxChangeAvatar">${icon('<circle cx="8" cy="6" r="3"/><path d="M 2.5 14 C 2.5 10.5 5 9 8 9 C 11 9 13.5 10.5 13.5 14" stroke-linecap="round"/>')}Change Avatar</div>`);
+            if (group.avatar) actions.push(`<div class="context-menu-item" data-action="groupCtxRemoveAvatar">${icon('<circle cx="8" cy="6" r="3"/><path d="M 2.5 14 C 2.5 10.5 5 9 8 9 C 11 9 13.5 10.5 13.5 14" stroke-linecap="round"/><line x1="3" y1="3" x2="13" y2="13" stroke-linecap="round"/>')}Remove Avatar</div>`);
+            actions.push(`<div class="context-menu-item" data-action="groupCtxChangeBanner">${icon('<rect x="2" y="3" width="12" height="10" rx="1"/><circle cx="5.5" cy="6.5" r="1"/><path d="M 2 11 L 6 8 L 9 10 L 12 7 L 14 9" stroke-linejoin="round"/>')}Change Banner</div>`);
+            if (group.banner) actions.push(`<div class="context-menu-item" data-action="groupCtxRemoveBanner">${icon('<rect x="2" y="3" width="12" height="10" rx="1"/><line x1="3" y1="3" x2="13" y2="13" stroke-linecap="round"/>')}Remove Banner</div>`);
+        }
+        if (iAmOwner && group.members.length > 1) {
+            actions.push(`<div class="context-menu-item" data-action="groupCtxTransferOwner">${icon('<circle cx="8" cy="5" r="2.5"/><path d="M 2 14 C 2 10 4 9 8 9 C 12 9 14 10 14 14" stroke-linecap="round"/><path d="M 12 4 L 15 4 L 13.5 2 M 15 4 L 13.5 6" stroke-linecap="round" stroke-linejoin="round"/>')}Transfer Ownership</div>`);
+        }
+        if (iAmOwner || iAmMod) {
+            actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
+        }
+        actions.push(`<div class="context-menu-item danger" data-action="groupCtxLeave">${icon('<path d="M 6 2 L 3 2 C 2.5 2 2 2.5 2 3 L 2 13 C 2 13.5 2.5 14 3 14 L 6 14" stroke-linecap="round" stroke-linejoin="round"/><path d="M 10 11 L 13 8 L 10 5" stroke-linecap="round" stroke-linejoin="round"/><line x1="13" y1="8" x2="6" y2="8" stroke-linecap="round"/>')}Leave Group</div>`);
+        document.getElementById('grpCtxActions').innerHTML = actions.join('');
+
+        // Members list (owner first, then mods, then members)
+        document.getElementById('grpCtxMembersTitle').textContent = `Members · ${group.members.length}`;
+        const sorted = [...group.members].sort((a, b) => this._memberRoleRank(groupId, a) - this._memberRoleRank(groupId, b));
+        document.getElementById('grpCtxMembers').innerHTML = sorted.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
+
+        menu.scrollTop = 0;
+        overlay.classList.add('active');
+        menu.classList.add('active');
+    },
+
+    _memberRoleRank(groupId, pubkey) {
+        if (this._isGroupOwner(groupId, pubkey)) return 0;
+        if (this._isGroupMod(groupId, pubkey)) return 1;
+        return 2;
+    },
+
+    _groupCtxMemberRowHtml(groupId, pubkey) {
+        const safePk = this._safePubkey(pubkey);
+        const baseNym = this.escapeHtml(this.getNymFromPubkey(pubkey));
+        const suffix = this.getPubkeySuffix(pubkey);
+        const isSelf = pubkey === this.pubkey;
+        const roleBadge = this._isGroupOwner(groupId, pubkey)
+            ? '<span class="group-ctx-role owner">Owner</span>'
+            : this._isGroupMod(groupId, pubkey)
+                ? '<span class="group-ctx-role mod">Mod</span>'
+                : '';
+        const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
+        const youTag = isSelf ? '<span class="group-ctx-you">you</span>' : '';
+        return `<div class="group-ctx-member" data-action="groupCtxMemberClick" data-pubkey="${safePk}" data-nym="${baseNym}">${avatar}<span class="group-ctx-member-name">${baseNym}<span class="nym-suffix">#${suffix}</span>${youTag}</span>${roleBadge}</div>`;
+    },
+
+    closeGroupContextMenu() {
+        const menu = document.getElementById('groupContextMenu');
+        const overlay = document.getElementById('groupContextMenuOverlay');
+        if (menu) menu.classList.remove('active');
+        if (overlay) overlay.classList.remove('active');
+        this._groupCtxTransferMode = false;
+    },
+
+    // Owner action: pick a new owner by selecting a member from the list.
+    groupCtxTransferOwner() {
+        const groupId = this._groupCtxGroupId;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this._groupCtxTransferMode = true;
+        document.getElementById('grpCtxMembersTitle').textContent = 'Select a member to make owner';
+        const others = group.members.filter(pk => pk !== this.pubkey)
+            .sort((a, b) => this._memberRoleRank(groupId, a) - this._memberRoleRank(groupId, b));
+        document.getElementById('grpCtxMembers').innerHTML = others.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
+    },
+
+    // A member row was clicked. In transfer mode this picks the new owner;
+    // otherwise it opens the user's profile/moderation context menu
+    // (profileOnly=false so the group kick/ban/mod actions remain visible).
+    _openMemberFromGroupCtx(pubkey, nym) {
+        if (this._groupCtxTransferMode) {
+            this._groupCtxTransferMode = false;
+            this.closeGroupContextMenu();
+            window.showAppConfirm(`Transfer group ownership to ${nym}? You will lose owner privileges.`, { danger: true, okLabel: 'Transfer' })
+                .then(ok => { if (ok) this.transferOwner(pubkey); });
+            return;
+        }
+        const backGroupId = this._groupCtxGroupId;
+        this.closeGroupContextMenu();
+        const suffix = this.getPubkeySuffix(pubkey);
+        const fakeEvent = { preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} };
+        // Pass the originating group so the user menu shows a "back" button.
+        this.showContextMenu(fakeEvent, `${nym}#${suffix}`, pubkey, null, null, false, null, backGroupId);
+    },
+
+    // Back button in the user context menu returns to the group context menu.
+    ctxBackToGroup() {
+        const groupId = this._ctxBackToGroup;
+        this.closeContextMenu();
+        if (groupId) this.showGroupContextMenu(groupId);
+    },
+
+    // Owner action: prompt for a new group name.
+    async groupCtxEditName() {
+        const groupId = this._groupCtxGroupId;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this.closeGroupContextMenu();
+        const name = await window.showAppPrompt('Enter a new group name:', {
+            title: 'Rename Group', okLabel: 'Save', defaultValue: group.name || '', maxLength: 100
+        });
+        if (name === null) return;
+        await this.setGroupName(groupId, name);
+    },
+
+    // Owner action: pick an image file for the banner or avatar. The group
+    // context menu is closed once a file is chosen so the upload progress bar
+    // (anchored to the message input) is visible.
+    _pickGroupImage(groupId, kind) {
+        const input = document.getElementById('grpBannerFileInput');
+        if (!input) return;
+        input.onchange = async () => {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            this.closeGroupContextMenu();
+            if (kind === 'avatar') await this.uploadGroupAvatar(groupId, file);
+            else await this.uploadGroupBanner(groupId, file);
+        };
+        input.click();
+    },
+
+    groupCtxChangeBanner() { this._pickGroupImage(this._groupCtxGroupId, 'banner'); },
+    groupCtxChangeAvatar() { this._pickGroupImage(this._groupCtxGroupId, 'avatar'); },
+
+    async groupCtxRemoveBanner() {
+        const groupId = this._groupCtxGroupId;
+        this.closeGroupContextMenu();
+        await this.removeGroupBanner(groupId);
+    },
+
+    async groupCtxRemoveAvatar() {
+        const groupId = this._groupCtxGroupId;
+        this.closeGroupContextMenu();
+        await this.removeGroupAvatar(groupId);
+    },
+
+    groupCtxAddMembers() {
+        const groupId = this._groupCtxGroupId;
+        this.closeGroupContextMenu();
+        this.openAddMembersModal(groupId);
+    },
+
+    async groupCtxLeave() {
+        const groupId = this._groupCtxGroupId;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this.closeGroupContextMenu();
+        const ok = await window.showAppConfirm(`Leave "${group.name}"? You'll stop receiving messages from this group.`, { danger: true, okLabel: 'Leave' });
+        if (ok) this.leaveGroup(groupId);
     },
 
     // Open a group conversation in the main chat area
@@ -2296,23 +2699,12 @@ Object.assign(NYM.prototype, {
         // Re-render typing indicator for the new conversation
         this.renderTypingIndicator();
 
-        // Build stacked avatar header
-        const otherMembers = group.members.filter(pk => pk !== this.pubkey);
-        const displayPks = otherMembers.slice(0, 4).map(pk => this._safePubkey(pk));
-        const headerAvatars = displayPks.map((sk, i) => {
-            const pk = otherMembers[i];
-            const src = this.getAvatarUrl(pk);
-            return `<img src="${this.escapeHtml(src)}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
-        }).join('');
-
-        const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
-        const headerHtml = `<span class="group-header-row"><span class="group-header-icon">${groupSvg}</span>${headerAvatars}<span class="group-name-text ${otherMembers.length > 0 ? 'nm-grp-ml8' : ''}">${this.escapeHtml(group.name)}</span></span>${memberLabel}`;
-
+        // Build the group header (custom avatar or stacked member avatars).
         const channelEl = document.getElementById('currentChannel');
-        channelEl.innerHTML = headerHtml;
-        channelEl.dataset.groupHeaderSig = `${displayPks.join(',')}|${group.members.length}|${group.name || ''}`;
+        channelEl.innerHTML = this._buildGroupHeaderHtml(groupId);
+        channelEl.dataset.groupHeaderSig = this._groupHeaderSig(groupId);
         delete channelEl.dataset.pmHeaderSig;
+        this._wireGroupHeaderClick(channelEl, groupId);
         const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-grp-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
         const metaText = `${lockSvg}End-to-end encrypted group chat`;
         document.getElementById('channelMeta').innerHTML = metaText;

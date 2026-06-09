@@ -447,6 +447,36 @@ window.nymHapticTap = function (ms) {
             }
         },
 
+        // Group context menu (group header click)
+        'closeGroupContextMenu':      function () { nym().closeGroupContextMenu(); },
+        'groupCtxEditName':           function () { nym().groupCtxEditName(); },
+        'groupCtxChangeBanner':       function () { nym().groupCtxChangeBanner(); },
+        'groupCtxRemoveBanner':       function () { nym().groupCtxRemoveBanner(); },
+        'groupCtxChangeAvatar':       function () { nym().groupCtxChangeAvatar(); },
+        'groupCtxRemoveAvatar':       function () { nym().groupCtxRemoveAvatar(); },
+        'groupCtxAddMembers':         function () { nym().groupCtxAddMembers(); },
+        'groupCtxTransferOwner':      function () { nym().groupCtxTransferOwner(); },
+        'groupCtxLeave':              function () { nym().groupCtxLeave(); },
+        'groupCtxMemberClick':        function (_e, t) {
+            nym()._openMemberFromGroupCtx(t.dataset.pubkey, t.dataset.nym);
+        },
+        // Back from a member's profile to the group context menu it was opened from
+        'ctxBack':                    function () { nym().ctxBackToGroup(); },
+
+        // New Group modal: optional avatar/banner pickers
+        'newGroupPickAvatar':         function () { nym().newGroupPickAvatar(); },
+        'newGroupPickBanner':         function () { nym().newGroupPickBanner(); },
+
+        // A custom group avatar image failed to load — fall back to the glyph.
+        'groupImgError':              function (_e, t) {
+            if (t.complete && t.naturalHeight > 0) return;
+            var wrap = t.parentElement;
+            if (!wrap) return;
+            wrap.classList.remove('has-image');
+            wrap.classList.add('group-img-fallback');
+            wrap.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>';
+        },
+
         // Error-event actions (referenced via data-error-action)
         'errorHideElement':           function (_e, t) { t.style.display = 'none'; },
 

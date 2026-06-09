@@ -555,7 +555,7 @@ Object.assign(NYM.prototype, {
 
         // Persist nickname to localStorage so it survives page reloads
         localStorage.setItem(`nym_nickname_${this.pubkey}`, newNym);
-        // Mark this as a user-chosen nick so it qualifies for R2 mirroring
+        // Mark this as a user-chosen nick so it qualifies for D1 mirroring
         try { localStorage.setItem('nym_custom_nick', newNym); } catch (_) { }
         // Also update the auto-ephemeral nick so persistent sessions use the new name
         if (localStorage.getItem('nym_auto_ephemeral') === 'true') {

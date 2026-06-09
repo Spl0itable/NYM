@@ -36,7 +36,7 @@ export class NymLedger {
     );
   }
 
-  // Serialize op handlers so an R2 read-modify-write can't interleave with
+  // Serialize op handlers so a D1 read-modify-write can't interleave with
   // another op on the same instance.
   _exclusive(fn) {
     const run = this._chain.then(fn, fn);

@@ -475,8 +475,16 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 // Encrypted user settings storage. The client encrypts each settings category
 // to itself (NIP-44) before upload, so the worker only ever stores opaque
 // ciphertext keyed by pubkey.
-var SETTINGS_CATEGORIES = ["nymchat-settings", "nymchat-keys", "nymchat-groups", "nymchat-history", "nymchat-notifications"];
+// Categories are validated by prefix/charset so the client can split data into
+// many sub-category and per-group gift wraps (e.g. nymchat-settings-appearance,
+// nymchat-keys-<groupId>) without enumerating each one here.
+var SETTINGS_CATEGORY_RE = /^nymchat-[a-z0-9-]{1,80}$/i;
+// Effectively unlimited: time-bucketed group history accumulates one category
+// per group per month, so the full backlog can span many thousands of wraps.
+// A very high ceiling is kept only as an abuse backstop.
+var SETTINGS_MAX_CATEGORIES = 50000;
 var SETTINGS_MAX_BLOB = 512 * 1024;
+function isValidSettingsCategory(cat) { return SETTINGS_CATEGORY_RE.test(cat); }
 
 async function handleSettingsAction(context, body) {
   var env = context.env;
@@ -495,11 +503,10 @@ async function handleSettingsAction(context, body) {
 
   if (body.action === "settings-get") {
     var categories = {};
-    SETTINGS_CATEGORIES.forEach(function (cat) { categories[cat] = null; });
     try {
       var rs = await env.DB_SETTINGS.prepare("SELECT category, blob, updated_at FROM settings WHERE pubkey = ?").bind(userPubkey).all();
       (rs.results || []).forEach(function (r) {
-        if (SETTINGS_CATEGORIES.indexOf(r.category) !== -1 && typeof r.blob === "string") {
+        if (isValidSettingsCategory(r.category) && typeof r.blob === "string") {
           categories[r.category] = { blob: r.blob, updatedAt: r.updated_at || 0 };
         }
       });
@@ -509,16 +516,24 @@ async function handleSettingsAction(context, body) {
 
   if (body.action === "settings-set") {
     var cat = String(body.category || "");
-    if (SETTINGS_CATEGORIES.indexOf(cat) === -1) return json({ error: "Unknown settings category." }, 400);
+    if (!isValidSettingsCategory(cat)) return json({ error: "Unknown settings category." }, 400);
     if (typeof body.blob !== "string" || !body.blob) return json({ error: "Missing settings blob." }, 400);
     if (body.blob.length > SETTINGS_MAX_BLOB) return json({ error: "Settings payload too large." }, 413);
     var contentHash = (typeof body.contentHash === "string" && /^[0-9a-f]{64}$/i.test(body.contentHash))
       ? body.contentHash.toLowerCase() : null;
-    if (contentHash) {
+    var prevDoc = null;
+    try {
+      prevDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
+    } catch (e) { }
+    if (contentHash && prevDoc && prevDoc.content_hash === contentHash) {
+      return json({ ok: true, category: cat, updatedAt: prevDoc.updated_at || 0, unchanged: true });
+    }
+    // Cap distinct categories per user to bound storage from runaway splitting.
+    if (!prevDoc) {
       try {
-        var prevDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
-        if (prevDoc && prevDoc.content_hash === contentHash) {
-          return json({ ok: true, category: cat, updatedAt: prevDoc.updated_at || 0, unchanged: true });
+        var cntRow = await env.DB_SETTINGS.prepare("SELECT COUNT(*) AS n FROM settings WHERE pubkey = ?").bind(userPubkey).first();
+        if (cntRow && (cntRow.n || 0) >= SETTINGS_MAX_CATEGORIES) {
+          return json({ error: "Too many settings categories." }, 429);
         }
       } catch (e) { }
     }

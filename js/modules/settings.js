@@ -2,6 +2,28 @@
 
 const INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
 
+// Maps core settings keys to the settings-modal section that owns them, used to
+// split the synced settings into smaller per-section gift wraps. Unmapped keys
+// fall through to a "misc" section so future settings still sync.
+const NYM_SETTINGS_SECTION_KEYS = {
+    appearance: ['theme', 'sound', 'autoscroll', 'showTimestamps', 'timeFormat', 'dateFormat',
+        'blurOthersImages', 'chatLayout', 'nickStyle', 'colorMode', 'wallpaperType',
+        'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'sidebarSectionOrder'],
+    privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels',
+        'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
+        'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
+        'acceptCalls', 'showStatus', 'powDifficulty', 'encryptAtRestPreferred', 'keypairMode'],
+    messaging: ['groupChatPMOnlyMode', 'translateLanguage', 'translateFavoriteLanguages',
+        'emojiPackFavorites', 'emojiCategoryFavorites', 'favoriteGifs', 'recentEmojis',
+        'gesturesEnabled', 'swipeLeftAction', 'swipeRightAction', 'swipeThreshold',
+        'swipeReactEmoji', 'notificationsEnabled', 'groupNotifyMentionsOnly', 'notifyFriendsOnly',
+        'syncMLSHistory', 'seenCalls'],
+    channels: ['pinnedChannels', 'userJoinedChannels', 'sortByProximity', 'pinnedLandingChannel',
+        'hideNonPinned', 'channelLastRead', 'closedPMs', 'leftGroups', 'closedPMTimes',
+        'leftGroupTimes'],
+    data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed']
+};
+
 function _normalizeIndicatorScope(value, fallback = 'everywhere') {
     if (value === true || value === 'true') return 'everywhere';
     if (value === false || value === 'false') return 'disabled';
@@ -139,6 +161,35 @@ Object.assign(NYM.prototype, {
         };
     },
 
+    // d-tag for a per-group sync category (lowercased UUID is regex-safe).
+    _groupSyncDTag(prefix, groupId) {
+        return `${prefix}-${String(groupId).toLowerCase()}`;
+    },
+
+    // On leaving a group, clear its ephemeral keys blob (security-relevant) but
+    // keep the time-bucketed history wraps so the user's own backlog stays
+    // durable and isn't dropped from D1.
+    _clearGroupSyncData(groupId) {
+        try { this._saveSettingsBlobToD1(this._groupSyncDTag('nymchat-keys', groupId), JSON.stringify({})); } catch (_) { }
+    },
+
+    // Partition the core settings payload into the settings-modal sections.
+    // Keys not in the map land in "misc" so newly added settings still sync.
+    _splitSettingsBySection(settingsData) {
+        const map = NYM_SETTINGS_SECTION_KEYS;
+        const lookup = this._settingsSectionLookup || (this._settingsSectionLookup = (() => {
+            const o = {};
+            for (const [section, keys] of Object.entries(map)) for (const k of keys) o[k] = section;
+            return o;
+        })());
+        const out = {};
+        for (const [key, val] of Object.entries(settingsData)) {
+            const section = lookup[key] || 'misc';
+            (out[section] || (out[section] = { v: settingsData.v || 2 }))[key] = val;
+        }
+        return out;
+    },
+
     // Debounced nostrSettingsSave — coalesces rapid state changes (e.g. incoming
     // group messages) into a single Nostr publish.  Delay defaults to 5 seconds.
     _debouncedNostrSettingsSave(delayMs = 5000) {
@@ -186,11 +237,12 @@ Object.assign(NYM.prototype, {
     _flushSettingsLoadBuffer(subId) {
         const buf = (this._settingsLoadBuffer && subId) ? this._settingsLoadBuffer.get(subId) : null;
         if (buf) this._settingsLoadBuffer.delete(subId);
-        if (buf && buf.newestSettings && buf.newestTs && buf.newestTs > (this._lastSettingsSyncTs || 0)) {
+        const sections = (buf && buf.byTag) ? Object.values(buf.byTag) : [];
+        if (sections.length && buf.newestTs && buf.newestTs > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = buf.newestTs;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
             if (typeof applyNostrSettings === 'function') {
-                Promise.resolve(applyNostrSettings(buf.newestSettings))
+                Promise.resolve(Promise.all(sections.map(sec => applyNostrSettings(sec.settings))))
                     .catch(() => { })
                     .finally(() => this._markSettingsHydrated());
                 return;
@@ -212,19 +264,23 @@ Object.assign(NYM.prototype, {
                 createdBy: group.createdBy,
                 mods: Array.isArray(group.mods) ? group.mods : [],
                 banned: Array.isArray(group.banned) ? group.banned : [],
+                banner: group.banner || null,
+                avatar: group.avatar || null,
                 modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
             };
         }
         return data;
     },
 
-    // Serialize group message history for new-device recovery
+    // Serialize group message history for new-device recovery. No per-group
+    // cap: history is time-bucketed into month-sized gift wraps at publish time,
+    // so the full backlog is preserved across many small wraps in D1.
     _buildGroupHistorySync() {
         if (!this.pmMessages || this.pmMessages.size === 0) return null;
         const data = {};
         for (const [convKey, messages] of this.pmMessages) {
             if (convKey.startsWith('group-') && messages.length > 0) {
-                data[convKey] = messages.slice(-200).map(m => ({
+                data[convKey] = messages.map(m => ({
                     id: m.id,
                     pubkey: m.pubkey,
                     content: m.content,
@@ -236,6 +292,13 @@ Object.assign(NYM.prototype, {
             }
         }
         return Object.keys(data).length > 0 ? data : null;
+    },
+
+    // YYYYMM bucket id for a unix-seconds timestamp, used to time-bucket
+    // group history so each gift wrap holds at most one month of messages.
+    _historyBucketId(tsSeconds) {
+        const d = new Date((tsSeconds || 0) * 1000);
+        return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
     },
 
     // Publish one data category as its own self-addressed gift wrap
@@ -270,7 +333,7 @@ Object.assign(NYM.prototype, {
     async _publishEncryptedSettings(settingsData) {
         // Don't overwrite stored settings until we've loaded them. On a fresh
         // device an early save (e.g. from an incoming group message) would
-        // otherwise clobber R2/relay with default state before the load lands.
+        // otherwise clobber D1/relay with default state before the load lands.
         if (!this._settingsHydrated) {
             this._settingsSavePending = true;
             return;
@@ -290,17 +353,31 @@ Object.assign(NYM.prototype, {
             try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
         }
 
-        // Group ephemeral keys → nymchat-keys. Skip groups we've left, drop
-        // stale member entries, and iteratively trim oldest `prev` keys when
-        // the payload exceeds the NIP-44 plaintext limit.
+        // Group ephemeral keys, published per group as nymchat-keys-<groupId> so
+        // one big group can't push the keys payload past the NIP-44 cap. Skips
+        // left groups and drops stale member entries.
         if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
-            try {
-                const ekData = {};
-                for (const [groupId, ek] of this.groupEphemeralKeys) {
-                    if (this.leftGroups && this.leftGroups.has(groupId)) continue;
+            // Trim the oldest quarter of one group's prev keys when oversized.
+            const trimEphemeralPrevKeys = (p) => {
+                const map = p.groupEphemeralKeys || {};
+                const entry = Object.values(map)[0];
+                const prev = entry?.self?.prev;
+                if (!Array.isArray(prev) || prev.length === 0) return false;
+                const dropCount = Math.max(1, Math.ceil(prev.length * 0.25));
+                entry.self.prev = prev.slice(0, prev.length - dropCount);
+                if (entry.self.prev.length === 0) delete entry.self.prev;
+                return true;
+            };
+            const trimMemberKeyTs = (p) => {
+                const entry = Object.values(p.groupEphemeralKeys || {})[0];
+                if (entry && entry.memberKeyTs) { delete entry.memberKeyTs; return true; }
+                return false;
+            };
+            for (const [groupId, ek] of this.groupEphemeralKeys) {
+                if (this.leftGroups && this.leftGroups.has(groupId)) continue;
+                try {
                     const entry = this._serializeEphemeralKeys(ek);
-                    // Drop members not in the current member list to keep the
-                    // payload bounded as groups churn.
+                    // Drop members not in the current member list to keep it bounded.
                     const group = this.groupConversations?.get(groupId);
                     if (group && Array.isArray(group.members) && entry.members) {
                         const memberSet = new Set(group.members);
@@ -311,63 +388,14 @@ Object.assign(NYM.prototype, {
                             }
                         }
                     }
-                    ekData[groupId] = entry;
-                }
-                if (Object.keys(ekData).length > 0) {
-                    const trimEphemeralPrevKeys = (p) => {
-                        const map = p.groupEphemeralKeys || {};
-                        let biggestKey = null;
-                        let biggestLen = 0;
-                        for (const [gid, entry] of Object.entries(map)) {
-                            const prev = entry?.self?.prev;
-                            if (Array.isArray(prev) && prev.length > biggestLen) {
-                                biggestLen = prev.length;
-                                biggestKey = gid;
-                            }
-                        }
-                        if (!biggestKey || biggestLen === 0) return false;
-                        const entry = map[biggestKey];
-                        // Drop the oldest quarter of prev keys from the biggest group
-                        const dropCount = Math.max(1, Math.ceil(biggestLen * 0.25));
-                        entry.self.prev = entry.self.prev.slice(0, biggestLen - dropCount);
-                        if (entry.self.prev.length === 0) delete entry.self.prev;
-                        return true;
-                    };
-                    const trimMemberKeyTs = (p) => {
-                        const map = p.groupEphemeralKeys || {};
-                        let dropped = false;
-                        for (const entry of Object.values(map)) {
-                            if (entry && entry.memberKeyTs) {
-                                delete entry.memberKeyTs;
-                                dropped = true;
-                            }
-                        }
-                        return dropped;
-                    };
-                    // Last-resort: drop the biggest group's entry entirely so the
-                    // remaining groups still sync.
-                    const dropBiggestGroup = (p) => {
-                        const map = p.groupEphemeralKeys || {};
-                        const keys = Object.keys(map);
-                        if (keys.length === 0) return false;
-                        let biggestKey = null;
-                        let biggestSize = -1;
-                        for (const gid of keys) {
-                            const size = JSON.stringify(map[gid] || {}).length;
-                            if (size > biggestSize) { biggestSize = size; biggestKey = gid; }
-                        }
-                        if (!biggestKey) return false;
-                        delete map[biggestKey];
-                        return true;
-                    };
                     await this._publishCategoryWrap(
-                        { groupEphemeralKeys: ekData },
-                        'nymchat-keys',
+                        { groupEphemeralKeys: { [groupId]: entry } },
+                        this._groupSyncDTag('nymchat-keys', groupId),
                         now,
-                        [trimEphemeralPrevKeys, trimMemberKeyTs, dropBiggestGroup]
+                        [trimEphemeralPrevKeys, trimMemberKeyTs]
                     );
-                }
-            } catch (_) { }
+                } catch (_) { }
+            }
         }
 
         // Group conversation metadata → nymchat-groups
@@ -388,27 +416,56 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Group message history → nymchat-history
+        // Group message history → nymchat-history-<groupId>-<YYYYMM>-<shard>.
+        // Messages are bucketed by month (stable, intrinsic key) and, within a
+        // month, packed into byte-bounded shards so even a very busy period
+        // (hundreds of messages/day) splits into multiple small wraps instead of
+        // overflowing one. A past month's shards become immutable once its
+        // messages stop changing, so the backlog accumulates durably in D1.
         try {
             const groupMessageHistory = this._buildGroupHistorySync();
             if (groupMessageHistory) {
-                // Drop the oldest 10% from whichever conversation is largest
+                // ~30 KB of message JSON per shard, well under the NIP-44 cap.
+                const SHARD_BUDGET = 30000;
+                // Last-resort guard if a single message is itself enormous.
                 const trimOldestHistory = (p) => {
                     const hist = p.groupMessageHistory || {};
-                    let biggestKey = null, biggestLen = 0;
-                    for (const [k, arr] of Object.entries(hist)) {
-                        if (Array.isArray(arr) && arr.length > biggestLen) {
-                            biggestLen = arr.length;
-                            biggestKey = k;
-                        }
-                    }
-                    if (!biggestKey || biggestLen <= 1) return false;
-                    const next = hist[biggestKey].slice(Math.max(1, Math.ceil(biggestLen * 0.1)));
-                    if (next.length === 0) delete hist[biggestKey];
-                    else hist[biggestKey] = next;
+                    const k = Object.keys(hist)[0];
+                    const arr = k && hist[k];
+                    if (!Array.isArray(arr) || arr.length <= 1) return false;
+                    const next = arr.slice(Math.max(1, Math.ceil(arr.length * 0.1)));
+                    if (next.length === 0) delete hist[k]; else hist[k] = next;
                     return true;
                 };
-                await this._publishCategoryWrap({ groupMessageHistory }, 'nymchat-history', now, [trimOldestHistory]);
+                for (const [convKey, arr] of Object.entries(groupMessageHistory)) {
+                    const groupId = convKey.startsWith('group-') ? convKey.slice(6) : convKey;
+                    const base = this._groupSyncDTag('nymchat-history', groupId);
+                    // Partition into month buckets.
+                    const buckets = {};
+                    for (const m of arr) {
+                        const b = this._historyBucketId(m.created_at);
+                        (buckets[b] || (buckets[b] = [])).push(m);
+                    }
+                    for (const [bucket, msgs] of Object.entries(buckets)) {
+                        // Sort ascending so shard boundaries are stable across saves.
+                        msgs.sort((a, b) => (a.created_at - b.created_at)
+                            || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+                        let shard = 0, shardMsgs = [], shardBytes = 0;
+                        const flush = async () => {
+                            if (!shardMsgs.length) return;
+                            await this._publishCategoryWrap(
+                                { groupMessageHistory: { [convKey]: shardMsgs } },
+                                `${base}-${bucket}-${shard}`, now, [trimOldestHistory]);
+                            shard++; shardMsgs = []; shardBytes = 0;
+                        };
+                        for (const m of msgs) {
+                            const sz = JSON.stringify(m).length + 4;
+                            if (shardBytes + sz > SHARD_BUDGET && shardMsgs.length) await flush();
+                            shardMsgs.push(m); shardBytes += sz;
+                        }
+                        await flush();
+                    }
+                }
             }
         } catch (_) { }
 
@@ -430,8 +487,13 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Core settings → nymchat-settings
-        await this._publishCategoryWrap(settingsData, 'nymchat-settings', now);
+        // Core settings split by settings-modal section → nymchat-settings-<section>
+        // so each gift wrap stays small. Every section payload is applied with
+        // per-key guards on load, so partitioning is loss-free.
+        const sections = this._splitSettingsBySection(settingsData);
+        for (const [section, payload] of Object.entries(sections)) {
+            await this._publishCategoryWrap(payload, `nymchat-settings-${section}`, now);
+        }
     },
 
     // Wrap an arbitrary settings payload as a NIP-59 self-addressed gift wrap
@@ -440,9 +502,9 @@ Object.assign(NYM.prototype, {
         const NT = window.NostrTools;
         const now = createdAt || Math.floor(Date.now() / 1000);
 
-        // Primary persistence: encrypted blob in R2. The Nostr gift wrap below
-        // is kept as a fallback copy that loads only when R2 can't be read.
-        this._saveSettingsBlobToR2(dTag, JSON.stringify(payload));
+        // Primary persistence: encrypted blob in D1. The Nostr gift wrap below
+        // is kept as a fallback copy that loads only when D1 can't be read.
+        this._saveSettingsBlobToD1(dTag, JSON.stringify(payload));
 
         const rumor = {
             kind: 30078,
@@ -462,7 +524,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const outerTags = [['p', this.pubkey], ['d', dTag]];
+        // 'k' marker lets the Nostr fallback REQ match every settings gift wrap
+        // (including dynamic per-group d-tags) with one filter.
+        const outerTags = [['p', this.pubkey], ['d', dTag], ['k', 'nym-sync']];
 
         if (this.privkey) {
             const ckSeal = NT.nip44.getConversationKey(this.privkey, this.pubkey);
@@ -561,7 +625,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async _saveSettingsBlobToR2(dTag, plaintext) {
+    async _saveSettingsBlobToD1(dTag, plaintext) {
         if (!this.pubkey) return false;
         try {
             // Skip the encrypt + POST when this category's plaintext is
@@ -586,10 +650,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Load encrypted settings categories from R2 and apply them. Returns true
+    // Load encrypted settings categories from D1 and apply them. Returns true
     // when core settings were applied; false (e.g. fetch error, no record) tells
     // the caller to fall back to the Nostr gift-wrap load.
-    async settingsLoadFromR2() {
+    async settingsLoadFromD1() {
         const pubkey = (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn())
             ? localStorage.getItem('nym_nostr_login_pubkey')
             : this.pubkey;
@@ -604,34 +668,46 @@ Object.assign(NYM.prototype, {
         const cats = data && data.categories;
         if (!cats || typeof cats !== 'object') return false;
 
-        for (const cat of ['nymchat-keys', 'nymchat-groups', 'nymchat-history', 'nymchat-notifications']) {
-            const entry = cats[cat];
+        // Decrypt every returned category. Core settings live in one or more
+        // nymchat-settings* sections; everything else (keys, history, groups,
+        // notifications — including per-group sub-categories) is applied
+        // additively. Apply non-core first so lists exist before core settings.
+        const coreSections = [];
+        let newestCoreTs = 0;
+        const entries = Object.entries(cats);
+        // Non-core additive categories
+        for (const [cat, entry] of entries) {
             if (!entry || !entry.blob) continue;
+            if (cat === 'nymchat-settings' || cat.startsWith('nymchat-settings-')) continue;
             try {
                 const plain = await this._decryptSettingsBlob(entry.blob);
                 if (plain) await applyNostrSettingsAdditive(JSON.parse(plain));
             } catch (_) { }
         }
-
-        const core = cats['nymchat-settings'];
-        if (!core || !core.blob) return false;
-        try {
-            const plain = await this._decryptSettingsBlob(core.blob);
-            if (!plain) return false;
-            const s = JSON.parse(plain);
-            await applyNostrSettingsAdditive(s);
-            await applyNostrSettings(s);
-            const ts = core.updatedAt ? Math.floor(core.updatedAt / 1000) : Math.floor(Date.now() / 1000);
-            if (ts > (this._lastSettingsSyncTs || 0)) {
-                this._lastSettingsSyncTs = ts;
-                try { localStorage.setItem('nym_last_settings_sync_ts', String(ts)); } catch (_) { }
-            }
-            // R2 had real settings and we applied them — safe to save from here.
-            this._markSettingsHydrated();
-            return true;
-        } catch (_) {
-            return false;
+        // Core settings sections
+        for (const [cat, entry] of entries) {
+            if (!entry || !entry.blob) continue;
+            if (cat !== 'nymchat-settings' && !cat.startsWith('nymchat-settings-')) continue;
+            try {
+                const plain = await this._decryptSettingsBlob(entry.blob);
+                if (!plain) continue;
+                const s = JSON.parse(plain);
+                await applyNostrSettingsAdditive(s);
+                await applyNostrSettings(s);
+                coreSections.push(s);
+                const ts = entry.updatedAt ? Math.floor(entry.updatedAt / 1000) : Math.floor(Date.now() / 1000);
+                if (ts > newestCoreTs) newestCoreTs = ts;
+            } catch (_) { }
         }
+
+        if (coreSections.length === 0) return false;
+        if (newestCoreTs > (this._lastSettingsSyncTs || 0)) {
+            this._lastSettingsSyncTs = newestCoreTs;
+            try { localStorage.setItem('nym_last_settings_sync_ts', String(newestCoreTs)); } catch (_) { }
+        }
+        // D1 had real settings and we applied them — safe to save from here.
+        this._markSettingsHydrated();
+        return true;
     },
 
     toggleNotificationsEnabled(enabled) {

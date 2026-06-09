@@ -589,10 +589,10 @@ Object.assign(NYM.prototype, {
 
             if (!this._giftWrapIsForMe(event)) return;
 
-            const fromR2 = !!(opts && opts.fromR2);
+            const fromD1 = !!(opts && opts.fromD1);
 
             // Early deduplication before expensive decryption
-            if (!fromR2 && this.processedPMEventIds.has(event.id)) {
+            if (!fromD1 && this.processedPMEventIds.has(event.id)) {
                 return;
             }
             this.processedPMEventIds.add(event.id);
@@ -720,21 +720,26 @@ Object.assign(NYM.prototype, {
             // Check if content is Bitchat format (v2: prefix)
             const isBitchatFormat = (content) => content.startsWith('v2:');
 
-            // Unwrap extension-only path (only works for standard NIP-44, not Bitchat)
-            const unwrapWithExtension = async () => {
-                // Extensions can't do raw ECDH, so Bitchat format won't work
+            // Remote-signer unwrap (NIP-07 extension or NIP-46): standard NIP-44
+            // only, not Bitchat (which needs raw ECDH only a local key can do).
+            const unwrapWithRemoteSigner = async (decryptFn) => {
                 if (isBitchatFormat(event.content)) {
                     throw new Error('Bitchat format requires local key');
                 }
-
-                const sealJson = await window.nostr.nip44.decrypt(event.pubkey, event.content);
+                const sealJson = await decryptFn(event.pubkey, event.content);
                 const seal = JSON.parse(sealJson);
-
-                const rumorJson = await window.nostr.nip44.decrypt(seal.pubkey, seal.content);
+                const rumorJson = await decryptFn(seal.pubkey, seal.content);
                 const rumor = JSON.parse(rumorJson);
-
                 return { seal, rumor };
             };
+
+            // Pick the active remote-signer NIP-44 decrypt (extension or NIP-46).
+            const _extDecrypt = window.nostr?.nip44?.decrypt
+                ? (peer, ct) => window.nostr.nip44.decrypt(peer, ct) : null;
+            const _n46Decrypt = (this.nostrLoginMethod === 'nip46'
+                && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected)
+                ? (peer, ct) => _nip46Decrypt(peer, ct) : null;
+            const remoteDecrypt = _extDecrypt || _n46Decrypt;
 
             let seal, rumor;
             if (this.privkey) {
@@ -745,17 +750,17 @@ Object.assign(NYM.prototype, {
                     () => window.NymCrypto.unwrapGiftWrap(event, candidates));
                 if (!res) return;
                 ({ seal, rumor } = res);
-            } else if (window.nostr?.nip44?.decrypt) {
+            } else if (remoteDecrypt) {
                 try {
-                    ({ seal, rumor } = await unwrapWithExtension());
-                } catch (_extErr) {
-                    // Extension decrypt failed — try ephemeral keys if we have local privkey
-                    // (extension can't use ephemeral keys, but we store them locally)
+                    ({ seal, rumor } = await unwrapWithRemoteSigner(remoteDecrypt));
+                } catch (_remErr) {
+                    // Remote signer can't use our locally-stored ephemeral keys, so
+                    // fall back to those for group messages addressed to them.
                     const ephResult = this._tryDecryptWithEphemeralKeys(event);
                     if (ephResult) {
                         ({ seal, rumor } = ephResult);
                     } else {
-                        throw _extErr;
+                        throw _remErr;
                     }
                 }
             } else {
@@ -820,20 +825,33 @@ Object.assign(NYM.prototype, {
                     try {
                         const s = JSON.parse(rumor.content);
                         const rumorTs = rumor.created_at || 0;
-                        const isCoreSettings = dTag === 'nymchat-settings';
+                        // Core settings now arrive split across nymchat-settings-<section>
+                        // gift wraps; treat every such section as core.
+                        const isCoreSettings = dTag === 'nymchat-settings' || dTag.startsWith('nymchat-settings-');
                         await applyNostrSettingsAdditive(s);
                         if (isCoreSettings) {
                             const subId = opts && opts.settingsLoadSubId;
                             const buf = subId && this._settingsLoadBuffer && this._settingsLoadBuffer.get(subId);
                             if (buf) {
-                                if (rumorTs > buf.newestTs) {
-                                    buf.newestTs = rumorTs;
-                                    buf.newestSettings = s;
+                                // Buffer the newest payload per d-tag so each section
+                                // applies once, after the initial REQ completes.
+                                if (!buf.byTag) buf.byTag = {};
+                                const prev = buf.byTag[dTag];
+                                if (!prev || rumorTs > prev.ts) buf.byTag[dTag] = { ts: rumorTs, settings: s };
+                                if (rumorTs > buf.newestTs) buf.newestTs = rumorTs;
+                            } else {
+                                // Live path: apply each section's newest payload once
+                                // (per d-tag) so a multi-section save all at the same
+                                // timestamp applies fully, without re-applying echoes.
+                                const appliedTs = (this._appliedSectionTs || (this._appliedSectionTs = {}));
+                                if (rumorTs > (appliedTs[dTag] || 0)) {
+                                    appliedTs[dTag] = rumorTs;
+                                    if (rumorTs > (this._lastSettingsSyncTs || 0)) {
+                                        this._lastSettingsSyncTs = rumorTs;
+                                        try { localStorage.setItem('nym_last_settings_sync_ts', String(rumorTs)); } catch (_) { }
+                                    }
+                                    await applyNostrSettings(s);
                                 }
-                            } else if (rumorTs > (this._lastSettingsSyncTs || 0)) {
-                                this._lastSettingsSyncTs = rumorTs;
-                                try { localStorage.setItem('nym_last_settings_sync_ts', String(rumorTs)); } catch (_) { }
-                                await applyNostrSettings(s);
                             }
                         }
                     } catch (_) { }
@@ -956,7 +974,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Archive only durable content; settings/signaling/typing/receipts already returned.
-            if (!fromR2) this._archivePMEvent(event);
+            if (!fromD1) this._archivePMEvent(event);
 
             // Fetch profile for any PM sender we don't have (await to get nickname)
             if (!isOwn && !this.users.has(senderPubkey)) {
@@ -1286,7 +1304,7 @@ Object.assign(NYM.prototype, {
         return `pm-${keys.join('-')}`;
     },
 
-    // Only durable (logged-in) identities mirror PMs to R2 for cross-device restore.
+    // Only durable (logged-in) identities mirror PMs to D1 for cross-device restore.
     _pmArchiveAllowed() {
         if (!this.pubkey) return false;
         if (!this._getApiHost || !this._getApiHost()) return false;
@@ -1294,7 +1312,7 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Queue a gift wrap (kind 1059, addressed to us) for batched upload to R2.
+    // Queue a gift wrap (kind 1059, addressed to us) for batched upload to D1.
     _archivePMEvent(event) {
         if (!event || typeof event.id !== 'string') return;
         if (!this._pmArchiveAllowed()) return;
@@ -1347,30 +1365,30 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    async pmRestoreFromR2() {
+    async pmRestoreFromD1() {
         if (!this._pmArchiveAllowed()) return;
-        this._pmR2OldestTs = null;
-        this._pmR2NoMore = false;
-        this._pmR2InitialPageSize = 200;
+        this._pmD1OldestTs = null;
+        this._pmD1NoMore = false;
+        this._pmD1InitialPageSize = 200;
         const maxPages = 5;
         let before = 0;
         for (let page = 0; page < maxPages; page++) {
-            const got = await this._pmRestoreR2Page({ before, limit: this._pmR2InitialPageSize });
-            if (!got || this._pmR2NoMore || !this._pmR2OldestTs) break;
-            before = this._pmR2OldestTs;
+            const got = await this._pmRestoreD1Page({ before, limit: this._pmD1InitialPageSize });
+            if (!got || this._pmD1NoMore || !this._pmD1OldestTs) break;
+            before = this._pmD1OldestTs;
         }
     },
 
-    async pmLoadOlderFromR2() {
-        if (this._pmR2NoMore) return false;
-        if (!this._pmR2OldestTs) return false;
-        return this._pmRestoreR2Page({ before: this._pmR2OldestTs, limit: 200 });
+    async pmLoadOlderFromD1() {
+        if (this._pmD1NoMore) return false;
+        if (!this._pmD1OldestTs) return false;
+        return this._pmRestoreD1Page({ before: this._pmD1OldestTs, limit: 200 });
     },
 
-    async _pmRestoreR2Page({ before = 0, limit = 200 } = {}) {
+    async _pmRestoreD1Page({ before = 0, limit = 200 } = {}) {
         if (!this._pmArchiveAllowed()) return false;
-        if (this._pmR2Loading) return false;
-        this._pmR2Loading = true;
+        if (this._pmD1Loading) return false;
+        this._pmD1Loading = true;
         const events = [];
         let hasMore = false;
         try {
@@ -1378,15 +1396,15 @@ Object.assign(NYM.prototype, {
             hasMore = resp.headers.get('X-Has-More') === '1';
             await this._readNdjsonStream(resp, (ev) => events.push(ev));
         } catch (_) {
-            this._pmR2Loading = false;
+            this._pmD1Loading = false;
             return false;
         }
-        if (!hasMore || events.length < limit) this._pmR2NoMore = true;
+        if (!hasMore || events.length < limit) this._pmD1NoMore = true;
         events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
         if (events.length) {
             const oldest = events[0].created_at || 0;
-            if (oldest && (!this._pmR2OldestTs || oldest < this._pmR2OldestTs)) {
-                this._pmR2OldestTs = oldest;
+            if (oldest && (!this._pmD1OldestTs || oldest < this._pmD1OldestTs)) {
+                this._pmD1OldestTs = oldest;
             }
         }
         if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
@@ -1398,19 +1416,19 @@ Object.assign(NYM.prototype, {
                 if (!ev || typeof ev.id !== 'string') continue;
                 if (this._pmArchivedIds.has(ev.id)) continue;
                 this._pmArchivedIds.add(ev.id);
-                try { await this.handleGiftWrapDM(ev, { fromR2: true }); } catch (_) { }
+                try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
             }
             if (end < events.length) await this._yieldToIdle();
         }
-        this._pmR2Loading = false;
+        this._pmD1Loading = false;
         return events.length > 0;
     },
 
     async pmLazyLoadOlderForConversation(conversationKey) {
         if (!conversationKey) return false;
-        if (this._pmR2NoMore || this._pmR2Loading) return false;
+        if (this._pmD1NoMore || this._pmD1Loading) return false;
         const beforeLen = this.getFilteredPMMessages(conversationKey).length;
-        const fetched = await this.pmLoadOlderFromR2();
+        const fetched = await this.pmLoadOlderFromD1();
         if (!fetched) return false;
         const afterLen = this.getFilteredPMMessages(conversationKey).length;
         const added = afterLen - beforeLen;
@@ -2356,6 +2374,13 @@ Object.assign(NYM.prototype, {
         _pmHeaderEl.innerHTML = pmHeaderHtml;
         _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
         delete _pmHeaderEl.dataset.groupHeaderSig;
+
+        // Click the header to open this contact's profile context menu.
+        const _pmHeaderRow = _pmHeaderEl.querySelector('.pm-header-row');
+        if (_pmHeaderRow) {
+            _pmHeaderRow.classList.add('header-clickable');
+            _pmHeaderRow.onclick = (e) => this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, true);
+        }
         const lockSvgPM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-pms-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
         if (this.isVerifiedBot(pubkey)) {
             document.getElementById('channelMeta').innerHTML =
@@ -2563,12 +2588,16 @@ Object.assign(NYM.prototype, {
                     this.sendDMToRelays(['EVENT', selfWrapped]);
                     this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 }
-            } else if (window.nostr?.nip44?.encrypt && window.nostr?.signEvent) {
-                // Extension path: create seal + wrap via extension
+            } else if (this._canSendGiftWraps()) {
+                // Extension or NIP-46 remote signer path: seal via signer, wrap locally.
                 const NT = window.NostrTools;
-                const sealContent = await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor));
+                const _useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
+                const enc44 = (peer, text) => _useExt ? window.nostr.nip44.encrypt(peer, text) : _nip46Encrypt(peer, text);
+                const signEvt = (u) => _useExt ? window.nostr.signEvent(u) : _nip46SignEvent(u);
+
+                const sealContent = await enc44(recipientPubkey, JSON.stringify(rumor));
                 const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
-                const seal = await window.nostr.signEvent(sealUnsigned);
+                const seal = await signEvt(sealUnsigned);
                 const ephSk = NT.generateSecretKey();
                 const ephPk = NT.getPublicKey(ephSk);
                 const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPubkey);
@@ -2581,9 +2610,9 @@ Object.assign(NYM.prototype, {
                 // Self-wrap so our own edit is retrievable from relays after reload
                 if (recipientPubkey !== this.pubkey) {
                     try {
-                        const selfSealContent = await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor));
+                        const selfSealContent = await enc44(this.pubkey, JSON.stringify(rumor));
                         const selfSealUnsigned = { kind: 13, content: selfSealContent, created_at: this.randomNow(), tags: [] };
-                        const selfSeal = await window.nostr.signEvent(selfSealUnsigned);
+                        const selfSeal = await signEvt(selfSealUnsigned);
                         const selfEphSk = NT.generateSecretKey();
                         const selfCkWrap = NT.nip44.getConversationKey(selfEphSk, this.pubkey);
                         const selfWrapContent = NT.nip44.encrypt(JSON.stringify(selfSeal), selfCkWrap);
@@ -2703,19 +2732,109 @@ Object.assign(NYM.prototype, {
 
     openNewPMModal() {
         this._newPMRecipients = [];
+        this._addMembersGroupId = null;
+        this._newGroupAvatar = null;
+        this._newGroupBanner = null;
         document.getElementById('pmRecipientChips').innerHTML = '';
         document.getElementById('pmRecipientInput').value = '';
         document.getElementById('pmSuggestions').style.display = 'none';
-        document.getElementById('pmGroupNameGroup').style.display = 'none';
         document.getElementById('pmGroupNameInput').value = '';
         document.getElementById('pmInitialMessage').value = '';
+        document.getElementById('pmInitialMessage').closest('.form-group').style.display = '';
         document.getElementById('pmStartBtn').disabled = true;
+        document.getElementById('pmStartBtn').textContent = 'Start';
+        this._resetNewGroupMediaPreview();
+        this._toggleNewGroupFields();
+        this._updateNewPMModalTitle();
         document.getElementById('newPMModal').classList.add('active');
         setTimeout(() => {
             document.getElementById('pmRecipientInput').focus();
             this._showRecentlySeenSuggestions('');
         }, 80);
         if (window.innerWidth <= 768) this.closeSidebar();
+    },
+
+    // Open the recipient picker in "add members to an existing group" mode.
+    openAddMembersModal(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this.openNewPMModal();
+        this._addMembersGroupId = groupId;
+        document.getElementById('pmInitialMessage').closest('.form-group').style.display = 'none';
+        document.getElementById('pmStartBtn').textContent = 'Add';
+        this._toggleNewGroupFields();
+        this._updateNewPMModalTitle();
+    },
+
+    // Group name + avatar/banner controls show only when composing a group
+    // (2+ recipients) and not when adding members to an existing group.
+    _toggleNewGroupFields() {
+        const groupMode = !this._addMembersGroupId && this._newPMRecipients.length >= 2;
+        document.getElementById('pmGroupNameGroup').style.display = groupMode ? 'block' : 'none';
+        document.getElementById('newGroupMediaGroup').style.display = groupMode ? 'block' : 'none';
+    },
+
+    // Title reflects the current mode: add-members, group (2+), or 1:1.
+    _updateNewPMModalTitle() {
+        const el = document.getElementById('newPMModalTitle');
+        if (!el) return;
+        if (this._addMembersGroupId) el.textContent = 'Add Members';
+        else el.textContent = this._newPMRecipients.length >= 2 ? 'New Group' : 'New Message';
+    },
+
+    _resetNewGroupMediaPreview() {
+        const banner = document.getElementById('newGroupBannerPreview');
+        const avatar = document.getElementById('newGroupAvatarPreview');
+        if (banner) {
+            banner.style.backgroundImage = '';
+            banner.classList.remove('has-image');
+        }
+        if (avatar) {
+            avatar.style.backgroundImage = '';
+            avatar.classList.remove('has-image');
+        }
+    },
+
+    // Pick + upload a group avatar/banner from the New Group modal, showing the
+    // modal-local progress bar. The resulting URL is stored until the group is
+    // created.
+    newGroupPickAvatar() { this._pickNewGroupMedia('avatar'); },
+    newGroupPickBanner() { this._pickNewGroupMedia('banner'); },
+
+    _pickNewGroupMedia(kind) {
+        const input = document.getElementById(kind === 'avatar' ? 'newGroupAvatarInput' : 'newGroupBannerInput');
+        if (!input) return;
+        input.onchange = async () => {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            try {
+                const { url } = await this._uploadFileWithProgress(
+                    file,
+                    kind === 'avatar' ? 'Uploading group avatar…' : 'Uploading group banner…',
+                    {
+                        container: document.getElementById('newGroupUploadProgress'),
+                        fill: document.getElementById('newGroupProgressFill'),
+                        labelEl: document.getElementById('newGroupUploadLabel')
+                    }
+                );
+                const proxied = this.getProxiedMediaUrl(url);
+                if (kind === 'avatar') {
+                    this._newGroupAvatar = url;
+                    const el = document.getElementById('newGroupAvatarPreview');
+                    if (el) { el.style.backgroundImage = `url("${proxied}")`; el.classList.add('has-image'); }
+                } else {
+                    this._newGroupBanner = url;
+                    const el = document.getElementById('newGroupBannerPreview');
+                    if (el) { el.style.backgroundImage = `url("${proxied}")`; el.classList.add('has-image'); }
+                }
+            } catch (error) {
+                if (!(error && error.name === 'AbortError')) {
+                    this.displaySystemMessage('Failed to upload image: ' + (error?.message || error));
+                }
+            }
+        };
+        input.click();
     },
 
     // Show recently seen users in the New Message modal (sorted most-recent first)
@@ -2855,8 +2974,8 @@ Object.assign(NYM.prototype, {
         this._renderNewPMRecipientChips();
         document.getElementById('pmRecipientInput').value = '';
         document.getElementById('pmSuggestions').style.display = 'none';
-        document.getElementById('pmGroupNameGroup').style.display =
-            this._newPMRecipients.length >= 2 ? 'block' : 'none';
+        this._toggleNewGroupFields();
+        this._updateNewPMModalTitle();
         document.getElementById('pmStartBtn').disabled = false;
         document.getElementById('pmRecipientInput').focus();
 
@@ -2877,8 +2996,8 @@ Object.assign(NYM.prototype, {
     removeNewPMRecipient(pubkey) {
         this._newPMRecipients = this._newPMRecipients.filter(r => r.pubkey !== pubkey);
         this._renderNewPMRecipientChips();
-        document.getElementById('pmGroupNameGroup').style.display =
-            this._newPMRecipients.length >= 2 ? 'block' : 'none';
+        this._toggleNewGroupFields();
+        this._updateNewPMModalTitle();
         document.getElementById('pmStartBtn').disabled = this._newPMRecipients.length === 0;
     },
 
@@ -2892,6 +3011,19 @@ Object.assign(NYM.prototype, {
 
     async startNewPMFromModal() {
         if (this._newPMRecipients.length === 0) return;
+
+        // Add-members mode: append the selected users to the existing group.
+        if (this._addMembersGroupId) {
+            const groupId = this._addMembersGroupId;
+            const recipients = [...this._newPMRecipients];
+            this._addMembersGroupId = null;
+            closeModal('newPMModal');
+            for (const r of recipients) {
+                await this.addMemberToGroup(groupId, r.pubkey);
+            }
+            return;
+        }
+
         const initialMsg = document.getElementById('pmInitialMessage').value.trim();
         closeModal('newPMModal');
 
@@ -2905,8 +3037,11 @@ Object.assign(NYM.prototype, {
             const groupName = document.getElementById('pmGroupNameInput').value.trim() ||
                 [this.getNymFromPubkey(this.pubkey), ...this._newPMRecipients.slice(0, 2).map(r => r.nym)].join(', ');
             const memberPubkeys = this._newPMRecipients.map(r => r.pubkey);
+            const groupOpts = { avatar: this._newGroupAvatar || null, banner: this._newGroupBanner || null };
+            this._newGroupAvatar = null;
+            this._newGroupBanner = null;
             this.displaySystemMessage(`Creating group "${groupName}"...`);
-            const groupId = await this.createGroup(groupName, memberPubkeys);
+            const groupId = await this.createGroup(groupName, memberPubkeys, groupOpts);
             if (groupId && initialMsg) {
                 this.sendGroupMessage(initialMsg, groupId);
             }

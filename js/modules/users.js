@@ -555,6 +555,32 @@ Object.assign(NYM.prototype, {
         throw lastErr || new Error('All Blossom servers failed');
     },
 
+    // Upload one file showing a progress bar
+    async _uploadFileWithProgress(file, labelText, opts = {}) {
+        const usingGlobalBar = !opts.container;
+        const container = opts.container || document.getElementById('uploadProgress');
+        const fill = opts.fill || document.getElementById('progressFill');
+        const labelEl = opts.labelEl || document.getElementById('uploadProgressLabel');
+        const abort = new AbortController();
+        if (usingGlobalBar) this._uploadAbort = abort;
+        try {
+            if (container) container.classList.add('active');
+            if (labelEl) labelEl.textContent = labelText || 'Uploading…';
+            if (fill) fill.style.width = '15%';
+            const arrayBuffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+            const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+            if (fill) fill.style.width = '55%';
+            const { url, server } = await this._uploadWithFallback(file, hashHex, abort.signal);
+            if (fill) fill.style.width = '100%';
+            this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
+            return { url, server, hashHex };
+        } finally {
+            if (this._uploadAbort === abort) this._uploadAbort = null;
+            setTimeout(() => { if (container) container.classList.remove('active'); }, 500);
+        }
+    },
+
     imetaTagsForContent(content) {
         if (!this.mediaFallbacks || !this.mediaFallbacks.size || !content) return [];
         const tags = [];
@@ -912,8 +938,9 @@ Object.assign(NYM.prototype, {
         const total = files.length;
         const uploaded = [];
 
-        this._uploadAbort = new AbortController();
-        const signal = this._uploadAbort.signal;
+        const abortCtrl = new AbortController();
+        this._uploadAbort = abortCtrl;
+        const signal = abortCtrl.signal;
 
         try {
             progress.classList.add('active');
@@ -968,7 +995,7 @@ Object.assign(NYM.prototype, {
                 this.displaySystemMessage('Failed to upload media: ' + (error && error.message ? error.message : error));
             }
         } finally {
-            this._uploadAbort = null;
+            if (this._uploadAbort === abortCtrl) this._uploadAbort = null;
             setTimeout(() => {
                 progress.classList.remove('active');
             }, 500);
