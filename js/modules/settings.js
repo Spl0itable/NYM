@@ -275,6 +275,7 @@ Object.assign(NYM.prototype, {
                 banner: group.banner || null,
                 avatar: group.avatar || null,
                 description: group.description || null,
+                metaUpdatedAt: group.metaUpdatedAt || 0,
                 modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
             };
         }

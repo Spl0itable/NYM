@@ -4147,7 +4147,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.463';
+const NYMCHAT_VERSION = 'v3.69.464';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5697,6 +5697,7 @@ async function applyNostrSettingsAdditive(s) {
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
                     if (group.description) g.description = group.description;
+                    if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
             } else {
@@ -5705,9 +5706,19 @@ async function applyNostrSettingsAdditive(s) {
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (!g.createdBy && group.createdBy) g.createdBy = group.createdBy;
-                    if (!g.banner && group.banner) g.banner = group.banner;
-                    if (!g.avatar && group.avatar) g.avatar = group.avatar;
-                    if (!g.description && group.description) g.description = group.description;
+                    const incomingMetaTs = group.metaUpdatedAt || 0;
+                    if (incomingMetaTs > (g.metaUpdatedAt || 0)) {
+                        if (group.name) g.name = group.name;
+                        g.banner = group.banner || null;
+                        g.avatar = group.avatar || null;
+                        g.description = group.description || null;
+                        g.metaUpdatedAt = incomingMetaTs;
+                        nym.updateGroupConversationUI(groupId);
+                    } else {
+                        if (!g.banner && group.banner) g.banner = group.banner;
+                        if (!g.avatar && group.avatar) g.avatar = group.avatar;
+                        if (!g.description && group.description) g.description = group.description;
+                    }
                     if (Array.isArray(group.mods)) {
                         const cur = new Set(Array.isArray(g.mods) ? g.mods : []);
                         for (const pk of group.mods) cur.add(pk);
@@ -6284,12 +6295,25 @@ async function applyNostrSettings(s) {
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
                     if (group.description) g.description = group.description;
+                    if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                 }
             } else {
                 const g = nym.groupConversations.get(groupId);
-                if (g && !g.banner && group.banner) g.banner = group.banner;
-                if (g && !g.avatar && group.avatar) g.avatar = group.avatar;
-                if (g && !g.description && group.description) g.description = group.description;
+                if (g) {
+                    const incomingMetaTs = group.metaUpdatedAt || 0;
+                    if (incomingMetaTs > (g.metaUpdatedAt || 0)) {
+                        if (group.name) g.name = group.name;
+                        g.banner = group.banner || null;
+                        g.avatar = group.avatar || null;
+                        g.description = group.description || null;
+                        g.metaUpdatedAt = incomingMetaTs;
+                        nym.updateGroupConversationUI(groupId);
+                    } else {
+                        if (!g.banner && group.banner) g.banner = group.banner;
+                        if (!g.avatar && group.avatar) g.avatar = group.avatar;
+                        if (!g.description && group.description) g.description = group.description;
+                    }
+                }
             }
         }
         nym._saveGroupConversations();

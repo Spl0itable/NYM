@@ -345,6 +345,7 @@ Object.assign(NYM.prototype, {
                     banner: group.banner || null,
                     avatar: group.avatar || null,
                     description: group.description || null,
+                    metaUpdatedAt: group.metaUpdatedAt || 0,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
                 };
             }
@@ -438,6 +439,7 @@ Object.assign(NYM.prototype, {
                         if (group.banner) g.banner = group.banner;
                         if (group.avatar) g.avatar = group.avatar;
                         if (group.description) g.description = group.description;
+                        if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                     }
                 }
@@ -597,6 +599,8 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (grp.createdBy !== senderPubkey) return; // owner-issued only
+            const metaTs = rumor.created_at || 0;
+            if (metaTs < (grp.metaUpdatedAt || 0)) return;
             const bannerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner');
             const avatarTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar');
             const descTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description');
@@ -615,6 +619,7 @@ Object.assign(NYM.prototype, {
                 if (newDesc !== (grp.description || null)) { grp.description = newDesc; changed = true; }
             }
             if (changed) {
+                grp.metaUpdatedAt = metaTs;
                 this.groupConversations.set(groupId, grp);
                 this.updateGroupConversationUI(groupId);
                 this._saveGroupConversations();
@@ -1179,13 +1184,13 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('User is already in this group');
             return false;
         }
-        // Banlist: only the owner can re-admit a banned user; mods/members cannot.
+        // Banlist: only the owner or a moderator can re-admit a banned user; regular members cannot.
         if (Array.isArray(group.banned) && group.banned.includes(newMemberPubkey)) {
-            if (!this._isGroupOwner(groupId, this.pubkey)) {
-                this.displaySystemMessage('That user was removed from this group and can only be re-invited by the group owner.');
+            if (!this._canModerate(groupId, this.pubkey)) {
+                this.displaySystemMessage('That user was removed from this group and can only be re-invited by the group owner or a moderator.');
                 return false;
             }
-            // Owner is re-admitting: clear the ban
+            // Owner/mod is re-admitting: clear the ban
             group.banned = group.banned.filter(pk => pk !== newMemberPubkey);
         }
 
@@ -1845,7 +1850,7 @@ Object.assign(NYM.prototype, {
         // ourselves would surface an empty control event as a blank message.
         const others = group.members.filter(pk => pk !== this.pubkey);
         if (!others.length) return;
-        const now = Math.floor(Date.now() / 1000);
+        const now = group.metaUpdatedAt || Math.floor(Date.now() / 1000);
         const tags = others.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
         tags.push(['subject', group.name]);
@@ -1869,6 +1874,7 @@ Object.assign(NYM.prototype, {
         const trimmed = (name || '').trim().slice(0, 100);
         if (!trimmed || trimmed === group.name) return;
         group.name = trimmed;
+        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
         this.groupConversations.set(groupId, group);
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
@@ -1889,6 +1895,7 @@ Object.assign(NYM.prototype, {
         const trimmed = (description || '').trim().slice(0, 500) || null;
         if (trimmed === (group.description || null)) return;
         group.description = trimmed;
+        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1902,6 +1909,7 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
         group[kind] = url;
+        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2522,7 +2530,6 @@ Object.assign(NYM.prototype, {
         this._groupCtxGroupId = groupId;
         this._groupCtxTransferMode = false;
         const iAmOwner = this._isGroupOwner(groupId, this.pubkey);
-        const iAmMod = this._isGroupMod(groupId, this.pubkey);
 
         const menu = document.getElementById('groupContextMenu');
         const overlay = document.getElementById('groupContextMenuOverlay');
@@ -2575,9 +2582,7 @@ Object.assign(NYM.prototype, {
         if (iAmOwner && group.members.length > 1) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxTransferOwner">${icon('<circle cx="8" cy="5" r="2.5"/><path d="M 2 14 C 2 10 4 9 8 9 C 12 9 14 10 14 14" stroke-linecap="round"/><path d="M 12 4 L 15 4 L 13.5 2 M 15 4 L 13.5 6" stroke-linecap="round" stroke-linejoin="round"/>')}Transfer Ownership</div>`);
         }
-        if (iAmOwner || iAmMod) {
-            actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
-        }
+        actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
         actions.push(`<div class="context-menu-item danger" data-action="groupCtxLeave">${icon('<path d="M 6 2 L 3 2 C 2.5 2 2 2.5 2 3 L 2 13 C 2 13.5 2.5 14 3 14 L 6 14" stroke-linecap="round" stroke-linejoin="round"/><path d="M 10 11 L 13 8 L 10 5" stroke-linecap="round" stroke-linejoin="round"/><line x1="13" y1="8" x2="6" y2="8" stroke-linecap="round"/>')}Leave Group</div>`);
         document.getElementById('grpCtxActions').innerHTML = actions.join('');
 
