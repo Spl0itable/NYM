@@ -228,6 +228,16 @@ Object.assign(NYM.prototype, {
         if (this._settingsSavePending) {
             this._settingsSavePending = false;
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        } else {
+            // Snapshot the just-loaded section content so a no-op background save
+            // won't re-publish it and trigger a self-echo that reloads the lists.
+            try {
+                const sections = this._splitSettingsBySection(this._buildSettingsPayload());
+                this._publishedSectionJson = {};
+                for (const [section, payload] of Object.entries(sections)) {
+                    this._publishedSectionJson[`nymchat-settings-${section}`] = JSON.stringify(payload);
+                }
+            } catch (_) { }
         }
         if (Array.isArray(this._onHydratedCbs)) {
             const cbs = this._onHydratedCbs;
@@ -516,12 +526,14 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Core settings split by settings-modal section → nymchat-settings-<section>
-        // so each gift wrap stays small. Every section payload is applied with
-        // per-key guards on load, so partitioning is loss-free.
         const sections = this._splitSettingsBySection(settingsData);
+        if (!this._publishedSectionJson) this._publishedSectionJson = {};
         for (const [section, payload] of Object.entries(sections)) {
-            await this._publishCategoryWrap(payload, `nymchat-settings-${section}`, now);
+            const dTag = `nymchat-settings-${section}`;
+            const json = JSON.stringify(payload);
+            if (this._publishedSectionJson[dTag] === json) continue;
+            this._publishedSectionJson[dTag] = json;
+            await this._publishCategoryWrap(payload, dTag, now);
         }
     },
 

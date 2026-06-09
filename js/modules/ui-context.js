@@ -1241,6 +1241,7 @@ Object.assign(NYM.prototype, {
 
         const showQuickReactPopup = (msgEl, e) => {
             msgLongPressFired = true;
+            window._nymMediaClickSuppressUntil = Date.now() + 800;
             const messageId = msgEl.dataset.messageId;
             if (!messageId) return;
             window.nymHapticTap && window.nymHapticTap();

@@ -2085,20 +2085,21 @@ Object.assign(NYM.prototype, {
         const userShopItems = this.getUserShopItems(pubkey);
         const supporterBadge = userShopItems?.supporter ?
             `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span></span>` : '';
+        const friendBadge = this.getFriendBadgeHtml(pubkey);
         const safePk = this._safePubkey(pubkey);
-        const authorSig = `${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterBadge}`;
+        const authorSig = `${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterBadge}|${friendBadge}`;
         document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {
             // Update only the author-clickable inner span to preserve bubble-time and click handler
             const clickable = el.querySelector('.author-clickable');
             if (clickable) {
                 if (clickable.dataset.authorSig === authorSig) return;
                 clickable.dataset.authorSig = authorSig;
-                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}`;
+                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendBadge}`;
             } else {
                 // Fallback: full rewrite with author-clickable wrapper for older messages missing it
                 const bubbleTime = el.querySelector('.bubble-time');
                 const bubbleHtml = bubbleTime ? bubbleTime.outerHTML : '';
-                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}</span><span class="nym-bracket">&gt;</span>`;
+                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span>`;
                 const newClickable = el.querySelector('.author-clickable');
                 if (newClickable) {
                     newClickable.style.cursor = 'pointer';

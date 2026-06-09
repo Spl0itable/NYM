@@ -1921,7 +1921,15 @@ Object.assign(NYM.prototype, {
         if (typeof this.updatePMNicknameFromProfile === 'function') {
             const known = this.users.get(pubkey);
             const profileName = known && known.nym ? this.parseNymFromDisplay(known.nym) : null;
-            if (profileName) this.updatePMNicknameFromProfile(pubkey, profileName);
+            if (profileName) {
+                this.updatePMNicknameFromProfile(pubkey, profileName);
+            } else {
+                // No cached profile name to drive a full author rewrite, so
+                // just add/remove the badge on existing public messages.
+                this._toggleFriendBadgeInMessages(pubkey);
+            }
+        } else {
+            this._toggleFriendBadgeInMessages(pubkey);
         }
 
         if (this.inPMMode && this.currentPM === pubkey) {
@@ -1942,6 +1950,22 @@ Object.assign(NYM.prototype, {
                 }
             }
         }
+    },
+
+    _toggleFriendBadgeInMessages(pubkey) {
+        const safePk = this._safePubkey(pubkey);
+        if (!safePk) return;
+        const isFriend = this.isFriend(pubkey);
+        document.querySelectorAll(`.message[data-pubkey="${safePk}"] .author-clickable`).forEach(clickable => {
+            const existing = clickable.querySelector('.friend-badge');
+            if (isFriend && !existing) {
+                clickable.insertAdjacentHTML('beforeend', this.getFriendBadgeHtml(pubkey));
+            } else if (!isFriend && existing) {
+                existing.remove();
+            }
+            // Drop the cached signature so a later profile rewrite isn't skipped
+            if (clickable.dataset.authorSig) delete clickable.dataset.authorSig;
+        });
     },
 
     updateFriendsList() {

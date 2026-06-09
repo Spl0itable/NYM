@@ -235,6 +235,7 @@ window.nymHapticTap = function (ms) {
         },
         'expandImageFromSrc':         function (_e, t) { nym().expandImage(t.src); },
         'expandImageFromData':        function (_e, t) {
+            if (Date.now() < (window._nymMediaClickSuppressUntil || 0)) return;
             const gallery = t.closest('.message-gallery');
             if (gallery) {
                 const imgs = Array.from(gallery.querySelectorAll('img'));
@@ -402,6 +403,7 @@ window.nymHapticTap = function (ms) {
         'showPollVoters':             function (e, t) { nym().showPollVotersModal(t.dataset.pollId, t, e); },
         'expandVideoFromContainer':   function (e, t) {
             e.stopPropagation();
+            if (Date.now() < (window._nymMediaClickSuppressUntil || 0)) return;
             var v = t.previousElementSibling;
             var source = v && v.querySelector && v.querySelector('source');
             var src = (v && v.dataset && v.dataset.blobSrc)
