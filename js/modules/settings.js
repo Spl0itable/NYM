@@ -179,6 +179,12 @@ Object.assign(NYM.prototype, {
         return s;
     },
 
+    // Opaque per-account D1 storage category so the row key can't be joined
+    // across members to reveal group membership.
+    async _d1Category(dTag) {
+        return `nymchat-${await this._syncOuterDTag('d1:' + dTag)}`;
+    },
+
     // On leaving a group, clear its ephemeral keys blob (security-relevant) but
     // keep the time-bucketed history wraps so the user's own backlog stays
     // durable and isn't dropped from D1.
@@ -652,19 +658,33 @@ Object.assign(NYM.prototype, {
     async _saveSettingsBlobToD1(dTag, plaintext) {
         if (!this.pubkey) return false;
         try {
+            // Embed the real category in the (encrypted) blob so the cleartext
+            // D1 column can be an opaque per-account hash.
+            let toStore = plaintext;
+            try {
+                const obj = JSON.parse(plaintext);
+                if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+                    obj.__cat = dTag;
+                    toStore = JSON.stringify(obj);
+                }
+            } catch (_) { }
+
+            const category = await this._d1Category(dTag);
             // Skip the encrypt + POST when this category's plaintext is
             // unchanged. NIP-44 ciphertext is non-deterministic, so we hash the
-            // plaintext, not the blob. The server enforces the same check.
-            const hash = await this._sha256Hex(plaintext);
-            const hashKey = `nym_settings_hash_${this.pubkey}_${dTag}`;
+            // plaintext, not the blob. Salt with the pubkey so an identical
+            // payload can't collide across accounts. The server enforces the
+            // same check.
+            const hash = await this._sha256Hex(`${this.pubkey}|${toStore}`);
+            const hashKey = `nym_settings_hash_${this.pubkey}_${category}`;
             if (hash) {
                 let lastHash = null;
                 try { lastHash = localStorage.getItem(hashKey); } catch (_) { }
                 if (lastHash === hash) return true; // unchanged — nothing to write
             }
-            const blob = await this._encryptSettingsBlob(plaintext);
+            const blob = await this._encryptSettingsBlob(toStore);
             if (!blob) return false;
-            const resp = await this._storageApiRequest('settings-set', { category: dTag, blob, contentHash: hash || undefined });
+            const resp = await this._storageApiRequest('settings-set', { category, blob, contentHash: hash || undefined });
             if (hash && resp) {
                 try { localStorage.setItem(hashKey, hash); } catch (_) { }
             }
@@ -692,47 +712,53 @@ Object.assign(NYM.prototype, {
         const cats = data && data.categories;
         if (!cats || typeof cats !== 'object') return false;
 
-        // Decrypt every returned category. Core settings live in one or more
-        // nymchat-settings* sections; everything else (keys, history, groups,
-        // notifications — including per-group sub-categories) is applied
-        // additively. Apply non-core first so lists exist before core settings.
-        const coreSections = [];
-        let newestCoreTs = 0;
-        const entries = Object.entries(cats);
-        // Non-core additive categories
-        for (const [cat, entry] of entries) {
+        // Decrypt each category once. The real category name rides inside the
+        // encrypted blob as __cat (the D1 column is an opaque per-account hash);
+        // legacy rows fall back to the cleartext column name.
+        const decoded = [];
+        for (const [cat, entry] of Object.entries(cats)) {
             if (!entry || !entry.blob) continue;
-            if (cat === 'nymchat-settings' || cat.startsWith('nymchat-settings-')) continue;
-            try {
-                const plain = await this._decryptSettingsBlob(entry.blob);
-                if (plain) await applyNostrSettingsAdditive(JSON.parse(plain));
-            } catch (_) { }
-        }
-        // Core settings: apply the legacy monolithic blob first (lowest
-        // precedence), then split sections oldest-to-newest, so the most
-        // recently saved values win regardless of the order D1 returns rows.
-        const coreEntries = entries.filter(([cat, e]) =>
-            e && e.blob && (cat === 'nymchat-settings' || cat.startsWith('nymchat-settings-')));
-        coreEntries.sort((a, b) => {
-            const legA = a[0] === 'nymchat-settings' ? 0 : 1;
-            const legB = b[0] === 'nymchat-settings' ? 0 : 1;
-            if (legA !== legB) return legA - legB;
-            return (a[1].updatedAt || 0) - (b[1].updatedAt || 0);
-        });
-        for (const [, entry] of coreEntries) {
             try {
                 const plain = await this._decryptSettingsBlob(entry.blob);
                 if (!plain) continue;
-                const s = JSON.parse(plain);
-                await applyNostrSettingsAdditive(s);
-                await applyNostrSettings(s);
-                coreSections.push(s);
-                const ts = entry.updatedAt ? Math.floor(entry.updatedAt / 1000) : Math.floor(Date.now() / 1000);
+                const payload = JSON.parse(plain);
+                if (!payload || typeof payload !== 'object') continue;
+                const realCat = typeof payload.__cat === 'string' ? payload.__cat : cat;
+                delete payload.__cat;
+                decoded.push({ realCat, payload, updatedAt: entry.updatedAt || 0 });
+            } catch (_) { }
+        }
+
+        const isCore = (c) => c === 'nymchat-settings' || c.startsWith('nymchat-settings-');
+
+        // Non-core additive categories first so lists exist before core settings.
+        for (const d of decoded) {
+            if (isCore(d.realCat)) continue;
+            try { await applyNostrSettingsAdditive(d.payload); } catch (_) { }
+        }
+
+        // Core settings: apply the legacy monolithic blob first (lowest
+        // precedence), then split sections oldest-to-newest, so the most
+        // recently saved values win regardless of the order D1 returns rows.
+        const coreEntries = decoded.filter(d => isCore(d.realCat));
+        coreEntries.sort((a, b) => {
+            const legA = a.realCat === 'nymchat-settings' ? 0 : 1;
+            const legB = b.realCat === 'nymchat-settings' ? 0 : 1;
+            if (legA !== legB) return legA - legB;
+            return (a.updatedAt || 0) - (b.updatedAt || 0);
+        });
+        let coreApplied = 0, newestCoreTs = 0;
+        for (const d of coreEntries) {
+            try {
+                await applyNostrSettingsAdditive(d.payload);
+                await applyNostrSettings(d.payload);
+                coreApplied++;
+                const ts = d.updatedAt ? Math.floor(d.updatedAt / 1000) : Math.floor(Date.now() / 1000);
                 if (ts > newestCoreTs) newestCoreTs = ts;
             } catch (_) { }
         }
 
-        if (coreSections.length === 0) return false;
+        if (coreApplied === 0) return false;
         if (newestCoreTs > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = newestCoreTs;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(newestCoreTs)); } catch (_) { }

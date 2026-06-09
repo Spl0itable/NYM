@@ -478,7 +478,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 // Categories are validated by prefix/charset so the client can split data into
 // many sub-category and per-group gift wraps (e.g. nymchat-settings-appearance,
 // nymchat-keys-<groupId>) without enumerating each one here.
-var SETTINGS_CATEGORY_RE = /^nymchat-[a-z0-9-]{1,80}$/i;
+// Bound covers the longest dynamic category: nymchat-history-<64-hex groupId>-<YYYYMM>-<shard>.
+var SETTINGS_CATEGORY_RE = /^nymchat-[a-z0-9-]{1,120}$/i;
 // Effectively unlimited: time-bucketed group history accumulates one category
 // per group per month, so the full backlog can span many thousands of wraps.
 // A very high ceiling is kept only as an abuse backstop.
