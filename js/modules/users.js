@@ -1779,7 +1779,7 @@ Object.assign(NYM.prototype, {
                         this.relayMessageHandlers.splice(index, 1);
                     }
                 });
-                try { this.sendToRelay(["CLOSE", subId]); } catch (_) { }
+                try { this.closeFewRelaysSub(subId); } catch (_) { }
                 if (!releasedSlot && typeof this._oneShotReqDone === 'function') {
                     releasedSlot = true;
                     this._oneShotReqDone();

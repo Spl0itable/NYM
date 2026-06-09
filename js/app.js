@@ -5574,7 +5574,9 @@ function nostrSettingsLoad() {
 
 async function applyNostrSettingsAdditive(s) {
     if (!s || typeof s !== 'object') return;
-    const _wasApplyingNSA = nym._applyingRemoteSettings;
+    // Depth counter, not save/restore: these applies run concurrently
+    // (one per incoming gift wrap), so a captured boolean would corrupt.
+    nym._applyRemoteDepth = (nym._applyRemoteDepth || 0) + 1;
     nym._applyingRemoteSettings = true;
     try {
 
@@ -5845,12 +5847,15 @@ async function applyNostrSettingsAdditive(s) {
             }
         } catch (_) { }
     }
-    } finally { nym._applyingRemoteSettings = _wasApplyingNSA; }
+    } finally {
+        nym._applyRemoteDepth = Math.max(0, (nym._applyRemoteDepth || 1) - 1);
+        nym._applyingRemoteSettings = nym._applyRemoteDepth > 0;
+    }
 }
 
 async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object') return;
-    const _wasApplyingNS = nym._applyingRemoteSettings;
+    nym._applyRemoteDepth = (nym._applyRemoteDepth || 0) + 1;
     nym._applyingRemoteSettings = true;
     try {
 
@@ -6469,7 +6474,10 @@ async function applyNostrSettings(s) {
     if (!nym._settingsSyncMessageShown) {
         nym._settingsSyncMessageShown = true;
     }
-    } finally { nym._applyingRemoteSettings = _wasApplyingNS; }
+    } finally {
+        nym._applyRemoteDepth = Math.max(0, (nym._applyRemoteDepth || 1) - 1);
+        nym._applyingRemoteSettings = nym._applyRemoteDepth > 0;
+    }
 }
 
 // Sign-out button
