@@ -257,15 +257,14 @@ Object.assign(NYM.prototype, {
     _flushSettingsLoadBuffer(subId) {
         const buf = (this._settingsLoadBuffer && subId) ? this._settingsLoadBuffer.get(subId) : null;
         if (buf) this._settingsLoadBuffer.delete(subId);
-        // Legacy monolithic first (lowest precedence), then sections oldest to
-        // newest, applied sequentially so the newest values win deterministically.
-        const tagged = (buf && buf.byTag) ? Object.entries(buf.byTag) : [];
-        tagged.sort((a, b) => {
-            const legA = a[0] === 'nymchat-settings' ? 0 : 1;
-            const legB = b[0] === 'nymchat-settings' ? 0 : 1;
-            if (legA !== legB) return legA - legB;
-            return (a[1].ts || 0) - (b[1].ts || 0);
-        });
+        // Section settings supersede the legacy monolithic blob: drop the
+        // monolithic nymchat-settings tag whenever any section tag is present,
+        // then apply oldest-to-newest so the newest values win.
+        let tagged = (buf && buf.byTag) ? Object.entries(buf.byTag) : [];
+        if (tagged.some(([t]) => t !== 'nymchat-settings')) {
+            tagged = tagged.filter(([t]) => t !== 'nymchat-settings');
+        }
+        tagged.sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
         if (tagged.length && buf.newestTs && buf.newestTs > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = buf.newestTs;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
@@ -733,18 +732,18 @@ Object.assign(NYM.prototype, {
             try { await applyNostrSettingsAdditive(d.payload); } catch (_) { }
         }
 
-        // Core settings: apply the legacy monolithic blob first (lowest
-        // precedence), then split sections oldest-to-newest, so the most
-        // recently saved values win regardless of the order D1 returns rows.
+        // Section settings supersede the legacy monolithic blob: apply sections
+        // oldest-to-newest so the most recently saved values win, and fall back
+        // to the monolithic nymchat-settings blob only when no sections exist.
         const coreEntries = decoded.filter(d => isCore(d.realCat));
-        coreEntries.sort((a, b) => {
-            const legA = a.realCat === 'nymchat-settings' ? 0 : 1;
-            const legB = b.realCat === 'nymchat-settings' ? 0 : 1;
-            if (legA !== legB) return legA - legB;
-            return (a.updatedAt || 0) - (b.updatedAt || 0);
-        });
+        const sectionEntries = coreEntries
+            .filter(d => d.realCat !== 'nymchat-settings')
+            .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0));
+        const toApply = sectionEntries.length
+            ? sectionEntries
+            : coreEntries.filter(d => d.realCat === 'nymchat-settings');
         let coreApplied = 0, newestCoreTs = 0;
-        for (const d of coreEntries) {
+        for (const d of toApply) {
             try {
                 await applyNostrSettingsAdditive(d.payload);
                 await applyNostrSettings(d.payload);
