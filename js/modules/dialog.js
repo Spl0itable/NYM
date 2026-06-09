@@ -15,6 +15,7 @@
                     '<div class="modal-body">' +
                         '<div class="app-dialog-message" id="appDialogMessage"></div>' +
                         '<input type="text" class="form-input app-dialog-input nm-hidden" id="appDialogInput" autocomplete="off">' +
+                        '<textarea class="form-textarea app-dialog-textarea nm-hidden" id="appDialogTextarea" rows="4"></textarea>' +
                     '</div>' +
                     '<div class="modal-actions">' +
                         '<button type="button" class="icon-btn" id="appDialogCancelBtn" data-action="appDialogCancel">Cancel</button>' +
@@ -26,10 +27,14 @@
         built = true;
     }
 
+    function promptField() {
+        return document.getElementById(pending && pending.multiline ? 'appDialogTextarea' : 'appDialogInput');
+    }
+
     function resultFor(ok) {
         if (!pending) return undefined;
         if (pending.alertOnly) return undefined;
-        if (pending.prompt) return ok ? (document.getElementById('appDialogInput').value || '') : null;
+        if (pending.prompt) return ok ? (promptField().value || '') : null;
         return ok;
     }
 
@@ -38,7 +43,7 @@
         if (e.key === 'Escape') {
             e.preventDefault();
             settle(resultFor(false));
-        } else if (e.key === 'Enter') {
+        } else if (e.key === 'Enter' && !pending.multiline) {
             e.preventDefault();
             settle(resultFor(true));
         }
@@ -58,18 +63,20 @@
         ensureModal();
         if (pending) settle(resultFor(false));
         return new Promise(function (resolve) {
-            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt };
+            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline };
             document.getElementById('appDialogTitle').textContent =
                 opts.title || (opts.alertOnly ? 'Notice' : 'Confirm');
             document.getElementById('appDialogMessage').textContent = opts.message || '';
             var input = document.getElementById('appDialogInput');
+            var textarea = document.getElementById('appDialogTextarea');
+            var field = opts.multiline ? textarea : input;
+            input.classList.add('nm-hidden');
+            textarea.classList.add('nm-hidden');
             if (opts.prompt) {
-                input.classList.remove('nm-hidden');
-                input.value = opts.defaultValue || '';
-                input.placeholder = opts.placeholder || '';
-                if (opts.maxLength) input.maxLength = opts.maxLength; else input.removeAttribute('maxlength');
-            } else {
-                input.classList.add('nm-hidden');
+                field.classList.remove('nm-hidden');
+                field.value = opts.defaultValue || '';
+                field.placeholder = opts.placeholder || '';
+                if (opts.maxLength) field.maxLength = opts.maxLength; else field.removeAttribute('maxlength');
             }
             var okBtn = document.getElementById('appDialogOkBtn');
             var cancelBtn = document.getElementById('appDialogCancelBtn');
@@ -80,7 +87,7 @@
             document.getElementById('appDialogModal').classList.add('active');
             document.addEventListener('keydown', onKey, true);
             setTimeout(function () {
-                try { (opts.prompt ? input : okBtn).focus(); if (opts.prompt) input.select(); } catch (_) {}
+                try { (opts.prompt ? field : okBtn).focus(); if (opts.prompt) field.select(); } catch (_) {}
             }, 30);
         });
     }
@@ -117,7 +124,8 @@
             cancelLabel: opts.cancelLabel,
             defaultValue: opts.defaultValue,
             placeholder: opts.placeholder,
-            maxLength: opts.maxLength
+            maxLength: opts.maxLength,
+            multiline: opts.multiline
         });
     };
 

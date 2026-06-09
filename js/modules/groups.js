@@ -1145,6 +1145,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Creating groups requires a logged-in account (not pseudonymous mode)');
             return null;
         }
+        name = this.sanitizeGroupName(name);
 
         // Always include self as a member
         const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
@@ -1895,6 +1896,16 @@ Object.assign(NYM.prototype, {
         await this._sendGiftWrapsAsync(others, rumor, null, groupId);
     },
 
+    // Single-line: strip control chars, collapse whitespace, cap at 2x nickname length.
+    sanitizeGroupName(name) {
+        return (name || '').replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+    },
+
+    // Multi-line: keep newlines, strip other control chars, cap at user-bio length.
+    sanitizeGroupDescription(description) {
+        return (description || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 150);
+    },
+
     // Owner-only: rename the group and propagate to members.
     async setGroupName(groupId, name) {
         const group = this.groupConversations.get(groupId);
@@ -1903,7 +1914,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Only the group owner can rename the group.');
             return;
         }
-        const trimmed = (name || '').trim().slice(0, 100);
+        const trimmed = this.sanitizeGroupName(name);
         if (!trimmed || trimmed === group.name) return;
         group.name = trimmed;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
@@ -1924,7 +1935,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Only the group owner can change the description.');
             return;
         }
-        const trimmed = (description || '').trim().slice(0, 500) || null;
+        const trimmed = this.sanitizeGroupDescription(description) || null;
         if (trimmed === (group.description || null)) return;
         group.description = trimmed;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
@@ -2735,7 +2746,7 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         this.closeGroupContextMenu();
         const name = await window.showAppPrompt('Enter a new group name:', {
-            title: 'Rename Group', okLabel: 'Save', defaultValue: group.name || '', maxLength: 100
+            title: 'Rename Group', okLabel: 'Save', defaultValue: group.name || '', maxLength: 40
         });
         if (name === null) return;
         await this.setGroupName(groupId, name);
@@ -2748,7 +2759,7 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         this.closeGroupContextMenu();
         const desc = await window.showAppPrompt('Enter a group description:', {
-            title: 'Group Description', okLabel: 'Save', defaultValue: group.description || '', maxLength: 500
+            title: 'Group Description', okLabel: 'Save', defaultValue: group.description || '', maxLength: 150, multiline: true
         });
         if (desc === null) return;
         await this.setGroupDescription(groupId, desc);

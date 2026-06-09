@@ -2198,6 +2198,17 @@ body.chat-bubbles .crypto-lock-irc {
     margin-top: 8px;
 }
 
+.app-dialog-input,
+.app-dialog-textarea {
+    margin-top: 12px;
+    width: 100%;
+}
+
+.app-dialog-textarea {
+    min-height: 110px;
+    resize: vertical;
+}
+
 .send-btn.danger {
     background: rgb(from var(--danger) r g b / 0.1);
     border-color: rgb(from var(--danger) r g b / 0.35);

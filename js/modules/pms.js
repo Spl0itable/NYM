@@ -3054,10 +3054,10 @@ Object.assign(NYM.prototype, {
                 setTimeout(() => this.sendPM(initialMsg, pubkey), 400);
             }
         } else {
-            const groupName = document.getElementById('pmGroupNameInput').value.trim() ||
+            const groupName = this.sanitizeGroupName(document.getElementById('pmGroupNameInput').value) ||
                 [this.getNymFromPubkey(this.pubkey), ...this._newPMRecipients.slice(0, 2).map(r => r.nym)].join(', ');
             const memberPubkeys = this._newPMRecipients.map(r => r.pubkey);
-            const groupDesc = (document.getElementById('newGroupDescInput').value || '').trim().slice(0, 500) || null;
+            const groupDesc = this.sanitizeGroupDescription(document.getElementById('newGroupDescInput').value) || null;
             const allowMemberInvites = document.getElementById('newGroupAllowInvites')?.checked !== false;
             const groupOpts = { avatar: this._newGroupAvatar || null, banner: this._newGroupBanner || null, description: groupDesc, allowMemberInvites };
             this._newGroupAvatar = null;
