@@ -39,6 +39,19 @@ Object.assign(NYM.prototype, {
         }, 900);
     },
 
+    _findReactionBadge(messageId, emoji) {
+        const badges = document.querySelectorAll(`.reaction-badge[data-message-id="${CSS.escape(messageId)}"]`);
+        for (let i = 0; i < badges.length; i++) {
+            if (badges[i].dataset.emoji === emoji) return badges[i];
+        }
+        return null;
+    },
+
+    _burstOnBadge(messageId, emoji, fallbackEl) {
+        const badge = this._findReactionBadge(messageId, emoji);
+        this._playReactionBurst(badge || fallbackEl, emoji);
+    },
+
     _playMessageDisintegration(messageEl) {
         if (!messageEl) return false;
         if (messageEl.dataset.disintegrating === '1') return true;
@@ -285,6 +298,7 @@ Object.assign(NYM.prototype, {
         }
 
         // Store pubkey with nym
+        const isNewReaction = !messageReactions.get(reactionContent).has(event.pubkey);
         messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
         this.persistReactions(messageId);
 
@@ -306,6 +320,14 @@ Object.assign(NYM.prototype, {
                     this.channelDOMCache.delete(key);
                     break;
                 }
+            }
+        }
+
+        // Burst on the badge for live reactions from other users, mirroring our own
+        if (reactionApplied && isNewReaction && event.pubkey !== this.pubkey) {
+            const reactionAge = Date.now() - (event.created_at * 1000);
+            if (reactionAge <= 10000) {
+                this._burstOnBadge(messageId, reactionContent, null);
             }
         }
 
@@ -970,12 +992,7 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             // Update UI immediately
             this.updateMessageReactions(messageId);
 
-            let newBadge = null;
-            const badges = messageEl.querySelectorAll('.reaction-badge');
-            for (let i = 0; i < badges.length; i++) {
-                if (badges[i].dataset.emoji === emoji) { newBadge = badges[i]; break; }
-            }
-            this._playReactionBurst(newBadge || messageEl, emoji);
+            this._burstOnBadge(messageId, emoji, messageEl);
 
             // Bump our own presence so status stays "online".
             this.recordOwnActivity();
