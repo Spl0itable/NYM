@@ -1049,6 +1049,8 @@ Object.assign(NYM.prototype, {
     // — callers should suppress the status indicator entirely in that case.
     getEffectiveUserStatus(pubkey) {
         if (!pubkey) return 'offline';
+        // Reflect our own hidden broadcast back to us so disabling clearly works.
+        if (pubkey === this.pubkey && this.settings && this.settings.showStatus === false) return 'hidden';
         // A friend who privately shared their real status with us (their
         // "Friends only" mode) overrides the 'hidden' they broadcast publicly.
         const sharesWithUs = this.friendsSharingStatus && this.friendsSharingStatus.has(pubkey);
