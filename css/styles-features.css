@@ -2241,13 +2241,15 @@ body:not(.chat-bubbles) .message.supporter-style {
 }
 
 .pm-header-avatar {
-    width: 18px;
-    height: 18px;
+    width: 26px;
+    height: 26px;
     margin-right: 4px;
     vertical-align: middle;
 }
 
 .pm-header-avatar .avatar-message {
+    width: 26px;
+    height: 26px;
     margin-right: 0;
 }
 
@@ -2322,8 +2324,8 @@ body.status-hidden .ctx-status-row,
 }
 
 .avatar-pm {
-    width: 18px;
-    height: 18px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
@@ -5216,12 +5218,13 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
 .group-ctx-role.mod { color: var(--secondary); background: rgba(255, 255, 255, 0.08); }
 
 .group-avatar-wrap {
-    width: 34px;
-    height: 22px;
+    width: 26px;
+    height: 26px;
     flex-shrink: 0;
-    margin-right: 6px;
+    margin-right: 4px;
     display: flex;
     align-items: center;
+    justify-content: center;
 }
 .group-custom-avatar {
     width: 26px;
@@ -5235,7 +5238,7 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
     display: inline-flex;
     align-items: center;
     vertical-align: middle;
-    margin-right: 5px;
+    margin-right: 4px;
 }
 .group-header-custom-avatar {
     width: 26px;

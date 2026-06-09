@@ -185,6 +185,7 @@ window.nymHapticTap = function (ms) {
             e.stopPropagation();
             nym().expandImage(t.src);
             nym().closeContextMenu();
+            if (typeof nym().closeGroupContextMenu === 'function') nym().closeGroupContextMenu();
         },
         'expandImageFromSrc':         function (_e, t) { nym().expandImage(t.src); },
         'expandImageFromData':        function (_e, t) {
@@ -450,6 +451,7 @@ window.nymHapticTap = function (ms) {
         // Group context menu (group header click)
         'closeGroupContextMenu':      function () { nym().closeGroupContextMenu(); },
         'groupCtxEditName':           function () { nym().groupCtxEditName(); },
+        'groupCtxEditDescription':    function () { nym().groupCtxEditDescription(); },
         'groupCtxChangeBanner':       function () { nym().groupCtxChangeBanner(); },
         'groupCtxRemoveBanner':       function () { nym().groupCtxRemoveBanner(); },
         'groupCtxChangeAvatar':       function () { nym().groupCtxChangeAvatar(); },

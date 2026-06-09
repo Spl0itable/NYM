@@ -237,12 +237,20 @@ Object.assign(NYM.prototype, {
     _flushSettingsLoadBuffer(subId) {
         const buf = (this._settingsLoadBuffer && subId) ? this._settingsLoadBuffer.get(subId) : null;
         if (buf) this._settingsLoadBuffer.delete(subId);
-        const sections = (buf && buf.byTag) ? Object.values(buf.byTag) : [];
-        if (sections.length && buf.newestTs && buf.newestTs > (this._lastSettingsSyncTs || 0)) {
+        // Legacy monolithic first (lowest precedence), then sections oldest to
+        // newest, applied sequentially so the newest values win deterministically.
+        const tagged = (buf && buf.byTag) ? Object.entries(buf.byTag) : [];
+        tagged.sort((a, b) => {
+            const legA = a[0] === 'nymchat-settings' ? 0 : 1;
+            const legB = b[0] === 'nymchat-settings' ? 0 : 1;
+            if (legA !== legB) return legA - legB;
+            return (a[1].ts || 0) - (b[1].ts || 0);
+        });
+        if (tagged.length && buf.newestTs && buf.newestTs > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = buf.newestTs;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(buf.newestTs)); } catch (_) { }
             if (typeof applyNostrSettings === 'function') {
-                Promise.resolve(Promise.all(sections.map(sec => applyNostrSettings(sec.settings))))
+                (async () => { for (const [, sec] of tagged) await applyNostrSettings(sec.settings); })()
                     .catch(() => { })
                     .finally(() => this._markSettingsHydrated());
                 return;
@@ -266,6 +274,7 @@ Object.assign(NYM.prototype, {
                 banned: Array.isArray(group.banned) ? group.banned : [],
                 banner: group.banner || null,
                 avatar: group.avatar || null,
+                description: group.description || null,
                 modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
             };
         }
@@ -684,10 +693,18 @@ Object.assign(NYM.prototype, {
                 if (plain) await applyNostrSettingsAdditive(JSON.parse(plain));
             } catch (_) { }
         }
-        // Core settings sections
-        for (const [cat, entry] of entries) {
-            if (!entry || !entry.blob) continue;
-            if (cat !== 'nymchat-settings' && !cat.startsWith('nymchat-settings-')) continue;
+        // Core settings: apply the legacy monolithic blob first (lowest
+        // precedence), then split sections oldest-to-newest, so the most
+        // recently saved values win regardless of the order D1 returns rows.
+        const coreEntries = entries.filter(([cat, e]) =>
+            e && e.blob && (cat === 'nymchat-settings' || cat.startsWith('nymchat-settings-')));
+        coreEntries.sort((a, b) => {
+            const legA = a[0] === 'nymchat-settings' ? 0 : 1;
+            const legB = b[0] === 'nymchat-settings' ? 0 : 1;
+            if (legA !== legB) return legA - legB;
+            return (a[1].updatedAt || 0) - (b[1].updatedAt || 0);
+        });
+        for (const [, entry] of coreEntries) {
             try {
                 const plain = await this._decryptSettingsBlob(entry.blob);
                 if (!plain) continue;

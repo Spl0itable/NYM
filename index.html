@@ -272,12 +272,13 @@
     <div class="context-menu" id="groupContextMenu">
         <button class="context-menu-close" id="grpCtxCloseBtn" data-action="closeGroupContextMenu" title="Close">&#x2715;</button>
         <div id="grpCtxDefaultBanner" class="context-menu-banner group-ctx-default-banner nm-hidden"></div>
-        <img id="grpCtxBannerImg" class="context-menu-banner nm-hidden" src="" alt="" decoding="async" loading="lazy">
+        <img id="grpCtxBannerImg" class="context-menu-banner nm-pointer nm-hidden" src="" alt="" decoding="async" loading="lazy" data-action="expandImageFromSrcStop">
         <div class="context-menu-avatar-header">
             <div class="group-ctx-icon" id="grpCtxIcon"></div>
             <div class="context-menu-avatar-nym" id="grpCtxName"></div>
             <div class="ctx-status-row" id="grpCtxMemberCount"></div>
         </div>
+        <div class="context-menu-bio" id="grpCtxBio"></div>
         <div class="context-menu-actions" id="grpCtxActions"></div>
         <div class="group-ctx-members-title" id="grpCtxMembersTitle"></div>
         <div class="group-ctx-members" id="grpCtxMembers"></div>
@@ -322,6 +323,10 @@
                     </div>
                     <input type="file" id="newGroupAvatarInput" accept="image/*" class="nm-hidden">
                     <input type="file" id="newGroupBannerInput" accept="image/*" class="nm-hidden">
+                </div>
+                <div class="form-group nm-hidden" id="newGroupDescGroup">
+                    <label class="form-label">Description <span class="nm-h-2">(optional)</span></label>
+                    <textarea class="form-textarea nm-h-4" id="newGroupDescInput" maxlength="500" placeholder="What's this group about?"></textarea>
                 </div>
                 <div class="form-group nm-h-3">
                     <label class="form-label">Message <span class="nm-h-2">(optional)</span></label>

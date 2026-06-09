@@ -844,7 +844,10 @@ Object.assign(NYM.prototype, {
                                 // (per d-tag) so a multi-section save all at the same
                                 // timestamp applies fully, without re-applying echoes.
                                 const appliedTs = (this._appliedSectionTs || (this._appliedSectionTs = {}));
-                                if (rumorTs > (appliedTs[dTag] || 0)) {
+                                // Per-d-tag newest, and never older than the newest core
+                                // settings already applied, so a stale legacy blob can't
+                                // clobber newer split sections.
+                                if (rumorTs > (appliedTs[dTag] || 0) && rumorTs >= (this._lastSettingsSyncTs || 0)) {
                                     appliedTs[dTag] = rumorTs;
                                     if (rumorTs > (this._lastSettingsSyncTs || 0)) {
                                         this._lastSettingsSyncTs = rumorTs;
@@ -2739,6 +2742,7 @@ Object.assign(NYM.prototype, {
         document.getElementById('pmRecipientInput').value = '';
         document.getElementById('pmSuggestions').style.display = 'none';
         document.getElementById('pmGroupNameInput').value = '';
+        document.getElementById('newGroupDescInput').value = '';
         document.getElementById('pmInitialMessage').value = '';
         document.getElementById('pmInitialMessage').closest('.form-group').style.display = '';
         document.getElementById('pmStartBtn').disabled = true;
@@ -2772,6 +2776,7 @@ Object.assign(NYM.prototype, {
         const groupMode = !this._addMembersGroupId && this._newPMRecipients.length >= 2;
         document.getElementById('pmGroupNameGroup').style.display = groupMode ? 'block' : 'none';
         document.getElementById('newGroupMediaGroup').style.display = groupMode ? 'block' : 'none';
+        document.getElementById('newGroupDescGroup').style.display = groupMode ? 'block' : 'none';
     },
 
     // Title reflects the current mode: add-members, group (2+), or 1:1.
@@ -3037,7 +3042,8 @@ Object.assign(NYM.prototype, {
             const groupName = document.getElementById('pmGroupNameInput').value.trim() ||
                 [this.getNymFromPubkey(this.pubkey), ...this._newPMRecipients.slice(0, 2).map(r => r.nym)].join(', ');
             const memberPubkeys = this._newPMRecipients.map(r => r.pubkey);
-            const groupOpts = { avatar: this._newGroupAvatar || null, banner: this._newGroupBanner || null };
+            const groupDesc = (document.getElementById('newGroupDescInput').value || '').trim().slice(0, 500) || null;
+            const groupOpts = { avatar: this._newGroupAvatar || null, banner: this._newGroupBanner || null, description: groupDesc };
             this._newGroupAvatar = null;
             this._newGroupBanner = null;
             this.displaySystemMessage(`Creating group "${groupName}"...`);

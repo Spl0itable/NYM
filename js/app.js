@@ -4147,7 +4147,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.462';
+const NYMCHAT_VERSION = 'v3.69.463';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5688,7 +5688,7 @@ async function applyNostrSettingsAdditive(s) {
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
             if (!nym.groupConversations.has(groupId)) {
-                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy, banner: group.banner, avatar: group.avatar });
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy, banner: group.banner, avatar: group.avatar, description: group.description });
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
@@ -5696,6 +5696,7 @@ async function applyNostrSettingsAdditive(s) {
                     g.banned = Array.isArray(group.banned) ? [...group.banned] : [];
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
+                    if (group.description) g.description = group.description;
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
             } else {
@@ -5706,6 +5707,7 @@ async function applyNostrSettingsAdditive(s) {
                     if (!g.createdBy && group.createdBy) g.createdBy = group.createdBy;
                     if (!g.banner && group.banner) g.banner = group.banner;
                     if (!g.avatar && group.avatar) g.avatar = group.avatar;
+                    if (!g.description && group.description) g.description = group.description;
                     if (Array.isArray(group.mods)) {
                         const cur = new Set(Array.isArray(g.mods) ? g.mods : []);
                         for (const pk of group.mods) cur.add(pk);
@@ -6275,17 +6277,19 @@ async function applyNostrSettings(s) {
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
             if (!nym.groupConversations.has(groupId)) {
-                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { banner: group.banner, avatar: group.avatar });
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { banner: group.banner, avatar: group.avatar, description: group.description });
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
+                    if (group.description) g.description = group.description;
                 }
             } else {
                 const g = nym.groupConversations.get(groupId);
                 if (g && !g.banner && group.banner) g.banner = group.banner;
                 if (g && !g.avatar && group.avatar) g.avatar = group.avatar;
+                if (g && !g.description && group.description) g.description = group.description;
             }
         }
         nym._saveGroupConversations();
