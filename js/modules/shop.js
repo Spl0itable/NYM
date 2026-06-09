@@ -341,7 +341,16 @@ Object.assign(NYM.prototype, {
             const badge = document.createElement('span');
             badge.className = 'supporter-badge';
             badge.innerHTML = `<span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span>`;
-            authorEl.insertBefore(badge, authorEl.lastChild);
+            // Keep the badge inside .author-clickable (before the friend badge)
+            // so author rewrites and renders all agree on its placement.
+            const clickable = authorEl.querySelector('.author-clickable');
+            if (clickable) {
+                const friendBadge = clickable.querySelector('.friend-badge');
+                if (friendBadge) clickable.insertBefore(badge, friendBadge);
+                else clickable.appendChild(badge);
+            } else {
+                authorEl.insertBefore(badge, authorEl.lastChild);
+            }
         }
         // Safeguard: never leave more than one verified/supporter badge behind
         // (a re-render race could otherwise stack two checkmarks).
@@ -887,6 +896,17 @@ TRANSFER TO PUBKEY
         const item = this.getShopItemById('supporter-badge');
         if (item && item.icon) return item.icon;
         return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" role="img" aria-label="Trophy"><title>Trophy</title><path d="M7 4h10v6a5 5 0 0 1-10 0V4z"/><path d="M7 6H4.5a2.5 2.5 0 0 0 2.5 2.5"/><path d="M17 6h2.5a2.5 2.5 0 0 1-2.5 2.5"/><path d="M12 15v3"/><path d="M9 21h6"/><path d="M10 18h4l.5 3h-5z"/></svg>';
+    },
+
+    // Canonical supporter-badge markup used by every render/rewrite path so
+    // the badge never changes shape (or vanishes) when an author is re-rendered.
+    _supporterBadgeMarkup() {
+        return `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`;
+    },
+
+    getSupporterBadgeHtml(pubkey) {
+        const items = this.getUserShopItems(pubkey);
+        return items && items.supporter ? this._supporterBadgeMarkup() : '';
     },
 
     // Edition numbers for the current user's owned items (id -> number),

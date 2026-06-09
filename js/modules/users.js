@@ -1922,23 +1922,8 @@ Object.assign(NYM.prototype, {
             this._toggleFriendBadgeInMessages(pubkey);
         }
 
-        if (this.inPMMode && this.currentPM === pubkey) {
-            const channelEl = document.getElementById('currentChannel');
-            if (channelEl) {
-                const known = this.users.get(pubkey);
-                const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.getNymFromPubkey(pubkey);
-                const suffix = this.getPubkeySuffix(pubkey);
-                const safePk = this._safePubkey(pubkey);
-                const flairHtml = this.getFlairForUser(pubkey);
-                const friendBadge = this.getFriendBadgeHtml(pubkey);
-                const sig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${friendBadge}`;
-                if (channelEl.dataset.pmHeaderSig !== sig) {
-                    const pmAvatarSrc = this.getAvatarUrl(pubkey);
-                    const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${friendBadge}`;
-                    channelEl.innerHTML = `${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}`;
-                    channelEl.dataset.pmHeaderSig = sig;
-                }
-            }
+        if (typeof this._renderPMHeaderForPubkey === 'function') {
+            this._renderPMHeaderForPubkey(pubkey);
         }
     },
 

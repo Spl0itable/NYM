@@ -2046,6 +2046,39 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Rebuild the PM conversation header for a pubkey with the full set of
+    // badges. Shared so every caller produces identical markup/signature and
+    // no badge (verified/flair/friend) is dropped on a partial refresh.
+    _renderPMHeaderForPubkey(pubkey, displayName) {
+        if (!(this.inPMMode && this.currentPM === pubkey)) return;
+        const channelEl = document.getElementById('currentChannel');
+        if (!channelEl) return;
+        const known = this.users.get(pubkey);
+        const baseNym = this.parseNymFromDisplay(displayName || (known ? known.nym : this.getNymFromPubkey(pubkey))).substring(0, 20);
+        const suffix = this.getPubkeySuffix(pubkey);
+        const safePk = this._safePubkey(pubkey);
+        const flairHtml = this.getFlairForUser(pubkey);
+        const friendBadge = this.getFriendBadgeHtml(pubkey);
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            : this.isVerifiedBot(pubkey)
+                ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                : '';
+        const pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
+        if (channelEl.dataset.pmHeaderSig === pmHeaderSig) return;
+        const pmAvatarSrc = this.getAvatarUrl(pubkey);
+        const lastSeenHtml = typeof this._pmLastSeenHtml === 'function' ? this._pmLastSeenHtml(pubkey) : '';
+        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
+        channelEl.innerHTML = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
+        channelEl.dataset.pmHeaderSig = pmHeaderSig;
+        // Preserve the header's click-to-open-profile behavior across rebuilds.
+        const row = channelEl.querySelector('.pm-header-row');
+        if (row) {
+            row.classList.add('header-clickable');
+            row.onclick = (e) => this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, true);
+        }
+    },
+
     updatePMNicknameFromProfile(pubkey, profileName) {
         if (!profileName) return;
         const clean = this.parseNymFromDisplay(profileName).substring(0, 20);
@@ -2082,10 +2115,16 @@ Object.assign(NYM.prototype, {
         const flairHtml = this.getFlairForUser(pubkey);
         const avatarSrc = this.getAvatarUrl(pubkey);
         const userShopItems = this.getUserShopItems(pubkey);
-        const supporterBadge = userShopItems?.supporter ?
-            `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span></span>` : '';
         const friendBadge = this.getFriendBadgeHtml(pubkey);
         const safePk = this._safePubkey(pubkey);
+        let supporterBadge = userShopItems?.supporter ? this._supporterBadgeMarkup() : '';
+        // Shop data loads asynchronously; if it isn't ready yet, don't strip a
+        // supporter badge that's already on screen — preserve it until the
+        // fetch resolves and can authoritatively confirm or remove it.
+        if (!userShopItems && safePk &&
+            document.querySelector(`.message[data-pubkey="${safePk}"] .author-clickable .supporter-badge`)) {
+            supporterBadge = this._supporterBadgeMarkup();
+        }
         const authorSig = `${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterBadge}|${friendBadge}`;
         document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {
             // Update only the author-clickable inner span to preserve bubble-time and click handler
@@ -2094,6 +2133,7 @@ Object.assign(NYM.prototype, {
                 if (clickable.dataset.authorSig === authorSig) return;
                 clickable.dataset.authorSig = authorSig;
                 clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendBadge}`;
+                if (typeof this._dedupeAuthorBadges === 'function') this._dedupeAuthorBadges(el);
             } else {
                 // Fallback: full rewrite with author-clickable wrapper for older messages missing it
                 const bubbleTime = el.querySelector('.bubble-time');
@@ -2118,24 +2158,7 @@ Object.assign(NYM.prototype, {
         });
 
         // Update PM header title if currently viewing this user's PM
-        if (this.inPMMode && this.currentPM === pubkey) {
-            const pmAvatarSrc = this.getAvatarUrl(pubkey);
-            const flairHtml = this.getFlairForUser(pubkey);
-            const friendBadge = this.getFriendBadgeHtml(pubkey);
-            const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-                ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
-                : this.isVerifiedBot(pubkey)
-                    ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
-                    : '';
-            const pmHeaderSig = `${safePk}|${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
-            const channelEl = document.getElementById('currentChannel');
-            if (channelEl && channelEl.dataset.pmHeaderSig !== pmHeaderSig) {
-                const displayNym = `<span class="pm-name-text">${this.escapeHtml(clean)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-                const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>`;
-                channelEl.innerHTML = pmHeaderHtml;
-                channelEl.dataset.pmHeaderSig = pmHeaderSig;
-            }
-        }
+        this._renderPMHeaderForPubkey(pubkey, clean);
 
         // Update any visible notification banner from this user
         const notif = document.querySelector(`.notification[data-pubkey="${pubkey}"] .notification-title`);
