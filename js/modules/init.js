@@ -81,7 +81,6 @@ Object.assign(NYM.prototype, {
             this.loadWallpaper();
             if (typeof this._hydrateUnreadCounts === 'function') this._hydrateUnreadCounts();
             applyMessageLayout(this.settings.chatLayout);
-            document.body.classList.toggle('status-hidden', this.settings.showStatus === false);
 
             // Hydrate channel/PM/profile/reaction caches from IndexedDB
             try {

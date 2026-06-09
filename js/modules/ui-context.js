@@ -448,7 +448,7 @@ Object.assign(NYM.prototype, {
             ctxStatusRow.textContent = '';
             const status = this.getEffectiveUserStatus(pubkey);
             const targetHidden = this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey);
-            if (this.settings.showStatus !== false && !targetHidden && status !== 'hidden') {
+            if (!targetHidden && status !== 'hidden') {
                 const dot = document.createElement('span');
                 dot.className = `user-status-dot status-${status}`;
                 const label = document.createElement('span');

@@ -5,7 +5,7 @@ Object.assign(NYM.prototype, {
     _pmHeaderAvatarHtml(pubkey, avatarSrc, safePk) {
         const status = (typeof this.getEffectiveUserStatus === 'function')
             ? this.getEffectiveUserStatus(pubkey) : 'offline';
-        const isHidden = (this.settings && this.settings.showStatus === false) || status === 'hidden';
+        const isHidden = status === 'hidden';
         const dotStatus = isHidden ? 'offline' : status;
         return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="user-status-dot status-${dotStatus}"></span></span>`;
     },
@@ -18,7 +18,7 @@ Object.assign(NYM.prototype, {
         if (dot) {
             const status = (typeof this.getEffectiveUserStatus === 'function')
                 ? this.getEffectiveUserStatus(this.currentPM) : 'offline';
-            const isHidden = (this.settings && this.settings.showStatus === false) || status === 'hidden';
+            const isHidden = status === 'hidden';
             const dotStatus = isHidden ? 'offline' : status;
             const wrap = dot.parentElement;
             if (wrap) wrap.classList.toggle('no-status', isHidden);
@@ -35,7 +35,6 @@ Object.assign(NYM.prototype, {
     // the contact is active/away, otherwise the relative time we last saw them.
     _pmLastSeenText(pubkey) {
         if (this.isVerifiedBot(pubkey)) return 'Always at your service';
-        if (this.settings && this.settings.showStatus === false) return '';
         const status = (typeof this.getEffectiveUserStatus === 'function')
             ? this.getEffectiveUserStatus(pubkey) : 'offline';
         if (status === 'hidden') return '';

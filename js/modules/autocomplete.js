@@ -212,10 +212,6 @@ Object.assign(NYM.prototype, {
         const currentChannelKey = this.currentGeohash || this.currentChannel;
         const scopePubkeys = this._mentionScopePubkeys();
 
-        // Get current time for activity check
-        const now = Date.now();
-        const activeThreshold = 300000; // 5 minutes
-
         // Collect users with effective status (matching sidebar logic)
         const channelActiveUsers = [];
         const channelAwayUsers = [];
@@ -235,13 +231,8 @@ Object.assign(NYM.prototype, {
             if (!this.blockedUsers.has(pubkey) &&
                 searchableNym.toLowerCase().includes(search.toLowerCase())) {
 
-                // Compute effective status matching sidebar logic
-                let effectiveStatus = user.status;
-                if (this.isVerifiedBot(pubkey)) {
-                    effectiveStatus = 'online';
-                } else if (now - user.lastSeen >= activeThreshold && effectiveStatus !== 'away') {
-                    effectiveStatus = 'offline';
-                }
+                // 'hidden' groups with offline so opted-out users aren't surfaced as active.
+                const effectiveStatus = this.getEffectiveUserStatus(pubkey);
 
                 const userEntry = {
                     nym: user.nym,
@@ -283,8 +274,7 @@ Object.assign(NYM.prototype, {
         ].slice(0, 8);
 
         if (allUsers.length > 0) {
-            const localStatusOff = this.settings && this.settings.showStatus === false;
-            this._reconcileAutocompleteItems(dropdown, allUsers, localStatusOff);
+            this._reconcileAutocompleteItems(dropdown, allUsers);
             dropdown.classList.add('active');
             this.autocompleteIndex = 0;
         } else {
@@ -315,7 +305,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Reconcile dropdown rows in place so avatars don't reload (flicker) on refresh
-    _reconcileAutocompleteItems(dropdown, allUsers, localStatusOff) {
+    _reconcileAutocompleteItems(dropdown, allUsers) {
         const existing = new Map();
         for (const el of dropdown.querySelectorAll('.autocomplete-item')) {
             if (el.dataset.acPubkey) existing.set(el.dataset.acPubkey, el);
@@ -323,8 +313,7 @@ Object.assign(NYM.prototype, {
         let prev = null;
         allUsers.forEach((user, index) => {
             const safePk = this._safePubkey(user.pubkey);
-            const statusHidden = localStatusOff ||
-                !!(this.statusHiddenUsers && this.statusHiddenUsers.has(user.pubkey));
+            const statusHidden = user.effectiveStatus === 'hidden';
             const avatarSrc = this.getAvatarUrl(user.pubkey);
 
             let item = existing.get(safePk);

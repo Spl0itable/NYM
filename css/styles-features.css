@@ -2302,8 +2302,6 @@ body:not(.chat-bubbles) .message.supporter-style {
     background: #6b7280;
 }
 
-body.status-hidden .user-status-dot,
-body.status-hidden .ctx-status-row,
 .user-avatar-wrap.no-status .user-status-dot {
     display: none !important;
 }

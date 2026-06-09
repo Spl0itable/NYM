@@ -1309,25 +1309,18 @@ Object.assign(NYM.prototype, {
                 this.isGibberishNym(user.nym)) return;
 
             const isRecent = (now - user.lastSeen) < ACTIVE_THRESHOLD;
-            let effectiveStatus = user.status;
-            if (verifiedBotSet.has(pubkey)) {
-                effectiveStatus = 'online';
-            } else if (!isRecent && effectiveStatus !== 'away') {
-                effectiveStatus = 'offline';
-            }
-            // Only count users who have sent a recent channel message (or verified bots).
-            // Away users without recent activity don't count as active.
-            if (effectiveStatus !== 'offline' && (isRecent || verifiedBotSet.has(pubkey))) {
+            // 'hidden' for opted-out users (unless a friend shares privately).
+            const effectiveStatus = this.getEffectiveUserStatus(pubkey);
+            const statusHidden = effectiveStatus === 'hidden';
+            if (!statusHidden && effectiveStatus !== 'offline' && (isRecent || verifiedBotSet.has(pubkey))) {
                 activeCount++;
             }
 
-            if (isRecent && user.channels && user.channels.has(currentChannelKey)) {
+            if (!statusHidden && isRecent && user.channels && user.channels.has(currentChannelKey)) {
                 channelUserCount++;
             }
 
             const sortKey = this.parseNymFromDisplay(user.nym).toLowerCase();
-            const localStatusOff = this.settings && this.settings.showStatus === false;
-            const statusHidden = localStatusOff || (this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey));
             candidates.push({ user, pubkey, effectiveStatus, sortKey, statusHidden });
         });
 
@@ -1380,19 +1373,14 @@ Object.assign(NYM.prototype, {
 
         this._updateUserListViewMoreButton(userListContent, totalCount, renderCap, isExpanded, EXPANDED_STEP);
 
-        const aggregateHidden = this.settings && this.settings.showStatus === false;
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
-            userListTitle.textContent = aggregateHidden
-                ? 'Nyms'
-                : `Nyms (${this.abbreviateNumber(activeCount)} online)`;
+            userListTitle.textContent = `Nyms (${this.abbreviateNumber(activeCount)} online)`;
         }
 
         if (!this.inPMMode) {
             const meta = document.getElementById('channelMeta');
-            if (meta) meta.textContent = aggregateHidden
-                ? ''
-                : `${this.abbreviateNumber(channelUserCount)} online nyms`;
+            if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} online nyms`;
         }
 
         this.refreshAutocompleteIfOpen();

@@ -3799,8 +3799,6 @@ async function saveSettings() {
         const prev = nym.settings.showStatus;
         nym.settings.showStatus = showStatus;
         localStorage.setItem('nym_show_status', String(showStatus));
-        // Only fully-disabled suppresses others' indicators in our own view.
-        document.body.classList.toggle('status-hidden', showStatus === false);
         if (prev !== showStatus) {
             if (typeof nym.publishStatusVisibility === 'function') nym.publishStatusVisibility();
             if (typeof nym.refreshPMHeaderStatus === 'function') nym.refreshPMHeaderStatus();
@@ -4174,7 +4172,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.471';
+const NYMCHAT_VERSION = 'v3.69.472';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5963,7 +5961,6 @@ async function applyNostrSettings(s) {
     if (typeof s.showStatus === 'boolean' || s.showStatus === 'friends') {
         nym.settings.showStatus = s.showStatus;
         localStorage.setItem('nym_show_status', String(s.showStatus));
-        document.body.classList.toggle('status-hidden', s.showStatus === false);
     }
 
     // Nick style
