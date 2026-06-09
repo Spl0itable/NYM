@@ -212,6 +212,7 @@ Object.assign(NYM.prototype, {
     // Debounced nostrSettingsSave — coalesces rapid state changes (e.g. incoming
     // group messages) into a single Nostr publish.  Delay defaults to 5 seconds.
     _debouncedNostrSettingsSave(delayMs = 5000) {
+        if (this._applyingRemoteSettings) return;
         if (this._settingsSaveTimer) clearTimeout(this._settingsSaveTimer);
         this._settingsSaveTimer = setTimeout(() => {
             this._settingsSaveTimer = null;

@@ -5465,6 +5465,7 @@ function startOnboardingWhenHydrated() {
 }
 
 async function nostrSettingsSave() {
+    if (nym && nym._applyingRemoteSettings) return;
     // For ephemeral users, delegate to the instance method which handles all modes
     if (!isNostrLoggedIn()) {
         if (nym && typeof nym.saveSyncedSettings === 'function') {
@@ -5573,6 +5574,9 @@ function nostrSettingsLoad() {
 
 async function applyNostrSettingsAdditive(s) {
     if (!s || typeof s !== 'object') return;
+    const _wasApplyingNSA = nym._applyingRemoteSettings;
+    nym._applyingRemoteSettings = true;
+    try {
 
     // Notification read-state
     if (typeof s.notificationLastReadTime === 'number'
@@ -5841,10 +5845,14 @@ async function applyNostrSettingsAdditive(s) {
             }
         } catch (_) { }
     }
+    } finally { nym._applyingRemoteSettings = _wasApplyingNSA; }
 }
 
 async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object') return;
+    const _wasApplyingNS = nym._applyingRemoteSettings;
+    nym._applyingRemoteSettings = true;
+    try {
 
     // Tutorial / bot-welcome state — only ever flip on, so once a user has
     // seen them on any device they stay suppressed everywhere.
@@ -6461,6 +6469,7 @@ async function applyNostrSettings(s) {
     if (!nym._settingsSyncMessageShown) {
         nym._settingsSyncMessageShown = true;
     }
+    } finally { nym._applyingRemoteSettings = _wasApplyingNS; }
 }
 
 // Sign-out button
