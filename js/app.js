@@ -5846,11 +5846,6 @@ async function applyNostrSettingsAdditive(s) {
 async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object') return;
 
-    if (nym._dirtySettings && nym._dirtySettings.size) {
-        s = Object.assign({}, s);
-        for (const k of nym._dirtySettings) delete s[k];
-    }
-
     // Tutorial / bot-welcome state — only ever flip on, so once a user has
     // seen them on any device they stay suppressed everywhere.
     if (s.tutorialSeen === true) {
@@ -6227,7 +6222,7 @@ async function applyNostrSettings(s) {
             if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
         }
         nym.recentEmojis = merged.slice(0, 24);
-        nym.saveRecentEmojis();
+        try { localStorage.setItem('nym_recent_emojis', JSON.stringify(nym.recentEmojis)); } catch (_) { }
     }
 
     // Sidebar section order
@@ -6466,8 +6461,6 @@ async function applyNostrSettings(s) {
     if (!nym._settingsSyncMessageShown) {
         nym._settingsSyncMessageShown = true;
     }
-
-    if (typeof nym._captureSettingsBaseline === 'function') nym._captureSettingsBaseline();
 }
 
 // Sign-out button
