@@ -145,10 +145,19 @@ Object.assign(NYM.prototype, {
                 content: JSON.stringify({ ...payload, nym: this.nym }),
                 pubkey: this.pubkey
             };
-            await this._sendGiftWrapsAsync([targetPubkey], rumor, null);
+            const groupId = this._callSignalGroupId(payload && payload.callId);
+            await this._sendGiftWrapsAsync([targetPubkey], rumor, null, groupId);
         } catch (e) {
             console.error('Call signal error:', e);
         }
+    },
+
+    _callSignalGroupId(callId) {
+        const ac = this.activeCall;
+        if (ac && ac.isGroup && ac.groupId && (!callId || ac.callId === callId)) return ac.groupId;
+        const inc = this.incomingCall;
+        if (inc && inc.isGroup && inc.groupId && (!callId || inc.callId === callId)) return inc.groupId;
+        return null;
     },
 
     _broadcastCallSignal(targets, payload) {

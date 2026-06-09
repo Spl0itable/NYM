@@ -3006,6 +3006,24 @@ body.status-hidden .ctx-status-row,
     opacity: 1;
 }
 
+.input-char-count {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.6;
+    text-align: right;
+}
+
+.input-char-count.warning {
+    color: #f59e0b;
+    opacity: 1;
+}
+
+.input-char-count.limit {
+    color: var(--danger);
+    opacity: 1;
+}
+
 .context-menu.has-banner {
     min-width: auto;
 }

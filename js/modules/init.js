@@ -97,6 +97,8 @@ Object.assign(NYM.prototype, {
             // Clean up old localStorage format
             this.cleanupOldLightningAddress();
 
+            if (typeof this._captureSettingsBaseline === 'function') this._captureSettingsBaseline();
+
             // Network change detection
             this.setupNetworkMonitoring();
 

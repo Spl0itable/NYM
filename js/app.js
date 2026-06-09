@@ -609,6 +609,7 @@ class NYM {
         this.groupConversations = new Map();
         this.groupEphemeralKeys = new Map();
         this.EPHEMERAL_PREV_KEYS_MAX = 30;
+        this.GROUP_META_PIGGYBACK_WINDOW = 7 * 24 * 60 * 60;
         this._ephemeralSubIds = [];
         this._dmCatchupReady = Promise.resolve();
         this.currentGroup = null;
@@ -2505,6 +2506,7 @@ function editNick() {
     // Only show the base nym (without #suffix) in the editable field
     const baseNym = nym.parseNymFromDisplay(nym.nym);
     document.getElementById('newNickInput').value = baseNym;
+    updateFieldCharCount(document.getElementById('newNickInput'));
     // Show the non-editable suffix next to the input
     const suffix = nym.getPubkeySuffix(nym.pubkey);
     const suffixEl = document.getElementById('nickSuffixDisplay');
@@ -2611,6 +2613,20 @@ function updateBioCharCount() {
     }
 }
 
+function updateFieldCharCount(input) {
+    if (!input) return;
+    const counter = document.getElementById(input.dataset.charCount);
+    if (!counter) return;
+    const max = parseInt(input.getAttribute('maxlength') || '0', 10);
+    const len = input.value.length;
+    counter.textContent = max ? `${len}/${max}` : String(len);
+    counter.classList.remove('warning', 'limit');
+    if (max) {
+        if (len >= max) counter.classList.add('limit');
+        else if (len >= max * 0.8) counter.classList.add('warning');
+    }
+}
+
 async function changeNick() {
     const newNick = document.getElementById('newNickInput').value.trim();
     // Strip any # suffix the user may have typed - the suffix is derived from pubkey
@@ -2684,6 +2700,7 @@ function randomizeNick() {
     // Extract base name without #suffix
     const baseName = nym.stripPubkeySuffix(generated);
     document.getElementById('newNickInput').value = baseName;
+    updateFieldCharCount(document.getElementById('newNickInput'));
 
     // Randomize the generated avatar preview if no custom avatar is set
     if (!nym.userAvatars.has(nym.pubkey)) {
@@ -4157,7 +4174,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.469';
+const NYMCHAT_VERSION = 'v3.69.470';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -5829,6 +5846,11 @@ async function applyNostrSettingsAdditive(s) {
 async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object') return;
 
+    if (nym._dirtySettings && nym._dirtySettings.size) {
+        s = Object.assign({}, s);
+        for (const k of nym._dirtySettings) delete s[k];
+    }
+
     // Tutorial / bot-welcome state — only ever flip on, so once a user has
     // seen them on any device they stay suppressed everywhere.
     if (s.tutorialSeen === true) {
@@ -6444,6 +6466,8 @@ async function applyNostrSettings(s) {
     if (!nym._settingsSyncMessageShown) {
         nym._settingsSyncMessageShown = true;
     }
+
+    if (typeof nym._captureSettingsBaseline === 'function') nym._captureSettingsBaseline();
 }
 
 // Sign-out button

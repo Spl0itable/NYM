@@ -607,41 +607,7 @@ Object.assign(NYM.prototype, {
 
         // group-metadata: owner changed the group name, banner, and/or avatar.
         if (typeTag && typeTag[1] === 'group-metadata') {
-            const grp = this.groupConversations.get(groupId);
-            if (!grp) return;
-            if (grp.createdBy !== senderPubkey) return; // owner-issued only
-            const metaTs = rumor.created_at || 0;
-            if (metaTs < (grp.metaUpdatedAt || 0)) return;
-            const bannerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner');
-            const avatarTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar');
-            const descTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description');
-            const allowInvTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'allow_invites');
-            let changed = false;
-            if (subjectTag && subjectTag[1] && subjectTag[1] !== grp.name) { grp.name = subjectTag[1]; changed = true; }
-            if (bannerTag) {
-                const newBanner = bannerTag[1] || null;
-                if (newBanner !== (grp.banner || null)) { grp.banner = newBanner; changed = true; }
-            }
-            if (avatarTag) {
-                const newAvatar = avatarTag[1] || null;
-                if (newAvatar !== (grp.avatar || null)) { grp.avatar = newAvatar; changed = true; }
-            }
-            if (descTag) {
-                const newDesc = descTag[1] || null;
-                if (newDesc !== (grp.description || null)) { grp.description = newDesc; changed = true; }
-            }
-            if (allowInvTag) {
-                const newAllow = allowInvTag[1] !== '0';
-                if (newAllow !== (grp.allowMemberInvites !== false)) { grp.allowMemberInvites = newAllow; changed = true; }
-            }
-            if (changed) {
-                grp.metaUpdatedAt = metaTs;
-                this.groupConversations.set(groupId, grp);
-                this.updateGroupConversationUI(groupId);
-                this._saveGroupConversations();
-                this._debouncedNostrSettingsSave();
-                if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
-            }
+            this._applyGroupMetadataTags(rumor, groupId, senderPubkey, rumor.created_at || 0);
             return;
         }
 
@@ -1086,6 +1052,10 @@ Object.assign(NYM.prototype, {
 
         // Update or create group conversation entry
         this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
+        const metaTsTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'meta_ts' && t[1]);
+        if (metaTsTag) {
+            this._applyGroupMetadataTags(rumor, groupId, senderPubkey, parseInt(metaTsTag[1], 10) || 0);
+        }
         this._saveGroupConversations();
         this._debouncedNostrSettingsSave(15000); // longer delay for routine messages
         this.moveGroupToTop(groupId, tsSec * 1000);
@@ -1464,6 +1434,7 @@ Object.assign(NYM.prototype, {
         tags.push(['g', groupId]);
         tags.push(['subject', group.name]);
         tags.push(['x', nymMessageId]);
+        this._attachGroupMetaTags(tags, group, groupId);
 
         // Ephemeral key rotation: generate next key and advertise it inside the rumor.
         // Recipients will encrypt future messages to this key instead of our real pubkey.
@@ -1894,6 +1865,58 @@ Object.assign(NYM.prototype, {
         tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content: '', pubkey: this.pubkey };
         await this._sendGiftWrapsAsync(others, rumor, null, groupId);
+    },
+
+    _attachGroupMetaTags(tags, group, groupId) {
+        if (!group || !this._isGroupOwner(groupId, this.pubkey)) return;
+        const metaTs = group.metaUpdatedAt || 0;
+        if (!metaTs) return;
+        if (Math.floor(Date.now() / 1000) - metaTs > this.GROUP_META_PIGGYBACK_WINDOW) return;
+        tags.push(['meta_ts', String(metaTs)]);
+        tags.push(['banner', group.banner || '']);
+        tags.push(['avatar', group.avatar || '']);
+        tags.push(['description', group.description || '']);
+        tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
+    },
+
+    _applyGroupMetadataTags(rumor, groupId, senderPubkey, metaTs) {
+        const grp = this.groupConversations.get(groupId);
+        if (!grp) return false;
+        if (grp.createdBy !== senderPubkey) return false; // owner-issued only
+        if (!metaTs || metaTs < (grp.metaUpdatedAt || 0)) return false;
+        const tag = (k) => (rumor.tags || []).find(t => Array.isArray(t) && t[0] === k);
+        const subjectTag = tag('subject');
+        const bannerTag = tag('banner');
+        const avatarTag = tag('avatar');
+        const descTag = tag('description');
+        const allowInvTag = tag('allow_invites');
+        let changed = false;
+        if (subjectTag && subjectTag[1] && subjectTag[1] !== grp.name) { grp.name = subjectTag[1]; changed = true; }
+        if (bannerTag) {
+            const newBanner = bannerTag[1] || null;
+            if (newBanner !== (grp.banner || null)) { grp.banner = newBanner; changed = true; }
+        }
+        if (avatarTag) {
+            const newAvatar = avatarTag[1] || null;
+            if (newAvatar !== (grp.avatar || null)) { grp.avatar = newAvatar; changed = true; }
+        }
+        if (descTag) {
+            const newDesc = descTag[1] || null;
+            if (newDesc !== (grp.description || null)) { grp.description = newDesc; changed = true; }
+        }
+        if (allowInvTag) {
+            const newAllow = allowInvTag[1] !== '0';
+            if (newAllow !== (grp.allowMemberInvites !== false)) { grp.allowMemberInvites = newAllow; changed = true; }
+        }
+        if (changed) {
+            grp.metaUpdatedAt = metaTs;
+            this.groupConversations.set(groupId, grp);
+            this.updateGroupConversationUI(groupId);
+            this._saveGroupConversations();
+            this._debouncedNostrSettingsSave();
+            if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
+        }
+        return changed;
     },
 
     // Single-line: strip control chars, collapse whitespace, cap at 2x nickname length.

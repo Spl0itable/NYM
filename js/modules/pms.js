@@ -2755,6 +2755,10 @@ Object.assign(NYM.prototype, {
         document.getElementById('pmSuggestions').style.display = 'none';
         document.getElementById('pmGroupNameInput').value = '';
         document.getElementById('newGroupDescInput').value = '';
+        if (typeof updateFieldCharCount === 'function') {
+            updateFieldCharCount(document.getElementById('pmGroupNameInput'));
+            updateFieldCharCount(document.getElementById('newGroupDescInput'));
+        }
         const allowInvitesEl = document.getElementById('newGroupAllowInvites');
         if (allowInvitesEl) allowInvitesEl.checked = true;
         document.getElementById('pmInitialMessage').value = '';

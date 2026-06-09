@@ -333,6 +333,7 @@ window.nymHapticTap = function (ms) {
         'triggerNickEditBannerUpload':function () { var i = byId('nickEditBannerInput'); if (i) i.click(); },
         'removeNickEditBanner':       function () { window.removeNickEditBanner(); },
         'updateBioCharCount':         function () { window.updateBioCharCount(); },
+        'updateFieldCharCount':       function (_e, t) { window.updateFieldCharCount(t); },
         'toggleRevealPrivkey':        function () { window.toggleRevealPrivkey(); },
         'toggleNsecVisibility':       function () { window.toggleNsecVisibility(); },
         'copyRevealedNsec':           function () { window.copyRevealedNsec(); },

@@ -305,10 +305,11 @@
                 </div>
                 <div class="form-group nm-hidden" id="pmGroupNameGroup">
                     <label class="form-label">Group Name <span class="nm-h-2">(optional)</span></label>
-                    <input type="text" class="form-input" id="pmGroupNameInput" maxlength="40" placeholder="Enter a group name...">
+                    <input type="text" class="form-input" id="pmGroupNameInput" maxlength="40" placeholder="Enter a group name..." data-on-input="updateFieldCharCount" data-char-count="pmGroupNameCharCount">
+                    <div class="input-char-count" id="pmGroupNameCharCount">0/40</div>
                 </div>
                 <div class="form-group nm-hidden" id="newGroupMediaGroup">
-                    <label class="form-label">Group Avatar/Banner <span class="nm-h-2">(optional)</span></label>
+                    <label class="form-label">Group Avatar & Banner <span class="nm-h-2">(optional)</span></label>
                     <div class="new-group-media" id="newGroupMedia">
                         <div class="new-group-banner" id="newGroupBannerPreview" data-action="newGroupPickBanner" title="Add a banner image">
                             <span class="new-group-media-hint">Add banner</span>
@@ -326,7 +327,8 @@
                 </div>
                 <div class="form-group nm-hidden" id="newGroupDescGroup">
                     <label class="form-label">Description <span class="nm-h-2">(optional)</span></label>
-                    <textarea class="form-textarea nm-h-4" id="newGroupDescInput" maxlength="150" placeholder="What's this group about?"></textarea>
+                    <textarea class="form-textarea nm-h-4" id="newGroupDescInput" maxlength="150" placeholder="What's this group about?" data-on-input="updateFieldCharCount" data-char-count="newGroupDescCharCount"></textarea>
+                    <div class="input-char-count" id="newGroupDescCharCount">0/150</div>
                 </div>
                 <div class="form-group nm-hidden" id="newGroupAllowInvitesGroup">
                     <label class="nm-h-78">
@@ -1094,10 +1096,11 @@
                     <label class="form-label">Nickname</label>
                     <div class="nm-h-37">
                         <input type="text" class="form-input nm-h-38" id="newNickInput" placeholder="Enter new nym"
-                            maxlength="20">
+                            maxlength="20" data-on-input="updateFieldCharCount" data-char-count="newNickCharCount">
                         <span id="nickSuffixDisplay" class="nym-suffix nym-suffix-clickable nm-h-39"
                             title="Click to view full pubkey"></span>
                     </div>
+                    <div class="input-char-count" id="newNickCharCount">0/20</div>
                     <div class="form-hint">Your ephemeral pseudonym nickname for this session. Click the # and four characters to the right to reveal this Nym's full pubkey.</div>
                     <div class="pubkey-slideout" id="pubkeySlideout">
                         <div class="pubkey-slideout-label">Full Hex Pubkey</div>
@@ -1214,7 +1217,8 @@
                     <div data-action="openNostrLogin" class="nm-h-50">Login with nsec private key or extension? Click here</div><br/>
                     <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
-                        maxlength="20">
+                        maxlength="20" data-on-input="updateFieldCharCount" data-char-count="nymInputCharCount">
+                    <div class="input-char-count" id="nymInputCharCount">0/20</div>
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
 
                     <br/>

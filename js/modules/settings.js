@@ -24,6 +24,15 @@ const NYM_SETTINGS_SECTION_KEYS = {
     data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed']
 };
 
+const NYM_SYNC_MERGE_KEYS = new Set([
+    'v',
+    'favoriteGifs', 'recentEmojis', 'seenCalls', 'userJoinedChannels',
+    'closedPMs', 'closedPMTimes', 'leftGroups', 'leftGroupTimes', 'channelLastRead',
+    'groupConversations', 'groupEphemeralKeys', 'groupMessageHistory',
+    'notificationHistory', 'notificationLastReadTime',
+    'tutorialSeen', 'botPmWelcomed', 'encryptAtRestPreferred'
+]);
+
 function _normalizeIndicatorScope(value, fallback = 'everywhere') {
     if (value === true || value === 'true') return 'everywhere';
     if (value === false || value === 'false') return 'disabled';
@@ -359,7 +368,26 @@ Object.assign(NYM.prototype, {
         await this._publishWrappedNostrEvent(payload, dTag, createdAt);
     },
 
+    _captureSettingsBaseline() {
+        try { this._syncedSettings = this._buildSettingsPayload(); } catch (_) { }
+    },
+
+    _markDirtySettingsFromPayload(payload) {
+        if (!payload || !this._syncedSettings) return;
+        if (!this._dirtySettings) this._dirtySettings = new Set();
+        const base = this._syncedSettings;
+        for (const k of Object.keys(payload)) {
+            if (NYM_SYNC_MERGE_KEYS.has(k)) continue;
+            let changed;
+            try { changed = JSON.stringify(payload[k]) !== JSON.stringify(base[k]); }
+            catch (_) { changed = true; }
+            if (changed) this._dirtySettings.add(k);
+        }
+    },
+
     async _publishEncryptedSettings(settingsData) {
+        this._markDirtySettingsFromPayload(settingsData);
+
         // Don't overwrite stored settings until we've loaded them. On a fresh
         // device an early save (e.g. from an incoming group message) would
         // otherwise clobber D1/relay with default state before the load lands.
@@ -523,6 +551,9 @@ Object.assign(NYM.prototype, {
         for (const [section, payload] of Object.entries(sections)) {
             await this._publishCategoryWrap(payload, `nymchat-settings-${section}`, now);
         }
+
+        this._captureSettingsBaseline();
+        if (this._dirtySettings) this._dirtySettings.clear();
     },
 
     // Wrap an arbitrary settings payload as a NIP-59 self-addressed gift wrap
