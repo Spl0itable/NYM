@@ -2973,7 +2973,6 @@ body.status-hidden .ctx-status-row,
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
     padding: 8px 10px;
-    padding-bottom: 22px;
     color: var(--text);
     font-size: 13px;
     font-family: inherit;
@@ -2984,26 +2983,6 @@ body.status-hidden .ctx-status-row,
 .bio-input-wrap textarea:focus {
     outline: none;
     border-color: var(--primary);
-}
-
-.bio-char-count {
-    position: absolute;
-    bottom: 6px;
-    right: 10px;
-    font-size: 11px;
-    color: var(--text-dim);
-    opacity: 0.6;
-    pointer-events: none;
-}
-
-.bio-char-count.warning {
-    color: #f59e0b;
-    opacity: 1;
-}
-
-.bio-char-count.limit {
-    color: var(--danger);
-    opacity: 1;
 }
 
 .input-char-count {

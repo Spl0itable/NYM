@@ -16,6 +16,7 @@
                         '<div class="app-dialog-message" id="appDialogMessage"></div>' +
                         '<input type="text" class="form-input app-dialog-input nm-hidden" id="appDialogInput" autocomplete="off">' +
                         '<textarea class="form-textarea app-dialog-textarea nm-hidden" id="appDialogTextarea" rows="4"></textarea>' +
+                        '<div class="input-char-count nm-hidden" id="appDialogCharCount"></div>' +
                     '</div>' +
                     '<div class="modal-actions">' +
                         '<button type="button" class="icon-btn" id="appDialogCancelBtn" data-action="appDialogCancel">Cancel</button>' +
@@ -29,6 +30,18 @@
 
     function promptField() {
         return document.getElementById(pending && pending.multiline ? 'appDialogTextarea' : 'appDialogInput');
+    }
+
+    function updateDialogCount() {
+        var counter = document.getElementById('appDialogCharCount');
+        if (!counter || !pending || !pending.maxLength) return;
+        var field = promptField();
+        var len = (field && field.value) ? field.value.length : 0;
+        var max = pending.maxLength;
+        counter.textContent = len + '/' + max;
+        counter.classList.remove('warning', 'limit');
+        if (len >= max) counter.classList.add('limit');
+        else if (len >= max * 0.8) counter.classList.add('warning');
     }
 
     function resultFor(ok) {
@@ -56,6 +69,7 @@
         var modal = document.getElementById('appDialogModal');
         if (modal) modal.classList.remove('active');
         document.removeEventListener('keydown', onKey, true);
+        if (p._countField) { try { p._countField.removeEventListener('input', updateDialogCount); } catch (_) {} }
         try { p.resolve(result); } catch (_) {}
     }
 
@@ -63,7 +77,7 @@
         ensureModal();
         if (pending) settle(resultFor(false));
         return new Promise(function (resolve) {
-            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline };
+            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline, maxLength: opts.maxLength || 0 };
             document.getElementById('appDialogTitle').textContent =
                 opts.title || (opts.alertOnly ? 'Notice' : 'Confirm');
             document.getElementById('appDialogMessage').textContent = opts.message || '';
@@ -72,11 +86,19 @@
             var field = opts.multiline ? textarea : input;
             input.classList.add('nm-hidden');
             textarea.classList.add('nm-hidden');
+            var counter = document.getElementById('appDialogCharCount');
+            if (counter) counter.classList.add('nm-hidden');
             if (opts.prompt) {
                 field.classList.remove('nm-hidden');
                 field.value = opts.defaultValue || '';
                 field.placeholder = opts.placeholder || '';
                 if (opts.maxLength) field.maxLength = opts.maxLength; else field.removeAttribute('maxlength');
+                if (opts.maxLength && counter) {
+                    counter.classList.remove('nm-hidden');
+                    field.addEventListener('input', updateDialogCount);
+                    pending._countField = field;
+                    updateDialogCount();
+                }
             }
             var okBtn = document.getElementById('appDialogOkBtn');
             var cancelBtn = document.getElementById('appDialogCancelBtn');

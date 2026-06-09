@@ -701,14 +701,10 @@ Object.assign(NYM.prototype, {
             } catch (_) { }
 
             const category = await this._d1Category(dTag);
-            // Skip the encrypt + POST when this category's plaintext is
-            // unchanged. NIP-44 ciphertext is non-deterministic, so we hash the
-            // plaintext, not the blob. Salt with the pubkey so an identical
-            // payload can't collide across accounts. The server enforces the
-            // same check.
             const hash = await this._sha256Hex(`${this.pubkey}|${toStore}`);
             const hashKey = `nym_settings_hash_${this.pubkey}_${category}`;
-            if (hash) {
+            const useClientCache = !dTag.startsWith('nymchat-settings');
+            if (useClientCache && hash) {
                 let lastHash = null;
                 try { lastHash = localStorage.getItem(hashKey); } catch (_) { }
                 if (lastHash === hash) return true; // unchanged — nothing to write
@@ -716,7 +712,7 @@ Object.assign(NYM.prototype, {
             const blob = await this._encryptSettingsBlob(toStore);
             if (!blob) return false;
             const resp = await this._storageApiRequest('settings-set', { category, blob, contentHash: hash || undefined });
-            if (hash && resp) {
+            if (useClientCache && hash && resp) {
                 try { localStorage.setItem(hashKey, hash); } catch (_) { }
             }
             return true;
