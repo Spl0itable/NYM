@@ -623,6 +623,10 @@ Object.assign(NYM.prototype, {
         document.body.appendChild(modal);
         this.reactorsModal = modal;
 
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(modal, shown.map(([pk]) => pk));
+        }
+
         // Position near the badge
         const rect = badge.getBoundingClientRect();
         const modalRect = modal.getBoundingClientRect();

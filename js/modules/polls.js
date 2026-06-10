@@ -355,6 +355,10 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(messageEl, [pubkey, ...votes.keys()]);
+        }
+
         // In bubble layout polls need their own .message-group wrapper to get
         // the side avatar; the rewrap also splits adjacent same-author groups.
         if (!this._suppressBubbleRewrap
@@ -443,6 +447,10 @@ Object.assign(NYM.prototype, {
 
         const pollFooter = container.querySelector('.poll-footer');
         if (pollFooter) pollFooter.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
+
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(container, [...poll.votes.keys()]);
+        }
     },
 
     showPollVotersModal(pollId, anchorEl, ev) {
@@ -482,6 +490,10 @@ Object.assign(NYM.prototype, {
         `;
         document.body.appendChild(modal);
         this._pollVotersModal = modal;
+
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(modal, shown.map(([pk]) => pk));
+        }
 
         const rect = anchorEl.getBoundingClientRect();
         const modalRect = modal.getBoundingClientRect();

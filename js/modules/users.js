@@ -653,6 +653,53 @@ Object.assign(NYM.prototype, {
         return mirrors;
     },
 
+    // For list UIs that render arbitrary users (reactors, voters, readers,
+    // group members, call peers): pull kind 0 profiles for any sender we don't
+    // already have cached so default nyms/avatars get replaced.
+    ensureListProfiles(rootEl, pubkeys, onResolved) {
+        const list = Array.isArray(pubkeys) ? pubkeys : Array.from(pubkeys || []);
+        const wanted = new Set();
+        const missing = [];
+        for (const pk of list) {
+            if (!pk || pk === this.pubkey || wanted.has(pk)) continue;
+            wanted.add(pk);
+            if (this.users.has(pk) && this.userAvatars && this.userAvatars.has(pk)) continue;
+            missing.push(pk);
+        }
+        if (!missing.length) return;
+        if (typeof this.fetchProfileDirect !== 'function') {
+            for (const pk of missing) { try { this.queueProfileFetch(pk); } catch (_) { } }
+            return;
+        }
+        Promise.all(missing.map(pk => this.fetchProfileDirect(pk).catch(() => { }))).then(() => {
+            if (typeof onResolved === 'function') { try { onResolved(missing); } catch (_) { } return; }
+            if (!rootEl || !rootEl.isConnected) return;
+            const wantedLower = new Set(Array.from(wanted).map(pk => pk.toLowerCase()));
+            rootEl.querySelectorAll('[data-pubkey]').forEach(row => {
+                const pk = (row.dataset.pubkey || '').toLowerCase();
+                if (pk && wantedLower.has(pk)) this._refreshListRowNym(row, pk);
+            });
+        });
+    },
+
+    // Rebuild the nym text of a single list row in place, preserving the
+    // surrounding markup (suffix, flair) for each row variant.
+    _refreshListRowNym(row, pubkey) {
+        const user = this.users.get(pubkey);
+        const baseNym = this.parseNymFromDisplay(user ? user.nym : this.getNymFromPubkey(pubkey));
+        const suffix = this.getPubkeySuffix(pubkey);
+        const nameHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+        const reactorEl = row.querySelector('.reactors-modal-nym');
+        if (reactorEl) { reactorEl.innerHTML = nameHtml; return; }
+        const ctxEl = row.querySelector('.group-ctx-member-name');
+        if (ctxEl) { ctxEl.innerHTML = nameHtml; return; }
+        const infoEl = row.querySelector('.group-info-nym');
+        if (infoEl) {
+            const flair = (typeof this.getFlairForUser === 'function' && this.getFlairForUser(pubkey)) || '';
+            infoEl.innerHTML = `${nameHtml}${flair}`;
+        }
+    },
+
     // Update already-rendered message avatars when a kind 0 profile picture arrives
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);

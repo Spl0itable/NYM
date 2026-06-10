@@ -2320,6 +2320,9 @@ Object.assign(NYM.prototype, {
         const overflowHtml = overflow > 0
             ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
             : '';
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(null, visible.map(([pk]) => pk));
+        }
         return avatarHtml + overflowHtml;
     },
 
@@ -2356,6 +2359,10 @@ Object.assign(NYM.prototype, {
             prev = img;
         }
         for (const img of existing.values()) img.remove();
+
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(null, visible.map(([pk]) => pk));
+        }
 
         let badge = el.querySelector('.group-reader-overflow');
         if (overflow > 0) {
@@ -2531,6 +2538,10 @@ Object.assign(NYM.prototype, {
         document.body.appendChild(modal);
         this.readersModal = modal;
 
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(modal, Array.from(readers.keys()));
+        }
+
         // Position above/below the anchor — batch style writes
         const rect = anchorEl.getBoundingClientRect();
         const right = Math.max(4, window.innerWidth - rect.right);
@@ -2582,6 +2593,9 @@ Object.assign(NYM.prototype, {
                 return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
             }).join('');
             iconPart = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}`;
+            if (typeof this.ensureListProfiles === 'function') {
+                this.ensureListProfiles(null, otherMembers.slice(0, 4));
+            }
         }
         const nameCls = (!customAvatar && otherMembers.length > 0) ? 'nm-grp-ml8' : '';
         const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
@@ -2716,6 +2730,9 @@ Object.assign(NYM.prototype, {
         document.getElementById('grpCtxMembersTitle').textContent = `Members · ${group.members.length}`;
         const sorted = [...group.members].sort((a, b) => this._memberRoleRank(groupId, a) - this._memberRoleRank(groupId, b));
         document.getElementById('grpCtxMembers').innerHTML = sorted.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(document.getElementById('grpCtxMembers'), sorted);
+        }
 
         menu.scrollTop = 0;
         overlay.classList.add('active');
@@ -3112,11 +3129,15 @@ Object.assign(NYM.prototype, {
             const labelHtml = labels.length
                 ? `<span class="group-info-label">${labels.join(', ')}</span>`
                 : '';
-            return `<div class="group-info-member"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
+            return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
         };
         const membersHtml = sorted.map(memberRow).join('');
-        const html = `<div class="group-info"><div class="group-info-title">Group: "${this.escapeHtml(group.name)}"</div><div class="group-info-count">Members (${group.members.length})</div><div class="group-info-members">${membersHtml}</div></div>`;
+        const infoId = `group-info-${Date.now().toString(36)}`;
+        const html = `<div class="group-info" id="${infoId}"><div class="group-info-title">Group: "${this.escapeHtml(group.name)}"</div><div class="group-info-count">Members (${group.members.length})</div><div class="group-info-members">${membersHtml}</div></div>`;
         this.displaySystemMessage(html, 'system', { html: true });
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(document.getElementById(infoId), sorted);
+        }
     },
 
     toggleGroupMentionsOnly(enabled) {
