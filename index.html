@@ -2034,6 +2034,20 @@
             <div class="modal-header">About</div>
             <div class="modal-body">
                 <div class="about-logo">Nymchat <span class="about-version" id="aboutVersion"></span></div>
+                <div class="about-build" id="aboutBuild">
+                    <div class="about-build-row">
+                        <span class="about-build-title">Build integrity</span>
+                        <span class="about-build-status" id="aboutBuildStatus">—</span>
+                    </div>
+                    <div class="about-build-meta">
+                        <a id="aboutBuildCommit" href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener">source</a>
+                        <span class="about-build-hash" id="aboutBuildHash"></span>
+                    </div>
+                    <div class="about-build-links">
+                        <a id="aboutBuildProvenance" href="https://github.com/Spl0itable/NYM/actions" target="_blank" rel="noopener">Build provenance</a>
+                        <a href="https://github.com/Spl0itable/NYM#verifying-the-build" target="_blank" rel="noopener">How to verify</a>
+                    </div>
+                </div>
                 <p class="about-desc">A decentralized, pseudonymous chat built on the <a href="https://nostr.com" target="_blank" rel="noopener">Nostr</a> protocol. Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener">Bitchat</a>.</p>
                 <div class="about-links">
                     <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener">GitHub</a>
@@ -2135,6 +2149,7 @@
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>
     <script defer src="js/modules/settings.js"></script>
+    <script defer src="js/modules/build-verify.js"></script>
     <script defer src="js/sw-register.js"></script>
 
     <!-- QRCode + WebTorrent are injected on first use via window.loadScriptOnce -->

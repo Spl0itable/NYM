@@ -1,6 +1,7 @@
 import { transform } from 'esbuild';
 import { minify as minifyHtml } from 'html-minifier-terser';
 import { promises as fs } from 'fs';
+import { execSync } from 'child_process';
 import path from 'path';
 import crypto from 'crypto';
 
@@ -8,7 +9,14 @@ const root = process.cwd();
 const dist = path.join(root, 'dist');
 
 const sha8 = (buf) => crypto.createHash('sha256').update(buf).digest('hex').slice(0, 8);
+const sha256b64 = (buf) => 'sha256-' + crypto.createHash('sha256').update(buf).digest('base64');
 const toPosix = (p) => p.split(path.sep).join('/');
+
+function gitCommit() {
+  const env = process.env.CF_PAGES_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA;
+  if (env) return env.trim();
+  try { return execSync('git rev-parse HEAD').toString().trim(); } catch (_) { return 'unknown'; }
+}
 
 async function walk(dir) {
   const out = [];
@@ -47,6 +55,8 @@ async function run() {
 
   // rel-from-root path -> hashed rel-from-root path
   const assetMap = new Map();
+  // public path ('/js/app.<hash>.js') -> 'sha256-<base64>' of the served bytes
+  const manifestFiles = {};
 
   // Minify + hash every JS file under js/.
   for (const file of await walk(path.join(root, 'js'))) {
@@ -57,6 +67,7 @@ async function run() {
     const hashed = hashedName(rel, code);
     await emit(hashed, code);
     assetMap.set(rel, hashed);
+    manifestFiles['/' + hashed] = sha256b64(Buffer.from(code));
   }
 
   // Minify + hash every CSS file under css/.
@@ -68,6 +79,7 @@ async function run() {
     const hashed = hashedName(rel, code);
     await emit(hashed, code);
     assetMap.set(rel, hashed);
+    manifestFiles['/' + hashed] = sha256b64(Buffer.from(code));
   }
 
   // Replace original asset paths with hashed ones in HTML. Longest keys first
@@ -105,7 +117,7 @@ async function run() {
     'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/users.js',
     'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',
     'js/modules/pms.js', 'js/modules/groups.js', 'js/modules/ui-context.js',
-    'js/modules/init.js',
+    'js/modules/init.js', 'js/modules/build-verify.js',
   ];
   const precache = criticalSources
     .map((rel) => assetMap.get(rel))
@@ -116,6 +128,23 @@ async function run() {
   await emit('sw.js', swSrc
     .replace('__CACHE_VERSION__', swVersion)
     .replace('__PRECACHE_ASSETS__', JSON.stringify(precache)));
+
+  // Build manifest: lets the app re-hash its own running bundle and lets anyone
+  // reproduce bundleHash from source at `commit`. bundleHash is derived only
+  // from the content-hashed asset set, so it is identical across reproducible
+  // rebuilds of the same source.
+  const bundleHash = crypto.createHash('sha256')
+    .update(Object.keys(manifestFiles).sort().map((p) => p + ':' + manifestFiles[p]).join('\n'))
+    .digest('hex');
+  const commit = gitCommit();
+  await emit('build-manifest.json', JSON.stringify({
+    app: 'nymchat',
+    commit,
+    builtAt: new Date().toISOString(),
+    algo: 'sha256',
+    bundleHash,
+    files: manifestFiles,
+  }, null, 2));
 
   // _headers + immutable caching for hashed assets, no-cache for entry.
   const headers = await fs.readFile(path.join(root, '_headers'), 'utf8');
@@ -131,10 +160,14 @@ async function run() {
   Cache-Control: no-cache
 /sw.js
   Cache-Control: no-cache
+/build-manifest.json
+  Cache-Control: no-cache
 `;
   await emit('_headers', headers.replace(/\s*$/, '') + cacheRules);
 
   console.log(`Built ${assetMap.size} assets to dist/.`);
+  console.log(`Build hash: ${bundleHash}`);
+  console.log(`Commit: ${commit}`);
 }
 
 run().catch((e) => { console.error(e); process.exit(1); });

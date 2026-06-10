@@ -4173,7 +4173,48 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.70.477';
+const NYMCHAT_VERSION = 'v3.70.478';
+
+const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
+
+function runBuildVerification() {
+    const statusEl = document.getElementById('aboutBuildStatus');
+    if (!statusEl || typeof window.verifyRunningBuild !== 'function') return;
+
+    const commitEl = document.getElementById('aboutBuildCommit');
+    const hashEl = document.getElementById('aboutBuildHash');
+    const provEl = document.getElementById('aboutBuildProvenance');
+
+    statusEl.textContent = 'Verifying…';
+    statusEl.className = 'about-build-status checking';
+
+    window.verifyRunningBuild().then((r) => {
+        const shortCommit = (r.commit || '').slice(0, 7);
+        const shortHash = (r.bundleHash || '').slice(0, 12);
+        const known = r.commit && r.commit !== 'unknown';
+
+        if (commitEl && known) {
+            commitEl.href = BUILD_REPO + '/commit/' + r.commit;
+            commitEl.textContent = 'commit ' + shortCommit;
+        }
+        if (provEl && known) provEl.href = BUILD_REPO + '/commit/' + r.commit + '/checks';
+        if (hashEl) {
+            hashEl.textContent = shortHash ? '#' + shortHash : '';
+            hashEl.title = r.bundleHash || '';
+        }
+
+        if (r.ok) {
+            statusEl.textContent = '✓ Verified (' + r.verified + '/' + r.total + ')';
+            statusEl.className = 'about-build-status ok';
+        } else {
+            statusEl.textContent = '✗ Mismatch (' + r.verified + '/' + r.total + ')';
+            statusEl.className = 'about-build-status bad';
+        }
+    }).catch(() => {
+        statusEl.textContent = 'Unavailable offline';
+        statusEl.className = 'about-build-status checking';
+    });
+}
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -4181,6 +4222,8 @@ function showAbout(prefill) {
 
     const verEl = document.getElementById('aboutVersion');
     if (verEl) verEl.textContent = NYMCHAT_VERSION;
+
+    runBuildVerification();
 
     const relayEl = document.getElementById('aboutRelayCount');
     if (relayEl) relayEl.textContent = String(nym.relayPool.size);

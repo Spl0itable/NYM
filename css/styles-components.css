@@ -320,7 +320,7 @@
 }
 
 .about-desc {
-    margin: 10px 0 16px;
+    margin: 30px 0 16px;
     font-size: 13px;
     line-height: 1.6;
     color: var(--text-dim);
@@ -365,6 +365,62 @@
     height: 1px;
     background: var(--glass-border);
     margin: 20px 0;
+}
+
+.about-build {
+    margin-top: 14px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+}
+
+.about-build-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.about-build-title {
+    color: var(--text-dim);
+}
+
+.about-build-status {
+    font-weight: 600;
+}
+
+.about-build-status.ok {
+    color: var(--success, #3fb950);
+}
+
+.about-build-status.bad {
+    color: var(--danger, #f85149);
+}
+
+.about-build-status.checking {
+    color: var(--text-dim);
+}
+
+.about-build-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin-top: 4px;
+    font-size: 11px;
+}
+
+.about-build-hash {
+    color: var(--text-dim);
+    font-family: monospace;
+}
+
+.about-build-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 6px;
+    font-size: 11px;
 }
 
 .about-contact-title {

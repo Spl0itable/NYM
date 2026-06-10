@@ -218,6 +218,32 @@ Quote-reply to any Nymbot response to continue the conversation. The bot carries
 
 Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory.
 
+## Verifying the build
+
+The deployed web app is built deterministically, so anyone can confirm that the code running at the live site is exactly what is published in this repository — no trust in the host required.
+
+How it works:
+
+- `npm run build` emits `dist/build-manifest.json` containing the source `commit`, a `sha256-` hash of every served JS/CSS asset, and a single `bundleHash` over that asset set. The `bundleHash` depends only on source content, so reproducible rebuilds of the same commit produce the same hash.
+- The app's **About** dialog re-fetches each running asset, hashes it in the browser with the Web Crypto API, and compares against the manifest. It shows `✓ Verified (n/n)`, the source commit (linked), and the short `bundleHash`.
+- The [Build provenance](../../actions/workflows/build-provenance.yml) GitHub Action independently rebuilds each commit, prints the `bundleHash` to the run summary, and signs a build-provenance attestation for the manifest.
+
+To verify a running build yourself:
+
+```sh
+git clone https://github.com/Spl0itable/NYM
+cd NYM
+git checkout <commit shown in the About dialog>
+npm ci
+npm run build   # prints "Build hash: <bundleHash>"
+```
+
+The printed `bundleHash` should match both the hash shown in the app's About dialog and the one in that commit's Build provenance run summary. You can also verify the signed attestation with the GitHub CLI:
+
+```sh
+gh attestation verify dist/build-manifest.json --repo Spl0itable/NYM
+```
+
 ## Contributing
 
 Pull requests are welcome.
