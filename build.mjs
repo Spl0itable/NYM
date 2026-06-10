@@ -91,12 +91,17 @@ async function run() {
   };
 
   const indexHtml = rewriteHtml(await fs.readFile(path.join(root, 'index.html'), 'utf8'));
-  await emit('index.html', await minifyHtml(indexHtml, htmlMinifyOptions));
+  const indexOut = await minifyHtml(indexHtml, htmlMinifyOptions);
+  await emit('index.html', indexOut);
+  manifestFiles['/index.html'] = sha256b64(Buffer.from(indexOut));
 
   for (const file of await walk(path.join(root, 'static'))) {
     const rel = toPosix(path.relative(root, file));
-    if (file.endsWith('.html')) await emit(rel, await minifyHtml(rewriteHtml(await fs.readFile(file, 'utf8')), htmlMinifyOptions));
-    else await emit(rel, await fs.readFile(file));
+    if (file.endsWith('.html')) {
+      const out = await minifyHtml(rewriteHtml(await fs.readFile(file, 'utf8')), htmlMinifyOptions);
+      await emit(rel, out);
+      manifestFiles['/' + rel] = sha256b64(Buffer.from(out));
+    } else await emit(rel, await fs.readFile(file));
   }
 
   // robots.txt verbatim.
