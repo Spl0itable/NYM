@@ -458,8 +458,25 @@
     color: var(--danger, #f85149);
 }
 
+.about-canary-status.forged {
+    color: var(--danger, #f85149);
+}
+
 .about-canary-status.checking {
     color: var(--text-dim);
+}
+
+.about-canary-sig {
+    color: var(--text-dim);
+    font-family: monospace;
+}
+
+.about-canary-sig.ok {
+    color: var(--success, #3fb950);
+}
+
+.about-canary-sig.bad {
+    color: var(--danger, #f85149);
 }
 
 .about-canary-note {

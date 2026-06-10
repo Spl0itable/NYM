@@ -4227,11 +4227,15 @@ function runCanaryCheck() {
 
     const noteEl = document.getElementById('aboutCanaryNote');
     const dateEl = document.getElementById('aboutCanaryDate');
+    const sigEl = document.getElementById('aboutCanarySig');
+    const anchorEl = document.getElementById('aboutCanaryAnchor');
 
     statusEl.textContent = 'Checking…';
     statusEl.className = 'about-canary-status checking';
     if (noteEl) noteEl.textContent = '';
     if (dateEl) dateEl.textContent = '';
+    if (sigEl) { sigEl.textContent = ''; sigEl.className = 'about-canary-sig'; }
+    if (anchorEl) { anchorEl.textContent = ''; anchorEl.removeAttribute('href'); }
 
     window.checkWarrantCanary().then((c) => {
         if (c.state === 'gone') {
@@ -4244,6 +4248,21 @@ function runCanaryCheck() {
             const upd = fmtCanaryDate(c.updatedAt);
             const due = fmtCanaryDate(c.dueBy);
             dateEl.textContent = (upd ? 'updated ' + upd : '') + (due ? ' · due ' + due : '');
+        }
+        if (sigEl) {
+            if (c.sig === 'valid') { sigEl.textContent = 'signature ✓'; sigEl.className = 'about-canary-sig ok'; }
+            else if (c.sig === 'invalid') { sigEl.textContent = 'signature ✗'; sigEl.className = 'about-canary-sig bad'; }
+            else { sigEl.textContent = 'unsigned'; sigEl.className = 'about-canary-sig'; }
+        }
+        if (anchorEl && c.btcBlock && c.btcBlock.height) {
+            anchorEl.textContent = 'btc block ' + c.btcBlock.height;
+            anchorEl.href = 'https://mempool.space/block/' + (c.btcBlock.hash || '');
+        }
+        if (c.state === 'forged') {
+            statusEl.textContent = '✗ Signature invalid';
+            statusEl.className = 'about-canary-status forged';
+            if (noteEl) noteEl.textContent = 'The canary signature does not match the operator key. Do not trust this canary.';
+            return;
         }
         if (c.state === 'ok') {
             statusEl.textContent = '✓ All clear';
