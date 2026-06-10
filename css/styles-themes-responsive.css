@@ -1068,7 +1068,8 @@ body.light-mode .search-input:focus,
 body.light-mode .message-input:focus,
 body.light-mode .form-input:focus,
 body.light-mode .form-select:focus,
-body.light-mode .form-textarea:focus {
+body.light-mode .form-textarea:focus,
+body.light-mode .bio-input-wrap textarea:focus {
     box-shadow: 0 0 0 3px rgb(from var(--primary) r g b / 0.1) !important;
     border-color: rgb(from var(--primary) r g b / 0.3) !important;
 }
