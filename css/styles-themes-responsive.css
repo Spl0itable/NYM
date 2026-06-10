@@ -521,6 +521,30 @@ body.light-mode .form-select {
     border-color: rgba(0, 0, 0, 0.1) !important;
 }
 
+input,
+textarea,
+select,
+.form-input,
+.form-select,
+.form-textarea,
+.search-input,
+.message-input,
+div.message-input {
+    color: #ffffff !important;
+}
+
+body.light-mode input,
+body.light-mode textarea,
+body.light-mode select,
+body.light-mode .form-input,
+body.light-mode .form-select,
+body.light-mode .form-textarea,
+body.light-mode .search-input,
+body.light-mode .message-input,
+body.light-mode div.message-input {
+    color: #000000 !important;
+}
+
 body.light-mode .icon-btn {
     border-color: rgba(0, 0, 0, 0.1);
     background: rgba(0, 0, 0, 0.03);

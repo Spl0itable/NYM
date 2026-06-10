@@ -4172,7 +4172,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.476';
+const NYMCHAT_VERSION = 'v3.69.477';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
@@ -6816,9 +6816,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const wasScrolledUp = nym.userScrolledUp;
             nym.userScrolledUp = distanceFromBottom > 150;
-            if (wasScrolledUp && !nym.userScrolledUp && !nym.inPMMode &&
-                typeof nym.markVisibleChannelMessagesRead === 'function') {
-                nym.markVisibleChannelMessagesRead();
+            if (wasScrolledUp && !nym.userScrolledUp) {
+                if (!nym.inPMMode && typeof nym.markVisibleChannelMessagesRead === 'function') {
+                    nym.markVisibleChannelMessagesRead();
+                } else if (nym.currentGroup && typeof nym._markVisibleGroupMessagesRead === 'function') {
+                    nym._markVisibleGroupMessagesRead();
+                }
             }
 
             if (distanceFromBottom < 50) {

@@ -518,6 +518,10 @@
     color: #e74c3c;
 }
 
+.verification-popup.unknown .verification-popup-title {
+    color: #9aa0a6;
+}
+
 .verification-popup-body {
     font-size: 12px;
     line-height: 1.45;

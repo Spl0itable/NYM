@@ -523,6 +523,9 @@ Object.assign(NYM.prototype, {
                     if (typeof this.markVisibleChannelMessagesRead === 'function') {
                         this.markVisibleChannelMessagesRead();
                     }
+                    if (typeof this._markVisibleGroupMessagesRead === 'function') {
+                        this._markVisibleGroupMessagesRead();
+                    }
 
                     this.backfillFromD1OnReconnect();
                 }, delay);
@@ -568,6 +571,9 @@ Object.assign(NYM.prototype, {
 
                 if (typeof this.markVisibleChannelMessagesRead === 'function') {
                     this.markVisibleChannelMessagesRead();
+                }
+                if (typeof this._markVisibleGroupMessagesRead === 'function') {
+                    this._markVisibleGroupMessagesRead();
                 }
 
                 this.backfillFromD1OnReconnect();

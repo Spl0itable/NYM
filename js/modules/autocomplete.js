@@ -188,21 +188,13 @@ Object.assign(NYM.prototype, {
         this.addToRecentEmojis(emoji);
     },
 
-    // In a 1:1 PM only the peer can be mentioned; in a group only its members.
-    // The group-management commands that take an arbitrary user (/addmember,
-    // /addmod) are the exception — they need the full directory, so return null
-    // (no restriction). Channels are also unrestricted.
-    _mentionScopePubkeys() {
-        const input = document.getElementById('messageInput');
-        const val = input ? input.value : '';
-        if (/^\s*\/(addmember|addmod)\b/i.test(val)) return null;
+    _mentionPriorityPubkeys() {
         if (this.inPMMode && this.currentPM) return new Set([this.currentPM]);
         if (this.inPMMode && this.currentGroup) {
             const g = this.groupConversations.get(this.currentGroup);
             if (g && Array.isArray(g.members)) {
                 return new Set(g.members.filter(pk => pk !== this.pubkey));
             }
-            return new Set();
         }
         return null;
     },
@@ -210,7 +202,7 @@ Object.assign(NYM.prototype, {
     showAutocomplete(search) {
         const dropdown = document.getElementById('autocompleteDropdown');
         const currentChannelKey = this.currentGeohash || this.currentChannel;
-        const scopePubkeys = this._mentionScopePubkeys();
+        const priorityPubkeys = this._mentionPriorityPubkeys();
 
         // Collect users with effective status (matching sidebar logic)
         const channelActiveUsers = [];
@@ -221,8 +213,6 @@ Object.assign(NYM.prototype, {
         const otherOfflineUsers = [];
 
         this.users.forEach((user, pubkey) => {
-            // Restrict to the relevant participant(s) when in a PM or group.
-            if (scopePubkeys && !scopePubkeys.has(pubkey)) return;
             // Create formatted nym for matching
             const baseNym = this.stripPubkeySuffix(user.nym);
             const suffix = this.getPubkeySuffix(pubkey);
@@ -244,7 +234,8 @@ Object.assign(NYM.prototype, {
                     effectiveStatus: effectiveStatus
                 };
 
-                const inCurrentChannel = user.channels && user.channels.has(currentChannelKey);
+                const inCurrentChannel = (user.channels && user.channels.has(currentChannelKey)) ||
+                    (priorityPubkeys && priorityPubkeys.has(pubkey));
 
                 if (inCurrentChannel) {
                     if (effectiveStatus === 'online') channelActiveUsers.push(userEntry);

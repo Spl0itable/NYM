@@ -1035,10 +1035,26 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Content dedup for dual-wrap scenarios
-        if (list.some(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5)) return;
-
         const nymMsgId = this.getNymMessageId(rumor);
+
+        // Content dedup for dual-wrap scenarios
+        let dupGroupMsg = null;
+        if (nymMsgId) {
+            dupGroupMsg = list.find(m => m.pubkey === senderPubkey && m.nymMessageId === nymMsgId);
+        }
+        if (!dupGroupMsg) {
+            dupGroupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
+        }
+        if (dupGroupMsg) {
+            if (senderVerified === true && dupGroupMsg.senderVerified !== true) {
+                dupGroupMsg.senderVerified = true;
+                this._setMessageVerifiedDOM(dupGroupMsg.nymMessageId || dupGroupMsg.id, true);
+                this.channelDOMCache.delete(groupConvKey);
+                this.persistPMMessages(groupConvKey);
+            }
+            return;
+        }
+
         const senderName = this.getNymFromPubkey(senderPubkey);
 
         // Fetch profile for unknown senders
@@ -1105,6 +1121,12 @@ Object.assign(NYM.prototype, {
             if (typeof this._markChannelRead === 'function') {
                 this._markChannelRead(groupConvKey, msg.created_at);
             }
+            if (!isOwn && !msg.isHistorical && !document.hidden && !this.userScrolledUp &&
+                this._canSendGiftWraps() && nymMsgId) {
+                this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group', groupId);
+                msg.readReceiptSent = true;
+                this.recordOwnActivity();
+            }
         } else {
             if (!isOwn && !senderBlocked) {
                 const ageMs = Date.now() - (tsSec * 1000);
@@ -1127,12 +1149,6 @@ Object.assign(NYM.prototype, {
                     }
                 }
             }
-        }
-
-        // Send read receipt back to sender so they can show our avatar as "read"
-        if (!isOwn && !msg.isHistorical && this._canSendGiftWraps() && nymMsgId) {
-            this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group', groupId);
-            this.recordOwnActivity();
         }
     },
 
@@ -2943,6 +2959,8 @@ Object.assign(NYM.prototype, {
         this.clearUnreadCount(groupConvKey);
         this.loadPMMessages(groupConvKey);
 
+        this._markVisibleGroupMessagesRead();
+
         // Restore any unsent input previously typed for this conversation
         this._restoreDraftForContext();
 
@@ -2950,6 +2968,23 @@ Object.assign(NYM.prototype, {
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
         this._focusMessageInput();
+    },
+
+    _markVisibleGroupMessagesRead() {
+        if (!this.inPMMode || !this.currentGroup) return;
+        if (document.hidden || this.userScrolledUp) return;
+        if (!this._canSendGiftWraps()) return;
+        const groupId = this.currentGroup;
+        const messages = this.pmMessages.get(this.getGroupConversationKey(groupId));
+        if (!messages || !messages.length) return;
+        let sentAny = false;
+        for (const m of messages) {
+            if (m.isOwn || m.readReceiptSent || m.isHistorical || !m.nymMessageId) continue;
+            this.sendNymReceipt(m.nymMessageId, 'read', m.pubkey, 'group', groupId);
+            m.readReceiptSent = true;
+            sentAny = true;
+        }
+        if (sentAny) this.recordOwnActivity();
     },
 
     // Bubble a group item to the top of the PM list

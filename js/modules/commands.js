@@ -619,6 +619,8 @@ Object.assign(NYM.prototype, {
         if (!args) {
             if (this.inPMMode && this.currentGroup) {
                 this.displaySystemMessage('Usage: /invite @nym — adds a user to this group');
+            } else if (this.inPMMode && this.currentPM) {
+                this.startGroupFromPM(null);
             } else {
                 this.displaySystemMessage('Usage: /invite @nym, /invite nym#xxxx, or /invite [pubkey]');
             }
@@ -645,6 +647,15 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        if (this.inPMMode && this.currentPM) {
+            const extra = args && args.trim() ? this.resolvePubkeyFromNym(args.trim().replace(/^@/, '')) : null;
+            if (args && args.trim() && !extra) {
+                this.displaySystemMessage(`User @${args.trim().replace(/^@/, '')} not found. They need to be visible in a channel first.`);
+                return;
+            }
+            this.startGroupFromPM(extra);
+            return;
+        }
         if (this.inPMMode) {
             this.displaySystemMessage('Use /group @nym to create a group with this person, or switch to a channel first');
             return;
@@ -741,6 +752,15 @@ Object.assign(NYM.prototype, {
 
     // /addmember @nym — add a member to the currently viewed group
     async cmdAddMember(args) {
+        if (this.inPMMode && this.currentPM && !this.currentGroup) {
+            const extra = args && args.trim() ? this.resolvePubkeyFromNym(args.trim().replace(/^@/, '')) : null;
+            if (args && args.trim() && !extra) {
+                this.displaySystemMessage(`User @${args.trim().replace(/^@/, '')} not found`);
+                return;
+            }
+            this.startGroupFromPM(extra);
+            return;
+        }
         if (!this.inPMMode || !this.currentGroup) {
             this.displaySystemMessage('You must be in a group conversation to use /addmember');
             return;

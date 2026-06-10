@@ -2828,6 +2828,26 @@ Object.assign(NYM.prototype, {
         this._updateNewPMModalTitle();
     },
 
+    startGroupFromPM(extraPubkey = null) {
+        const seeds = [];
+        const consider = (pk) => {
+            if (!pk || pk === this.pubkey || seeds.includes(pk)) return;
+            if (this.isVerifiedBot(pk)) {
+                this.displaySystemMessage("Nymbot can only be messaged 1:1, not added to a group chat.");
+                return;
+            }
+            seeds.push(pk);
+        };
+        if (this.inPMMode && this.currentPM) consider(this.currentPM);
+        consider(extraPubkey);
+        if (seeds.length === 0) return;
+        this.openNewPMModal();
+        for (const pk of seeds) {
+            this.addNewPMRecipient(pk, this.stripPubkeySuffix(this.getNymFromPubkey(pk)));
+        }
+        this._updateNewPMModalTitle();
+    },
+
     // Group name + avatar/banner controls show only when composing a group
     // (2+ recipients) and not when adding members to an existing group.
     _toggleNewGroupFields() {

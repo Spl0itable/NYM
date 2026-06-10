@@ -572,6 +572,13 @@ Object.assign(NYM.prototype, {
         // Hide PM option only for your own messages (Nymbot accepts private chats)
         document.getElementById('ctxPM').style.display = (pubkey === this.pubkey) ? 'none' : 'block';
 
+        const addToGroupOption = document.getElementById('ctxAddToGroup');
+        if (addToGroupOption) {
+            const canStartGroup = pubkey !== this.pubkey && !this.isVerifiedBot(pubkey) &&
+                !(this.inPMMode && this.currentGroup);
+            addToGroupOption.classList.toggle('nm-hidden', !canStartGroup);
+        }
+
         // Gift Nymbot credits — for other users, not yourself or Nymbot itself
         document.getElementById('ctxGiftCredits').style.display =
             (pubkey === this.pubkey || this.isVerifiedBot(pubkey)) ? 'none' : 'block';

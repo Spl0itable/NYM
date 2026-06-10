@@ -432,7 +432,7 @@ window.nymHapticTap = function (ms) {
         'showVerificationInfo':       function (e, t) {
             if (e && e.preventDefault) e.preventDefault();
             if (e && e.stopPropagation) e.stopPropagation();
-            nym().showVerificationPopup(t, t && t.dataset && t.dataset.verified === 'true');
+            nym().showVerificationPopup(t, t && t.dataset && t.dataset.verified);
             return false;
         },
         'codeBlockCopy':              function (_e, t) {
@@ -469,6 +469,12 @@ window.nymHapticTap = function (ms) {
         'removeModFromContext':       function () {
             var d = nym().contextMenuData;
             if (d && d.pubkey) nym().revokeModerator(d.pubkey);
+        },
+        'addToGroupFromContext':      function () {
+            var n = nym();
+            var d = n.contextMenuData;
+            n.closeContextMenu();
+            if (d && d.pubkey) n.startGroupFromPM(d.pubkey);
         },
         'transferOwnerFromContext':   function () {
             var d = nym().contextMenuData;

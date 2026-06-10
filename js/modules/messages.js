@@ -708,6 +708,11 @@ Object.assign(NYM.prototype, {
                 _lockExtraClass = ' unverified';
                 _lockTitle = 'Unverified sender — tap for details';
                 _lockSvgInner = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M9.5 14l5 5"></path><path d="M14.5 14l-5 5"></path>';
+            } else if (message.isPM) {
+                _lockVerified = 'unknown';
+                _lockExtraClass = ' unknown';
+                _lockTitle = 'Sender verification unknown — tap for details';
+                _lockSvgInner = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M9.6 14.6a2.4 2.4 0 0 1 3.6 2c0 1-1.2 1.4-1.2 2.4"></path><path d="M12 21.2v.01"></path>';
             }
             const mkLock = (layoutClass) => _lockVerified === '' ? '' :
                 `<span class="crypto-verified-badge ${layoutClass}${_lockExtraClass}" data-action="showVerificationInfo" data-verified="${_lockVerified}" title="${_lockTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${_lockSvgInner}</svg></span>`;
@@ -3408,13 +3413,19 @@ Object.assign(NYM.prototype, {
         this.closeTimestampPopup();
         if (!anchorEl) return;
 
-        const title = verified ? 'Cryptographically verified' : 'Unverified sender';
-        const body = verified
+        const state = (verified === true || verified === 'true') ? 'verified'
+            : (verified === 'unknown' ? 'unknown' : 'unverified');
+        const title = state === 'verified' ? 'Cryptographically verified'
+            : state === 'unknown' ? 'Verification unknown'
+                : 'Unverified sender';
+        const body = state === 'verified'
             ? "The seal wrapping this message (NIP-17 / NIP-59 kind 13) was signed by the sender's long-term identity key, and that signer matches the author the message claims. The displayed identity is cryptographically authenticated and cannot be forged by a relay or third party."
-            : "This message uses a Bitchat-format seal signed with a throwaway, per-message key that has no binding to any long-term identity. The displayed sender is an unverified, self-asserted claim — treat the identity with caution, as it could be spoofed.";
+            : state === 'unknown'
+                ? "This message's sender could not be cryptographically verified on this device — its verification seal isn't available (for example, it was restored from saved history). The displayed identity is unconfirmed: don't assume it is authenticated."
+                : "This message uses a Bitchat-format seal signed with a throwaway, per-message key that has no binding to any long-term identity. The displayed sender is an unverified, self-asserted claim — treat the identity with caution, as it could be spoofed.";
 
         const modal = document.createElement('div');
-        modal.className = `reactors-modal verification-popup${verified ? '' : ' unverified'}`;
+        modal.className = `reactors-modal verification-popup${state === 'verified' ? '' : ' ' + state}`;
         modal.innerHTML = `<div class="verification-popup-title">${this.escapeHtml(title)}</div><div class="verification-popup-body">${this.escapeHtml(body)}</div>`;
         document.body.appendChild(modal);
         this.timestampPopup = modal;
