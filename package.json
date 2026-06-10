@@ -2,10 +2,13 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "canary:sign": "node scripts/sign-canary.mjs",
+    "canary:check": "node scripts/check-canary.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.27.4",
-    "html-minifier-terser": "^7.2.0"
+    "html-minifier-terser": "^7.2.0",
+    "nostr-tools": "^2.23.5"
   }
 }

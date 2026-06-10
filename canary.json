@@ -1,7 +1,14 @@
 {
-  "statement": "As of the date below, 21 Million LLC has not received any National Security Letters, FISA court orders, gag orders, warrants, subpoenas, or other secret government requests for Nymchat user data, and has not been compelled to modify its systems or surrender cryptographic keys.",
-  "allClear": true,
-  "updatedAt": "2026-06-01T00:00:00Z",
-  "nextUpdateBy": "2026-09-01T00:00:00Z",
-  "signedBy": "Nymchat maintainers"
+  "kind": 30078,
+  "created_at": 1781079680,
+  "tags": [
+    [
+      "d",
+      "warrant-canary"
+    ]
+  ],
+  "content": "{\"statement\":\"As of the date below, 21 Million LLC has not received any National Security Letters, FISA court orders, gag orders, warrants, subpoenas, or other secret government requests for Nymchat user data, and has not been compelled to modify its systems or surrender cryptographic keys.\",\"allClear\":true,\"updatedAt\":\"2026-06-10T08:21:18.147Z\",\"nextUpdateBy\":\"2026-09-08T08:21:18.148Z\",\"signedBy\":\"Nymchat maintainers\",\"btcBlock\":{\"height\":953076,\"hash\":\"00000000000000000001bf19263da81b96fcdc4abbbcde6f10344107e6c47f16\"}}",
+  "pubkey": "fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2",
+  "id": "f32d9c7b88b31276f09438d13667bfff25eb8fbed5f5b163491347b52bcd8406",
+  "sig": "d6c6d9df446c0feddbe5fd9eef00e266cad58bbc8e2fe4d84602a455591568b2825463899bf4f2841f4961e2871d6d12ad89ad5808e89ff62c5c0e8b8e01159b"
 }
