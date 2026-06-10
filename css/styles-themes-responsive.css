@@ -1533,17 +1533,9 @@ body.light-mode .typing-indicator {
         width: 80px;
     }
 
-    .channel-info {
-        gap: 0;
-    }
-
-    .channel-info > .nm-h-15 {
-        flex: 0 0 auto;
-    }
-
     .channel-title-wrap {
-        margin-left: 10px;
-        margin-right: 0;
+    margin-left: 10px;
+    margin-right: 0;
     }
 }
 
