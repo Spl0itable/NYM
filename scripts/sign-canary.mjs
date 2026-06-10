@@ -1,9 +1,17 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { finalizeEvent } from 'nostr-tools/pure';
+import { SimplePool } from 'nostr-tools/pool';
 import { nip19 } from 'nostr-tools';
 
 const KIND = 30078;
 const D_TAG = 'warrant-canary';
+const DEFAULT_RELAYS = [
+    'wss://sendit.nosflare.com',
+    'wss://relay.damus.io',
+    'wss://nos.lol',
+    'wss://relay.primal.net',
+    'wss://relay.snort.social',
+];
 
 function secretKey() {
     const k = process.env.NOSTR_NSEC;
@@ -35,6 +43,21 @@ function isoInDays(days) {
     return new Date(Date.now() + days * 86400000).toISOString();
 }
 
+async function broadcast(event) {
+    if (process.env.CANARY_NO_BROADCAST === '1') return;
+    if (typeof WebSocket === 'undefined') throw new Error('no global WebSocket; use Node 20+ to broadcast');
+    const relays = (process.env.CANARY_RELAYS || DEFAULT_RELAYS.join(',')).split(',').map((r) => r.trim()).filter(Boolean);
+    const pool = new SimplePool();
+    const withTimeout = (p) => {
+        let t;
+        return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('timeout')), 8000); })])
+            .finally(() => clearTimeout(t));
+    };
+    const results = await Promise.allSettled(pool.publish(relays, event).map(withTimeout));
+    relays.forEach((r, i) => console.log((results[i].status === 'fulfilled' ? '  published ' : '  failed    ') + r));
+    pool.close(relays);
+}
+
 async function main() {
     let base = {};
     try {
@@ -60,9 +83,13 @@ async function main() {
     }, secretKey());
 
     writeFileSync('canary.json', JSON.stringify(event, null, 2) + '\n');
+    const nevent = nip19.neventEncode({ id: event.id, author: event.pubkey, relays: DEFAULT_RELAYS.slice(0, 3) });
     console.log('Signed canary by ' + event.pubkey);
+    console.log('Event id ' + event.id);
     console.log('Anchored to BTC block ' + payload.btcBlock.height);
     console.log('Next update by ' + payload.nextUpdateBy);
+    console.log('View: https://njump.me/' + nevent);
+    await broadcast(event);
 }
 
-main().catch((e) => { console.error(e.message || e); process.exit(1); });
+main().then(() => process.exit(0)).catch((e) => { console.error(e.message || e); process.exit(1); });

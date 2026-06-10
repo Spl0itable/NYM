@@ -4221,6 +4221,8 @@ function fmtCanaryDate(ms) {
     try { return new Date(ms).toISOString().slice(0, 10); } catch (_) { return ''; }
 }
 
+const CANARY_RELAY_HINTS = ['wss://sendit.nosflare.com', 'wss://relay.damus.io', 'wss://nos.lol'];
+
 function runCanaryCheck() {
     const statusEl = document.getElementById('aboutCanaryStatus');
     if (!statusEl || typeof window.checkWarrantCanary !== 'function') return;
@@ -4228,6 +4230,7 @@ function runCanaryCheck() {
     const noteEl = document.getElementById('aboutCanaryNote');
     const dateEl = document.getElementById('aboutCanaryDate');
     const sigEl = document.getElementById('aboutCanarySig');
+    const eventEl = document.getElementById('aboutCanaryEvent');
     const anchorEl = document.getElementById('aboutCanaryAnchor');
 
     statusEl.textContent = 'Checking…';
@@ -4235,6 +4238,7 @@ function runCanaryCheck() {
     if (noteEl) noteEl.textContent = '';
     if (dateEl) dateEl.textContent = '';
     if (sigEl) { sigEl.textContent = ''; sigEl.className = 'about-canary-sig'; }
+    if (eventEl) { eventEl.textContent = ''; eventEl.removeAttribute('href'); }
     if (anchorEl) { anchorEl.textContent = ''; anchorEl.removeAttribute('href'); }
 
     window.checkWarrantCanary().then((c) => {
@@ -4253,6 +4257,17 @@ function runCanaryCheck() {
             if (c.sig === 'valid') { sigEl.textContent = 'signature ✓'; sigEl.className = 'about-canary-sig ok'; }
             else if (c.sig === 'invalid') { sigEl.textContent = 'signature ✗'; sigEl.className = 'about-canary-sig bad'; }
             else { sigEl.textContent = 'unsigned'; sigEl.className = 'about-canary-sig'; }
+        }
+        if (eventEl && c.id) {
+            let ref = c.id;
+            try {
+                const NT = window.NostrTools;
+                if (NT && NT.nip19 && typeof NT.nip19.neventEncode === 'function') {
+                    ref = NT.nip19.neventEncode({ id: c.id, author: c.pubkey || undefined, relays: CANARY_RELAY_HINTS });
+                }
+            } catch (_) { }
+            eventEl.textContent = 'nostr event';
+            eventEl.href = 'https://njump.me/' + ref;
         }
         if (anchorEl && c.btcBlock && c.btcBlock.height) {
             anchorEl.textContent = 'btc block ' + c.btcBlock.height;

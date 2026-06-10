@@ -37,6 +37,8 @@
             dueBy: Number.isFinite(dueBy) ? dueBy : null,
             overdue,
             btcBlock: c.btcBlock || null,
+            id: doc.id || '',
+            pubkey: doc.pubkey || '',
         };
     }
 
