@@ -4577,7 +4577,28 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .call-overlay-top {
     text-align: center;
     padding: 18px 16px 6px;
+    position: relative;
 }
+
+.call-switch-cam-btn {
+    position: absolute;
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: 14px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-bright);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s, background 0.15s, filter 0.15s;
+}
+
+.call-switch-cam-btn:hover { transform: scale(1.08); }
+.call-switch-cam-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
 
 .call-title {
     font-size: 1.05rem;

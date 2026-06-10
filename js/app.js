@@ -616,6 +616,7 @@ class NYM {
         this._newPMRecipients = [];
         this.groupMessageReaders = new Map();
         this.channelMessageReaders = new Map();
+        this._msgVerifyStatus = new Map();
         this._unfurlCache = new Map();
         this.unreadCounts = new Map();
         this.channelLastRead = new Map();
@@ -4172,7 +4173,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.69.477';
+const NYMCHAT_VERSION = 'v3.70.477';
 
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');

@@ -232,6 +232,26 @@
     flex: 1;
 }
 
+.zap-custom-generate-btn {
+    flex-shrink: 0;
+    padding: 0 18px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgb(from var(--lightning) r g b / 0.4);
+    background: rgb(from var(--lightning) r g b / 0.12);
+    color: var(--lightning);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.zap-custom-generate-btn:hover {
+    background: rgb(from var(--lightning) r g b / 0.2);
+    border-color: rgb(from var(--lightning) r g b / 0.6);
+}
+
 .zap-comment {
     margin-top: 20px;
 }
@@ -899,6 +919,14 @@ body.chat-bubbles .read-more-btn {
 }
 
 .message-content .channel-link:hover {
+    color: var(--primary);
+}
+
+.channel-reference {
+    cursor: pointer;
+}
+
+.channel-reference:hover {
     color: var(--primary);
 }
 

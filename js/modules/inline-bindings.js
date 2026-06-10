@@ -263,6 +263,7 @@ window.nymHapticTap = function (ms) {
         'hangupCall':                 function () { nym().hangupCall(); },
         'toggleCallMute':             function () { nym().toggleCallMute(); },
         'toggleCallVideo':            function () { nym().toggleCallVideo(); },
+        'switchCamera':               function () { nym().switchCamera(); },
         'toggleScreenShare':          function () { nym().toggleScreenShare(); },
         'toggleCallReactions':        function () { nym().toggleCallReactions(); },
         'sendCallReaction':           function (_e, t) { nym().sendCallReaction(t.dataset.emoji); },
@@ -576,6 +577,9 @@ window.nymHapticTap = function (ms) {
         },
         'selectChannelAutocompleteItem': function (_e, t) {
             nym().selectChannelAutocompleteItem(t.dataset.channelName);
+        },
+        'selectKaomoji': function (_e, t) {
+            nym().selectKaomoji(t.dataset.kaomoji);
         },
 
         // Channels (settings list buttons)

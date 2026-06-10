@@ -188,6 +188,78 @@ Object.assign(NYM.prototype, {
         this.addToRecentEmojis(emoji);
     },
 
+    showKaomojiAutocomplete(search) {
+        const palette = document.getElementById('kaomojiAutocomplete');
+        const needle = (search || '').toLowerCase();
+        const cats = needle
+            ? this.kaomojiCategories.filter(([label]) => label.toLowerCase().includes(needle))
+            : this.kaomojiCategories;
+
+        if (cats.length === 0) { this.hideKaomojiAutocomplete(); return; }
+
+        let firstAssigned = false;
+        palette.innerHTML = cats.map(([label, items]) => {
+            const rows = items.map(k => {
+                const selected = firstAssigned ? '' : ' selected';
+                firstAssigned = true;
+                const safe = this.escapeHtml(k);
+                return `<div class="command-item kaomoji-item${selected}" data-action="selectKaomoji" data-kaomoji="${safe}"><span class="kaomoji-text">${safe}</span></div>`;
+            }).join('');
+            return `<div class="command-category">${label}</div>${rows}`;
+        }).join('');
+        palette.classList.add('active');
+        this.kaomojiAutocompleteIndex = 0;
+    },
+
+    hideKaomojiAutocomplete() {
+        const el = document.getElementById('kaomojiAutocomplete');
+        if (el) {
+            el.classList.remove('active');
+            el.replaceChildren();
+        }
+        this.kaomojiAutocompleteIndex = -1;
+    },
+
+    navigateKaomojiAutocomplete(direction) {
+        const items = document.querySelectorAll('#kaomojiAutocomplete .kaomoji-item');
+        if (items.length === 0) return;
+
+        items.forEach(el => el.classList.remove('selected'));
+
+        if (this.kaomojiAutocompleteIndex < 0 || this.kaomojiAutocompleteIndex >= items.length) {
+            this.kaomojiAutocompleteIndex = direction > 0 ? 0 : items.length - 1;
+        } else {
+            this.kaomojiAutocompleteIndex += direction;
+            if (this.kaomojiAutocompleteIndex < 0) this.kaomojiAutocompleteIndex = items.length - 1;
+            if (this.kaomojiAutocompleteIndex >= items.length) this.kaomojiAutocompleteIndex = 0;
+        }
+
+        items[this.kaomojiAutocompleteIndex].classList.add('selected');
+        items[this.kaomojiAutocompleteIndex].scrollIntoView({ block: 'nearest' });
+    },
+
+    selectKaomojiAutocomplete() {
+        const selected = document.querySelector('#kaomojiAutocomplete .kaomoji-item.selected');
+        if (selected) this.selectKaomoji(selected.dataset.kaomoji);
+    },
+
+    selectKaomoji(kaomoji) {
+        if (!kaomoji) return;
+        const input = document.getElementById('messageInput');
+        const value = input.value;
+        const cursor = (typeof input.selectionStart === 'number') ? input.selectionStart : value.length;
+        const before = value.substring(0, cursor);
+        const after = value.substring(cursor);
+        // Replace the \search token immediately left of the cursor with the kaomoji
+        const m = before.match(/\\[a-z]*$/i);
+        const slashIndex = m ? before.length - m[0].length : before.lastIndexOf('\\');
+        const replaced = before.substring(0, slashIndex) + kaomoji + ' ';
+        input.value = replaced + after;
+        input.selectionStart = input.selectionEnd = replaced.length;
+        input.focus();
+        this.hideKaomojiAutocomplete();
+    },
+
     _mentionPriorityPubkeys() {
         if (this.inPMMode && this.currentPM) return new Set([this.currentPM]);
         if (this.inPMMode && this.currentGroup) {

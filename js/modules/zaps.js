@@ -361,12 +361,24 @@ Object.assign(NYM.prototype, {
             };
         });
         const custom = document.getElementById('zapCustomAmount');
+        const triggerCustom = () => {
+            const val = parseInt(custom && custom.value, 10);
+            if (!val || val <= 0) { if (custom) custom.focus(); return; }
+            document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
+            generate();
+        };
         if (custom) {
             custom.onkeydown = (e) => {
                 if (e.key !== 'Enter') return;
                 e.preventDefault();
-                document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('selected'));
-                generate();
+                triggerCustom();
+            };
+        }
+        const customBtn = document.getElementById('zapCustomGenerateBtn');
+        if (customBtn) {
+            customBtn.onclick = (e) => {
+                e.preventDefault();
+                triggerCustom();
             };
         }
     },

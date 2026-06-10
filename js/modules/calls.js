@@ -113,6 +113,7 @@ Object.assign(NYM.prototype, {
             members: [this.pubkey, ...targets],
             muted: false,
             cameraOff: false,
+            facingMode: 'user',
             startedAt: 0,
             timerInterval: null,
             ringTimeout: null
@@ -389,6 +390,7 @@ Object.assign(NYM.prototype, {
             members: inc.members.slice(),
             muted: false,
             cameraOff: false,
+            facingMode: 'user',
             startedAt: 0,
             timerInterval: null,
             ringTimeout: null
@@ -649,6 +651,55 @@ Object.assign(NYM.prototype, {
         this._renderCallGrid();
     },
 
+    async switchCamera() {
+        const ac = this.activeCall;
+        if (!ac || ac.kind !== 'video' || ac.sharing || ac.switchingCamera) return;
+        ac.switchingCamera = true;
+        this._updateCallControls();
+        const next = ac.facingMode === 'environment' ? 'user' : 'environment';
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: { ideal: next } }
+            });
+        } catch (e) {
+            ac.switchingCamera = false;
+            this._updateCallControls();
+            this.displaySystemMessage('Could not switch camera: ' + (e.message || e.name || e));
+            return;
+        }
+        if (!this.activeCall || this.activeCall !== ac) { stream.getTracks().forEach(t => t.stop()); return; }
+        const newTrack = stream.getVideoTracks()[0];
+        if (!newTrack) { stream.getTracks().forEach(t => t.stop()); ac.switchingCamera = false; this._updateCallControls(); return; }
+        newTrack.enabled = !ac.cameraOff;
+        const oldTrack = ac.localStream.getVideoTracks()[0];
+        if (oldTrack) { ac.localStream.removeTrack(oldTrack); try { oldTrack.stop(); } catch (e) { /* ignore */ } }
+        ac.localStream.addTrack(newTrack);
+        if (!ac.sharing) {
+            ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(newTrack); } catch (e) { /* ignore */ } } });
+        }
+        ac.facingMode = next;
+        ac.switchingCamera = false;
+        this._updateCallControls();
+        this._renderCallGrid();
+    },
+
+    async _updateCameraSwitchBtn() {
+        const btn = document.getElementById('callSwitchCamBtn');
+        if (!btn) return;
+        const ac = this.activeCall;
+        let show = !!(ac && ac.kind === 'video');
+        if (show && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                show = devices.filter(d => d.kind === 'videoinput').length > 1;
+            } catch (e) { /* keep showing */ }
+        }
+        if (!this.activeCall || this.activeCall !== ac) return;
+        btn.classList.toggle('nm-call-hidden', !show);
+    },
+
     _callTitleHtml() {
         if (!this.activeCall) return '';
         const kind = this.activeCall.kind === 'video' ? 'Video call' : 'Audio call';
@@ -697,6 +748,7 @@ Object.assign(NYM.prototype, {
             const el = document.getElementById(id); if (el) el.classList.remove('active');
         });
         this._updateCallControls();
+        this._updateCameraSwitchBtn();
         this._renderCallGrid();
     },
 
@@ -1669,6 +1721,12 @@ Object.assign(NYM.prototype, {
 
     _updateCallControls() {
         const ac = this.activeCall;
+
+        const switchBtn = document.getElementById('callSwitchCamBtn');
+        if (switchBtn) {
+            switchBtn.disabled = !!(ac && (ac.sharing || ac.switchingCamera));
+            switchBtn.title = ac && ac.facingMode === 'environment' ? 'Switch to front camera' : 'Switch to rear camera';
+        }
 
         const shareBtn = document.getElementById('callShareBtn');
         if (shareBtn) {

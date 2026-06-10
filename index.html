@@ -668,6 +668,7 @@
                     <div class="autocomplete-dropdown" id="channelAutocomplete"></div>
                     <div class="emoji-autocomplete" id="emojiAutocomplete"></div>
                     <div class="command-palette" id="commandPalette"></div>
+                    <div class="command-palette kaomoji-autocomplete" id="kaomojiAutocomplete"></div>
                     <div class="upload-progress" id="uploadProgress">
                         <button class="upload-progress-close" data-action="cancelUpload" title="Cancel upload" aria-label="Cancel upload">
                             <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
@@ -870,6 +871,14 @@
         <div class="call-overlay-top">
             <div class="call-title" id="callTitle"></div>
             <div class="call-status" id="callStatus">Calling…</div>
+            <button class="call-switch-cam-btn nm-call-hidden" id="callSwitchCamBtn" data-action="switchCamera" title="Switch camera">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <path d="M15.5 12.5a3.5 3.5 0 0 1-5.6 2.8M8.5 11.5a3.5 3.5 0 0 1 5.6-2.8"></path>
+                    <polyline points="14.5 6 14.1 8.7 11.5 8.3"></polyline>
+                    <polyline points="9.5 19 9.9 16.3 12.5 16.7"></polyline>
+                </svg>
+            </button>
         </div>
         <div class="call-body">
             <div class="call-grid" id="callGrid"></div>
@@ -1964,6 +1973,7 @@
                     <div class="form-group zap-custom-amount">
                         <input type="number" class="form-input" id="zapCustomAmount" placeholder="Custom amount (sats)"
                             min="1">
+                        <button type="button" class="zap-custom-generate-btn" id="zapCustomGenerateBtn">Generate</button>
                     </div>
 
                     <div class="form-group zap-comment">

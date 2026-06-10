@@ -699,11 +699,18 @@ Object.assign(NYM.prototype, {
             let _lockExtraClass = '';
             let _lockTitle = '';
             let _lockSvgInner = '';
-            if (message.senderVerified === true) {
+            let _sv = message.senderVerified;
+            if (typeof _sv === 'boolean') {
+                if (message.isPM && message.nymMessageId) this._recordMsgVerification(message.nymMessageId, _sv);
+            } else if (message.isPM && message.nymMessageId) {
+                const _remembered = this._lookupMsgVerification(message.nymMessageId);
+                if (typeof _remembered === 'boolean') _sv = _remembered;
+            }
+            if (_sv === true) {
                 _lockVerified = 'true';
                 _lockTitle = 'Cryptographically verified sender — tap for details';
                 _lockSvgInner = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path><path d="M8.5 16.5l2.5 2.5 4.5-4.5"></path>';
-            } else if (message.senderVerified === false) {
+            } else if (_sv === false) {
                 _lockVerified = 'false';
                 _lockExtraClass = ' unverified';
                 _lockTitle = 'Unverified sender — tap for details';
@@ -1176,9 +1183,10 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Add zaps display - check if this message has any zaps
-        if (message.id && this.zaps.has(message.id)) {
-            this.updateMessageZaps(message.id);
+        // Add zaps display
+        const zapKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+        if (zapKey && this.zaps.has(zapKey)) {
+            this.updateMessageZaps(zapKey);
         }
 
         // iOS Safari: explicitly load videos inserted via innerHTML. Safari
@@ -3505,6 +3513,57 @@ Object.assign(NYM.prototype, {
             const txt = bubbleInner.querySelector('.bubble-time-text');
             (txt || bubbleInner).insertAdjacentHTML(txt ? 'afterend' : 'beforeend', this._verificationLockSpan(verified, 'crypto-lock-bubble'));
         }
+    },
+
+    _msgVerifyKey(id) {
+        return id ? String(id).toUpperCase() : '';
+    },
+
+    _ensureMsgVerifyLoaded() {
+        if (this._msgVerifyLoaded) return;
+        this._msgVerifyLoaded = true;
+        if (!this._msgVerifyStatus) this._msgVerifyStatus = new Map();
+        try {
+            const raw = localStorage.getItem('nym_msg_verify_status');
+            if (raw) {
+                const arr = JSON.parse(raw);
+                if (Array.isArray(arr)) {
+                    for (const e of arr) {
+                        if (Array.isArray(e) && e.length === 2 && e[0]) {
+                            this._msgVerifyStatus.set(String(e[0]), !!e[1]);
+                        }
+                    }
+                }
+            }
+        } catch (_) { }
+    },
+
+    _recordMsgVerification(id, verified) {
+        if (typeof verified !== 'boolean') return;
+        const key = this._msgVerifyKey(id);
+        if (!key) return;
+        this._ensureMsgVerifyLoaded();
+        if (this._msgVerifyStatus.get(key) === verified) return;
+        this._msgVerifyStatus.delete(key);
+        this._msgVerifyStatus.set(key, verified);
+        if (this._msgVerifyStatus.size > 8000) {
+            const oldest = this._msgVerifyStatus.keys().next().value;
+            this._msgVerifyStatus.delete(oldest);
+        }
+        clearTimeout(this._msgVerifyPersistTimer);
+        this._msgVerifyPersistTimer = setTimeout(() => {
+            try {
+                const arr = Array.from(this._msgVerifyStatus.entries()).map(([k, v]) => [k, v ? 1 : 0]);
+                localStorage.setItem('nym_msg_verify_status', JSON.stringify(arr));
+            } catch (_) { }
+        }, 3000);
+    },
+
+    _lookupMsgVerification(id) {
+        const key = this._msgVerifyKey(id);
+        if (!key) return undefined;
+        this._ensureMsgVerifyLoaded();
+        return this._msgVerifyStatus.get(key);
     },
 
 });

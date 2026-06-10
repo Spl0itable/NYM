@@ -286,7 +286,6 @@ Object.assign(NYM.prototype, {
             '/w':             { aliasOf: '/who',                        fn: () => this.cmdWho() },
             '/clear':         { desc: 'Clear conversation',             cat: 'misc',       fn: () => this.cmdClear() },
             '/me':            { desc: 'Action message',                 cat: 'misc', fn: (args) => this.cmdMe(args) },
-            '/shrug':         { desc: 'Send shrug',                     cat: 'misc', fn: () => this.cmdShrug() },
             '/bold':          { desc: 'Bold text (**text**)',           cat: 'formatting', aliases: ['/b'], fn: (args) => this.cmdBold(args) },
             '/b':             { aliasOf: '/bold',                       fn: (args) => this.cmdBold(args) },
             '/italic':        { desc: 'Italic text (*text*)',           cat: 'formatting', aliases: ['/i'], fn: (args) => this.cmdItalic(args) },
@@ -325,6 +324,18 @@ Object.assign(NYM.prototype, {
             ['groups',     'Groups'],
             ['formatting', 'Formatting'],
             ['misc',       'Misc']
+        ];
+        // Kaomoji picker (type \ in chat) — Japanese emoticons grouped by mood
+        this.kaomojiCategories = [
+            ['Joy',       ['(◕‿◕)', '(◠‿◠)', '(*^‿^*)', '(≧◡≦)', 'ヽ(•‿•)ノ', '(´∇｀)', '＼(^o^)／']],
+            ['Love',      ['(♥‿♥)', '(づ｡◕‿‿◕｡)づ', '♡(◡‿◡)', '(*♡∀♡)', '(❤ω❤)']],
+            ['Sad',       ['(╥﹏╥)', '(｡•́︿•̀｡)', '(T_T)', '(ಥ_ಥ)', '(´；ω；`)', 'orz']],
+            ['Anger',     ['(╬ಠ益ಠ)', 'ヽ(`Д´)ﾉ', '(ノಠ益ಠ)ノ', '凸(￣ヘ￣)', '(＃`Д´)']],
+            ['Surprise',  ['(⊙_⊙)', '(°ロ°)', 'Σ(°△°)', '(ﾟοﾟ)']],
+            ['Confused',  ['¯\\_(ツ)_/¯', '(•_•)?', '(°ヘ°)', '(￣～￣;)']],
+            ['Tableflip', ['(╯°□°)╯︵ ┻━┻', '┬─┬ノ( º_ºノ)', '(ノಠ益ಠ)ノ彡┻━┻']],
+            ['Animals',   ['(=^･ω･^=)', 'ʕ•ᴥ•ʔ', '(•ㅅ•)', '/ᐠ｡ꞈ｡ᐟ\\', '>°)))彡']],
+            ['Misc',      ['(☞ﾟヮﾟ)☞', 'ᕦ(ò_óˇ)ᕤ', '(⌐■_■)', '(◔_◔)', '~(˘▽˘~)']],
         ];
     },
 
@@ -421,7 +432,7 @@ Object.assign(NYM.prototype, {
 
     selectCommand(element = null) {
         const selected = element || document.querySelector('.command-item.selected');
-        if (selected) {
+        if (selected && selected.dataset.command) {
             const cmd = selected.dataset.command;
             const input = document.getElementById('messageInput');
             input.value = cmd + ' ';
@@ -457,6 +468,7 @@ Object.assign(NYM.prototype, {
         const footer = [
             'Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, > quote',
             'Type : to quickly pick an emoji',
+            'Type \\ to pick a kaomoji like ¯\\_(ツ)_/¯',
             'Nyms are shown as name#xxxx where xxxx is the last 4 characters of their pubkey',
             'Click on users for more options'
         ].map(line => this.escapeHtml(line)).join('<br><br>');
@@ -1198,14 +1210,6 @@ Object.assign(NYM.prototype, {
 
         try {
             await this._sendToCurrentTarget(content);
-        } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
-        }
-    },
-
-    async cmdShrug() {
-        try {
-            await this._sendToCurrentTarget('¯\\_(ツ)_/¯');
         } catch (error) {
             this.displaySystemMessage('Failed to send message: ' + error.message);
         }

@@ -1049,6 +1049,7 @@ Object.assign(NYM.prototype, {
             if (senderVerified === true && dupGroupMsg.senderVerified !== true) {
                 dupGroupMsg.senderVerified = true;
                 this._setMessageVerifiedDOM(dupGroupMsg.nymMessageId || dupGroupMsg.id, true);
+                this._recordMsgVerification(dupGroupMsg.nymMessageId, true);
                 this.channelDOMCache.delete(groupConvKey);
                 this.persistPMMessages(groupConvKey);
             }
@@ -1084,6 +1085,7 @@ Object.assign(NYM.prototype, {
             nymMessageId: nymMsgId,
             deliveryStatus: isOwn ? 'sent' : undefined
         };
+        this._recordMsgVerification(nymMsgId, senderVerified);
 
         list.push(msg);
         list.sort((a, b) => {
@@ -2763,7 +2765,7 @@ Object.assign(NYM.prototype, {
 
     _groupCtxMemberRowHtml(groupId, pubkey) {
         const safePk = this._safePubkey(pubkey);
-        const baseNym = this.escapeHtml(this.getNymFromPubkey(pubkey));
+        const baseNym = this.escapeHtml(this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
         const suffix = this.getPubkeySuffix(pubkey);
         const isSelf = pubkey === this.pubkey;
         const roleBadge = this._isGroupOwner(groupId, pubkey)

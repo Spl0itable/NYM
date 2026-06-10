@@ -832,6 +832,17 @@
     font-size: 12px;
 }
 
+.kaomoji-item {
+    justify-content: flex-start;
+}
+
+.kaomoji-text {
+    color: var(--text);
+    font-family: 'Segoe UI Symbol', 'Apple Symbols', 'Noto Sans Symbols', sans-serif;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
 .notifications-btn {
     position: relative;
     display: inline-flex;

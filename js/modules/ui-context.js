@@ -926,6 +926,7 @@ Object.assign(NYM.prototype, {
             const channelAc = document.getElementById('channelAutocomplete');
             const emojiAutocomplete = document.getElementById('emojiAutocomplete');
             const commandPalette = document.getElementById('commandPalette');
+            const kaomojiAc = document.getElementById('kaomojiAutocomplete');
 
             if (autocomplete.classList.contains('active')) {
                 if (e.key === 'ArrowDown') {
@@ -968,6 +969,20 @@ Object.assign(NYM.prototype, {
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
                     this.hideEmojiAutocomplete();
+                }
+            } else if (kaomojiAc && kaomojiAc.classList.contains('active')) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    this.navigateKaomojiAutocomplete(1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    this.navigateKaomojiAutocomplete(-1);
+                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    this.selectKaomojiAutocomplete();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this.hideKaomojiAutocomplete();
                 }
             } else if (commandPalette.classList.contains('active')) {
                 if (e.key === 'ArrowDown') {
@@ -1069,6 +1084,11 @@ Object.assign(NYM.prototype, {
                 this.hideEmojiAutocomplete();
             }
 
+            // Close \ kaomoji autocomplete if clicking outside
+            if (!e.target.closest('#kaomojiAutocomplete') && !e.target.closest('#messageInput')) {
+                this.hideKaomojiAutocomplete();
+            }
+
             // Close # channel autocomplete if clicking outside
             if (!e.target.closest('#channelAutocomplete') && !e.target.closest('#messageInput')) {
                 this.hideChannelAutocomplete();
@@ -1111,8 +1131,9 @@ Object.assign(NYM.prototype, {
             }
 
             // Handle command palette item click
-            if (e.target.closest('.command-item')) {
-                this.selectCommand(e.target.closest('.command-item'));
+            const commandItem = e.target.closest('.command-item');
+            if (commandItem && !commandItem.classList.contains('kaomoji-item')) {
+                this.selectCommand(commandItem);
             }
         });
 
@@ -1650,20 +1671,31 @@ Object.assign(NYM.prototype, {
         const hashMatch = before.match(/(?:^|\s)#([^\s]*)$/);
         const isChannelActive = hashMatch !== null;
 
+        // Check for \ kaomoji picker (\ at start or after whitespace)
+        const kaomojiMatch = before.match(/(?:^|\s)\\([a-z]*)$/i);
+
         if (isMentionActive) {
             const search = mentionMatch[1];
             this.showAutocomplete(search);
             // Hide emoji autocomplete and channel autocomplete
             this.hideEmojiAutocomplete();
             this.hideChannelAutocomplete();
+            this.hideKaomojiAutocomplete();
         } else if (isChannelActive) {
             const search = hashMatch[1];
             this.showChannelAutocomplete(search);
             this.hideAutocomplete();
             this.hideEmojiAutocomplete();
+            this.hideKaomojiAutocomplete();
+        } else if (kaomojiMatch) {
+            this.showKaomojiAutocomplete(kaomojiMatch[1]);
+            this.hideAutocomplete();
+            this.hideChannelAutocomplete();
+            this.hideEmojiAutocomplete();
         } else {
             this.hideAutocomplete();
             this.hideChannelAutocomplete();
+            this.hideKaomojiAutocomplete();
 
             // Only check for emoji autocomplete when not in a mention context.
             // Match a :shortcode token immediately to the left of the cursor

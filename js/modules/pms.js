@@ -1185,6 +1185,7 @@ Object.assign(NYM.prototype, {
                     // Flip the on-screen lock immediately so the verified copy
                     // wins even when the unverified Bitchat copy rendered first.
                     this._setMessageVerifiedDOM(dupMsg.nymMessageId || dupMsg.id, true);
+                    this._recordMsgVerification(dupMsg.nymMessageId, true);
                     needsRerender = true;
                 }
                 if (needsRerender) {
@@ -1237,6 +1238,7 @@ Object.assign(NYM.prototype, {
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
+            this._recordMsgVerification(nymMsgId, senderVerified);
 
             list.push(msg);
             list.sort((a, b) => {
