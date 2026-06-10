@@ -224,7 +224,7 @@ The deployed web app is built deterministically, so anyone can confirm that the 
 
 How it works:
 
-- `npm run build` emits `dist/build-manifest.json` containing the source `commit`, a `sha256-` hash of every served JS/CSS asset, and a single `bundleHash` over that asset set. The `bundleHash` depends only on source content, so reproducible rebuilds of the same commit produce the same hash.
+- `npm run build` emits `dist/build-manifest.json` containing the source `commit`, a `sha256-` hash of every served HTML/JS/CSS asset, and a single `bundleHash` over that asset set. The `bundleHash` depends only on source content, so reproducible rebuilds of the same commit produce the same hash.
 - The app's **About** dialog re-fetches each running asset, hashes it in the browser with the Web Crypto API, and compares against the manifest. It shows `✓ Verified (n/n)`, the source commit (linked), and the short `bundleHash`.
 - The [Build provenance](../../actions/workflows/build-provenance.yml) GitHub Action independently rebuilds each commit, prints the `bundleHash` to the run summary, and signs a build-provenance attestation for the manifest.
 
