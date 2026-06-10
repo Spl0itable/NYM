@@ -357,6 +357,19 @@ Object.assign(NYM.prototype, {
         if (recent.length === 0) {
             body.innerHTML = '<div class="notifications-empty">No notifications in the last 24 hours</div>';
         } else {
+            // Pull fresh kind 0 profiles for any sender we don't already have
+            // cached, so default nyms/avatars get replaced once the events
+            // land (the kind 0 handler refreshes the open modal in place).
+            if (typeof this.queueProfileFetch === 'function') {
+                const seenPubkeys = new Set();
+                for (const n of recent) {
+                    const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
+                    if (!pk || seenPubkeys.has(pk) || pk === this.pubkey) continue;
+                    seenPubkeys.add(pk);
+                    if (this.users.has(pk) && this.userAvatars && this.userAvatars.has(pk)) continue;
+                    try { this.queueProfileFetch(pk); } catch (_) { }
+                }
+            }
             body.innerHTML = '';
             // Show newest first
             for (let i = recent.length - 1; i >= 0; i--) {
