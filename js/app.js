@@ -4173,7 +4173,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.70.478';
+const NYMCHAT_VERSION = 'v3.70.479';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -4216,6 +4216,50 @@ function runBuildVerification() {
     });
 }
 
+function fmtCanaryDate(ms) {
+    if (!ms) return '';
+    try { return new Date(ms).toISOString().slice(0, 10); } catch (_) { return ''; }
+}
+
+function runCanaryCheck() {
+    const statusEl = document.getElementById('aboutCanaryStatus');
+    if (!statusEl || typeof window.checkWarrantCanary !== 'function') return;
+
+    const noteEl = document.getElementById('aboutCanaryNote');
+    const dateEl = document.getElementById('aboutCanaryDate');
+
+    statusEl.textContent = 'Checking…';
+    statusEl.className = 'about-canary-status checking';
+    if (noteEl) noteEl.textContent = '';
+    if (dateEl) dateEl.textContent = '';
+
+    window.checkWarrantCanary().then((c) => {
+        if (c.state === 'gone') {
+            statusEl.textContent = '⚠ Canary removed';
+            statusEl.className = 'about-canary-status gone';
+            if (noteEl) noteEl.textContent = 'The signed canary is no longer published. Treat this as a serious warning.';
+            return;
+        }
+        if (dateEl) {
+            const upd = fmtCanaryDate(c.updatedAt);
+            const due = fmtCanaryDate(c.dueBy);
+            dateEl.textContent = (upd ? 'updated ' + upd : '') + (due ? ' · due ' + due : '');
+        }
+        if (c.state === 'ok') {
+            statusEl.textContent = '✓ All clear';
+            statusEl.className = 'about-canary-status ok';
+            if (noteEl) noteEl.textContent = c.statement || 'No secret government requests have been received.';
+        } else {
+            statusEl.textContent = c.overdue ? '✗ Update overdue' : '✗ Not all clear';
+            statusEl.className = 'about-canary-status stale';
+            if (noteEl) noteEl.textContent = 'The canary has not been refreshed on schedule — a silenced request (NSL/FISA order) cannot be ruled out.';
+        }
+    }).catch(() => {
+        statusEl.textContent = 'Unavailable offline';
+        statusEl.className = 'about-canary-status checking';
+    });
+}
+
 function showAbout(prefill) {
     const modal = document.getElementById('aboutModal');
     if (!modal) return;
@@ -4224,6 +4268,7 @@ function showAbout(prefill) {
     if (verEl) verEl.textContent = NYMCHAT_VERSION;
 
     runBuildVerification();
+    runCanaryCheck();
 
     const relayEl = document.getElementById('aboutRelayCount');
     if (relayEl) relayEl.textContent = String(nym.relayPool.size);

@@ -122,7 +122,7 @@ async function run() {
     'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/users.js',
     'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',
     'js/modules/pms.js', 'js/modules/groups.js', 'js/modules/ui-context.js',
-    'js/modules/init.js', 'js/modules/build-verify.js',
+    'js/modules/init.js', 'js/modules/build-verify.js', 'js/modules/canary-verify.js',
   ];
   const precache = criticalSources
     .map((rel) => assetMap.get(rel))

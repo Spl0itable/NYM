@@ -2048,6 +2048,17 @@
                         <a href="https://github.com/Spl0itable/NYM#verify-build" target="_blank" rel="noopener">How to verify</a>
                     </div>
                 </div>
+                <div class="about-canary" id="aboutCanary">
+                    <div class="about-canary-row">
+                        <span class="about-canary-title">Warrant canary</span>
+                        <span class="about-canary-status" id="aboutCanaryStatus">—</span>
+                    </div>
+                    <div class="about-canary-note" id="aboutCanaryNote"></div>
+                    <div class="about-canary-meta">
+                        <a id="aboutCanarySource" href="https://github.com/Spl0itable/NYM/blob/main/canary.json" target="_blank" rel="noopener">canary</a>
+                        <span class="about-canary-date" id="aboutCanaryDate"></span>
+                    </div>
+                </div>
                 <p class="about-desc">A decentralized, pseudonymous chat built on the <a href="https://nostr.com" target="_blank" rel="noopener">Nostr</a> protocol. Inspired by and bridged with Jack Dorsey's <a href="https://bitchat.free" target="_blank" rel="noopener">Bitchat</a>.</p>
                 <div class="about-links">
                     <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener">GitHub</a>
@@ -2150,6 +2161,7 @@
     <script defer src="js/modules/notifications.js"></script>
     <script defer src="js/modules/settings.js"></script>
     <script defer src="js/modules/build-verify.js"></script>
+    <script defer src="js/modules/canary-verify.js"></script>
     <script defer src="js/sw-register.js"></script>
 
     <!-- QRCode + WebTorrent are injected on first use via window.loadScriptOnce -->

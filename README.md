@@ -244,6 +244,16 @@ The printed `bundleHash` should match both the hash shown in the app's About dia
 gh attestation verify dist/build-manifest.json --repo Spl0itable/NYM
 ```
 
+## Warrant Canary
+
+A warrant canary is a statement, published and updated on a fixed schedule, that the operator has *not* received any secret government request (such as a National Security Letter or FISA order) that legally prohibits disclosure. Because the operator can be compelled to stay silent about such a request but cannot be compelled to lie, the canary going stale or disappearing is itself the signal.
+
+The canary lives in [`canary.json`](canary.json) at the repository root and is fetched directly from GitHub, so its source is auditable in the commit history independently of the deployed site. The About dialog reads it and color-codes the status:
+
+- **Green — All clear**: The canary is signed and current. No secret request has been received.
+- **Yellow — Update overdue / Not all clear**: The canary was not refreshed by its `nextUpdateBy` date, or `allClear` is `false`. A silenced request cannot be ruled out.
+- **Red — Canary removed**: The canary file is gone entirely. Treat this as a serious warning.
+
 ## Contributing
 
 Pull requests are welcome.
