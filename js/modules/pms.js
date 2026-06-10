@@ -772,9 +772,10 @@ Object.assign(NYM.prototype, {
 
             // Validate rumor and identity
             // Accept kind 14 (DM), kind 15 (file), kind 69420 (Nymchat receipt),
-            // kind 7 (group reaction gift-wrapped to the group),
+            // kind 7 (reaction gift-wrapped to the conversation),
+            // kind 9735 (zap announcement gift-wrapped to the conversation),
             // kind 30078 (encrypted settings sync), and CALL_SIGNALING_KIND (audio/video call signaling)
-            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 30078 && rumor.kind !== this.CALL_SIGNALING_KIND && rumor.kind !== this.FRIEND_PRESENCE_KIND)) {
+            if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 9735 && rumor.kind !== 30078 && rumor.kind !== this.CALL_SIGNALING_KIND && rumor.kind !== this.FRIEND_PRESENCE_KIND)) {
                 return;
             }
 
@@ -1042,6 +1043,28 @@ Object.assign(NYM.prototype, {
                                 this.channelDOMCache.delete(key);
                                 break;
                             }
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Handle 1:1 PM zaps (kind 9735 gift-wrapped without group tag)
+            if (rumor.kind === 9735) {
+                const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
+                const boltTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'bolt11' && t[1]);
+                if (eTag && boltTag) {
+                    const zapMessageId = eTag[1];
+                    const amount = this.parseAmountFromBolt11(boltTag[1]);
+                    const dedupKey = 'b:' + boltTag[1].toLowerCase();
+                    const existing = this.zaps.get(zapMessageId);
+                    if (amount && !(existing && existing.receipts.has(dedupKey))) {
+                        const isLive = (Date.now() - ((rumor.created_at || 0) * 1000)) <= 10000;
+                        this._recordMessageZap(zapMessageId, senderPubkey, amount, dedupKey, isLive);
+
+                        const pTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
+                        if (senderPubkey !== this.pubkey && pTag && pTag[1] === this.pubkey) {
+                            this._notifyZapToOurMessage(zapMessageId, amount, senderPubkey, { id: event.id, created_at: rumor.created_at });
                         }
                     }
                 }

@@ -503,6 +503,27 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    handleGroupZap(rumor, senderPubkey) {
+        const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
+        const boltTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'bolt11' && t[1]);
+        if (!eTag || !boltTag) return;
+        const messageId = eTag[1];
+        const amount = this.parseAmountFromBolt11(boltTag[1]);
+        if (!amount) return;
+
+        const dedupKey = 'b:' + boltTag[1].toLowerCase();
+        const existing = this.zaps.get(messageId);
+        if (existing && existing.receipts.has(dedupKey)) return;
+
+        const isLive = (Date.now() - ((rumor.created_at || 0) * 1000)) <= 10000;
+        this._recordMessageZap(messageId, senderPubkey, amount, dedupKey, isLive);
+
+        const pTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
+        if (senderPubkey !== this.pubkey && pTag && pTag[1] === this.pubkey) {
+            this._notifyZapToOurMessage(messageId, amount, senderPubkey, { id: '', created_at: rumor.created_at });
+        }
+    },
+
     // Handle incoming group message (rumor with 'g' tag)
     async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified) {
         const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
@@ -573,6 +594,12 @@ Object.assign(NYM.prototype, {
         // Route group reactions (kind 7) before regular message processing
         if (rumor.kind === 7) {
             this.handleGroupReaction(rumor, senderPubkey);
+            return;
+        }
+
+        // Route group zaps (kind 9735) before regular message processing
+        if (rumor.kind === 9735) {
+            this.handleGroupZap(rumor, senderPubkey);
             return;
         }
 

@@ -728,6 +728,11 @@ Object.assign(NYM.prototype, {
                     originalKind = String(this.channelWire(this.currentGeohash).kind);
                 }
                 zapRequest.tags.push(['k', originalKind]);
+                this.currentZapTarget._messageKind = originalKind;
+                this.currentZapTarget._geohash = this.currentGeohash || null;
+                this.currentZapTarget._channelId = this.currentChannel || null;
+                this.currentZapTarget._groupId = (this.inPMMode && this.currentGroup) ? this.currentGroup : null;
+                this.currentZapTarget._pmPeer = (this.inPMMode && !this.currentGroup) ? this.currentPM : null;
             } else {
                 // Profile zap: tag k=0 so the receipt can be filtered by the
                 // recipient's broad #k subscription alongside message zaps.
@@ -736,6 +741,7 @@ Object.assign(NYM.prototype, {
 
             // Sign the request
             const signedEvent = await this.signEvent(zapRequest);
+            this._lastSignedZapRequest = signedEvent;
 
             return signedEvent;
         } catch (error) {
@@ -993,11 +999,16 @@ Object.assign(NYM.prototype, {
         const botCreditGiftNym = this.currentZapTarget.giftRecipientNym || null;
 
         if (!isBotCreditPurchase && this.currentZapTarget.messageId) {
-            this._recordOwnMessageZap(
-                this.currentZapTarget.messageId,
-                amount,
-                this.currentZapInvoice && this.currentZapInvoice.pr
-            );
+            const bolt11 = this.currentZapInvoice && this.currentZapInvoice.pr;
+            const t = this.currentZapTarget;
+            this._recordOwnMessageZap(t.messageId, amount, bolt11, true);
+            if (t._groupId || t._pmPeer) {
+                // PM/group zap: announce privately via gift wrap so we don't leak
+                // the zap to the public relay.
+                this._publishOwnPrivateZapEvent(t.messageId, t.recipientPubkey, bolt11, t._groupId, t._pmPeer);
+            } else {
+                this._publishOwnMessageZapEvent(t.messageId, t.recipientPubkey, bolt11, t._messageKind, t._geohash, t._channelId);
+            }
         }
 
         window.nymHapticTap && window.nymHapticTap();
@@ -1037,6 +1048,10 @@ Object.assign(NYM.prototype, {
     // Handle zap receipt events (NIP-57)
     handleZapReceipt(event) {
         if (event.kind !== 9735) return;
+
+        // Ignore the zap-occurred events we published ourselves echoing back —
+        // our own zap is already recorded locally at payment time.
+        if (this._ownPublishedZapIds && this._ownPublishedZapIds.has(event.id)) return;
 
         // Parse zap receipt
         const eTag = event.tags.find(t => t[0] === 'e');
@@ -1135,9 +1150,16 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Track the zap and refresh the message badge (deduped by receipt id)
+            // Dedup by bolt11 so the LNURL receipt and our own zap-occurred
+            // event for the same payment only count once, falling back to the
+            // event id when no invoice is present.
+            const dedupKey = bolt11 ? 'b:' + bolt11.toLowerCase() : event.id;
             const existing = this.zaps.get(messageId);
-            if (existing && existing.receipts.has(event.id)) return;
+            if (existing && existing.receipts.has(dedupKey)) return;
+
+            // Only animate genuinely live zaps, not historical receipts replayed
+            // by relays on reload or channel switch.
+            const isLive = (Date.now() - (event.created_at * 1000)) <= 10000;
 
             // Our own zap: dedup by bolt11 since handleZapPaymentSuccess may have
             // already counted it via the verify-URL confirmation.
@@ -1146,12 +1168,12 @@ Object.assign(NYM.prototype, {
                 if (this.currentZapTarget && this.currentZapTarget.messageId === messageId) {
                     this.handleZapPaymentSuccess(amount);
                 } else {
-                    this._recordOwnMessageZap(messageId, amount, bolt11);
+                    this._recordOwnMessageZap(messageId, amount, bolt11, isLive);
                 }
                 return;
             }
 
-            this._recordMessageZap(messageId, zapperPubkey, amount, event.id);
+            this._recordMessageZap(messageId, zapperPubkey, amount, dedupKey, isLive);
 
             if (pTag && pTag[1] === this.pubkey && zapperPubkey !== this.pubkey) {
                 this._notifyZapToOurMessage(messageId, amount, zapperPubkey, event);
@@ -1335,20 +1357,94 @@ Object.assign(NYM.prototype, {
         try { this.sendToRelay(["EVENT", event]); } catch (_) { }
     },
 
+    // Publish our own signed kind-9735 carrying the e/p/k tags when we zap a
+    // channel message. The LNURL receipt has no top-level k tag, so it never
+    // matches the live #k subscriptions other users (and the recipient) run —
+    // this event does, giving real-time badge updates and recipient notifications.
+    async _publishOwnMessageZapEvent(messageId, recipientPubkey, bolt11, kind, geohash, channelId) {
+        if (!messageId || !recipientPubkey || !bolt11) return;
+        if (kind !== '20000' && kind !== '23333') return;
+        const tags = [
+            ['e', messageId],
+            ['p', recipientPubkey],
+            ['k', kind],
+            ['bolt11', bolt11]
+        ];
+        if (this._lastSignedZapRequest) {
+            tags.push(['description', JSON.stringify(this._lastSignedZapRequest)]);
+        }
+        if (geohash) tags.push(['g', geohash]);
+        else if (kind === '23333' && channelId) tags.push(['d', channelId]);
+
+        const event = {
+            kind: 9735,
+            created_at: Math.floor(Date.now() / 1000),
+            tags,
+            content: '',
+            pubkey: this.pubkey
+        };
+        const signed = await this.signEvent(event);
+        if (!signed) return;
+
+        if (!this._ownPublishedZapIds) this._ownPublishedZapIds = new Set();
+        this._ownPublishedZapIds.add(signed.id);
+        if (this._ownPublishedZapIds.size > 500) {
+            this._ownPublishedZapIds = new Set(Array.from(this._ownPublishedZapIds).slice(-400));
+        }
+
+        try { this.sendToRelay(["EVENT", signed]); } catch (_) { }
+        if (geohash) this.ensureGeoRelayDelivery(signed, geohash);
+
+        const descTag = signed.tags.find(t => t[0] === 'description');
+        this._archiveZapReceipt(signed, signed.tags.find(t => t[0] === 'e'), descTag);
+    },
+
+    // Announce a PM/group message zap privately by gift-wrapping a kind-9735
+    // rumor to the conversation members, so recipients see the badge update
+    // and get notified without leaking the zap to public relays.
+    async _publishOwnPrivateZapEvent(messageId, recipientPubkey, bolt11, groupId, pmPeer) {
+        if (!messageId || !recipientPubkey || !bolt11) return;
+        if (!this._canSendGiftWraps()) return;
+        const now = Math.floor(Date.now() / 1000);
+        if (groupId) {
+            const group = this.groupConversations.get(groupId);
+            if (!group) return;
+            const rumor = {
+                kind: 9735,
+                created_at: now,
+                tags: [['g', groupId], ['e', messageId], ['k', '14'], ['p', recipientPubkey], ['bolt11', bolt11]],
+                content: '',
+                pubkey: this.pubkey
+            };
+            await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+        } else if (pmPeer) {
+            const rumor = {
+                kind: 9735,
+                created_at: now,
+                tags: [['e', messageId], ['p', recipientPubkey], ['k', '1059'], ['bolt11', bolt11]],
+                content: '',
+                pubkey: this.pubkey
+            };
+            await this._sendGiftWrapsAsync([this.pubkey, pmPeer], rumor, null);
+        }
+    },
+
     // Record our own zap against a message, deduped by the invoice's bolt11 so
     // the verify-URL confirmation and a later NIP-57 receipt for the same
     // payment don't both count it.
-    _recordOwnMessageZap(messageId, amount, bolt11) {
+    _recordOwnMessageZap(messageId, amount, bolt11, isLive) {
         if (!messageId || !amount) return;
         if (!this._selfCountedZapInvoices) this._selfCountedZapInvoices = new Set();
         const key = bolt11 ? String(bolt11).toLowerCase() : ('amt:' + messageId + ':' + amount);
         if (this._selfCountedZapInvoices.has(key)) return;
         this._selfCountedZapInvoices.add(key);
-        this._recordMessageZap(messageId, this.pubkey, amount, 'self:' + key);
+        // Key on the invoice so our own zap and its echo (public receipt or a
+        // gift-wrapped announcement) dedup against each other.
+        this._recordMessageZap(messageId, this.pubkey, amount, 'b:' + key, isLive);
     },
 
     // Record a zap against a message and refresh its badge (deduped by receipt)
-    _recordMessageZap(messageId, zapperPubkey, amount, receiptId) {
+    _recordMessageZap(messageId, zapperPubkey, amount, receiptId, isLive) {
         const sats = Number(amount) || 0;
         if (!messageId || !sats) return;
         if (!this.zaps.has(messageId)) {
@@ -1359,13 +1455,79 @@ Object.assign(NYM.prototype, {
         if (receiptId) messageZaps.receipts.add(receiptId);
         const currentAmount = messageZaps.amounts.get(zapperPubkey) || 0;
         messageZaps.amounts.set(zapperPubkey, currentAmount + sats);
-        this.updateMessageZaps(messageId);
+        const applied = this.updateMessageZaps(messageId);
+        if (applied) {
+            if (isLive) this._playZapBurst(messageId);
+        } else {
+            // Message isn't in the current DOM — drop its channel's cached render
+            // so the zap badge and quick-zap button appear on next navigation.
+            this._invalidateZapDOMCache(messageId);
+        }
+    },
+
+    _invalidateZapDOMCache(messageId) {
+        for (const [key, msgs] of this.messages.entries()) {
+            if (msgs.some(m => m.id === messageId)) { this.channelDOMCache.delete(key); return; }
+        }
+        for (const [key, msgs] of this.pmMessages.entries()) {
+            if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
+                this.channelDOMCache.delete(key);
+                return;
+            }
+        }
+    },
+
+    // Electricity shock burst anchored to a message's zap badge
+    _playZapBurst(messageId) {
+        const messageEl = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+        if (!messageEl) return;
+        const badge = messageEl.querySelector('.zap-badge');
+        if (!badge) return;
+        const rect = badge.getBoundingClientRect();
+        if (!rect.width && !rect.height) return;
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+
+        const flash = document.createElement('div');
+        flash.className = 'zap-burst';
+        flash.style.left = cx + 'px';
+        flash.style.top = cy + 'px';
+        flash.innerHTML = `<svg viewBox="0 0 24 24"><path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"/></svg>`;
+
+        const bolts = document.createElement('div');
+        bolts.className = 'zap-burst-bolts';
+        bolts.style.left = cx + 'px';
+        bolts.style.top = cy + 'px';
+        const boltCount = 9;
+        for (let i = 0; i < boltCount; i++) {
+            const b = document.createElement('span');
+            b.className = 'zap-bolt';
+            const angle = (i / boltCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+            const dist = 20 + Math.random() * 20;
+            b.style.setProperty('--dx', (Math.cos(angle) * dist).toFixed(1) + 'px');
+            b.style.setProperty('--dy', (Math.sin(angle) * dist).toFixed(1) + 'px');
+            b.style.setProperty('--rot', (angle * 180 / Math.PI + 90).toFixed(1) + 'deg');
+            b.style.animationDelay = (Math.random() * 60) + 'ms';
+            bolts.appendChild(b);
+        }
+
+        document.body.appendChild(flash);
+        document.body.appendChild(bolts);
+        setTimeout(() => {
+            if (flash.parentNode) flash.remove();
+            if (bolts.parentNode) bolts.remove();
+        }, 800);
+
+        badge.classList.remove('zap-badge-shock');
+        void badge.offsetWidth;
+        badge.classList.add('zap-badge-shock');
+        setTimeout(() => badge.classList.remove('zap-badge-shock'), 600);
     },
 
     // Update message with zap display
     updateMessageZaps(messageId) {
         const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
-        if (!messageEl) return;
+        if (!messageEl) return false;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
         const container = document.getElementById('messagesScroller');
@@ -1414,9 +1576,9 @@ Object.assign(NYM.prototype, {
             // Insert at beginning of reactions row
             reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);
 
-            // Add quick zap button ONLY if zaps exist and not own message
+            // Add quick zap button for every viewer of a zapped message
             const pubkey = messageEl.dataset.pubkey;
-            if (pubkey && pubkey !== this.pubkey) {
+            if (pubkey) {
                 const addZapBtn = document.createElement('span');
                 addZapBtn.className = 'add-zap-btn';
                 addZapBtn.innerHTML = `
@@ -1440,6 +1602,7 @@ Object.assign(NYM.prototype, {
         if (wasAtBottom) {
             this._scheduleScrollToBottom();
         }
+        return true;
     },
 
     async handleQuickZap(messageId, pubkey, messageEl) {
