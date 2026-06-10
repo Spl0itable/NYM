@@ -447,11 +447,11 @@
 }
 
 .about-canary-status.ok {
-    color: var(--canary-ok, #7ee787);
+    color: var(--success, #3fb950);
 }
 
 .about-canary-status.stale {
-    color: var(--canary-stale, #d29922);
+    color: var(--warning, #d29922);
 }
 
 .about-canary-status.gone {
