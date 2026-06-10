@@ -218,9 +218,9 @@ Quote-reply to any Nymbot response to continue the conversation. The bot carries
 
 Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory.
 
-## Verifying the build
+## Verify Build
 
-The deployed web app is built deterministically, so anyone can confirm that the code running at the live site is exactly what is published in this repository — no trust in the host required.
+The deployed web app is built deterministically, so anyone can confirm that the code running at the live site and in the iOS and Android apps is exactly what is published in this repository.
 
 How it works:
 
