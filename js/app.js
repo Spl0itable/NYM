@@ -4261,7 +4261,7 @@ function runCanaryCheck() {
         if (c.state === 'forged') {
             statusEl.textContent = '✗ Signature invalid';
             statusEl.className = 'about-canary-status forged';
-            if (noteEl) noteEl.textContent = 'The canary signature does not match the operator key. Do not trust this canary.';
+            if (noteEl) noteEl.textContent = 'The canary signature does not match the Nymchat develper key. Do not trust this canary.';
             return;
         }
         if (c.state === 'ok') {

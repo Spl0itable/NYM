@@ -1,5 +1,5 @@
 // Fetches the warrant canary from GitHub and, when it is a signed Nostr event, verifies the
-// operator signature so the About dialog can flag a current, overdue, removed, or forged canary.
+// developer signature so the About dialog can flag a current, overdue, removed, or forged canary.
 
 (function () {
     const CANARY_URL = 'https://raw.githubusercontent.com/Spl0itable/NYM/main/canary.json';
