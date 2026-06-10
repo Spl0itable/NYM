@@ -254,11 +254,7 @@ The canary lives in [`canary.json`](canary.json) at the repository root and is f
 - **Yellow — Update overdue / Not all clear**: The canary was not refreshed by its `nextUpdateBy` date, or `allClear` is `false`. A silenced request cannot be ruled out.
 - **Red — Signature invalid / Canary removed**: The signature does not match the Nymchat developer key, or the canary file is gone entirely. Treat this as a serious warning.
 
-The signed canary also embeds a **freshness anchor**: the latest Bitcoin block height and hash at signing time (`content.btcBlock`). Because that hash could not have been known before the block existed, it proves the canary was signed *after* a specific point in time and was not pre-signed in bulk. The About dialog links the anchor to a block explorer.
-
-### Automated reminder
-
-A scheduled GitHub Action ([`.github/workflows/canary-check.yml`](.github/workflows/canary-check.yml)) runs `npm run canary:check` daily. As `nextUpdateBy` approaches (within 14 days) or passes, it opens or comments on a `warrant-canary` issue so the operator is prompted to re-sign before the app flips to yellow.
+The signed canary also embeds a **freshness anchor**: the latest Bitcoin block height and hash at signing time. Because that hash could not have been known before the block existed, it proves the canary was signed *after* a specific point in time and was not pre-signed in bulk. The About dialog links the anchor to a block explorer.
 
 ## Contributing
 
