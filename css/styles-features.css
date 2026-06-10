@@ -4577,18 +4577,20 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .call-overlay-top {
     text-align: center;
     padding: 18px 16px 6px;
-    position: relative;
 }
 
 .call-switch-cam-btn {
     position: absolute;
-    top: calc(12px + env(safe-area-inset-top, 0px));
+    top: 14px;
     right: 14px;
+    z-index: 3;
     width: 42px;
     height: 42px;
     border-radius: 50%;
     border: 1px solid var(--border);
-    background: var(--bg-tertiary);
+    background: rgba(15, 15, 22, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     color: var(--text-bright);
     cursor: pointer;
     display: flex;
@@ -4599,6 +4601,7 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 
 .call-switch-cam-btn:hover { transform: scale(1.08); }
 .call-switch-cam-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+.call-chat-panel.active ~ .call-switch-cam-btn { display: none; }
 
 .call-title {
     font-size: 1.05rem;
@@ -4635,6 +4638,19 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     display: inline-flex;
     align-items: center;
     min-width: 0;
+}
+
+.call-title-nym .call-nym-base {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.call-title-nym .nym-suffix {
+    flex: none;
+    white-space: nowrap;
 }
 
 .call-title .group-header-row {

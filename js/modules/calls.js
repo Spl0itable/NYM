@@ -32,7 +32,7 @@ Object.assign(NYM.prototype, {
             ? `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`
             : '';
         const friendHtml = (typeof this.getFriendBadgeHtml === 'function' && this.getFriendBadgeHtml(pubkey)) || '';
-        return `${this.escapeHtml(base)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendHtml}`;
+        return `<span class="call-nym-base">${this.escapeHtml(base)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendHtml}`;
     },
 
     // Open the shared user context menu (block, friend, PM, report…) from a
