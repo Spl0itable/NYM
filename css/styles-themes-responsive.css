@@ -1535,6 +1535,7 @@ body.light-mode .typing-indicator {
 
     .channel-title-wrap {
     margin-left: 10px;
+    margin-right: 0;
     }
 }
 

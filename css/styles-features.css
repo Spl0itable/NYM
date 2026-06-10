@@ -2306,10 +2306,10 @@ body:not(.chat-bubbles) .message.supporter-style {
     vertical-align: middle;
 }
 
-.pm-header-avatar {
+.user-avatar-wrap.pm-header-avatar {
     width: 26px;
     height: 26px;
-    margin-right: 4px;
+    margin-right: 10px;
     vertical-align: middle;
 }
 
