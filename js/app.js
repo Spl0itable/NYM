@@ -6711,6 +6711,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Parse URL for channel routing BEFORE initialization
     parseUrlChannel();
+    // Surface the group on the setup modal right away if this is an invite link.
+    updateSetupInviteBanner();
 
     await nym.initialize();
     startRelayStatsSampling();
@@ -7071,6 +7073,20 @@ function updateSetupInviteBanner() {
     }
 }
 window.updateSetupInviteBanner = updateSetupInviteBanner;
+
+// An invite link opened while the app is already loaded only changes the hash
+// (no reload), so route it live here in addition to the on-load path.
+window.addEventListener('hashchange', () => {
+    const m = window.location.hash.match(/^#gjoin=([A-Za-z0-9_-]+)/);
+    if (!m) return;
+    window.pendingGroupInvite = m[1];
+    try { localStorage.setItem('nym_pending_group_invite', m[1]); } catch (e) { }
+    if (window.nym && nym.pubkey && typeof nym._canSendGiftWraps === 'function' && nym._canSendGiftWraps()) {
+        routeToUrlChannel();
+    } else {
+        updateSetupInviteBanner();
+    }
+});
 
 function parseUrlChannel() {
     const hash = window.location.hash;
