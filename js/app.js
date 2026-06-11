@@ -4238,7 +4238,7 @@ function runBuildVerification() {
         }
 
         if (r.ok && r.officialHost) {
-            statusEl.textContent = '✓ Verified official app (' + r.verified + '/' + r.total + ')';
+            statusEl.textContent = '✓ Verified (' + r.verified + '/' + r.total + ')';
             statusEl.className = 'about-build-status ok';
         } else if (r.ok) {
             statusEl.textContent = '⚠ Verified build · not the official app';
