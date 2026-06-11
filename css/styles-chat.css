@@ -903,6 +903,34 @@ body.chat-bubbles .read-more-btn {
     color: var(--primary);
 }
 
+.message-content .group-invite-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border: 1px solid var(--secondary);
+    border-radius: 12px;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.inline-group-ico {
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.15em;
+    margin-right: 0.35em;
+}
+
+.group-suggestion-ico {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--secondary);
+}
+
+.group-suggestion-ico svg {
+    width: 20px;
+    height: 20px;
+}
+
 .channel-reference {
     cursor: pointer;
 }

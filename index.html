@@ -287,6 +287,14 @@
             <div class="group-ctx-icon" id="grpCtxIcon"></div>
             <div class="context-menu-avatar-nym" id="grpCtxName"></div>
             <div class="ctx-status-row" id="grpCtxMemberCount"></div>
+            <div class="ctx-full-pubkey nm-hidden" id="grpCtxInviteLink" title="Group invite link"></div>
+            <div class="context-menu-copy-pubkey nm-hidden" id="grpCtxCopyInvite" data-action="groupCtxCopyInviteLink">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico4">
+                    <rect x="5" y="5" width="8" height="9" rx="1" />
+                    <path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" />
+                </svg>
+                Copy Invite Link
+            </div>
         </div>
         <div class="context-menu-bio" id="grpCtxBio"></div>
         <div class="context-menu-actions" id="grpCtxActions"></div>
@@ -1232,6 +1240,7 @@
 </pre>
             </div>
             <div class="modal-body">
+                <div class="setup-invite-banner nm-hidden" id="setupInviteBanner"></div>
                 <div class="form-group" id="nymGroup">
                     <div data-action="openNostrLogin" class="nm-h-50">Login with nsec private key or extension? Click here</div><br/>
                     <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>

@@ -304,6 +304,8 @@ Object.assign(NYM.prototype, {
                 banner: group.banner || null,
                 avatar: group.avatar || null,
                 description: group.description || null,
+                inviteEnabled: group.inviteEnabled === true,
+                inviteEpoch: group.inviteEpoch || 0,
                 metaUpdatedAt: group.metaUpdatedAt || 0,
                 modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
             };

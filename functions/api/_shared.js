@@ -2641,7 +2641,7 @@ function nip44Decrypt(payload, conversationKey) {
 
 var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
 
-function verifyBotAuth(auth, expectedPubkey, binding) {
+function verifyClientAuth(auth, expectedPubkey, binding) {
   try {
     if (!auth || typeof auth !== "object") return false;
     if (auth.pubkey !== expectedPubkey) return false;
@@ -2854,13 +2854,13 @@ function sanitizeInput(text) {
   return text.trim();
 }
 
-const BOT_CORS_HEADERS = {
+const CLIENT_CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type"
 };
 
-function isNymchatBotClient(request) {
+function isNymchatClient(request) {
   const origin = request.headers.get("Origin") || "";
   if (origin) {
     try {
@@ -2886,7 +2886,7 @@ export {
   randomTimestampNow,
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
-  verifyBotAuth,
+  verifyClientAuth,
   validateZapReceipt,
   parseNwcUri,
   nwcInvoicePaid,
@@ -2902,6 +2902,6 @@ export {
   secp256k1,
   schnorr,
   BOT_LIGHTNING_ADDRESS,
-  BOT_CORS_HEADERS,
-  isNymchatBotClient
+  CLIENT_CORS_HEADERS,
+  isNymchatClient
 };

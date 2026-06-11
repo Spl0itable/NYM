@@ -44,6 +44,7 @@ The web app is served as static files plus a set of Cloudflare Pages Functions u
 ### Messaging
 - **Private Messages**: End-to-end encrypted 1:1 PMs using [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) (kind 14 rumor) wrapped in NIP-59 gift wraps.
 - **Private Group Chats**: End-to-end encrypted multi-party group chats via [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) and [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md) with rotating ephemeral recipient keys and automatic post-compromise recovery. Each message is individually gift-wrapped per member using one-time pubkeys so relays cannot correlate group membership, timing, or real identities.
+- **Group Invite Links**: Optional shareable invite links for group chats. Joining via link is off by default; the owner turns on "Allow joining via invite link" from the group context menu, after which the link appears there for the owner (and for members too when "allow members to add others" is on). A brand-new user who opens a link is prompted to pick a nym or log in first, then the join resumes automatically. The owner can "Reset Invite Link" to revoke every link shared so far.
 - **Forward Secrecy and Disappearing Messages**: Optional per-message forward secrecy for DMs and a configurable message time-to-live.
 - **Read Receipts and Typing Indicators**: Optional, with per-scope control (everyone, friends only, or off).
 - **Rich Text**: Markdown for bold, italic, strikethrough, code blocks, and quotes.

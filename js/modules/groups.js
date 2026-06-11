@@ -346,6 +346,8 @@ Object.assign(NYM.prototype, {
                     avatar: group.avatar || null,
                     description: group.description || null,
                     allowMemberInvites: group.allowMemberInvites !== false,
+                    inviteEnabled: group.inviteEnabled === true,
+                    inviteEpoch: group.inviteEpoch || 0,
                     metaUpdatedAt: group.metaUpdatedAt || 0,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
                 };
@@ -374,6 +376,142 @@ Object.assign(NYM.prototype, {
         if (!g) return false;
         if (this._isGroupOwner(groupId, pubkey)) return true;
         return g.allowMemberInvites !== false;
+    },
+
+    _b64uEncode(str) {
+        const bytes = new TextEncoder().encode(str);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    },
+    _b64uDecode(token) {
+        let b64 = token.replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) b64 += '=';
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new TextDecoder().decode(bytes);
+    },
+
+    // Self-contained invite link
+    buildGroupInviteLink(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return null;
+        if (!group.inviteEnabled) return null;
+        if (!this._canAddMembers(groupId, this.pubkey)) return null;
+        const payload = { v: 1, g: groupId, n: (group.name || 'Group').slice(0, 80), a: this.pubkey, e: group.inviteEpoch || 0 };
+        const token = this._b64uEncode(JSON.stringify(payload));
+        const base = window.location.origin + window.location.pathname;
+        return `${base}#gjoin=${token}`;
+    },
+
+    parseGroupInviteInput(str) {
+        if (!str) return null;
+        let token = String(str).trim();
+        const m = token.match(/[#&?]gjoin=([A-Za-z0-9_-]+)/);
+        if (m) token = m[1];
+        else if (/^gjoin=/.test(token)) token = token.slice(6);
+        if (!/^[A-Za-z0-9_-]+$/.test(token)) return null;
+        try {
+            const obj = JSON.parse(this._b64uDecode(token));
+            if (!obj || obj.v !== 1) return null;
+            if (!/^[0-9a-f]{64}$/i.test(obj.g || '')) return null;
+            if (!/^[0-9a-f]{64}$/i.test(obj.a || '')) return null;
+            obj.e = parseInt(obj.e, 10) || 0;
+            return obj;
+        } catch { return null; }
+    },
+
+    async groupCtxCopyInviteLink() {
+        const groupId = this._groupCtxGroupId;
+        if (!groupId) return;
+        const link = this.buildGroupInviteLink(groupId);
+        if (!link) {
+            this.displaySystemMessage('Invite links are disabled for this group.');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(link);
+            this.displaySystemMessage('Copied group invite link to clipboard');
+        } catch {
+            this.displaySystemMessage('Failed to copy invite link');
+        }
+    },
+
+    _clearPendingInvite() {
+        try { localStorage.removeItem('nym_pending_group_invite'); } catch (e) { }
+    },
+
+    // Joiner side: confirm, then gift-wrap a single join-request to the sharer.
+    async requestJoinGroupViaInvite(payload) {
+        if (!payload) return;
+        const groupId = payload.g;
+        const approver = payload.a;
+        if (this.groupConversations.has(groupId)) {
+            this._clearPendingInvite();
+            this.openGroup(groupId);
+            return;
+        }
+        if (approver === this.pubkey) {
+            this._clearPendingInvite();
+            this.displaySystemMessage('That is your own invite link.');
+            return;
+        }
+        const name = this.sanitizeGroupName(payload.n || '') || 'this group';
+        // Brand-new user with no identity yet: keep the invite pending, prompt
+        // them to set up, and resume the join after they enter chat.
+        if (!this._canSendGiftWraps()) {
+            this.displaySystemMessage(`Pick a nym or log in to join "${name}", then you'll be added.`);
+            const setupModal = document.getElementById('setupModal');
+            if (setupModal && !setupModal.classList.contains('active')) setupModal.classList.add('active');
+            if (typeof window.updateSetupInviteBanner === 'function') window.updateSetupInviteBanner();
+            return;
+        }
+        const ok = await window.showAppConfirm(`Join "${name}"? A join request will be sent to a group member.`, { title: 'Join Group', okLabel: 'Join' });
+        if (!ok) { this._clearPendingInvite(); return; }
+        this._clearPendingInvite();
+
+        if (!this._pendingInviteJoins) this._pendingInviteJoins = new Set();
+        this._pendingInviteJoins.add(groupId);
+
+        const now = Math.floor(Date.now() / 1000);
+        const tags = [
+            ['p', approver],
+            ['g', groupId],
+            ['subject', (payload.n || 'Group').slice(0, 80)],
+            ['type', 'group-join-request'],
+            ['invite_epoch', String(payload.e || 0)],
+            ['x', this._generateSharedEventId()]
+        ];
+        const rumor = { kind: 14, created_at: now, tags, content: 'requested to join via invite link', pubkey: this.pubkey };
+        await this._sendGiftWrapsAsync([approver], rumor, null);
+        this.displaySystemMessage(`Join request sent for "${name}". You'll be added once a member is online.`);
+    },
+
+    async handleGroupInviteFromUrl(token) {
+        const payload = this.parseGroupInviteInput(token);
+        if (!payload) {
+            this._clearPendingInvite();
+            this.displaySystemMessage('Invalid or expired invite link.');
+            return;
+        }
+        await this.requestJoinGroupViaInvite(payload);
+    },
+
+    // Approver side: auto-admit only when invite links are enabled, the request's
+    // epoch matches the current one, and the joiner is eligible.
+    async _handleGroupJoinRequest(rumor, groupId, joinerPubkey) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!group.inviteEnabled) return;
+        if (!this._canSendGiftWraps()) return;
+        if (!this._canAddMembers(groupId, this.pubkey)) return;
+        const epochTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_epoch');
+        const reqEpoch = epochTag ? (parseInt(epochTag[1], 10) || 0) : 0;
+        if (reqEpoch !== (group.inviteEpoch || 0)) return;
+        if (group.members.includes(joinerPubkey)) return;
+        if (Array.isArray(group.banned) && group.banned.includes(joinerPubkey)) return;
+        await this.addMemberToGroup(groupId, joinerPubkey);
     },
     _appendModLog(group, entry) {
         if (!group) return;
@@ -450,6 +588,8 @@ Object.assign(NYM.prototype, {
                         if (group.avatar) g.avatar = group.avatar;
                         if (group.description) g.description = group.description;
                         if (group.allowMemberInvites === false) g.allowMemberInvites = false;
+                        if (group.inviteEnabled === true) g.inviteEnabled = true;
+                        if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
                         if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                     }
@@ -546,8 +686,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Filter group invites based on acceptPMs setting
-        if (!isOwn && this.settings.acceptPMs !== 'enabled' && !this.groupConversations.has(groupId)) {
+        // Filter group invites based on acceptPMs setting. A group the user is
+        // actively joining via an invite link bypasses the filter so the
+        // resulting add-member wrap is accepted.
+        if (!isOwn && this.settings.acceptPMs !== 'enabled' && !this.groupConversations.has(groupId)
+            && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId))) {
             if (this.settings.acceptPMs === 'disabled') return;
             if (this.settings.acceptPMs === 'friends' && !this.isFriend(senderPubkey)) return;
         }
@@ -638,6 +781,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        // group-join-request: someone used an invite link; admit them if eligible.
+        if (typeTag && typeTag[1] === 'group-join-request') {
+            if (!isOwn) await this._handleGroupJoinRequest(rumor, groupId, senderPubkey);
+            return;
+        }
+
         // group-invite: the rumor author is always the group creator — persist this so
         // non-creating members know who owns the group without relying on local state.
         if (typeTag && typeTag[1] === 'group-invite') {
@@ -662,13 +811,17 @@ Object.assign(NYM.prototype, {
             const inviteDesc = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description' && t[1])?.[1] || null;
             const inviteAllowInvTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'allow_invites');
             const inviteAllowInvites = inviteAllowInvTag ? inviteAllowInvTag[1] !== '0' : undefined;
+            const inviteEnabledTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_enabled');
+            const inviteEnabled = inviteEnabledTag ? inviteEnabledTag[1] === '1' : undefined;
+            const inviteEpochTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_epoch');
+            const inviteEpoch = inviteEpochTag ? (parseInt(inviteEpochTag[1], 10) || 0) : undefined;
             if (!this.groupConversations.has(groupId)) {
                 this.addGroupConversation(
                     groupId,
                     groupName,
                     inviteMembers,
                     (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites }
+                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites, inviteEnabled, inviteEpoch }
                 );
             }
             const grp = this.groupConversations.get(groupId);
@@ -682,6 +835,8 @@ Object.assign(NYM.prototype, {
             if (grp && inviteBanner && !grp.banner) grp.banner = inviteBanner;
             if (grp && inviteDesc && !grp.description) grp.description = inviteDesc;
             if (grp && inviteAllowInvites !== undefined) grp.allowMemberInvites = inviteAllowInvites;
+            if (grp && inviteEnabled !== undefined) grp.inviteEnabled = inviteEnabled;
+            if (grp && inviteEpoch !== undefined) grp.inviteEpoch = inviteEpoch;
             if (grp) {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
@@ -734,11 +889,15 @@ Object.assign(NYM.prototype, {
             const addBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
             const addDesc = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description' && t[1])?.[1] || null;
             const addAllowInvTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'allow_invites');
+            const addInviteEnabledTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_enabled');
+            const addInviteEpochTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_epoch');
             const existingGroup = this.groupConversations.get(groupId);
             const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey;
-            // Refuse to bootstrap a brand-new group entry from a non-owner;
-            // legitimate first contact arrives via group-invite from the owner.
-            if (!existingGroup && !senderIsClaimedOwner) return;
+            // Refuse to bootstrap a brand-new group entry from a non-owner, unless
+            // the user is actively joining via an invite link they chose to accept.
+            const joiningViaInvite = !!(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId));
+            if (!existingGroup && !senderIsClaimedOwner && !joiningViaInvite) return;
+            const trustBootstrap = senderIsClaimedOwner || (joiningViaInvite && !existingGroup);
             const existingMembers = existingGroup ? new Set(existingGroup.members) : new Set();
             const newMembers = memberPubkeys.filter(pk => !existingMembers.has(pk));
             this.addGroupConversation(
@@ -747,22 +906,27 @@ Object.assign(NYM.prototype, {
                 memberPubkeys,
                 (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
                 {
-                    createdBy: senderIsClaimedOwner ? claimedOwner : undefined,
-                    mods: senderIsClaimedOwner ? addMods : [],
-                    avatar: senderIsClaimedOwner ? addAvatar : undefined,
-                    banner: senderIsClaimedOwner ? addBanner : undefined,
-                    description: senderIsClaimedOwner ? addDesc : undefined,
-                    allowMemberInvites: senderIsClaimedOwner && addAllowInvTag ? addAllowInvTag[1] !== '0' : undefined
+                    createdBy: trustBootstrap ? claimedOwner : undefined,
+                    mods: trustBootstrap ? addMods : [],
+                    avatar: trustBootstrap ? addAvatar : undefined,
+                    banner: trustBootstrap ? addBanner : undefined,
+                    description: trustBootstrap ? addDesc : undefined,
+                    allowMemberInvites: trustBootstrap && addAllowInvTag ? addAllowInvTag[1] !== '0' : undefined,
+                    inviteEnabled: trustBootstrap && addInviteEnabledTag ? addInviteEnabledTag[1] === '1' : undefined,
+                    inviteEpoch: trustBootstrap && addInviteEpochTag ? (parseInt(addInviteEpochTag[1], 10) || 0) : undefined
                 }
             );
             const grpAdd = this.groupConversations.get(groupId);
-            if (senderIsClaimedOwner && grpAdd && addAvatar && !grpAdd.avatar) grpAdd.avatar = addAvatar;
-            if (senderIsClaimedOwner && grpAdd && addBanner && !grpAdd.banner) grpAdd.banner = addBanner;
-            if (senderIsClaimedOwner && grpAdd && addDesc && !grpAdd.description) grpAdd.description = addDesc;
-            if (senderIsClaimedOwner && grpAdd && addAllowInvTag) grpAdd.allowMemberInvites = addAllowInvTag[1] !== '0';
-            if (senderIsClaimedOwner && grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
+            if (trustBootstrap && grpAdd && addAvatar && !grpAdd.avatar) grpAdd.avatar = addAvatar;
+            if (trustBootstrap && grpAdd && addBanner && !grpAdd.banner) grpAdd.banner = addBanner;
+            if (trustBootstrap && grpAdd && addDesc && !grpAdd.description) grpAdd.description = addDesc;
+            if (trustBootstrap && grpAdd && addAllowInvTag) grpAdd.allowMemberInvites = addAllowInvTag[1] !== '0';
+            if (trustBootstrap && grpAdd && addInviteEnabledTag) grpAdd.inviteEnabled = addInviteEnabledTag[1] === '1';
+            if (trustBootstrap && grpAdd && addInviteEpochTag) grpAdd.inviteEpoch = parseInt(addInviteEpochTag[1], 10) || 0;
+            if (trustBootstrap && grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
                 grpAdd.mods = [...addMods];
             }
+            if (joiningViaInvite) this._pendingInviteJoins.delete(groupId);
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
@@ -1174,6 +1338,8 @@ Object.assign(NYM.prototype, {
         const groupBanner = opts.banner || null;
         const groupDescription = opts.description || null;
         const allowMemberInvites = opts.allowMemberInvites !== false;
+        const inviteEnabled = opts.inviteEnabled === true;
+        const inviteEpoch = opts.inviteEpoch || 0;
 
         const tags = allMembers.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
@@ -1184,6 +1350,8 @@ Object.assign(NYM.prototype, {
         if (groupBanner) tags.push(['banner', groupBanner]);
         if (groupDescription) tags.push(['description', groupDescription]);
         tags.push(['allow_invites', allowMemberInvites ? '1' : '0']);
+        tags.push(['invite_enabled', inviteEnabled ? '1' : '0']);
+        tags.push(['invite_epoch', String(inviteEpoch)]);
         tags.push(['x', nymMessageId]);
 
         // Bootstrap ephemeral keys: include our first ephemeral pk so members
@@ -1200,7 +1368,7 @@ Object.assign(NYM.prototype, {
         this._saveEphemeralKeys();
 
         // addGroupConversation creates the sidebar item with us marked as owner
-        this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner, description: groupDescription, allowMemberInvites });
+        this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner, description: groupDescription, allowMemberInvites, inviteEnabled, inviteEpoch });
         // Defensive: ensure createdBy is set even if a relay echo created the entry first
         const grp = this.groupConversations.get(groupId);
         if (grp && grp.createdBy !== this.pubkey) grp.createdBy = this.pubkey;
@@ -1265,6 +1433,8 @@ Object.assign(NYM.prototype, {
         if (group.banner) tags.push(['banner', group.banner]);
         if (group.description) tags.push(['description', group.description]);
         tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
+        tags.push(['invite_enabled', group.inviteEnabled ? '1' : '0']);
+        tags.push(['invite_epoch', String(group.inviteEpoch || 0)]);
         tags.push(['x', nymMessageId]);
 
         // Include our ephemeral pk so the new member (and existing members) learn it
@@ -1907,6 +2077,8 @@ Object.assign(NYM.prototype, {
         tags.push(['avatar', group.avatar || '']);
         tags.push(['description', group.description || '']);
         tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
+        tags.push(['invite_enabled', group.inviteEnabled ? '1' : '0']);
+        tags.push(['invite_epoch', String(group.inviteEpoch || 0)]);
         tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content: '', pubkey: this.pubkey };
         await this._sendGiftWrapsAsync(others, rumor, null, groupId);
@@ -1922,6 +2094,8 @@ Object.assign(NYM.prototype, {
         tags.push(['avatar', group.avatar || '']);
         tags.push(['description', group.description || '']);
         tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
+        tags.push(['invite_enabled', group.inviteEnabled ? '1' : '0']);
+        tags.push(['invite_epoch', String(group.inviteEpoch || 0)]);
     },
 
     _applyGroupMetadataTags(rumor, groupId, senderPubkey, metaTs) {
@@ -1935,6 +2109,8 @@ Object.assign(NYM.prototype, {
         const avatarTag = tag('avatar');
         const descTag = tag('description');
         const allowInvTag = tag('allow_invites');
+        const inviteEnabledTag = tag('invite_enabled');
+        const inviteEpochTag = tag('invite_epoch');
         let changed = false;
         if (subjectTag && subjectTag[1] && subjectTag[1] !== grp.name) { grp.name = subjectTag[1]; changed = true; }
         if (bannerTag) {
@@ -1952,6 +2128,14 @@ Object.assign(NYM.prototype, {
         if (allowInvTag) {
             const newAllow = allowInvTag[1] !== '0';
             if (newAllow !== (grp.allowMemberInvites !== false)) { grp.allowMemberInvites = newAllow; changed = true; }
+        }
+        if (inviteEnabledTag) {
+            const newEnabled = inviteEnabledTag[1] === '1';
+            if (newEnabled !== !!grp.inviteEnabled) { grp.inviteEnabled = newEnabled; changed = true; }
+        }
+        if (inviteEpochTag) {
+            const newEpoch = parseInt(inviteEpochTag[1], 10) || 0;
+            if (newEpoch !== (grp.inviteEpoch || 0)) { grp.inviteEpoch = newEpoch; changed = true; }
         }
         if (changed) {
             grp.metaUpdatedAt = metaTs;
@@ -2034,6 +2218,44 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(next
             ? 'Group members can now add new users.'
             : 'Only the group owner can add new users now.');
+    },
+
+    // Owner-only: turn joining via invite link on or off, then propagate.
+    async setGroupInviteEnabled(groupId, enabled) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can change this setting.');
+            return;
+        }
+        const next = !!enabled;
+        if (next === !!group.inviteEnabled) return;
+        group.inviteEnabled = next;
+        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        await this._broadcastGroupMetadata(groupId);
+        this.displaySystemMessage(next
+            ? 'Joining via invite link is now enabled.'
+            : 'Joining via invite link is now disabled.');
+    },
+
+    // Owner-only: rotate the invite epoch to revoke every outstanding link.
+    async rotateGroupInviteEpoch(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can reset the invite link.');
+            return;
+        }
+        group.inviteEpoch = (group.inviteEpoch || 0) + 1;
+        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        await this._broadcastGroupMetadata(groupId);
+        this.displaySystemMessage('Previous invite links revoked. A new link is now active.');
     },
 
     // Owner-only: persist a group image (kind = 'avatar' | 'banner') and
@@ -2183,6 +2405,8 @@ Object.assign(NYM.prototype, {
                 avatar: opts.avatar || null,
                 description: opts.description || null,
                 allowMemberInvites: opts.allowMemberInvites !== false,
+                inviteEnabled: opts.inviteEnabled === true,
+                inviteEpoch: opts.inviteEpoch || 0,
                 modLog: []
             });
             const pmList = document.getElementById('pmList');
@@ -2222,6 +2446,8 @@ Object.assign(NYM.prototype, {
             if (opts.avatar !== undefined && opts.avatar !== null) next.avatar = opts.avatar;
             if (opts.description !== undefined && opts.description !== null) next.description = opts.description;
             if (opts.allowMemberInvites !== undefined) next.allowMemberInvites = opts.allowMemberInvites;
+            if (opts.inviteEnabled !== undefined) next.inviteEnabled = opts.inviteEnabled;
+            if (opts.inviteEpoch !== undefined) next.inviteEpoch = opts.inviteEpoch;
             this.groupConversations.set(groupId, next);
             this.updateGroupConversationUI(groupId);
         }
@@ -2717,6 +2943,18 @@ Object.assign(NYM.prototype, {
         document.getElementById('grpCtxMemberCount').textContent = `${group.members.length} member${group.members.length === 1 ? '' : 's'}`;
         document.getElementById('grpCtxBio').textContent = group.description || '';
 
+        // Invite link row, shown in the header like the pubkey row of a user menu.
+        const inviteLink = this._canAddMembers(groupId, this.pubkey) ? this.buildGroupInviteLink(groupId) : null;
+        const grpCtxInviteLink = document.getElementById('grpCtxInviteLink');
+        const grpCtxCopyInvite = document.getElementById('grpCtxCopyInvite');
+        if (inviteLink) {
+            if (grpCtxInviteLink) { grpCtxInviteLink.textContent = inviteLink; grpCtxInviteLink.classList.remove('nm-hidden'); }
+            if (grpCtxCopyInvite) grpCtxCopyInvite.classList.remove('nm-hidden');
+        } else {
+            if (grpCtxInviteLink) { grpCtxInviteLink.textContent = ''; grpCtxInviteLink.classList.add('nm-hidden'); }
+            if (grpCtxCopyInvite) grpCtxCopyInvite.classList.add('nm-hidden');
+        }
+
         // Role-based action buttons
         const icon = (p) => `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico8">${p}</svg>`;
         const actions = [];
@@ -2731,12 +2969,17 @@ Object.assign(NYM.prototype, {
         if (iAmOwner && group.members.length > 1) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxTransferOwner">${icon('<circle cx="8" cy="5" r="2.5"/><path d="M 2 14 C 2 10 4 9 8 9 C 12 9 14 10 14 14" stroke-linecap="round"/><path d="M 12 4 L 15 4 L 13.5 2 M 15 4 L 13.5 6" stroke-linecap="round" stroke-linejoin="round"/>')}Transfer Ownership</div>`);
         }
+        const checkbox = (on) => on
+            ? '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5" stroke-linecap="round" stroke-linejoin="round"/>'
+            : '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>';
         if (iAmOwner) {
-            const allowOn = group.allowMemberInvites !== false;
-            const boxIcon = allowOn
-                ? '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5" stroke-linecap="round" stroke-linejoin="round"/>'
-                : '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>';
-            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInvites">${icon(boxIcon)}Allow members to add others</div>`);
+            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInviteJoin">${icon(checkbox(!!group.inviteEnabled))}Allow joining via invite link</div>`);
+            if (group.inviteEnabled) {
+                actions.push(`<div class="context-menu-item" data-action="groupCtxResetInviteLink">${icon('<path d="M 13 8 A 5 5 0 1 1 11.5 4.5" stroke-linecap="round"/><path d="M 11.5 2 L 11.5 5 L 8.5 5" stroke-linecap="round" stroke-linejoin="round"/>')}Reset Invite Link</div>`);
+            }
+        }
+        if (iAmOwner) {
+            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInvites">${icon(checkbox(group.allowMemberInvites !== false))}Allow members to add others</div>`);
         }
         if (this._canAddMembers(groupId, this.pubkey)) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
@@ -2895,6 +3138,23 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         this.closeGroupContextMenu();
         this.setGroupAllowMemberInvites(groupId, group.allowMemberInvites === false);
+    },
+
+    groupCtxToggleInviteJoin() {
+        const groupId = this._groupCtxGroupId;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this.closeGroupContextMenu();
+        this.setGroupInviteEnabled(groupId, !group.inviteEnabled);
+    },
+
+    async groupCtxResetInviteLink() {
+        const groupId = this._groupCtxGroupId;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this.closeGroupContextMenu();
+        const ok = await window.showAppConfirm('Reset the invite link? Every link shared so far will stop working.', { title: 'Reset Invite Link', okLabel: 'Reset', danger: true });
+        if (ok) this.rotateGroupInviteEpoch(groupId);
     },
 
     async groupCtxLeave() {

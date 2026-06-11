@@ -2994,11 +2994,47 @@ Object.assign(NYM.prototype, {
         return item;
     },
 
+    _buildGroupInviteSuggestionItem(invite) {
+        const item = document.createElement('div');
+        item.className = 'pm-suggestion-item';
+
+        const icon = document.createElement('span');
+        icon.className = 'pm-suggestion-avatar group-suggestion-ico';
+        icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'pm-suggestion-nym';
+        nameSpan.textContent = this.sanitizeGroupName(invite.n || '') || 'Group';
+
+        const suffixSpan = document.createElement('span');
+        suffixSpan.className = 'pm-suggestion-suffix';
+        suffixSpan.textContent = 'Join group';
+
+        item.appendChild(icon);
+        item.appendChild(nameSpan);
+        item.appendChild(suffixSpan);
+
+        item.addEventListener('click', () => {
+            closeModal('newPMModal');
+            this.requestJoinGroupViaInvite(invite);
+        });
+        return item;
+    },
+
     onNewPMRecipientInput(value) {
         const suggestions = document.getElementById('pmSuggestions');
         const query = value.trim().replace(/^@/, '').toLowerCase();
         if (!query) {
             this._showRecentlySeenSuggestions('');
+            return;
+        }
+
+        // Group invite link/code paste (case-sensitive, parse the raw value)
+        const invite = this.parseGroupInviteInput(value.trim());
+        if (invite) {
+            suggestions.textContent = '';
+            suggestions.appendChild(this._buildGroupInviteSuggestionItem(invite));
+            suggestions.style.display = 'block';
             return;
         }
 

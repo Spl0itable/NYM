@@ -29,7 +29,7 @@ import {
   randomTimestampNow,
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
-  verifyBotAuth,
+  verifyClientAuth,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -43,8 +43,8 @@ import {
   secp256k1,
   schnorr,
   BOT_LIGHTNING_ADDRESS,
-  BOT_CORS_HEADERS,
-  isNymchatBotClient
+  CLIENT_CORS_HEADERS,
+  isNymchatClient
 } from "./_shared.js";
 
 var SHOP_CATALOG = {
@@ -188,7 +188,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
-      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
   if (!hasD1(env.DB_SHOP)) return json({ error: "Shop is not configured (missing DB_SHOP binding)." }, 503);
@@ -259,7 +259,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) {
+  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) {
     return json({ error: "Authentication failed" }, 401);
   }
   var SHOP_MONEY_ACTIONS = { "shop-buy-invoice": 1, "shop-claim": 1, "shop-transfer": 1, "shop-redeem": 1 };
@@ -492,7 +492,7 @@ async function handleSettingsAction(context, body) {
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
-      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
   if (!hasD1(env.DB_SETTINGS)) return json({ error: "Settings storage is not configured (missing DB_SETTINGS binding)." }, 503);
@@ -500,7 +500,7 @@ async function handleSettingsAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "settings-get") {
     var categories = {};
@@ -570,7 +570,7 @@ async function handleProfileAction(context, body) {
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
-      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
   if (!hasD1(env.DB_PROFILES)) return json({ error: "Profile storage is not configured (missing DB_PROFILES binding)." }, 503);
@@ -624,14 +624,14 @@ async function handleProfileAction(context, body) {
     });
     return new Response(profStream, {
       status: 200,
-      headers: { "Content-Type": "application/x-ndjson", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS }
     });
   }
 
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "profile-set") {
     var ev = body.event;
@@ -739,7 +739,7 @@ async function handlePmAction(context, body) {
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
-      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
   if (!hasD1(env.DB_PM)) return json({ error: "PM storage is not configured (missing DB_PM binding)." }, 503);
@@ -747,7 +747,7 @@ async function handlePmAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   // Upload one or more gift wraps addressed to the authenticated user. The
   // primary key (pubkey, id) makes re-uploads free no-ops via INSERT OR IGNORE.
@@ -800,7 +800,7 @@ async function handlePmAction(context, body) {
         "Content-Type": "application/x-ndjson",
         "X-Has-More": hasMore ? "1" : "0",
         "Access-Control-Expose-Headers": "X-Has-More",
-        ...BOT_CORS_HEADERS
+        ...CLIENT_CORS_HEADERS
       }
     });
   }
@@ -833,7 +833,7 @@ async function handleChannelAction(context, body) {
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
-      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
   if (!hasD1(env.DB_CHANNELS)) return json({ error: "Channel storage is not configured (missing DB_CHANNELS binding)." }, 503);
@@ -846,7 +846,7 @@ async function handleChannelAction(context, body) {
     var minTsSec = Math.floor((Date.now() - CHANNEL_TTL_MS) / 1000);
     var since = Number(body.since) || 0;
     var floorSec = since > minTsSec ? since : minTsSec;
-    var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...BOT_CORS_HEADERS };
+    var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS };
     if (!since) {
       var cachedBody = await readCacheGetRaw("/channel/" + name);
       if (cachedBody !== null) {
@@ -1045,7 +1045,7 @@ async function handleZapAction(context, body) {
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
-      headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
 
@@ -1082,14 +1082,14 @@ async function handleZapAction(context, body) {
     });
     return new Response(zapStream, {
       status: 200,
-      headers: { "Content-Type": "application/x-ndjson", ...BOT_CORS_HEADERS }
+      headers: { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS }
     });
   }
 
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyBotAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "zap-put") {
     var events = Array.isArray(body.events) ? body.events.slice(0, 100)
@@ -1119,16 +1119,16 @@ async function onRequest(context) {
   const { request } = context;
 
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: BOT_CORS_HEADERS });
+    return new Response(null, { status: 204, headers: CLIENT_CORS_HEADERS });
   }
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "POST required" }), {
-      status: 405, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      status: 405, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   }
-  if (!isNymchatBotClient(request)) {
+  if (!isNymchatClient(request)) {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
-      status: 403, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      status: 403, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   }
 
@@ -1137,7 +1137,7 @@ async function onRequest(context) {
     body = await request.json();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-      status: 400, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+      status: 400, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   }
 
@@ -1147,7 +1147,7 @@ async function onRequest(context) {
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
       });
     }
   }
@@ -1158,7 +1158,7 @@ async function onRequest(context) {
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
       });
     }
   }
@@ -1169,7 +1169,7 @@ async function onRequest(context) {
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
       });
     }
   }
@@ -1180,7 +1180,7 @@ async function onRequest(context) {
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
       });
     }
   }
@@ -1191,7 +1191,7 @@ async function onRequest(context) {
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
       });
     }
   }
@@ -1207,13 +1207,13 @@ async function onRequest(context) {
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 500, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
       });
     }
   }
 
   return new Response(JSON.stringify({ error: "Unknown action" }), {
-    status: 400, headers: { "Content-Type": "application/json", ...BOT_CORS_HEADERS }
+    status: 400, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
   });
 }
 

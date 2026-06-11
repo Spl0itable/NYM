@@ -4207,7 +4207,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.70.481';
+const NYMCHAT_VERSION = 'v3.70.482';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -4717,11 +4717,13 @@ async function checkSavedConnection() {
             localStorage.removeItem('nym_auto_ephemeral');
             localStorage.removeItem('nym_auto_ephemeral_nick');
             document.getElementById('setupModal').classList.add('active');
+            updateSetupInviteBanner();
             return;
         }
     }
     // No saved connection (or restoration failed) — show the setup modal.
     document.getElementById('setupModal').classList.add('active');
+    updateSetupInviteBanner();
 }
 
 async function initializeNym() {
@@ -5894,6 +5896,8 @@ async function applyNostrSettingsAdditive(s) {
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
                     if (group.description) g.description = group.description;
+                    if (group.inviteEnabled === true) g.inviteEnabled = true;
+                    if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
                     if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
@@ -5909,6 +5913,8 @@ async function applyNostrSettingsAdditive(s) {
                         g.banner = group.banner || null;
                         g.avatar = group.avatar || null;
                         g.description = group.description || null;
+                        g.inviteEnabled = group.inviteEnabled === true;
+                        g.inviteEpoch = group.inviteEpoch || 0;
                         g.metaUpdatedAt = incomingMetaTs;
                         nym.updateGroupConversationUI(groupId);
                     } else {
@@ -6498,6 +6504,8 @@ async function applyNostrSettings(s) {
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
                     if (group.description) g.description = group.description;
+                    if (group.inviteEnabled === true) g.inviteEnabled = true;
+                    if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
                     if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                 }
             } else {
@@ -6509,6 +6517,8 @@ async function applyNostrSettings(s) {
                         g.banner = group.banner || null;
                         g.avatar = group.avatar || null;
                         g.description = group.description || null;
+                        g.inviteEnabled = group.inviteEnabled === true;
+                        g.inviteEpoch = group.inviteEpoch || 0;
                         g.metaUpdatedAt = incomingMetaTs;
                         nym.updateGroupConversationUI(groupId);
                     } else {
@@ -7041,9 +7051,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // Parse URL for channel routing
+// When a brand-new user opens an invite link, surface the group on the setup
+// modal so the reason for signing up is clear.
+function updateSetupInviteBanner() {
+    const banner = document.getElementById('setupInviteBanner');
+    if (!banner) return;
+    let token = window.pendingGroupInvite;
+    if (!token) { try { token = localStorage.getItem('nym_pending_group_invite'); } catch (e) { } }
+    const payload = token && window.nym && typeof nym.parseGroupInviteInput === 'function'
+        ? nym.parseGroupInviteInput(token) : null;
+    if (payload) {
+        const rawName = (nym.sanitizeGroupName && nym.sanitizeGroupName(payload.n || '')) || 'a group';
+        const name = nym.escapeHtml ? nym.escapeHtml(rawName) : rawName;
+        const groupSvg = `<svg class="inline-group-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+        banner.innerHTML = `${groupSvg}You've been invited to join "${name}". Pick a nym or log in below to continue.`;
+        banner.classList.remove('nm-hidden');
+    } else {
+        banner.classList.add('nm-hidden');
+    }
+}
+window.updateSetupInviteBanner = updateSetupInviteBanner;
+
 function parseUrlChannel() {
     const hash = window.location.hash;
     if (hash && hash.length > 1) {
+        // Group invite links carry a case-sensitive base64url token; never lowercase.
+        const inviteMatch = hash.match(/^#gjoin=([A-Za-z0-9_-]+)/);
+        if (inviteMatch) {
+            window.pendingGroupInvite = inviteMatch[1];
+            // Persist so a brand-new user who completes setup (or reloads) still
+            // resumes the join once they have an identity.
+            try { localStorage.setItem('nym_pending_group_invite', inviteMatch[1]); } catch (e) { }
+            return;
+        }
         const channelFromUrl = hash.substring(1).toLowerCase();
 
         // Store for use after initialization
@@ -7053,6 +7093,16 @@ function parseUrlChannel() {
 
 // Handle channel routing after initialization
 async function routeToUrlChannel() {
+    let pendingInvite = window.pendingGroupInvite;
+    if (!pendingInvite) {
+        try { pendingInvite = localStorage.getItem('nym_pending_group_invite'); } catch (e) { }
+    }
+    if (pendingInvite) {
+        delete window.pendingGroupInvite;
+        history.replaceState(null, null, window.location.pathname);
+        try { await nym.handleGroupInviteFromUrl(pendingInvite); } catch (e) { console.warn('[GroupInvite]', e); }
+        return;
+    }
     if (window.pendingChannel) {
         window.urlChannelRouted = true;
         const channelInput = window.pendingChannel;

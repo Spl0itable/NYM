@@ -525,7 +525,11 @@ window.nymHapticTap = function (ms) {
         'groupCtxChangeAvatar':       function () { nym().groupCtxChangeAvatar(); },
         'groupCtxRemoveAvatar':       function () { nym().groupCtxRemoveAvatar(); },
         'groupCtxAddMembers':         function () { nym().groupCtxAddMembers(); },
+        'groupCtxCopyInviteLink':     function () { nym().groupCtxCopyInviteLink(); },
+        'joinGroupFromInvite':        function (_e, t) { nym().handleGroupInviteFromUrl(t.dataset.invite); },
         'groupCtxToggleInvites':      function () { nym().groupCtxToggleInvites(); },
+        'groupCtxToggleInviteJoin':   function () { nym().groupCtxToggleInviteJoin(); },
+        'groupCtxResetInviteLink':    function () { nym().groupCtxResetInviteLink(); },
         'groupCtxTransferOwner':      function () { nym().groupCtxTransferOwner(); },
         'groupCtxLeave':              function () { nym().groupCtxLeave(); },
         'groupCtxMemberClick':        function (_e, t) {

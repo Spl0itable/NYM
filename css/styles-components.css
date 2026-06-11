@@ -52,6 +52,17 @@
     justify-content: center;
 }
 
+.setup-invite-banner {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--secondary);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 13px;
+    line-height: 1.4;
+    text-align: center;
+}
+
 .setup-modal-header .setup-logo {
     font-size: 6px;
     margin-bottom: 0;

@@ -1535,6 +1535,18 @@ Object.assign(NYM.prototype, {
             }
         );
 
+        // Convert group invite links into a join chip BEFORE general URLs
+        formatted = formatted.replace(
+            /https?:\/\/[^\s<>"]*#gjoin=([A-Za-z0-9_-]+)/g,
+            (match, token) => {
+                const invite = typeof this.parseGroupInviteInput === 'function' ? this.parseGroupInviteInput(token) : null;
+                if (!invite) return match;
+                const name = this.escapeHtml(this.sanitizeGroupName(invite.n || '') || 'group');
+                const groupSvg = `<svg class="inline-group-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+                return `<span class="channel-link group-invite-chip" data-action="joinGroupFromInvite" data-invite="${this.escapeHtml(token)}">${groupSvg}Join ${name}</span>`;
+            }
+        );
+
         // Convert other URLs to links (but not placeholders)
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
