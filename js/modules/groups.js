@@ -415,7 +415,8 @@ Object.assign(NYM.prototype, {
         try {
             const obj = JSON.parse(this._b64uDecode(token));
             if (!obj || obj.v !== 1) return null;
-            if (!/^[0-9a-f]{64}$/i.test(obj.g || '')) return null;
+            // Group ids are 64-hex for new groups, uppercase UUIDs for legacy ones.
+            if (!/^([0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.test(obj.g || '')) return null;
             if (!/^[0-9a-f]{64}$/i.test(obj.a || '')) return null;
             obj.e = parseInt(obj.e, 10) || 0;
             return obj;
@@ -704,6 +705,10 @@ Object.assign(NYM.prototype, {
         const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
         const msgType = typeTag ? typeTag[1] : null;
 
+        // Extract group name from 'subject' tag
+        const subjectTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'subject' && t[1]);
+        const groupName = subjectTag ? subjectTag[1] : 'Group';
+
         // Drop messages for groups the user has left, unless it's a reinvite or unban
         // newer than when we left. Stale backlog never resurrects a deleted group.
         if (this.leftGroups.has(groupId)) {
@@ -770,10 +775,6 @@ Object.assign(NYM.prototype, {
             }
             return;
         }
-
-        // Extract group name from 'subject' tag
-        const subjectTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'subject' && t[1]);
-        const groupName = subjectTag ? subjectTag[1] : 'Group';
 
         // group-metadata: owner changed the group name, banner, and/or avatar.
         if (typeTag && typeTag[1] === 'group-metadata') {
