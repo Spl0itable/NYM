@@ -4207,7 +4207,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.70.480';
+const NYMCHAT_VERSION = 'v3.70.481';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -4240,9 +4240,15 @@ function runBuildVerification() {
         if (r.ok) {
             statusEl.textContent = '✓ Verified (' + r.verified + '/' + r.total + ')';
             statusEl.className = 'about-build-status ok';
-        } else {
+        } else if (!r.filesOk) {
             statusEl.textContent = '✗ Mismatch (' + r.verified + '/' + r.total + ')';
             statusEl.className = 'about-build-status bad';
+        } else if (r.anchored === false) {
+            statusEl.textContent = '✗ Unofficial build (' + r.verified + '/' + r.total + ')';
+            statusEl.className = 'about-build-status bad';
+        } else {
+            statusEl.textContent = '⚠ Provenance unreachable (' + r.verified + '/' + r.total + ')';
+            statusEl.className = 'about-build-status checking';
         }
     }).catch(() => {
         statusEl.textContent = 'Unavailable offline';

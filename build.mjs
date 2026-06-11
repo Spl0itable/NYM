@@ -18,6 +18,10 @@ function gitCommit() {
   try { return execSync('git rev-parse HEAD').toString().trim(); } catch (_) { return 'unknown'; }
 }
 
+function gitCommitTime() {
+  try { return execSync('git log -1 --format=%cI').toString().trim(); } catch (_) { return ''; }
+}
+
 async function walk(dir) {
   const out = [];
   for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
@@ -136,8 +140,9 @@ async function run() {
 
   // Build manifest: lets the app re-hash its own running bundle and lets anyone
   // reproduce bundleHash from source at `commit`. bundleHash is derived only
-  // from the content-hashed asset set, so it is identical across reproducible
-  // rebuilds of the same source.
+  // from the content-hashed asset set, and builtAt is the commit time rather
+  // than the build time, so rebuilds of the same source are byte-identical and
+  // the deployed manifest matches the digest attested by the provenance Action.
   const bundleHash = crypto.createHash('sha256')
     .update(Object.keys(manifestFiles).sort().map((p) => p + ':' + manifestFiles[p]).join('\n'))
     .digest('hex');
@@ -145,7 +150,7 @@ async function run() {
   await emit('build-manifest.json', JSON.stringify({
     app: 'nymchat',
     commit,
-    builtAt: new Date().toISOString(),
+    builtAt: gitCommitTime(),
     algo: 'sha256',
     bundleHash,
     files: manifestFiles,

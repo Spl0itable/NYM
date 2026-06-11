@@ -224,9 +224,9 @@ The deployed web app is built deterministically, so anyone can confirm that the 
 
 How it works:
 
-- `npm run build` emits `dist/build-manifest.json` containing the source `commit`, a `sha256-` hash of every served HTML/JS/CSS asset, and a single `bundleHash` over that asset set. The `bundleHash` depends only on source content, so reproducible rebuilds of the same commit produce the same hash.
-- The app's **About** dialog re-fetches each running asset, hashes it in the browser with the Web Crypto API, and compares against the manifest. It shows `✓ Verified (n/n)`, the source commit (linked), and the short `bundleHash`.
-- The [Build provenance](../../actions/workflows/build-provenance.yml) GitHub Action independently rebuilds each commit, prints the `bundleHash` to the run summary, and signs a build-provenance attestation for the manifest.
+- `npm run build` emits `dist/build-manifest.json` containing the source `commit`, a `sha256-` hash of every served HTML/JS/CSS asset, and a single `bundleHash` over that asset set. The manifest depends only on source content (`builtAt` is the commit time, not the build time), so reproducible rebuilds of the same commit produce a byte-identical manifest.
+- The [Build provenance](../../actions/workflows/build-provenance.yml) GitHub Action independently rebuilds each commit, prints the `bundleHash` to the run summary, and signs a build-provenance attestation for the manifest. Because the manifest is byte-reproducible, the attested digest equals the digest of the manifest the live site serves.
+- The app's **About** dialog re-fetches each running asset, hashes it in the browser with the Web Crypto API, and compares against the manifest. It then hashes the served manifest itself and looks that digest up in this repository's signed attestations via the GitHub API, so the manifest cannot simply vouch for itself. It shows `✓ Verified (n/n)` only when every asset matches **and** the manifest digest is attested by this repository; a deployment serving modified files or a self-made manifest shows `✗ Mismatch` or `✗ Unofficial build` instead, and `⚠ Provenance unreachable` when the GitHub API cannot be reached.
 
 To verify a running build yourself:
 

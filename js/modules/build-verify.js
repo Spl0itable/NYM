@@ -1,22 +1,49 @@
-// Re-hashes the running HTML and JS/CSS bundle against /build-manifest.json so the About
-// dialog can prove the served code matches the published, reproducible build from official repo.
+// Re-hashes the running HTML and JS/CSS bundle against /build-manifest.json, and anchors the
+// manifest itself to the official repo by looking up its digest in GitHub's signed build
+// attestations, so the About dialog can prove the served code matches the published,
+// reproducible build from the official repo rather than whatever the serving origin claims.
 
 (function () {
     const MANIFEST_URL = '/build-manifest.json';
+    const ATTESTATION_API = 'https://api.github.com/repos/Spl0itable/NYM/attestations/sha256:';
     let pending = null;
 
+    async function digest(buf) {
+        return new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+    }
+
     async function sha256b64(buf) {
-        const digest = await crypto.subtle.digest('SHA-256', buf);
-        const bytes = new Uint8Array(digest);
+        const bytes = await digest(buf);
         let bin = '';
         for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
         return 'sha256-' + btoa(bin);
     }
 
+    async function sha256hex(buf) {
+        const bytes = await digest(buf);
+        let hex = '';
+        for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+        return hex;
+    }
+
+    async function checkAttestation(hex) {
+        try {
+            const res = await fetch(ATTESTATION_API + hex, { cache: 'no-store' });
+            if (res.status === 404) return false;
+            if (!res.ok) return null;
+            const data = await res.json();
+            return Array.isArray(data.attestations) && data.attestations.length > 0;
+        } catch (_) {
+            return null;
+        }
+    }
+
     async function run() {
         const res = await fetch(MANIFEST_URL, { cache: 'no-store' });
         if (!res.ok) throw new Error('manifest unavailable');
-        const manifest = await res.json();
+        const raw = await res.arrayBuffer();
+        const manifest = JSON.parse(new TextDecoder().decode(raw));
+        const anchoredPromise = sha256hex(raw).then(checkAttestation);
         const files = manifest.files || {};
         const paths = Object.keys(files);
         const mismatches = [];
@@ -41,6 +68,8 @@
 
         const lanes = Math.min(6, paths.length) || 1;
         await Promise.all(Array.from({ length: lanes }, worker));
+        const anchored = await anchoredPromise;
+        const filesOk = paths.length > 0 && mismatches.length === 0;
 
         return {
             commit: manifest.commit || 'unknown',
@@ -49,7 +78,9 @@
             total: paths.length,
             verified,
             mismatches,
-            ok: paths.length > 0 && mismatches.length === 0,
+            anchored,
+            filesOk,
+            ok: filesOk && anchored === true,
         };
     }
 
