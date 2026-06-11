@@ -290,16 +290,11 @@
     justify-content: center;
 }
 
-.about-logo {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--primary);
-}
-
 .about-version {
     font-size: 12px;
     font-weight: 500;
     color: var(--text-dim);
+    text-transform: none;
 }
 
 .about-desc {

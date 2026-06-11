@@ -1,7 +1,8 @@
-// Re-hashes the running HTML and JS/CSS bundle against /build-manifest.json, and anchors the
-// manifest itself to the official repo by looking up its digest in GitHub's signed build
-// attestations, so the About dialog can prove the served code matches the published,
-// reproducible build from the official repo rather than whatever the serving origin claims.
+// Re-hashes the running HTML and JS/CSS bundle against /build-manifest.json, recomputes the
+// bundleHash from those locally computed hashes, and anchors it to the official repo by looking
+// up the digest of the canonical bundle-hash artifact in GitHub's signed build attestations, so
+// the About dialog can prove the served code matches the published, reproducible build from the
+// official repo rather than whatever the serving origin claims.
 
 (function () {
     const MANIFEST_URL = '/build-manifest.json';
@@ -26,9 +27,10 @@
         return hex;
     }
 
-    async function checkAttestation(hex) {
+    async function checkAttestation(bundleHash) {
         try {
-            const res = await fetch(ATTESTATION_API + hex, { cache: 'no-store' });
+            const subject = await sha256hex(new TextEncoder().encode(bundleHash + '\n'));
+            const res = await fetch(ATTESTATION_API + subject, { cache: 'no-store' });
             if (res.status === 404) return false;
             if (!res.ok) return null;
             const data = await res.json();
@@ -41,11 +43,10 @@
     async function run() {
         const res = await fetch(MANIFEST_URL, { cache: 'no-store' });
         if (!res.ok) throw new Error('manifest unavailable');
-        const raw = await res.arrayBuffer();
-        const manifest = JSON.parse(new TextDecoder().decode(raw));
-        const anchoredPromise = sha256hex(raw).then(checkAttestation);
+        const manifest = await res.json();
         const files = manifest.files || {};
         const paths = Object.keys(files);
+        const computed = {};
         const mismatches = [];
         let verified = 0;
         let idx = 0;
@@ -58,6 +59,7 @@
                     const r = await fetch(path, { cache });
                     if (!r.ok) throw new Error('http ' + r.status);
                     const got = await sha256b64(await r.arrayBuffer());
+                    computed[path] = got;
                     if (got === files[path]) verified++;
                     else mismatches.push(path);
                 } catch (_) {
@@ -68,12 +70,16 @@
 
         const lanes = Math.min(6, paths.length) || 1;
         await Promise.all(Array.from({ length: lanes }, worker));
-        const anchored = await anchoredPromise;
+
+        const bundleHash = await sha256hex(new TextEncoder().encode(
+            paths.slice().sort().map((p) => p + ':' + (computed[p] || '')).join('\n')
+        ));
+        const anchored = await checkAttestation(bundleHash);
         const filesOk = paths.length > 0 && mismatches.length === 0;
 
         return {
             commit: manifest.commit || 'unknown',
-            bundleHash: manifest.bundleHash || '',
+            bundleHash,
             builtAt: manifest.builtAt || '',
             total: paths.length,
             verified,

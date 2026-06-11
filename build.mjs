@@ -147,6 +147,7 @@ async function run() {
     .update(Object.keys(manifestFiles).sort().map((p) => p + ':' + manifestFiles[p]).join('\n'))
     .digest('hex');
   const commit = gitCommit();
+  await emit('bundle-hash.txt', bundleHash + '\n');
   await emit('build-manifest.json', JSON.stringify({
     app: 'nymchat',
     commit,
