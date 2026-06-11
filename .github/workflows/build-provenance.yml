@@ -1,0 +1,36 @@
+name: Build provenance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: |
+          {
+            echo "### Build provenance"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Build hash: \`$(cat dist/bundle-hash.txt)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/attest-build-provenance@v4
+        if: github.repository == 'Spl0itable/NYM'
+        with:
+          subject-path: |
+            dist/bundle-hash.txt
+            dist/build-manifest.json
