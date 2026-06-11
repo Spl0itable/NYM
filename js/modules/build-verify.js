@@ -7,6 +7,7 @@
 (function () {
     const MANIFEST_URL = '/build-manifest.json';
     const ATTESTATION_API = 'https://api.github.com/repos/Spl0itable/NYM/attestations/sha256:';
+    const OFFICIAL_HOSTS = ['web.nymchat.app'];
     let pending = null;
 
     async function digest(buf) {
@@ -55,7 +56,7 @@
             while (idx < paths.length) {
                 const path = paths[idx++];
                 try {
-                    const cache = /\.(js|css)$/.test(path) ? 'force-cache' : 'no-store';
+                    const cache = path !== '/sw.js' && /\.(js|css)$/.test(path) ? 'force-cache' : 'no-store';
                     const r = await fetch(path, { cache });
                     if (!r.ok) throw new Error('http ' + r.status);
                     const got = await sha256b64(await r.arrayBuffer());
@@ -86,6 +87,7 @@
             mismatches,
             anchored,
             filesOk,
+            officialHost: OFFICIAL_HOSTS.indexOf(location.hostname) !== -1,
             ok: filesOk && anchored === true,
         };
     }

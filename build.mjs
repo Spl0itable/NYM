@@ -134,9 +134,11 @@ async function run() {
     .map((hashed) => '/' + hashed);
 
   const swSrc = await fs.readFile(path.join(root, 'sw.js'), 'utf8');
-  await emit('sw.js', swSrc
+  const swOut = swSrc
     .replace('__CACHE_VERSION__', swVersion)
-    .replace('__PRECACHE_ASSETS__', JSON.stringify(precache)));
+    .replace('__PRECACHE_ASSETS__', JSON.stringify(precache));
+  await emit('sw.js', swOut);
+  manifestFiles['/sw.js'] = sha256b64(Buffer.from(swOut));
 
   // Build manifest: lets the app re-hash its own running bundle and lets anyone
   // reproduce bundleHash from source at `commit`. bundleHash is derived only

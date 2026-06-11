@@ -4237,9 +4237,12 @@ function runBuildVerification() {
             hashEl.title = r.bundleHash || '';
         }
 
-        if (r.ok) {
-            statusEl.textContent = '✓ Verified (' + r.verified + '/' + r.total + ')';
+        if (r.ok && r.officialHost) {
+            statusEl.textContent = '✓ Verified official app (' + r.verified + '/' + r.total + ')';
             statusEl.className = 'about-build-status ok';
+        } else if (r.ok) {
+            statusEl.textContent = '⚠ Verified build · not the official app';
+            statusEl.className = 'about-build-status checking';
         } else if (!r.filesOk) {
             statusEl.textContent = '✗ Mismatch (' + r.verified + '/' + r.total + ')';
             statusEl.className = 'about-build-status bad';
