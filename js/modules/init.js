@@ -1,4 +1,4 @@
-// init.js - App initialization, device capability detection, performance mode
+// init.js - App initialization
 
 Object.assign(NYM.prototype, {
 
@@ -21,28 +21,6 @@ Object.assign(NYM.prototype, {
         return setTimeout(fn, 0);
     },
 
-    _detectDeviceCapabilities() {
-        const caps = { tier: 'high', cores: 4, memory: 8, mobile: false };
-        try {
-            caps.cores = navigator.hardwareConcurrency || 2;
-            caps.memory = navigator.deviceMemory || 4;
-            caps.mobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
-                || (navigator.maxTouchPoints > 1 && window.innerWidth <= 1024);
-
-            if (caps.cores <= 2 || caps.memory <= 2 || (caps.mobile && caps.cores <= 4 && caps.memory <= 4)) {
-                caps.tier = 'low';
-            } else if (caps.cores <= 4 || caps.memory <= 4) {
-                caps.tier = 'mid';
-            }
-        } catch (e) { /* fallback to defaults */ }
-        return caps;
-    },
-
-    _applyPerformanceMode() {
-        this.performanceMode = true;
-        document.body.classList.add('performance-mode');
-    },
-
     async initialize() {
         try {
             // Check if nostr-tools is loaded
@@ -59,7 +37,6 @@ Object.assign(NYM.prototype, {
             this.setupEventListeners();
             this.setupCommands();
             this.setupEmojiPicker();
-            this.initCustomEmojis();
             this.setupContextMenu();
             this.setupMobileGestures();
             this.setupTranslateInput();
@@ -75,7 +52,6 @@ Object.assign(NYM.prototype, {
             this.loadBlockedUsers();
             this.loadFriends();
             this.loadBlockedKeywords();
-            this.loadBlockedChannels();
             this.loadPinnedChannels();
             this.loadHiddenChannels();
             this.loadWallpaper();

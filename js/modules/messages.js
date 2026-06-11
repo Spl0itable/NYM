@@ -338,6 +338,8 @@ Object.assign(NYM.prototype, {
             if (this.trustedPubkeys.size > 50000) {
                 this.trustedPubkeys.delete(this.trustedPubkeys.values().next().value);
             }
+            // Trust survives reloads via the meta store
+            if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
             if (!silent) this._revealGatedPubkey(pubkey);
         }
     },
@@ -1052,41 +1054,30 @@ Object.assign(NYM.prototype, {
             const msgMs = msgHasMs ? message._ms : 0;
             const msgSeq = message._seq || 0;
 
-            const allTimestamped = container.querySelectorAll('[data-created-at]');
-            let insertBefore = null;
-            for (let i = allTimestamped.length - 1; i >= 0; i--) {
-                const cursor = allTimestamped[i];
-                const existingCreatedAt = parseInt(cursor.dataset.createdAt) || 0;
-                if (msgCreatedAt > existingCreatedAt) break;
-                if (msgCreatedAt < existingCreatedAt) {
-                    insertBefore = cursor;
-                    continue;
-                }
-                const existingMsRaw = parseInt(cursor.dataset.ms) || 0;
-                const existingHasMs = existingMsRaw > existingCreatedAt * 1000;
-                if (msgHasMs && existingHasMs) {
-                    if (msgMs > existingMsRaw) break;
-                    if (msgMs < existingMsRaw) {
-                        insertBefore = cursor;
-                        continue;
-                    }
-                }
-                const existingSeq = parseInt(cursor.dataset.seq) || 0;
-                if (msgSeq >= existingSeq) break;
-                insertBefore = cursor;
-            }
-
-            if (insertBefore && insertBefore.parentNode) {
-                insertBefore.parentNode.insertBefore(messageEl, insertBefore);
-            } else {
+            const lastTimestamped = this._lastTimestampedEl(container);
+            if (!lastTimestamped || this._msgSortsAfter(lastTimestamped, msgCreatedAt, msgHasMs, msgMs, msgSeq)) {
                 container.appendChild(messageEl);
+            } else {
+                const allTimestamped = container.querySelectorAll('[data-created-at]');
+                let insertBefore = null;
+                for (let i = allTimestamped.length - 1; i >= 0; i--) {
+                    const cursor = allTimestamped[i];
+                    if (this._msgSortsAfter(cursor, msgCreatedAt, msgHasMs, msgMs, msgSeq)) break;
+                    insertBefore = cursor;
+                }
+
+                if (insertBefore && insertBefore.parentNode) {
+                    insertBefore.parentNode.insertBefore(messageEl, insertBefore);
+                } else {
+                    container.appendChild(messageEl);
+                }
             }
         }
 
         this._updateBubbleGrouping(messageEl);
 
         if (!this._bulkAppending && !message.isHistorical &&
-            messageEl.classList.contains('bubble-grouped') &&
+            this._isBubbleGroupedWithPrev(messageEl) &&
             document.body.classList.contains('chat-bubbles')) {
             messageEl.classList.add('bubble-snap');
             setTimeout(() => { messageEl.classList.remove('bubble-snap'); }, 320);
@@ -1530,7 +1521,7 @@ Object.assign(NYM.prototype, {
                 const idx = mediaPlaceholders.length;
                 mediaPlaceholders.push({
                     kind: 'image',
-                    html: `<img src="${proxiedUrl}" alt="Image" data-action="expandImageFromData"${fbAttr} />`
+                    html: `<img src="${proxiedUrl}" alt="Image" class="msg-img" data-action="expandImageFromData"${fbAttr} />`
                 });
                 return `﷒${idx}﷓`;
             }
@@ -1806,15 +1797,56 @@ Object.assign(NYM.prototype, {
         }
         const container = document.getElementById('messagesContainer');
         if (container && (container.contains(messageEl) || messageEl.parentNode === null)) {
-            this._rewrapBubbleGroups(container);
-            const messages = container.querySelectorAll('[data-message-id]');
-            for (let i = 0; i < messages.length; i++) {
-                this._applyBubbleGroupingTo(messages[i]);
+            if (!this._bubbleRegroupRAF) {
+                this._bubbleRegroupRAF = requestAnimationFrame(() => {
+                    this._bubbleRegroupRAF = null;
+                    const c = document.getElementById('messagesContainer');
+                    if (c) this._recomputeAllBubbleGrouping(c);
+                });
             }
             return;
         }
         this._applyBubbleGroupingTo(messageEl);
         this._applyBubbleGroupingTo(messageEl.nextElementSibling);
+    },
+
+    _lastTimestampedEl(container) {
+        for (let child = container.lastElementChild; child; child = child.previousElementSibling) {
+            if (child.dataset && child.dataset.createdAt !== undefined) return child;
+            const nested = child.querySelectorAll('[data-created-at]');
+            if (nested.length) return nested[nested.length - 1];
+        }
+        return null;
+    },
+
+    _msgSortsAfter(cursor, msgCreatedAt, msgHasMs, msgMs, msgSeq) {
+        const existingCreatedAt = parseInt(cursor.dataset.createdAt) || 0;
+        if (msgCreatedAt > existingCreatedAt) return true;
+        if (msgCreatedAt < existingCreatedAt) return false;
+        const existingMsRaw = parseInt(cursor.dataset.ms) || 0;
+        const existingHasMs = existingMsRaw > existingCreatedAt * 1000;
+        if (msgHasMs && existingHasMs) {
+            if (msgMs > existingMsRaw) return true;
+            if (msgMs < existingMsRaw) return false;
+        }
+        const existingSeq = parseInt(cursor.dataset.seq) || 0;
+        return msgSeq >= existingSeq;
+    },
+
+    _isBubbleGroupedWithPrev(el) {
+        if (!el || !el.dataset || !el.dataset.pubkey || !el.dataset.messageId) return false;
+        if (el.classList.contains('poll-message') || el.classList.contains('blocked-user-message')) return false;
+        let prev = el.previousElementSibling;
+        if (prev && prev.classList && prev.classList.contains('message-group')) {
+            const stack = prev.querySelector(':scope > .message-group-stack');
+            prev = stack ? stack.lastElementChild : null;
+        }
+        if (!prev || !prev.dataset || prev.dataset.pubkey !== el.dataset.pubkey) return false;
+        if (!prev.dataset.messageId || prev.classList.contains('poll-message') ||
+            prev.classList.contains('blocked-user-message')) return false;
+        const ts = parseInt(el.dataset.timestamp) || 0;
+        const prevTs = parseInt(prev.dataset.timestamp) || 0;
+        return !!(ts && prevTs && Math.abs(ts - prevTs) <= 5 * 60 * 1000);
     },
 
     _recomputeAllBubbleGrouping(container) {
@@ -3361,6 +3393,7 @@ Object.assign(NYM.prototype, {
     },
 
     _refreshBubbleRelativeTimes() {
+        if (document.hidden) return;
         if (!document.body.classList.contains('chat-bubbles')) return;
         document.querySelectorAll('.bubble-time-inner > .bubble-time-text').forEach(el => {
             const msgEl = el.closest('[data-timestamp]');

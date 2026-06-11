@@ -159,6 +159,8 @@ async function run() {
   Cache-Control: public, max-age=31536000, immutable
 /css/*
   Cache-Control: public, max-age=31536000, immutable
+/static/*
+  Cache-Control: public, max-age=86400
 /index.html
   Cache-Control: no-cache
 /

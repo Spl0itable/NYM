@@ -374,8 +374,7 @@ Object.assign(NYM.prototype, {
         const canvas = container.querySelector('#geohashMapCanvas');
         const ctx = canvas.getContext('2d');
 
-        const isPerf = !!this.performanceMode;
-        const dpr = isPerf ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+        const dpr = 1;
 
         const view = { cx: 0, cy: 0, zoom: 1, minZoom: 1, maxZoom: 16 };
 
@@ -576,7 +575,7 @@ Object.assign(NYM.prototype, {
         const drawWorld = () => {
             ctx.fillStyle = styles.land;
             ctx.strokeStyle = styles.border;
-            ctx.lineWidth = isPerf ? 0.5 : 0.7;
+            ctx.lineWidth = 0.5;
             ctx.lineJoin = 'round';
 
             for (const feat of features) {
@@ -629,7 +628,7 @@ Object.assign(NYM.prototype, {
 
         const drawLabels = () => {
             if (!features.length) return;
-            const fontSize = isPerf ? 10 : 11;
+            const fontSize = 10;
             ctx.font = `600 ${fontSize}px var(--font-sans, system-ui, sans-serif)`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -667,7 +666,7 @@ Object.assign(NYM.prototype, {
             if (t <= 0) return;
 
             ctx.strokeStyle = styles.adminBorder;
-            ctx.lineWidth = isPerf ? 0.4 : 0.5;
+            ctx.lineWidth = 0.4;
             ctx.globalAlpha = t;
             ctx.lineJoin = 'round';
             ctx.beginPath();
@@ -704,7 +703,7 @@ Object.assign(NYM.prototype, {
 
         const drawAdmin1Labels = () => {
             if (view.zoom < 4 || !admin1Features.length) return;
-            const fontSize = isPerf ? 9 : 10;
+            const fontSize = 9;
             ctx.font = `500 ${fontSize}px var(--font-sans, system-ui, sans-serif)`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -741,13 +740,13 @@ Object.assign(NYM.prototype, {
                 : view.zoom < 6 ? 6
                 : view.zoom < 8 ? 8 : 10;
 
-            const fontSize = isPerf ? 9 : 10;
+            const fontSize = 9;
             ctx.font = `500 ${fontSize}px var(--font-sans, system-ui, sans-serif)`;
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
             ctx.lineJoin = 'round';
 
-            const dotR = isPerf ? 1.5 : 2;
+            const dotR = 1.5;
             const showLabels = view.zoom >= 3;
 
             for (const city of cityFeatures) {
@@ -862,7 +861,7 @@ Object.assign(NYM.prototype, {
             heatCtx.putImageData(img, 0, 0);
 
             ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = isPerf ? 'low' : 'medium';
+            ctx.imageSmoothingQuality = 'low';
             ctx.drawImage(heatCanvas, 0, 0, cssWidth, cssHeight);
             ctx.imageSmoothingEnabled = false;
 
@@ -879,7 +878,7 @@ Object.assign(NYM.prototype, {
         };
 
         const drawChannels = () => {
-            const baseR = isPerf ? 4 : 5;
+            const baseR = 4;
             const channels = this.geohashChannels || [];
 
             for (const ch of channels) {
@@ -888,15 +887,6 @@ Object.assign(NYM.prototype, {
                 const isHover = hoveredChannel && hoveredChannel.geohash === ch.geohash;
                 const r = isHover ? baseR + 2 : baseR;
                 const color = ch.isJoined ? styles.joined : styles.primary;
-
-                if (!isPerf) {
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, r + 5, 0, Math.PI * 2);
-                    ctx.fillStyle = color;
-                    ctx.globalAlpha = styles.haloAlpha;
-                    ctx.fill();
-                    ctx.globalAlpha = 1;
-                }
 
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
@@ -912,14 +902,6 @@ Object.assign(NYM.prototype, {
             if (this.userLocation) {
                 const p = project(this.userLocation.lng, this.userLocation.lat);
                 if (inView(p, 10)) {
-                    if (!isPerf) {
-                        ctx.beginPath();
-                        ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
-                        ctx.fillStyle = styles.warning;
-                        ctx.globalAlpha = styles.haloAlpha;
-                        ctx.fill();
-                        ctx.globalAlpha = 1;
-                    }
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, 5.5, 0, Math.PI * 2);
                     ctx.fillStyle = styles.warning;

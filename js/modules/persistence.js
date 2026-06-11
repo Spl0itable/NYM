@@ -25,6 +25,7 @@
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
     const META_NYMCHAT_VOUCHES = 'nymchatVouches';
+    const META_TRUSTED_PUBKEYS = 'trustedPubkeys';
     const META_POOL_SHARD_LAST_SEEN = 'poolShardLastSeen';
 
     Object.assign(NYM.prototype, {
@@ -298,6 +299,12 @@
                         ids: Array.from(this.nymchatVouches)
                     });
                 }
+                if (this.trustedPubkeys && this.trustedPubkeys.size > 0) {
+                    this._cachePut('meta', {
+                        key: META_TRUSTED_PUBKEYS,
+                        ids: Array.from(this.trustedPubkeys).slice(-20000)
+                    });
+                }
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
@@ -327,6 +334,8 @@
                         for (const id of m.ids) this.nymchatPubkeys.add(id);
                     } else if (m.key === META_NYMCHAT_VOUCHES && this.nymchatVouches) {
                         for (const id of m.ids) this.nymchatVouches.add(id);
+                    } else if (m.key === META_TRUSTED_PUBKEYS && this.trustedPubkeys) {
+                        for (const id of m.ids) this.trustedPubkeys.add(id);
                     } else if (m.key === META_POOL_SHARD_LAST_SEEN && m.map && typeof m.map === 'object') {
                         if (!this._shardLastSeenAt) this._shardLastSeenAt = new Map();
                         for (const [shardId, ts] of Object.entries(m.map)) {
@@ -418,14 +427,6 @@
                     const msgs = c.messages.map(m => this._hydrateMessage(m));
                     this.messages.set(c.key, msgs);
                     loadedChannelKeys.push(c.key);
-                    // Rebuild spam-gate counts from cache
-                    if (typeof this._trackPubkeyMessage === 'function') {
-                        for (const m of msgs) {
-                            if (m && m.pubkey && m.id) {
-                                this._trackPubkeyMessage(m.pubkey, m.id, true);
-                            }
-                        }
-                    }
                 }
 
                 for (const key of loadedChannelKeys) {

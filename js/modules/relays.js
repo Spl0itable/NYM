@@ -1505,25 +1505,77 @@ Object.assign(NYM.prototype, {
 
     shouldRetryRelay(relayUrl) {
         if (relayUrl === this.appRelay) return true;
-        const failedAttempt = this.failedRelays.get(relayUrl);
-        if (!failedAttempt) return true;
 
-        const now = Date.now();
-        const canRetry = now - failedAttempt > this.relayRetryDelay;
-
-        if (!canRetry) {
-            //
+        // Persisted failure history
+        if (this.relayPool.size > 0) {
+            const s = this._getRelayStats().get(relayUrl);
+            if (s && s.fails >= 3) {
+                const coolDown = Math.min(
+                    5 * 60 * 1000 * Math.pow(2, s.fails - 3),
+                    6 * 60 * 60 * 1000
+                );
+                if (Date.now() - s.lastFail < coolDown) return false;
+            }
         }
 
-        return canRetry;
+        const failedAttempt = this.failedRelays.get(relayUrl);
+        if (!failedAttempt) return true;
+        return Date.now() - failedAttempt > this.relayRetryDelay;
     },
 
     trackRelayFailure(relayUrl) {
         this.failedRelays.set(relayUrl, Date.now());
+        if (navigator.onLine === false) return;
+        const stats = this._getRelayStats();
+        const s = stats.get(relayUrl) || { fails: 0, lastFail: 0, lastOk: 0 };
+        s.fails++;
+        s.lastFail = Date.now();
+        stats.set(relayUrl, s);
+        this._saveRelayStats();
     },
 
     clearRelayFailure(relayUrl) {
         this.failedRelays.delete(relayUrl);
+        const stats = this._getRelayStats();
+        const s = stats.get(relayUrl);
+        if (s && s.fails > 0) {
+            s.fails = 0;
+            s.lastOk = Date.now();
+            this._saveRelayStats();
+        }
+    },
+
+    _getRelayStats() {
+        if (!this._relayStatsMap) {
+            this._relayStatsMap = new Map();
+            try {
+                const raw = JSON.parse(localStorage.getItem('nym_relay_stats') || '{}');
+                for (const [url, s] of Object.entries(raw)) {
+                    if (s && typeof s === 'object') this._relayStatsMap.set(url, s);
+                }
+            } catch (_) { }
+        }
+        return this._relayStatsMap;
+    },
+
+    _saveRelayStats() {
+        if (this._relayStatsSaveTimer) return;
+        this._relayStatsSaveTimer = setTimeout(() => {
+            this._relayStatsSaveTimer = null;
+            try {
+                let stats = this._getRelayStats();
+                // Keep the map bounded: drop the stalest entries past 200.
+                if (stats.size > 200) {
+                    const recency = (s) => Math.max(s.lastFail || 0, s.lastOk || 0);
+                    stats = this._relayStatsMap = new Map(
+                        [...stats.entries()]
+                            .sort((a, b) => recency(b[1]) - recency(a[1]))
+                            .slice(0, 200)
+                    );
+                }
+                localStorage.setItem('nym_relay_stats', JSON.stringify(Object.fromEntries(stats)));
+            } catch (_) { }
+        }, 3000);
     },
 
     // True when the page is served from the app's own domain, so the browser

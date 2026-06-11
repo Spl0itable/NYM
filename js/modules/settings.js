@@ -973,10 +973,21 @@ Object.assign(NYM.prototype, {
         this.loadWallpaper();
 
         // Update meta theme-color to match the mode
+        const themeColor = resolved === 'light' ? '#f5f5f2' : '#000000';
         const metaTheme = document.querySelector('meta[name="theme-color"]');
         if (metaTheme) {
-            metaTheme.content = resolved === 'light' ? '#f5f5f2' : '#000000';
+            metaTheme.content = themeColor;
         }
+
+        // Keep the Flutter shell's native status bar in sync with the app theme
+        try {
+            if (window.FlutterTheme && typeof window.FlutterTheme.postMessage === 'function') {
+                window.FlutterTheme.postMessage(JSON.stringify({
+                    backgroundColor: themeColor,
+                    isLightMode: resolved === 'light'
+                }));
+            }
+        } catch (_) { /* ignore */ }
     },
 
     setupColorModeListener() {

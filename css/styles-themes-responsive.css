@@ -16,8 +16,6 @@
 }
 
 body.light-mode .channel-context-menu {
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(30px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -228,11 +226,10 @@ body.light-mode .verified-badge::before {
         left: auto;
         right: auto;
         padding: 10px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
         flex-direction: column;
         gap: 10px;
         background: var(--glass-bg);
-        backdrop-filter: blur(30px) saturate(1.5);
-        -webkit-backdrop-filter: blur(30px) saturate(1.5);
         border-top: 1px solid var(--glass-border);
         z-index: 500;
         flex-shrink: 0;
@@ -493,23 +490,13 @@ body.light-mode::after {
 
 body.light-mode .modal-content,
 body.light-mode .shop-content {
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(40px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
-body.light-mode .modal {
-    background: rgba(0, 0, 0, 0.25);
-    backdrop-filter: blur(10px);
-}
-
-body.light-mode .message:hover {
-    background: rgba(0, 0, 0, 0.03);
-}
-
-body.light-mode .sidebar {
-    background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(40px) saturate(1.5);
+@media (hover: hover) {
+    body.light-mode .message:hover {
+        background: rgba(0, 0, 0, 0.03);
+    }
 }
 
 body.light-mode input,
@@ -628,47 +615,20 @@ body.light-mode.theme-ghost {
     --warning: #555555;
 }
 
-body.light-mode .image-modal {
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(20px);
-}
-
 body.light-mode .image-modal img {
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2);
 }
 
 body.light-mode .geohash-explorer-modal {
     background: rgba(0, 0, 0, 0.3);
-    backdrop-filter: blur(15px);
 }
 
 body.light-mode .geohash-info-panel {
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(30px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-}
-
-body.light-mode .geohash-control-btn {
-    background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(20px);
-}
-
-body.light-mode .geohash-legend {
-    background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(20px);
 }
 
 body.light-mode .geohash-info-item {
     border-bottom-color: rgba(0, 0, 0, 0.1);
-}
-
-body.light-mode .shop-modal {
-    background: rgba(0, 0, 0, 0.25);
-    backdrop-filter: blur(15px);
-}
-
-body.light-mode .mobile-overlay {
-    background: none;
 }
 
 body.light-mode .tutorial-highlight {
@@ -676,8 +636,6 @@ body.light-mode .tutorial-highlight {
 }
 
 body.light-mode .tutorial-card {
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(30px);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
@@ -1036,8 +994,6 @@ body.light-mode .modal-content {
 
 body.light-mode .geohash-explorer-content {
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
-    background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(1.5);
 }
 
 body.light-mode .geohash-join-btn:hover,
@@ -1089,8 +1045,6 @@ body.light-mode ::-webkit-scrollbar-thumb:hover {
 }
 
 body.light-mode .context-menu {
-    background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(40px) saturate(1.5);
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1107,17 +1061,15 @@ body.light-mode .context-menu-close:hover {
     border-color: rgba(255, 68, 68, 0.3);
 }
 
-body.light-mode .context-menu-overlay {
-    background: none;
-}
-
 body.light-mode .has-banner .avatar-context {
     border-color: rgba(255, 255, 255, 0.95);
 }
 
-body.light-mode .channel-item:hover,
-body.light-mode .pm-item:hover {
-    background: rgba(0, 0, 0, 0.04);
+@media (hover: hover) {
+    body.light-mode .channel-item:hover,
+    body.light-mode .pm-item:hover {
+        background: rgba(0, 0, 0, 0.04);
+    }
 }
 
 body.light-mode .channel-item.active,
@@ -1132,64 +1084,52 @@ body.light-mode .message.mentioned {
 
 body.light-mode .autocomplete-dropdown,
 body.light-mode .emoji-autocomplete {
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .command-palette {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .reaction-picker,
 body.light-mode .enhanced-emoji-modal {
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .emoji-picker {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .gif-picker {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .upload-progress {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .reaction-btn,
 body.light-mode .translate-msg-btn {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .reaction-badge[title]:hover::after {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
     color: var(--text);
 }
 
 body.light-mode .reactors-modal {
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(30px) saturate(1.5);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
 }
@@ -1204,21 +1144,18 @@ body.light-mode .reactors-modal-user:hover {
 
 body.light-mode .message-time:hover::after {
     background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
     color: var(--text);
 }
 
 body.light-mode .image-modal-close,
 body.light-mode .image-modal-download {
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .mobile-menu-toggle,
 body.light-mode .mobile-notif-toggle {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
     border-color: rgba(0, 0, 0, 0.08);
 }
 
@@ -1247,8 +1184,10 @@ body.light-mode .nym-display:hover {
     background: rgba(0, 0, 0, 0.07);
 }
 
-body.light-mode .user-item:hover {
-    background: rgba(0, 0, 0, 0.04);
+@media (hover: hover) {
+    body.light-mode .user-item:hover {
+        background: rgba(0, 0, 0, 0.04);
+    }
 }
 
 body.light-mode .video-expand-btn {
@@ -1540,139 +1479,14 @@ body.light-mode .typing-indicator {
     }
 }
 
-body.performance-mode,
-body.performance-mode *,
-body.performance-mode *::before,
-body.performance-mode *::after {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-}
-
-body.performance-mode .sidebar {
+.message-header-bar,
+.message-input-footer {
     background: var(--bg-secondary);
 }
 
-body.performance-mode .context-menu {
-    background: var(--bg-tertiary);
-}
-
-body.performance-mode .mobile-overlay,
-body.performance-mode .context-menu-overlay {
-    background: rgba(0, 0, 0, 0.6);
-}
-
-body.performance-mode .channel-context-menu,
-body.performance-mode .autocomplete-dropdown,
-body.performance-mode .emoji-autocomplete {
-    background: var(--bg-tertiary);
-}
-
-body.performance-mode .modal,
-body.performance-mode .shop-modal {
-    background: rgba(0, 0, 0, 0.7);
-}
-
-body.performance-mode .modal-content,
-body.performance-mode .shop-content,
-body.performance-mode .reactors-modal,
-body.performance-mode .enhanced-emoji-modal,
-body.performance-mode .reaction-picker {
-    background: var(--bg-secondary);
-}
-
-body.performance-mode .message-header-bar {
-    background: var(--bg-secondary);
-}
-
-body.performance-mode .message-input-footer {
-    background: var(--bg-secondary);
-}
-
-body.performance-mode .geohash-explorer-content {
-    background: var(--bg-secondary);
-}
-
-body.performance-mode .geohash-info-panel,
-body.performance-mode .geohash-control-btn,
-body.performance-mode .geohash-legend {
-    background: rgba(0, 0, 0, 0.7);
-}
-
-body.performance-mode .tutorial-card {
-    background: var(--bg-tertiary);
-}
-
-body.performance-mode .image-modal {
-    background: rgba(0, 0, 0, 0.85);
-}
-
-body.performance-mode .status-dot {
-    animation: none;
-}
-
-body.performance-mode .message {
-    animation: none;
-    transition: none;
-}
-
-body.performance-mode .message:hover {
-    background: rgba(255, 255, 255, 0.03);
-}
-
-body.performance-mode .sidebar {
-    transition: transform 0.15s linear;
-}
-
-body.performance-mode .context-menu {
-    transition: transform 0.15s linear;
-}
-
-body.performance-mode .modal-content {
-    animation: none;
-}
-
-body.performance-mode .reactors-modal {
-    animation: none;
-}
-
-body.performance-mode .message.cosmetic-aura-gold {
+body.chat-bubbles .message.cosmetic-aura-gold {
     box-shadow: none;
     background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), transparent);
-}
-
-body.performance-mode .logo-ascii {
-    text-shadow: none;
-}
-
-body.performance-mode .status-dot {
-    box-shadow: none;
-}
-
-body.performance-mode .channel-item,
-body.performance-mode .pm-item,
-body.performance-mode .user-item,
-body.performance-mode .context-menu-item {
-    transition: none;
-}
-
-body.performance-mode .message.flooded {
-    filter: none;
-    opacity: 0.2;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .status-dot {
-        animation: none;
-    }
-
-    .message {
-        animation: none;
-    }
-
-    .modal-content,
-    .reactors-modal {
-        animation: none;
-    }
 }
 
 body.solid-ui {
@@ -1685,13 +1499,6 @@ body.solid-ui.light-mode {
     --glass-bg: #ffffff;
     --bg-secondary: #ffffff;
     --bg-tertiary: #f0f0ed;
-}
-
-body.solid-ui *,
-body.solid-ui *::before,
-body.solid-ui *::after {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
 }
 
 body.solid-ui .messages-container {
@@ -1970,4 +1777,16 @@ body.solid-ui .edit-preview {
 body.solid-ui.light-mode .quote-preview,
 body.solid-ui.light-mode .edit-preview {
     background: #ececea;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }

@@ -89,6 +89,18 @@ window.filterSettings = function (query) {
     if (!q) window.restoreSettingsSectionState();
 };
 
+// Chat images keep a reserved placeholder box
+(function () {
+    function markImgLoaded(e) {
+        var t = e.target;
+        if (t && t.tagName === 'IMG' && t.classList && t.classList.contains('msg-img')) {
+            t.classList.add('img-loaded');
+        }
+    }
+    document.addEventListener('load', markImgLoaded, true);
+    document.addEventListener('error', markImgLoaded, true);
+})();
+
 // Short haptic pulse used to confirm a long-press fired on mobile
 window.nymHapticTap = function (ms) {
     try {

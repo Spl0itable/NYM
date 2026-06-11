@@ -11,15 +11,12 @@
 }
 
 .modal-content {
-    background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(1.5);
-    -webkit-backdrop-filter: blur(40px) saturate(1.5);
+    background: var(--bg-secondary);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xl);
     padding: 32px;
     max-width: 500px;
     width: 90%;
-    animation: modalIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
     box-shadow: var(--shadow-lg), var(--shadow-glow), 0 0 0 1px rgba(255, 255, 255, 0.05);
     max-height: 90vh;
     overflow-y: auto;
@@ -102,18 +99,6 @@
     border-color: rgba(255, 68, 68, 0.3);
 }
 
-@keyframes modalIn {
-    from {
-        opacity: 0;
-        transform: scale(0.9) translateY(-20px);
-    }
-
-    to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-    }
-}
-
 .modal-header {
     font-size: 22px;
     color: var(--primary);
@@ -143,8 +128,6 @@
     margin: 0 -32px 4px;
     padding: 4px 32px 14px;
     background: var(--glass-bg);
-    backdrop-filter: blur(24px) saturate(1.5);
-    -webkit-backdrop-filter: blur(24px) saturate(1.5);
 }
 
 .settings-search-icon {
@@ -581,9 +564,7 @@
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(30px);
-    -webkit-backdrop-filter: blur(30px);
+    background: rgba(0, 0, 0, 0.85);
     z-index: 10001;
     align-items: center;
     justify-content: center;
@@ -617,7 +598,6 @@
     font-size: 24px;
     cursor: pointer;
     background: rgba(20, 20, 35, 0.8);
-    backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: 50%;
     width: 40px;
@@ -642,7 +622,6 @@
     font-size: 22px;
     cursor: pointer;
     background: rgba(20, 20, 35, 0.8);
-    backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: 50%;
     width: 40px;
@@ -663,8 +642,6 @@
     line-height: 1;
     cursor: pointer;
     background: rgba(20, 20, 35, 0.8);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: 50%;
     width: 44px;
@@ -697,8 +674,6 @@
     top: 12px;
     z-index: 10000;
     background: rgba(20, 20, 35, 0.8);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
     color: var(--primary);
@@ -738,9 +713,7 @@
     bottom: 100%;
     left: 0;
     right: 0;
-    background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
+    background: var(--bg-tertiary);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     max-height: 150px;
@@ -871,8 +844,6 @@
     left: 0;
     right: 0;
     background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     padding: 6px;
@@ -1146,7 +1117,6 @@
     left: 0;
     right: 0;
     background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
     padding: 12px;
@@ -1207,9 +1177,7 @@
     position: absolute;
     bottom: calc(100% + 5px);
     right: 0;
-    background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
+    background: var(--bg-secondary);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 12px;
@@ -1639,7 +1607,6 @@ body.chat-bubbles .crypto-lock-irc {
     bottom: 100%;
     left: 0;
     background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(20px);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
     padding: 5px 10px;
@@ -1690,8 +1657,6 @@ body.chat-bubbles .crypto-lock-irc {
     width: 100%;
     height: 100%;
     background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     z-index: 10001;
     align-items: center;
     justify-content: center;
@@ -1706,9 +1671,7 @@ body.chat-bubbles .crypto-lock-irc {
     height: 90%;
     max-width: 1200px;
     max-height: 800px;
-    background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(1.5);
-    -webkit-backdrop-filter: blur(40px) saturate(1.5);
+    background: var(--bg-secondary);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xl);
     display: flex;
@@ -1785,9 +1748,7 @@ body.chat-bubbles .crypto-lock-irc {
     position: absolute;
     top: 20px;
     right: 20px;
-    background: rgba(15, 15, 25, 0.85);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
+    background: rgba(0, 0, 0, 0.7);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 16px;
@@ -1884,8 +1845,7 @@ body.chat-bubbles .crypto-lock-irc {
 }
 
 .geohash-control-btn {
-    background: rgba(15, 15, 25, 0.8);
-    backdrop-filter: blur(20px);
+    background: rgba(0, 0, 0, 0.7);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xs);
     color: var(--text);
@@ -1906,8 +1866,7 @@ body.chat-bubbles .crypto-lock-irc {
     position: absolute;
     bottom: 20px;
     right: 20px;
-    background: rgba(15, 15, 25, 0.8);
-    backdrop-filter: blur(20px);
+    background: rgba(0, 0, 0, 0.7);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
     padding: 0px 14px;
@@ -2003,9 +1962,7 @@ body.chat-bubbles .crypto-lock-irc {
 .tutorial-card {
     position: fixed;
     max-width: min(420px, 92vw);
-    background: rgba(18, 18, 30, 0.9);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
+    background: var(--bg-tertiary);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);
     color: var(--text);
@@ -2097,8 +2054,6 @@ body.chat-bubbles .crypto-lock-irc {
     bottom: 100%;
     right: 60px;
     background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 12px;
@@ -2317,9 +2272,7 @@ body.chat-bubbles .crypto-lock-irc {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: rgba(0, 0, 0, 0.7);
     z-index: 10001;
     justify-content: center;
     align-items: center;

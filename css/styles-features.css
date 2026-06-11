@@ -3,9 +3,7 @@
 }
 
 .shop-content {
-    background: var(--glass-bg);
-    backdrop-filter: blur(40px) saturate(1.5);
-    -webkit-backdrop-filter: blur(40px) saturate(1.5);
+    background: var(--bg-secondary);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-xl);
     padding: 0;
@@ -1163,8 +1161,6 @@ body.chat-bubbles .message.cosmetic-aura-neon .message-content {
 
 .message:not([class*="style-"]).cosmetic-frost .message-content {
     background-color: rgba(190, 230, 255, 0.16);
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
 }
 
 body:not(.chat-bubbles) .message.cosmetic-aura-phoenix {
@@ -1562,8 +1558,6 @@ body:not(.chat-bubbles) .message.supporter-style {
     bottom: calc(100% + 5px);
     right: 0;
     background: rgba(20, 20, 35, 0.9);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     padding: 12px;
@@ -2714,8 +2708,6 @@ body:not(.chat-bubbles) .message.supporter-style {
     gap: 4px;
     padding: 6px 8px;
     background: rgba(20, 20, 35, 0.92);
-    backdrop-filter: blur(20px) saturate(1.5);
-    -webkit-backdrop-filter: blur(20px) saturate(1.5);
     border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
     border-radius: 24px;
     z-index: 10001;
@@ -2783,8 +2775,6 @@ body:not(.chat-bubbles) .message.supporter-style {
     min-width: 200px;
     padding: 4px;
     background: rgba(20, 20, 35, 0.92);
-    backdrop-filter: blur(20px) saturate(1.5);
-    -webkit-backdrop-filter: blur(20px) saturate(1.5);
     border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
     border-radius: 14px;
     z-index: 10001;
@@ -4567,8 +4557,6 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     inset: 0;
     z-index: 10002;
     background: rgba(5, 5, 10, 0.96);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
     flex-direction: column;
 }
 
@@ -4589,8 +4577,6 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     border-radius: 50%;
     border: 1px solid var(--border);
     background: rgba(15, 15, 22, 0.6);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
     color: var(--text-bright);
     cursor: pointer;
     display: flex;

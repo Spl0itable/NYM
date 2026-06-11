@@ -617,13 +617,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     loadPinnedChannels() {
-        const saved = localStorage.getItem('nym_pinned_channels');
-        if (saved) {
-            try {
-                this.pinnedChannels = new Set(JSON.parse(saved));
-            } catch (_) {
-                this.pinnedChannels = new Set();
-            }
+        if (localStorage.getItem('nym_pinned_channels')) {
             this._scheduleIdle(() => {
                 this.updateChannelPins();
                 this.sortChannelsByActivity();
@@ -689,24 +683,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     loadHiddenChannels() {
-        const saved = localStorage.getItem('nym_hidden_channels');
-        if (saved) {
-            try {
-                this.hiddenChannels = new Set(JSON.parse(saved));
-            } catch (_) {
-                this.hiddenChannels = new Set();
-            }
-        }
-        const hideNonPinned = localStorage.getItem('nym_hide_non_pinned');
-        this.hideNonPinned = hideNonPinned === 'true';
+        this.hideNonPinned = localStorage.getItem('nym_hide_non_pinned') === 'true';
         this._scheduleIdle(() => this.applyHiddenChannels());
-    },
-
-    loadBlockedChannels() {
-        const saved = localStorage.getItem('nym_blocked_channels');
-        if (saved) {
-            this.blockedChannels = new Set(JSON.parse(saved));
-        }
     },
 
     saveBlockedChannels() {

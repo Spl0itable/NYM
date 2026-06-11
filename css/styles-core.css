@@ -103,6 +103,19 @@ html {
     -webkit-tap-highlight-color: transparent;
 }
 
+button,
+input,
+textarea,
+select,
+[data-action],
+.channel-item,
+.pm-item,
+.user-item,
+.context-menu-item,
+.message-author {
+    touch-action: manipulation;
+}
+
 body {
     font-family: var(--font-sans);
     line-height: 1.4;

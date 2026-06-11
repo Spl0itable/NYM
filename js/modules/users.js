@@ -110,15 +110,7 @@ Object.assign(NYM.prototype, {
     },
 
     loadBlockedKeywords() {
-        const saved = localStorage.getItem('nym_blocked_keywords');
-        if (saved) {
-            try {
-                this.blockedKeywords = new Set(JSON.parse(saved));
-            } catch (_) {
-                // Corrupted localStorage — fall back to empty set rather than crashing init.
-                this.blockedKeywords = new Set();
-            }
-        }
+        // blockedKeywords parses lazily on first access (see the NYM constructor).
         this._scheduleIdle(() => this.updateKeywordList());
     },
 
@@ -1734,14 +1726,6 @@ Object.assign(NYM.prototype, {
     },
 
     loadBlockedUsers() {
-        const blocked = localStorage.getItem('nym_blocked');
-        if (blocked) {
-            try {
-                this.blockedUsers = new Set(JSON.parse(blocked));
-            } catch (_) {
-                this.blockedUsers = new Set();
-            }
-        }
         this._scheduleIdle(() => this.updateBlockedList());
     },
 
@@ -1887,14 +1871,6 @@ Object.assign(NYM.prototype, {
     },
 
     loadFriends() {
-        const saved = localStorage.getItem('nym_friends');
-        if (saved) {
-            try {
-                this.friends = new Set(JSON.parse(saved));
-            } catch (_) {
-                this.friends = new Set();
-            }
-        }
         this._scheduleIdle(() => this.updateFriendsList());
     },
 

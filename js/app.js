@@ -621,10 +621,27 @@ class NYM {
         this.unreadCounts = new Map();
         this.channelLastRead = new Map();
         this.channelLastActivity = new Map();
-        this.blockedUsers = new Set();
-        this.friends = new Set();
-        this.blockedKeywords = new Set();
-        this.blockedChannels = new Set();
+        const defineLazy = (prop, build) => {
+            let value;
+            Object.defineProperty(this, prop, {
+                configurable: true,
+                enumerable: true,
+                get() { if (value === undefined) value = build(); return value; },
+                set(v) { value = v; }
+            });
+        };
+        const lazyStoredSet = (key) => () => {
+            try { return new Set(JSON.parse(localStorage.getItem(key) || '[]')); }
+            catch (_) { return new Set(); }
+        };
+        const lazyStoredMap = (key) => () => {
+            try { return new Map(Object.entries(JSON.parse(localStorage.getItem(key) || '{}'))); }
+            catch (_) { return new Map(); }
+        };
+        defineLazy('blockedUsers', lazyStoredSet('nym_blocked'));
+        defineLazy('friends', lazyStoredSet('nym_friends'));
+        defineLazy('blockedKeywords', lazyStoredSet('nym_blocked_keywords'));
+        defineLazy('blockedChannels', lazyStoredSet('nym_blocked_channels'));
         this.discoveredGeohashes = new Set();
         this.channelSubscriptions = new Map();
         this.channelLoadedFromRelays = new Set();
@@ -634,9 +651,6 @@ class NYM {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
         }
         applyTransparency(this.settings.transparencyEnabled === true);
-        this.performanceMode = false;
-        this._deviceCapabilities = this._detectDeviceCapabilities();
-        this._applyPerformanceMode();
         this.channelSubscriptionBatchSize = 15;
         this.channelMessageLimit = 1000;
         this.channelPageSize = 50;
@@ -678,8 +692,8 @@ class NYM {
         this.inPMMode = false;
         this.userSearchTerm = '';
         this.geohashRegex = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
-        this.pinnedChannels = new Set();
-        this.hiddenChannels = new Set();
+        defineLazy('pinnedChannels', lazyStoredSet('nym_pinned_channels'));
+        defineLazy('hiddenChannels', lazyStoredSet('nym_hidden_channels'));
         this.hideNonPinned = false;
         this.reactions = new Map();
         this.reactionLastAction = new Map();
@@ -742,13 +756,33 @@ class NYM {
         this.notificationsEnabled = localStorage.getItem('nym_notifications_enabled') !== 'false';
         this.groupNotifyMentionsOnly = localStorage.getItem('nym_group_notify_mentions_only') === 'true';
         this.notifyFriendsOnly = localStorage.getItem('nym_notify_friends_only') === 'true';
-        this.closedPMs = new Set(JSON.parse(localStorage.getItem('nym_closed_pms') || '[]'));
-        this.leftGroups = new Set(JSON.parse(localStorage.getItem('nym_left_groups') || '[]'));
-        this.closedPMTimes = new Map(Object.entries(JSON.parse(localStorage.getItem('nym_closed_pm_times') || '{}')));
-        this.leftGroupTimes = new Map(Object.entries(JSON.parse(localStorage.getItem('nym_left_group_times') || '{}')));
+        defineLazy('closedPMs', lazyStoredSet('nym_closed_pms'));
+        defineLazy('leftGroups', lazyStoredSet('nym_left_groups'));
+        defineLazy('closedPMTimes', lazyStoredMap('nym_closed_pm_times'));
+        defineLazy('leftGroupTimes', lazyStoredMap('nym_left_group_times'));
         this.recentEmojis = [];
-        this.customEmojis = new Map();
-        this.customEmojiPacks = new Map();
+        this._customEmojiCacheLoaded = false;
+        {
+            const ensureEmojiCache = () => {
+                if (this._customEmojiCacheLoaded) return;
+                this._customEmojiCacheLoaded = true;
+                try { this._loadCustomEmojiCache(); } catch (_) { }
+            };
+            let emojis = null;
+            let packs = null;
+            Object.defineProperty(this, 'customEmojis', {
+                configurable: true,
+                enumerable: true,
+                get: () => { if (!emojis) emojis = new Map(); ensureEmojiCache(); return emojis; },
+                set: (v) => { emojis = v; }
+            });
+            Object.defineProperty(this, 'customEmojiPacks', {
+                configurable: true,
+                enumerable: true,
+                get: () => { if (!packs) packs = new Map(); ensureEmojiCache(); return packs; },
+                set: (v) => { packs = v; }
+            });
+        }
         this.userEmojiPackRefs = new Set();
         this._userEmojiListTs = 0;
         this.allEmojis = {
@@ -4173,7 +4207,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.70.479';
+const NYMCHAT_VERSION = 'v3.70.480';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6725,8 +6759,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }, 1000);
 
-    // Wake the page once per second
+    // Wake the page once per second while visible
     nym._setManagedInterval('connectionHealth', () => {
+        if (document.hidden) return;
         if (nym.initialConnectionInProgress) return;
         if (nym.connected) {
             nym.updateConnectionStatus();
@@ -6741,8 +6776,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         checkSavedConnection();
     }, 100);
 
-    // Periodically update user list
+    // Periodically update user list (visible foreground only)
     nym._setManagedInterval('userListRefresh', () => {
+        if (document.hidden) return;
         if (nym.connected) {
             nym.updateUserList();
         }
@@ -7200,9 +7236,9 @@ function drawThroughputGraph(history) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
-    // High-DPI (cap at 1x in performance mode to reduce fill rate)
+    // Cap the canvas at 1x to keep fill rate cheap, especially on mobile.
     const rect = canvas.getBoundingClientRect();
-    const dpr = (typeof nym !== 'undefined' && nym.performanceMode) ? 1 : (window.devicePixelRatio || 1);
+    const dpr = 1;
     const w = rect.width;
     const h = rect.height;
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) {

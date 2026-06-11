@@ -5,13 +5,6 @@ const _RX_EMOJI_URL = /^https?:\/\//i;
 
 Object.assign(NYM.prototype, {
 
-    initCustomEmojis() {
-        if (!this.customEmojis) this.customEmojis = new Map();
-        if (!this.customEmojiPacks) this.customEmojiPacks = new Map();
-        if (!this.userEmojiPackRefs) this.userEmojiPackRefs = new Set();
-        this._loadCustomEmojiCache();
-    },
-
     _loadCustomEmojiCache() {
         // Loose shortcode→url map: covers emoji seen via message `emoji` tags
         // that aren't part of any saved pack, so old messages still render

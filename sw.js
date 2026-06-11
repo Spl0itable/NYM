@@ -31,6 +31,23 @@ self.addEventListener('fetch', (e) => {
     const req = e.request;
     if (req.method !== 'GET') return;
     const url = new URL(req.url);
+
+    // Brand icons/images live on the marketing origin; cache-first so cold
+    // starts and offline launches don't refetch them on every load.
+    if (url.origin === 'https://nymchat.app' && url.pathname.startsWith('/images/')) {
+        e.respondWith((async () => {
+            const cached = await caches.match(req);
+            if (cached) return cached;
+            const resp = await fetch(req);
+            if (resp && (resp.ok || resp.type === 'opaque')) {
+                const cache = await caches.open(CACHE);
+                cache.put(req, resp.clone());
+            }
+            return resp;
+        })());
+        return;
+    }
+
     if (url.origin !== self.location.origin) return;
 
     if (req.mode === 'navigate') {
@@ -46,7 +63,9 @@ self.addEventListener('fetch', (e) => {
         return;
     }
 
-    if (ASSET_RE.test(url.pathname)) {
+    // Hashed assets are immutable; /static/ pages refresh with each SW
+    // version since the cache name rotates per build.
+    if (ASSET_RE.test(url.pathname) || url.pathname.startsWith('/static/')) {
         e.respondWith((async () => {
             const cached = await caches.match(req);
             if (cached) return cached;
