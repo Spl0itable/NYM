@@ -64,7 +64,7 @@ export class NymLedger {
     switch (op) {
       case "replay": return this._replay(a.id, a.ttl);
       case "transfer-credits": return this._transferCredits(a.from, a.to);
-      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts);
+      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier);
       case "claim-credits": return this._claimCredits(a);
       case "shop-claim": return this._shopClaim(a);
       case "shop-transfer": return this._shopTransfer(a);
@@ -169,13 +169,18 @@ export class NymLedger {
     return n;
   }
 
-  // D1 credit/shop helpers
-  async _getCredits(pk) {
-    return creditsGet(this.env.DB_CREDITS, pk);
+  // D1 credit/shop helpers. Pro credits share the credits table under a
+  // "#pro"-suffixed row key ("#" is not hex, so no pubkey collision).
+  _creditKey(pk, tier) {
+    return tier === "pro" ? pk + "#pro" : pk;
   }
 
-  async _putCredits(pk, data) {
-    await creditsPut(this.env.DB_CREDITS, pk, data);
+  async _getCredits(pk, tier) {
+    return creditsGet(this.env.DB_CREDITS, this._creditKey(pk, tier));
+  }
+
+  async _putCredits(pk, data, tier) {
+    await creditsPut(this.env.DB_CREDITS, this._creditKey(pk, tier), data);
   }
 
   async _getShop(pk) {
@@ -195,30 +200,50 @@ export class NymLedger {
     rec.active = a;
   }
 
-  // Money operations
+  // Money operations. Transfers move the user's ENTIRE balance — both the
+  // standard and Pro pools — to the target pubkey.
   async _transferCredits(from, to) {
     if (!/^[0-9a-f]{64}$/.test(from || "") || !/^[0-9a-f]{64}$/.test(to || "")) {
       return { error: "Invalid pubkey." };
     }
     if (from === to) return { error: "You can't transfer credits to your own pubkey." };
     const source = await this._getCredits(from);
-    if (!source.balance || source.balance <= 0) return { error: "No credits to transfer." };
-    const moved = source.balance;
-    const dest = await this._getCredits(to);
-    dest.balance = (dest.balance || 0) + moved;
-    dest.totalPurchased = (dest.totalPurchased || 0) + moved;
-    source.balance = 0;
-    await this._putCredits(to, dest);
-    await this._putCredits(from, source);
-    return { transferred: moved, target: to, sourceBalance: 0, targetBalance: dest.balance };
+    const proSource = await this._getCredits(from, "pro");
+    const moved = source.balance > 0 ? source.balance : 0;
+    const proMoved = proSource.balance > 0 ? proSource.balance : 0;
+    if (moved <= 0 && proMoved <= 0) return { error: "No credits to transfer." };
+    let targetBalance = 0;
+    let targetProBalance = 0;
+    if (moved > 0) {
+      const dest = await this._getCredits(to);
+      dest.balance = (dest.balance || 0) + moved;
+      dest.totalPurchased = (dest.totalPurchased || 0) + moved;
+      source.balance = 0;
+      await this._putCredits(to, dest);
+      await this._putCredits(from, source);
+      targetBalance = dest.balance;
+    }
+    if (proMoved > 0) {
+      const proDest = await this._getCredits(to, "pro");
+      proDest.balance = (proDest.balance || 0) + proMoved;
+      proDest.totalPurchased = (proDest.totalPurchased || 0) + proMoved;
+      proSource.balance = 0;
+      await this._putCredits(to, proDest, "pro");
+      await this._putCredits(from, proSource, "pro");
+      targetProBalance = proDest.balance;
+    }
+    return {
+      transferred: moved, proTransferred: proMoved, target: to,
+      sourceBalance: 0, targetBalance, targetProBalance
+    };
   }
 
   // Atomic spend for the paid-PM flow: re-checks balance under the lock so two
   // concurrent messages can't overspend.
-  async _consumeCredits(pubkey, cost, ts) {
+  async _consumeCredits(pubkey, cost, ts, tier) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     cost = Math.max(0, Math.floor(Number(cost) || 0));
-    const rec = await this._getCredits(pubkey);
+    const rec = await this._getCredits(pubkey, tier);
     if ((rec.balance || 0) < cost) {
       return { ok: false, balance: rec.balance || 0, required: cost };
     }
@@ -226,9 +251,12 @@ export class NymLedger {
     rec.totalUsed = (rec.totalUsed || 0) + cost;
     if (Number.isFinite(Number(ts))) {
       if (!Array.isArray(rec.rl)) rec.rl = [];
+      // Drop stamps far older than any rate window so the row can't grow forever.
+      const rlCutoff = Date.now() - 600000;
+      rec.rl = rec.rl.filter((t) => t > rlCutoff);
       rec.rl.push(Number(ts));
     }
-    await this._putCredits(pubkey, rec);
+    await this._putCredits(pubkey, rec, tier);
     return { ok: true, balance: rec.balance };
   }
 
@@ -238,16 +266,17 @@ export class NymLedger {
     const invoiceId = String(a.invoiceId || "");
     const creditTo = String(a.creditTo || "").toLowerCase();
     const credits = Math.max(0, Math.floor(Number(a.credits) || 0));
+    const tier = a.tier === "pro" ? "pro" : "standard";
     if (!/^[0-9a-f]{64}$/i.test(invoiceId) || !/^[0-9a-f]{64}$/.test(creditTo) || credits <= 0) {
       return { error: "Invalid claim." };
     }
     if (!this._claimOnce("credits/" + invoiceId, "credits")) {
       return { alreadyClaimed: true };
     }
-    const crec = await this._getCredits(creditTo);
+    const crec = await this._getCredits(creditTo, tier);
     crec.balance = (crec.balance || 0) + credits;
     crec.totalPurchased = (crec.totalPurchased || 0) + credits;
-    await this._putCredits(creditTo, crec);
+    await this._putCredits(creditTo, crec, tier);
     // Mark the invoice claimed so check-invoice's claimed read still works.
     try {
       await invoicePut(this.env.DB_INVOICES, "credits", "claimed", invoiceId,

@@ -1219,6 +1219,18 @@ Object.assign(NYM.prototype, {
             // Get sender name from kind 0 profile (not from rumor tags)
             const senderName = this.getNymFromPubkey(senderPubkey);
 
+            // Nymbot replies may lead with a <think> reasoning block — split it
+            // into its own field so previews/search see only the visible reply
+            // and the renderer can show it as a collapsible section.
+            let botThinking = null;
+            if (this.isVerifiedBot(senderPubkey)) {
+                const tm = /^\s*<think>([\s\S]*?)<\/think>\s*/i.exec(messageContent);
+                if (tm && messageContent.slice(tm[0].length).trim()) {
+                    botThinking = tm[1].trim();
+                    messageContent = messageContent.slice(tm[0].length);
+                }
+            }
+
             // Use nymMessageId already extracted above (during dedup check)
             const nymMsgId = nymMsgIdFromRumor;
 
@@ -1239,6 +1251,7 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 isHistorical: this._isGiftWrapBacklog(),
                 senderVerified,
+                thinking: botThinking || undefined,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId  // For sending Nymchat read receipts
             };
@@ -1476,6 +1489,17 @@ Object.assign(NYM.prototype, {
 
     async sendPM(content, recipientPubkey) {
         try {
+            // Bot ?commands are handled entirely on-device: they never need to
+            // reach the worker or relays (and ?git can contain an access
+            // token), so they aren't encrypted, published, shown as message
+            // bubbles, or stored — only their system-message responses appear.
+            if (this.isVerifiedBot(recipientPubkey) &&
+                /^\s*\?(github|git|help|commands|balance|buy|clear|transfer|gift|model)\b/i.test(content || '')) {
+                const trimmedCmd = String(content).trim();
+                if (/^\?(github|git)\b/i.test(trimmedCmd)) this._handleBotGitCommand(trimmedCmd);
+                else this._handleBotPM(trimmedCmd, null);
+                return true;
+            }
             if (!this.connected) throw new Error('Not connected to relay');
             if (!content || !content.trim()) return false;
 
@@ -1603,18 +1627,63 @@ Object.assign(NYM.prototype, {
             'I\'m smarter than the free public-channel bot. I read each message, figure out the type of task (coding, reasoning/math, creative writing, translation, or general chat) and route it to the best AI model for the job — so my answers are sharper.',
             '',
             '<strong>Here\'s how to get the most out of me:</strong>',
+            '• <code>?help</code> — full guide to premium vs Pro, the git repo integration, and every command (free).',
             '• Just type normally — I use our whole conversation as context.',
             '• Start a message with <code>!</code> to get a one-off answer that ignores all earlier chat history (e.g. <code>!what is 2+2</code>).',
             '• Quote-reply any message to ask a follow-up about it — I\'ll see what you\'re replying to.',
             '• <code>?clear</code> — wipe this chat and start fresh.',
             '• <code>?balance</code> — check your credit balance (also shown in the header).',
             '• <code>?buy</code> — purchase more credits. <code>?gift @nym#xxxx</code> — gift credits to someone.',
+            '• <code>?model</code> — go <strong>Pro</strong>: pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.1, Codex) for every reply, paid with separate Pro credits.',
+            '• <code>?git</code> — connect a git repo (GitHub, GitLab, Gitea/Codeberg) so Pro replies read your actual code and can even commit, branch, and open PRs — like a chat-based coding agent.',
             '• <code>?transfer @nym#xxxx confirm</code> — move ALL your credits to another pubkey (great for switching nyms).',
             '',
-            '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Credits are tied to your nym — save your nsec so you don\'t lose them.',
+            '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Pro replies cost <strong>1–6 Pro credits</strong> depending on the model you pick. Credits are tied to your nym — save your nsec so you don\'t lose them.',
             '',
             'So, what can I help you with?'
         ].join('<br>');
+    },
+
+    // Free, fully client-side guide to the premium chat: standard vs Pro
+    // tiers, the git repo integration, credits, and every ?command.
+    _displayBotPmHelp() {
+        const proModel = this._getBotProModel();
+        const git = this._getGitConfig();
+        const std = this._lastBotCredits;
+        const pro = this._lastBotProCredits;
+        const modelLines = this._botProModels.map(m =>
+            `&nbsp;&nbsp;<code>${m.key}</code> — ${this.escapeHtml(m.label)}, ${m.credits} Pro credit${m.credits === 1 ? '' : 's'}/reply`);
+        const statusBits = [];
+        if (typeof std === 'number') statusBits.push(`${std} standard credit${std === 1 ? '' : 's'}`);
+        if (typeof pro === 'number') statusBits.push(`${pro} Pro credit${pro === 1 ? '' : 's'}`);
+        statusBits.push(proModel ? `Pro model: ${this.escapeHtml(proModel.label)}` : 'Pro model: off (standard routing)');
+        if (git && git.token && git.repo) statusBits.push(`repo: ${this.escapeHtml(git.repo)}${git.allowWrites ? ' (writes on)' : ' (read-only)'}`);
+        this.displaySystemMessage([
+            '<strong>📖 Nymbot premium guide</strong>',
+            `<em>You right now: ${statusBits.join(' · ')}.</em>`,
+            '',
+            '<strong>1. Standard premium (this chat)</strong>',
+            'Each message is auto-routed to the best AI model for its task. Replies cost <strong>standard credits</strong> (10 sats each, bulk bonuses from 500 sats): 1 credit for general chat, creative writing, or translation; 2 credits for coding or reasoning/math.',
+            '',
+            '<strong>2. Nymbot Pro</strong>',
+            'Pin every reply to a specific frontier model instead of auto-routing. Pro replies spend separate <strong>Pro credits</strong> (100 sats each, bulk bonuses from 5K sats):',
+            ...modelLines,
+            'Pick with <code>?model &lt;name&gt;</code> (e.g. <code>?model claude-opus</code>), back to standard with <code>?model off</code>. Buy Pro credits via <code>?buy</code> → Pro switch.',
+            '',
+            '<strong>3. Git repos (Pro)</strong>',
+            'Connect a repository — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg & self-hosted) — and Pro replies become a coding agent over your real code: it lists, reads, and searches files, and with writes enabled it commits to a branch (or directly) and opens pull/merge requests.',
+            'Setup: <code>?git provider github|gitlab|gitea [host]</code> → <code>?git token &lt;pat&gt;</code> → <code>?git repos</code> → <code>?git repo owner/name [branch]</code> → optionally <code>?git writes on</code>. Type <code>?git</code> anytime for status.',
+            'Repo tasks use up to 6 model calls, each at the model\'s Pro credit price — only calls actually used are charged. Your token stays on this device, is never published to relays, and is never stored server-side.',
+            '',
+            '<strong>4. Credits</strong>',
+            '<code>?balance</code> shows both balances · <code>?buy</code> purchases over Lightning (Standard/Pro switch) · <code>?gift @nym#xxxx</code> gifts credits · <code>?transfer @nym#xxxx confirm</code> moves your ENTIRE balance (both pools) to another pubkey.',
+            'Credits are tied to your nym — save your nsec (sidebar → your nym → Reveal private key) so they survive a new session.',
+            '',
+            '<strong>5. Chat tricks</strong>',
+            'Start a message with <code>!</code> for a one-off answer that ignores history · <code>?clear</code> wipes the conversation · quote-reply any message to ask a follow-up about it.',
+            '',
+            'This guide is free — type <code>?help</code> anytime.'
+        ].join('<br>'), 'system', { html: true });
     },
 
     // Render the Nymbot welcome as a message bubble from Nymbot itself
@@ -1666,7 +1735,9 @@ Object.assign(NYM.prototype, {
             '',
             'Right here in our private 1:1 chat is the **premium** tier: it\'s end-to-end encrypted and I route each message to the best AI model for the job (coding, reasoning/math, creative writing, translation, or general chat). These private replies cost **credits** — general chat, creative writing, and translation cost 1 credit each; coding and reasoning/math cost 2 credits each.',
             '',
-            'Type `?buy` to get credits and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them.',
+            'Want even more power? **Nymbot Pro** lets you pick a specific frontier model — Claude Fable 5, Claude Opus, GPT-5.1, and more — for every reply. Type `?model` to see them; Pro replies use separate Pro credits. Pro can even connect to a git repo (`?git` — GitHub, GitLab, Gitea/Codeberg) to read your code and ship commits or PRs.',
+            '',
+            'Type `?buy` to get credits (Standard or Pro) and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them. Type `?help` here anytime for the full free guide to premium, Pro, and the git integration.',
             '',
             'So, what can I help you with?'
         ].join('\n');
@@ -1715,6 +1786,18 @@ Object.assign(NYM.prototype, {
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
     },
 
+    // Best-effort removal of the Nymbot conversation's encrypted wraps from
+    // the D1 PM archive, so a cleared thread can't be restored on any device.
+    async _purgeBotPMArchive(conversationKey) {
+        if (!this._pmArchiveAllowed()) return;
+        const ids = (this.pmMessages.get(conversationKey) || [])
+            .map(m => m && m.id)
+            .filter(id => typeof id === 'string' && /^[0-9a-f]{64}$/i.test(id));
+        for (let i = 0; i < ids.length; i += 200) {
+            try { await this._storageApiRequest('pm-delete', { ids: ids.slice(i, i + 200) }); } catch (_) { }
+        }
+    },
+
     // Wipe the Nymbot conversation and start fresh (premium ?clear command)
     _clearBotPMHistory() {
         const pubkey = this.verifiedBot && this.verifiedBot.pubkey;
@@ -1722,6 +1805,10 @@ Object.assign(NYM.prototype, {
         const conversationKey = this.getPMConversationKey(pubkey);
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
         this._clearBotServerThread();
+        this._purgeBotPMArchive(conversationKey);
+        // Sync the cleared-at marker so other devices filter the thread too,
+        // covering any archived wraps this device didn't know about.
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
         if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
@@ -1768,11 +1855,15 @@ Object.assign(NYM.prototype, {
         if (!confirming) {
             const balance = await this._checkBotCredits(false);
             const have = typeof balance === 'number' ? balance : (this._lastBotCredits || 0);
-            if (!have || have <= 0) {
+            const havePro = this._lastBotProCredits || 0;
+            if ((!have || have <= 0) && havePro <= 0) {
                 this.displaySystemMessage('You have no Nymbot credits to transfer.');
                 return;
             }
-            this.displaySystemMessage(`Transfer ALL ${have} credit${have === 1 ? '' : 's'} to @${targetNym}? This empties your balance. To confirm, type: ?transfer @${targetNym}#${this.getPubkeySuffix(targetPubkey)} confirm`);
+            const parts = [];
+            if (have > 0) parts.push(`${have} credit${have === 1 ? '' : 's'}`);
+            if (havePro > 0) parts.push(`${havePro} Pro credit${havePro === 1 ? '' : 's'}`);
+            this.displaySystemMessage(`Transfer ALL ${parts.join(' and ')} to @${targetNym}? This empties your balance. To confirm, type: ?transfer @${targetNym}#${this.getPubkeySuffix(targetPubkey)} confirm`);
             return;
         }
         try {
@@ -1790,7 +1881,11 @@ Object.assign(NYM.prototype, {
                 return;
             }
             this._setBotCreditDisplay(0);
-            this.displaySystemMessage(`Transferred ${data.transferred} credit${data.transferred === 1 ? '' : 's'} to @${targetNym}. Your balance is now 0.`);
+            this._setBotProCreditDisplay(0);
+            const moved = [];
+            if (data.transferred > 0) moved.push(`${data.transferred} credit${data.transferred === 1 ? '' : 's'}`);
+            if (data.proTransferred > 0) moved.push(`${data.proTransferred} Pro credit${data.proTransferred === 1 ? '' : 's'}`);
+            this.displaySystemMessage(`Transferred ${moved.join(' and ') || '0 credits'} to @${targetNym}. Your balance is now 0.`);
         } catch (e) {
             this.displaySystemMessage('Transfer failed. Please try again.');
         }
@@ -1896,13 +1991,295 @@ Object.assign(NYM.prototype, {
         if (changed) this.channelDOMCache.delete(convKey);
     },
 
+    // Nymbot Pro model catalog (mirrors BOT_PRO_MODELS in functions/api/bot.js)
+    _botProModels: [
+        { key: 'claude-fable', label: 'Claude Fable 5', credits: 6 },
+        { key: 'claude-opus', label: 'Claude Opus 4.8', credits: 3 },
+        { key: 'claude-sonnet', label: 'Claude Sonnet 4.6', credits: 2 },
+        { key: 'claude-haiku', label: 'Claude Haiku 4.5', credits: 1 },
+        { key: 'gpt-5', label: 'GPT-5.1', credits: 2 },
+        { key: 'gpt-5-mini', label: 'GPT-5 mini', credits: 1 },
+        { key: 'codex', label: 'GPT-5.1 Codex', credits: 2 }
+    ],
+
+    _getBotProModel() {
+        try {
+            const key = localStorage.getItem('nym_botpm_pro_model') || '';
+            return this._botProModels.find(m => m.key === key) || null;
+        } catch { return null; }
+    },
+
+    _setBotProModel(key) {
+        try {
+            if (key) localStorage.setItem('nym_botpm_pro_model', key);
+            else localStorage.removeItem('nym_botpm_pro_model');
+        } catch { }
+        this._renderBotCreditMeta();
+    },
+
+    // ?model — list, select, or turn off the Pro model for the private chat
+    _handleBotModelCommand(trimmed) {
+        const arg = trimmed.replace(/^\?model\b/i, '').trim().toLowerCase();
+        const current = this._getBotProModel();
+        const plural = n => n === 1 ? '' : 's';
+        if (!arg) {
+            const lines = this._botProModels.map(m =>
+                `• <code>${m.key}</code>${current && current.key === m.key ? ' ✓' : ''} — ${this.escapeHtml(m.label)}, ${m.credits} Pro credit${plural(m.credits)}/reply`);
+            this.displaySystemMessage([
+                current
+                    ? `Nymbot Pro model: <strong>${this.escapeHtml(current.label)}</strong> (${current.credits} Pro credit${plural(current.credits)} per reply).`
+                    : 'Nymbot Pro is off — replies use standard multi-model routing and standard credits.',
+                ...lines,
+                'Use <code>?model &lt;name&gt;</code> to select one, or <code>?model off</code> for standard routing. Pro credits: <code>?buy</code> → Pro.'
+            ].join('<br>'), 'system', { html: true });
+            return;
+        }
+        if (arg === 'off' || arg === 'standard' || arg === 'none') {
+            this._setBotProModel(null);
+            this.displaySystemMessage('Nymbot Pro off — back to standard multi-model routing (standard credits).');
+            return;
+        }
+        const picked = this._botProModels.find(m => m.key === arg);
+        if (!picked) {
+            this.displaySystemMessage(`Unknown model "${arg}". Type ?model to see the available Pro models.`);
+            return;
+        }
+        this._setBotProModel(picked.key);
+        this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it and costs ${picked.credits} Pro credit${plural(picked.credits)}. Type ?model off to switch back.`);
+    },
+
+    // Git repo mode (GitHub, GitLab, Gitea/Forgejo incl. Codeberg and
+    // self-hosted): token + repo selection live ONLY in localStorage on this
+    // device. The token is sent to the Nymbot worker with each repo message
+    // (over TLS) but is never stored server-side or put on relays.
+    _gitProviders: {
+        github: { label: 'GitHub', host: 'github.com', tokenHint: 'fine-grained personal access token (github.com → Settings → Developer settings)' },
+        gitlab: { label: 'GitLab', host: 'gitlab.com', tokenHint: 'personal access token with api scope (GitLab → Preferences → Access tokens)' },
+        gitea: { label: 'Gitea/Forgejo', host: 'codeberg.org', tokenHint: 'access token (Settings → Applications)' }
+    },
+
+    _getGitConfig() {
+        try {
+            const raw = localStorage.getItem('nym_botpm_git');
+            const cfg = raw ? JSON.parse(raw) : null;
+            return cfg && typeof cfg === 'object' ? cfg : null;
+        } catch { return null; }
+    },
+
+    _saveGitConfig(cfg) {
+        try {
+            if (cfg) localStorage.setItem('nym_botpm_git', JSON.stringify(cfg));
+            else localStorage.removeItem('nym_botpm_git');
+        } catch { }
+        this._renderBotCreditMeta();
+    },
+
+    _gitTokenValid(cfg, token) {
+        if ((cfg.provider || 'github') === 'github' && (cfg.host || 'github.com') === 'github.com') {
+            return /^(gh[a-z]_|github_pat_)[A-Za-z0-9_]{16,255}$/.test(token || '');
+        }
+        return /^\S{8,255}$/.test(token || '');
+    },
+
+    _gitApiBase(cfg) {
+        const provider = cfg.provider || 'github';
+        const host = cfg.host || this._gitProviders[provider].host;
+        if (provider === 'gitlab') return `https://${host}/api/v4`;
+        if (provider === 'gitea') return `https://${host}/api/v1`;
+        return host === 'github.com' ? 'https://api.github.com' : `https://${host}/api/v3`;
+    },
+
+    async _gitApi(path) {
+        const cfg = this._getGitConfig();
+        if (!cfg || !cfg.token) return { ok: false, status: 0, data: null };
+        try {
+            const headers = { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/json' };
+            if ((cfg.provider || 'github') === 'github') {
+                headers['Accept'] = 'application/vnd.github+json';
+                headers['X-GitHub-Api-Version'] = '2022-11-28';
+            }
+            const resp = await fetch(this._gitApiBase(cfg) + path, { headers });
+            return { ok: resp.ok, status: resp.status, data: await resp.json().catch(() => null) };
+        } catch {
+            return { ok: false, status: 0, data: null };
+        }
+    },
+
+    // Provider-specific shapes for the few client-side calls we make
+    _gitUserPath() { return '/user'; },
+    _gitUserLogin(cfg, data) { return (cfg.provider === 'gitlab' ? data && data.username : data && data.login) || ''; },
+    _gitReposPath(cfg) {
+        if (cfg.provider === 'gitlab') return '/projects?membership=true&per_page=30&order_by=last_activity_at';
+        if (cfg.provider === 'gitea') return '/user/repos?limit=30';
+        return '/user/repos?per_page=30&sort=pushed';
+    },
+    _gitRepoFullName(cfg, r) { return cfg.provider === 'gitlab' ? r.path_with_namespace : r.full_name; },
+    _gitRepoPath(cfg, repo) {
+        return cfg.provider === 'gitlab' ? '/projects/' + encodeURIComponent(repo) : '/repos/' + repo;
+    },
+    _gitRepoRe(cfg) {
+        // GitLab allows nested groups (up to 4 segments); others are owner/name.
+        return cfg.provider === 'gitlab'
+            ? /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+){1,3}$/
+            : /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+    },
+
+    async _handleBotGitCommand(trimmed) {
+        const parts = trimmed.replace(/^\?(github|git)\b/i, '').trim().split(/\s+/).filter(Boolean);
+        const cmd = (parts[0] || 'status').toLowerCase();
+        const cfg = this._getGitConfig() || { provider: 'github', host: 'github.com' };
+        const provInfo = this._gitProviders[cfg.provider || 'github'];
+        const sys = (msg) => this.displaySystemMessage(msg, 'system', { html: true });
+
+        if (cmd === 'provider') {
+            const name = (parts[1] || '').toLowerCase();
+            if (!this._gitProviders[name]) {
+                sys('Usage: <code>?git provider github|gitlab|gitea [host]</code> — e.g. <code>?git provider gitlab</code>, <code>?git provider gitea codeberg.org</code>, or a self-hosted domain like <code>?git provider gitlab git.mycompany.com</code>. Switching providers clears the saved token and repo.');
+                return;
+            }
+            const host = (parts[2] || '').toLowerCase() || this._gitProviders[name].host;
+            if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(host)) { sys('Invalid host name.'); return; }
+            this._saveGitConfig({ provider: name, host });
+            sys(`Provider set to <strong>${this._gitProviders[name].label}</strong> at <strong>${this.escapeHtml(host)}</strong>. Now add a token: <code>?git token &lt;${this._gitProviders[name].tokenHint.split(' (')[0]}&gt;</code>.`);
+            return;
+        }
+
+        if (cmd === 'token') {
+            const token = parts[1] || '';
+            if (!this._gitTokenValid(cfg, token)) {
+                sys(`That doesn't look like a valid ${provInfo.label} token. Create a ${provInfo.tokenHint} scoped to just the repos you want Nymbot to use, then run <code>?git token &lt;token&gt;</code>.`);
+                return;
+            }
+            cfg.token = token;
+            delete cfg.login;
+            this._saveGitConfig(cfg);
+            const who = await this._gitApi(this._gitUserPath());
+            const login = this._gitUserLogin(cfg, who.data);
+            if (who.ok && login) {
+                cfg.login = login;
+                this._saveGitConfig(cfg);
+                sys(`${provInfo.label} token saved for <strong>@${this.escapeHtml(login)}</strong> (stored only on this device). Next: <code>?git repos</code> to list repos, then <code>?git repo owner/name</code>.`);
+            } else {
+                sys(`${provInfo.label} token saved, but it could not be verified` + (who.status ? ` (HTTP ${who.status})` : '') + '. Check that it\'s valid and has repo access.');
+            }
+            return;
+        }
+
+        if (cmd === 'repos') {
+            if (!cfg.token) { sys(`No ${provInfo.label} token yet — run <code>?git token &lt;token&gt;</code> first.`); return; }
+            const res = await this._gitApi(this._gitReposPath(cfg));
+            if (!res.ok || !Array.isArray(res.data)) {
+                sys(`Could not list repos (HTTP ${res.status || '?'}). Check the token with ?git status.`);
+                return;
+            }
+            if (!res.data.length) { sys(`The token can't see any repos. Grant it repository access on ${provInfo.label}.`); return; }
+            const lines = res.data.map(r => `• <code>${this.escapeHtml(this._gitRepoFullName(cfg, r) || '')}</code>${(r.private || r.visibility === 'private') ? ' 🔒' : ''}`);
+            sys(['Repos this token can access:', ...lines, 'Select one with <code>?git repo owner/name [branch]</code>.'].join('<br>'));
+            return;
+        }
+
+        if (cmd === 'repo') {
+            if (!cfg.token) { sys(`No ${provInfo.label} token yet — run <code>?git token &lt;token&gt;</code> first.`); return; }
+            const repo = (parts[1] || '').trim();
+            if (!this._gitRepoRe(cfg).test(repo)) {
+                sys('Usage: <code>?git repo owner/name [branch]</code> (run <code>?git repos</code> to see what the token can access).');
+                return;
+            }
+            const res = await this._gitApi(this._gitRepoPath(cfg, repo));
+            if (!res.ok || !res.data) {
+                sys(`Can't access <code>${this.escapeHtml(repo)}</code> (HTTP ${res.status || '?'}). Check the name and the token's repo access.`);
+                return;
+            }
+            cfg.repo = this._gitRepoFullName(cfg, res.data) || repo;
+            cfg.branch = (parts[2] && /^[\w./-]{1,100}$/.test(parts[2])) ? parts[2] : '';
+            this._saveGitConfig(cfg);
+            const branchLabel = cfg.branch || `${res.data.default_branch} (default)`;
+            const proModel = this._getBotProModel();
+            sys(`Repo connected: <strong>${this.escapeHtml(cfg.repo)}</strong> on branch <strong>${this.escapeHtml(branchLabel)}</strong>, ${cfg.allowWrites ? 'writes enabled' : 'read-only'}. Every Pro reply now works inside this repo.` +
+                (proModel ? '' : ' ⚠ Pick a Pro model first with <code>?model</code> — repo mode needs one.'));
+            return;
+        }
+
+        if (cmd === 'branch') {
+            if (!cfg.repo) { sys('Select a repo first: <code>?git repo owner/name</code>.'); return; }
+            const branch = (parts[1] || '').trim();
+            if (branch && !/^[\w./-]{1,100}$/.test(branch)) { sys('Invalid branch name.'); return; }
+            cfg.branch = branch;
+            this._saveGitConfig(cfg);
+            sys(branch ? `Working branch set to <strong>${this.escapeHtml(branch)}</strong>.` : 'Working branch reset to the repo default.');
+            return;
+        }
+
+        if (cmd === 'writes') {
+            if (!cfg.repo) { sys('Select a repo first: <code>?git repo owner/name</code>.'); return; }
+            const arg = (parts[1] || '').toLowerCase();
+            if (arg !== 'on' && arg !== 'off') { sys('Usage: <code>?git writes on</code> or <code>?git writes off</code>.'); return; }
+            cfg.allowWrites = arg === 'on';
+            this._saveGitConfig(cfg);
+            sys(cfg.allowWrites
+                ? 'Writes <strong>enabled</strong> — Nymbot can now commit files, create branches, and open pull/merge requests in the connected repo. Make sure the token has content and pull-request write access.'
+                : 'Writes disabled — Nymbot is back to read-only repo access.');
+            return;
+        }
+
+        if (cmd === 'off') {
+            delete cfg.repo;
+            delete cfg.branch;
+            cfg.allowWrites = false;
+            this._saveGitConfig(cfg.token ? cfg : null);
+            sys('Repo disconnected — Pro replies are back to normal chat. The token is still saved; <code>?git disconnect</code> removes it too.');
+            return;
+        }
+
+        if (cmd === 'disconnect') {
+            this._saveGitConfig(null);
+            sys('Git provider disconnected — token and repo selection removed from this device.');
+            return;
+        }
+
+        const proModel = this._getBotProModel();
+        sys([
+            '<strong>Nymbot × Git</strong> — let Pro replies work inside one of your repos, Claude Code-style: it reads your actual files and, if you allow writes, commits to a branch (or directly) and opens pull/merge requests. Supports GitHub, GitLab, and Gitea/Forgejo (incl. Codeberg and self-hosted).',
+            `Provider: <strong>${provInfo.label}</strong> at <strong>${this.escapeHtml(cfg.host || provInfo.host)}</strong> — change with <code>?git provider github|gitlab|gitea [host]</code>`,
+            `Token: ${cfg.token ? (cfg.login ? `connected as <strong>@${this.escapeHtml(cfg.login)}</strong>` : 'saved') : `not set — <code>?git token &lt;token&gt;</code> (${provInfo.tokenHint})`}`,
+            `Repo: ${cfg.repo ? `<strong>${this.escapeHtml(cfg.repo)}</strong>${cfg.branch ? ` @ ${this.escapeHtml(cfg.branch)}` : ''} (${cfg.allowWrites ? 'writes enabled' : 'read-only'})` : 'none — <code>?git repos</code> then <code>?git repo owner/name</code>'}`,
+            `Pro model: ${proModel ? this.escapeHtml(proModel.label) : 'none — repo mode requires one (<code>?model</code>)'}`,
+            '',
+            'Commands: <code>?git provider …</code> · <code>?git token &lt;pat&gt;</code> · <code>?git repos</code> · <code>?git repo owner/name [branch]</code> · <code>?git branch [name]</code> · <code>?git writes on|off</code> · <code>?git off</code> · <code>?git disconnect</code>',
+            `Pricing: repo tasks run as an agent with up to 6 model calls per message${proModel ? `, each costing ${proModel.credits} Pro credit${proModel.credits === 1 ? '' : 's'} with ${this.escapeHtml(proModel.label)}` : ''} — you're only charged for calls actually used.`,
+            'Privacy: the token stays on this device (cleared by Panic Mode), is sent only to the Nymbot worker with each repo message, and is never stored server-side or published to relays. Use a token scoped to just the repos you need — read-only unless you enable writes.'
+        ].join('<br>'));
+    },
+
     // Update the cached Nymbot credit count and the chat-header indicator
     _setBotCreditDisplay(balance) {
         if (typeof balance === 'number') this._lastBotCredits = balance;
+        this._renderBotCreditMeta();
+    },
+
+    _setBotProCreditDisplay(balance) {
+        if (typeof balance === 'number') this._lastBotProCredits = balance;
+        this._renderBotCreditMeta();
+    },
+
+    _renderBotCreditMeta() {
         const el = document.getElementById('botCreditMeta');
-        if (el && typeof this._lastBotCredits === 'number') {
-            el.textContent = `${this._lastBotCredits} credit${this._lastBotCredits === 1 ? '' : 's'} left`;
+        if (!el) return;
+        const proModel = this._getBotProModel();
+        const std = this._lastBotCredits;
+        const pro = this._lastBotProCredits;
+        if (proModel) {
+            const proText = typeof pro === 'number' ? pro : '…';
+            let meta = `${proText} Pro credit${pro === 1 ? '' : 's'} · ${proModel.label}`;
+            const git = this._getGitConfig();
+            if (git && git.token && git.repo) meta += ` · ${git.repo.split('/').pop()}`;
+            el.textContent = meta;
+            return;
         }
+        if (typeof std !== 'number') return;
+        let text = `${std} credit${std === 1 ? '' : 's'}`;
+        if (typeof pro === 'number' && pro > 0) text += ` · ${pro} Pro`;
+        el.textContent = text + ' left';
     },
 
     // Paint the header credit indicator for the open Nymbot chat, then refresh it
@@ -1919,6 +2296,11 @@ Object.assign(NYM.prototype, {
     async _handleBotPM(content, wrapId) {
         const trimmed = (content || '').trim();
         this._markBotPMReceipts('delivered');
+        if (/^\?(help|commands)\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
+            this._displayBotPmHelp();
+            return;
+        }
         if (/^\?balance\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
             this._checkBotCredits(true);
@@ -1926,7 +2308,12 @@ Object.assign(NYM.prototype, {
         }
         if (/^\?buy\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
-            this.showBotCreditsModal();
+            this.showBotCreditsModal(null, this._getBotProModel() ? 'pro' : 'standard');
+            return;
+        }
+        if (/^\?model\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
+            this._handleBotModelCommand(trimmed);
             return;
         }
         if (/^\?clear\b/i.test(trimmed)) {
@@ -1965,22 +2352,43 @@ Object.assign(NYM.prototype, {
             if (!apiHost) { this._setBotTyping(false); return; }
             const auth = await this._signBotAuth('pm');
             const isFresh = /^\s*!\s*\S/.test(content);
+            const proModel = this._getBotProModel();
             // Send only the current message's wrap ID; the worker maintains the
             // ordered thread server-side. fresh (!) tells it to skip history.
+            const reqBody = { action: 'pm', pubkey: this.pubkey, auth, eventId: wrapId, fresh: isFresh };
+            if (proModel) {
+                reqBody.proModel = proModel.key;
+                const git = this._getGitConfig();
+                if (git && git.token && git.repo) {
+                    reqBody.git = {
+                        provider: git.provider || 'github',
+                        host: git.host || '',
+                        token: git.token,
+                        repo: git.repo,
+                        branch: git.branch || '',
+                        allowWrites: !!git.allowWrites
+                    };
+                }
+            }
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'pm', pubkey: this.pubkey, auth, eventId: wrapId, fresh: isFresh })
+                body: JSON.stringify(reqBody)
             });
             const data = await resp.json().catch(() => ({}));
             this._setBotTyping(false);
             this._markBotPMReceipts('read');
             if (data && data.noCredits) {
                 const msg = data.error
-                    || `You're out of Nymbot credits (${data.balance || 0} left). Zap Nymbot or type ?buy to purchase more.`;
+                    || (data.pro
+                        ? `You're out of Nymbot Pro credits (${data.balance || 0} left). Type ?buy and switch to Pro, or ?model off for standard replies.`
+                        : `You're out of Nymbot credits (${data.balance || 0} left). Zap Nymbot or type ?buy to purchase more.`);
                 this.displaySystemMessage(msg);
-                if (typeof data.balance === 'number') this._setBotCreditDisplay(data.balance);
-                this.showBotCreditsModal();
+                if (typeof data.balance === 'number') {
+                    if (data.pro) this._setBotProCreditDisplay(data.balance);
+                    else this._setBotCreditDisplay(data.balance);
+                }
+                this.showBotCreditsModal(null, data.pro ? 'pro' : 'standard');
                 return;
             }
             if (!resp.ok || !data || data.error) {
@@ -1997,12 +2405,17 @@ Object.assign(NYM.prototype, {
                 this.sendDMToRelays(['EVENT', data.selfEvent]);
             }
             if (typeof data.balance === 'number') {
-                this._setBotCreditDisplay(data.balance);
-                if (data.cost && data.cost > 1) {
+                if (data.pro) this._setBotProCreditDisplay(data.balance);
+                else this._setBotCreditDisplay(data.balance);
+                if (data.git && data.cost) {
+                    this.displaySystemMessage(`Repo task used ${data.cost} Pro credit${data.cost === 1 ? '' : 's'}${data.modelCalls > 1 ? ` (${data.modelCalls} model calls)` : ''}. Pro balance: ${data.balance}.`);
+                } else if (!data.pro && data.cost && data.cost > 1) {
                     this.displaySystemMessage(`${data.taskType || 'Heavy'} reply used ${data.cost} credits. Balance: ${data.balance}.`);
                 }
                 if (data.lowBalance) {
-                    this.displaySystemMessage(`Nymbot credits running low: ${data.balance} credit${data.balance === 1 ? '' : 's'} left. Type ?buy to top up.`);
+                    this.displaySystemMessage(data.pro
+                        ? `Nymbot Pro credits running low: ${data.balance} left. Type ?buy and switch to Pro to top up.`
+                        : `Nymbot credits running low: ${data.balance} credit${data.balance === 1 ? '' : 's'} left. Type ?buy to top up.`);
                 }
             }
         } catch (e) {
@@ -2028,9 +2441,11 @@ Object.assign(NYM.prototype, {
                 return null;
             }
             this._setBotCreditDisplay(data.balance);
+            if (typeof data.proBalance === 'number') this._setBotProCreditDisplay(data.proBalance);
             if (display) {
                 const b = data.balance || 0;
-                this.displaySystemMessage(`Nymbot credit balance: ${b} private message${b === 1 ? '' : 's'} remaining.` + (b <= 0 ? ' Type ?buy to purchase more.' : ''));
+                const p = data.proBalance || 0;
+                this.displaySystemMessage(`Nymbot credit balance: ${b} standard · ${p} Pro.` + (b <= 0 && p <= 0 ? ' Type ?buy to purchase more.' : ''));
             }
             return data.balance;
         } catch (e) {

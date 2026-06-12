@@ -189,7 +189,8 @@
                 geohash: m.geohash,
                 isFileOffer: m.isFileOffer,
                 fileOffer: m.fileOffer,
-                isBot: m.isBot
+                isBot: m.isBot,
+                thinking: m.thinking
             };
             // Non-enumerable so it never leaks into JSON/structured-clone of the
             // live message object elsewhere.

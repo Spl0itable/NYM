@@ -167,6 +167,12 @@ Nymbot is a built-in AI-powered chat bot that responds to `?` commands in any ch
 
 You can also have a private 1:1 chat with Nymbot. Private replies are a paid feature funded with credits you buy over Lightning. Type `?balance` to see your credit balance, `?buy` to purchase more, and `?gift @nym` to gift credits to someone else.
 
+The private chat has two tiers. **Standard** replies are auto-routed to the best model for each task and spend standard credits (10 sats each). **Pro** lets you pin every reply to a specific frontier model — Claude Fable 5, Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5, GPT-5.1, GPT-5 mini, or GPT-5.1 Codex, and paid with separate Pro credits (100 sats each; 1–6 per reply depending on the model). Pick a model with `?model <name>`, switch back with `?model off`, and buy Pro credits via the Standard/Pro switch in the `?buy` modal.
+
+When a reasoning model shows its chain of thought (the standard tier's reasoning route, or a Pro model that exposes it), the private chat shows it as a collapsed "💭 Reasoning" section above the reply that you can tap to read.
+
+Pro can also work inside one of your git repositories, Claude Code-style. Type `?git` to connect a provider, choosing either GitHub, GitLab, or Gitea/Forgejo (including Codeberg and self-hosted instances), and pasting a scoped personal access token and selecting a repo and branch. Repo messages then run as a small agent: the model lists, reads, and searches your actual files, and with `?git writes on` it can commit files, create branches, and open pull/merge requests. Repo tasks use up to 6 model calls per message, each billed at the selected model's Pro credit price (only calls actually used are charged). The access token is stored only on your device (Panic Mode wipes it), travels to the Nymbot worker per request, and is never stored server-side or published to relays.
+
 ### Bot Commands
 
 **AI & Knowledge:**
@@ -199,10 +205,13 @@ You can also have a private 1:1 chat with Nymbot. Private replies are a paid fea
 - `?seen <nym|@mention|pubkey>` - Where and when a nym was last seen
 
 **Credits (private Nymbot chat):**
-- `?balance` - Show your Nymbot credit balance
-- `?buy` - Buy credits over Lightning
+- `?help` - Free local guide to standard premium vs Pro, the git repo integration, and all commands
+- `?balance` - Show your standard and Pro credit balances
+- `?buy` - Buy credits over Lightning (Standard/Pro switch)
+- `?model [name|off]` - Pick a Pro frontier model for replies, or switch back to standard routing
+- `?git` - Connect a git repo (GitHub/GitLab/Gitea) so Pro replies can read the code and optionally commit, branch, and open PRs
 - `?gift @nym` - Gift credits to another user
-- `?transfer @nym` - Transfer your credits to another user
+- `?transfer @nym` - Transfer your credits (standard and Pro) to another user
 
 **Info:**
 - `?help` - List all available bot commands

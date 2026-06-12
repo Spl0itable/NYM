@@ -21,7 +21,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
     channels: ['pinnedChannels', 'userJoinedChannels', 'sortByProximity', 'pinnedLandingChannel',
         'hideNonPinned', 'channelLastRead', 'closedPMs', 'leftGroups', 'closedPMTimes',
         'leftGroupTimes'],
-    data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed']
+    data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt']
 };
 
 function _normalizeIndicatorScope(value, fallback = 'pms-groups') {
@@ -152,6 +152,7 @@ Object.assign(NYM.prototype, {
             cachePMs: this.settings.cachePMs !== false,
             tutorialSeen: localStorage.getItem('nym_tutorial_seen') === 'true',
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
+            botPmClearedAt: this._getBotPmClearedAt() || 0,
             keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent',
             // Non-sensitive preference only: "I protect my identity key at rest
             // on my devices." No key material, salt, or credential is ever

@@ -750,8 +750,12 @@ Object.assign(NYM.prototype, {
     </div>
 ` : '';
 
-            // Build the initial HTML with quote detection
-            const formattedContent = this.formatMessageWithQuotes(message.content);
+            // Build the initial HTML with quote detection. Bot reasoning (if
+            // any) renders above the reply as a collapsed accordion.
+            let formattedContent = this.formatMessageWithQuotes(message.content);
+            if (message.thinking && (message.isBot || this.isVerifiedBot(message.pubkey))) {
+                formattedContent = this._renderBotThinkingHtml(message.thinking) + formattedContent;
+            }
 
             const baseNym = this.parseNymFromDisplay(message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
@@ -1393,6 +1397,13 @@ Object.assign(NYM.prototype, {
             URL.revokeObjectURL(v.dataset.blobSrc);
             delete v.dataset.blobSrc;
         });
+    },
+
+    // Collapsible "Reasoning" section shown above bot replies whose model
+    // exposed its chain of thought. Collapsed by default; tap to expand.
+    _renderBotThinkingHtml(thinking) {
+        const body = this.escapeHtml(String(thinking)).replace(/\n/g, '<br>');
+        return `<details class="bot-think"><summary>💭 Reasoning</summary><div class="bot-think-body">${body}</div></details>`;
     },
 
     formatMessage(content) {

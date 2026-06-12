@@ -321,8 +321,24 @@ Object.assign(NYM.prototype, {
         return Math.floor((sats / 10) * mult);
     },
 
+    // Pro credits: 100 sats each, same bulk bonuses at 10x thresholds
+    // (mirrors botProCreditsForSats in functions/api/bot.js)
+    _botProCreditsForSats(sats) {
+        sats = Math.max(0, Math.floor(Number(sats) || 0));
+        let mult = 1;
+        if (sats >= 50000) mult = 1.20;
+        else if (sats >= 10000) mult = 1.15;
+        else if (sats >= 5000) mult = 1.10;
+        return Math.floor((sats / 100) * mult);
+    },
+
+    _botCreditsForSatsTier(sats) {
+        return this._botCreditTier === 'pro' ? this._botProCreditsForSats(sats) : this._botCreditsForSats(sats);
+    },
+
     // Preset purchase tiers for the Nymbot credit modal
     _botCreditTiers: [100, 500, 1000, 2500, 5000, 10000],
+    _botProCreditPresets: [500, 1000, 5000, 10000, 20000, 50000],
 
     // Capture the default sats buttons once so regular zaps can restore them
     _captureDefaultZapAmounts() {
@@ -341,6 +357,8 @@ Object.assign(NYM.prototype, {
         if (est) est.style.display = 'none';
         const note = document.querySelector('.bot-credit-pricing-note');
         if (note) note.remove();
+        const toggle = document.getElementById('botCreditTierToggle');
+        if (toggle) toggle.remove();
         const input = document.getElementById('zapCustomAmount');
         if (input) input.oninput = null;
     },
@@ -384,18 +402,47 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Standard vs Pro switch shown above the amount presets in credit mode
+    _renderBotCreditTierToggle(onTierChange) {
+        const container = document.querySelector('.zap-amounts');
+        if (!container || !container.parentElement) return;
+        let toggle = document.getElementById('botCreditTierToggle');
+        if (!toggle) {
+            toggle = document.createElement('div');
+            toggle.id = 'botCreditTierToggle';
+            toggle.className = 'bot-credit-tier-toggle';
+            container.insertAdjacentElement('beforebegin', toggle);
+        }
+        const isPro = this._botCreditTier === 'pro';
+        toggle.innerHTML = `
+            <button type="button" class="bot-credit-tier-btn${!isPro ? ' active' : ''}" data-tier="standard">Standard</button>
+            <button type="button" class="bot-credit-tier-btn${isPro ? ' active' : ''}" data-tier="pro">Pro</button>`;
+        toggle.querySelectorAll('.bot-credit-tier-btn').forEach(btn => {
+            btn.onclick = () => {
+                const tier = btn.dataset.tier === 'pro' ? 'pro' : 'standard';
+                if (this._botCreditTier === tier) return;
+                this._botCreditTier = tier;
+                this._renderBotCreditTierToggle(onTierChange);
+                if (onTierChange) onTierChange();
+            };
+        });
+    },
+
     _renderBotCreditAmounts() {
         const container = document.querySelector('.zap-amounts');
         if (!container) return;
-        container.innerHTML = this._botCreditTiers.map(sats => {
-            const credits = this._botCreditsForSats(sats);
+        const isPro = this._botCreditTier === 'pro';
+        const presets = isPro ? this._botProCreditPresets : this._botCreditTiers;
+        const word = isPro ? 'Pro' : 'credits';
+        container.innerHTML = presets.map(sats => {
+            const credits = this._botCreditsForSatsTier(sats);
             const satLabel = sats >= 1000 ? (sats / 1000) + 'K' : String(sats);
             return `<button class="zap-amount-btn bot-credit-btn" data-amount="${sats}">
                 <span class="sats">${satLabel} sats</span>
-                <span class="credits">${credits} credits</span>
+                <span class="credits">${credits} ${word}</span>
             </button>`;
         }).join('');
-        const note = this._botCreditPricingNote();
+        const note = isPro ? this._botProCreditPricingNote() : this._botCreditPricingNote();
         let info = container.parentElement && container.parentElement.querySelector('.bot-credit-pricing-note');
         if (!info && container.parentElement) {
             info = document.createElement('div');
@@ -410,6 +457,16 @@ Object.assign(NYM.prototype, {
             '<strong>1 credit</strong> per general chat, creative writing, or translation reply.',
             '<strong>2 credits</strong> per coding or reasoning/math reply (uses larger, more capable models).',
             'Bulk bonus: +10% at 500 sats, +15% at 1K, +20% at 5K.'
+        ].join('<br>');
+    },
+
+    _botProCreditPricingNote() {
+        const models = (this._botProModels || []).map(m =>
+            `${this.escapeHtml(m.label)} <strong>${m.credits}</strong>`).join(' · ');
+        return [
+            '<strong>Pro credits</strong> unlock replies from a frontier model you pick with <code>?model</code> in the Nymbot chat.',
+            'Per reply: ' + models + ' Pro credit(s).',
+            'Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.'
         ].join('<br>');
     },
 
@@ -433,21 +490,29 @@ Object.assign(NYM.prototype, {
     _updateBotCreditEstimate() {
         const est = document.getElementById('botCreditEstimate');
         if (!est) return;
+        const isPro = this._botCreditTier === 'pro';
         const input = document.getElementById('zapCustomAmount');
         const selected = document.querySelector('.zap-amount-btn.selected');
         const sats = parseInt((input && input.value) || (selected ? selected.dataset.amount : ''), 10);
         if (!sats || sats <= 0) {
-            est.textContent = 'Enter a custom amount to see how many messages you\'ll get.';
+            est.textContent = isPro
+                ? 'Enter a custom amount to see how many Pro credits you\'ll get.'
+                : 'Enter a custom amount to see how many messages you\'ll get.';
             return;
         }
-        const credits = this._botCreditsForSats(sats);
-        est.textContent = credits > 0
-            ? `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'} (1/msg, 2 for coding & reasoning)`
-            : 'Amount too small to buy any credits.';
+        const credits = this._botCreditsForSatsTier(sats);
+        if (credits <= 0) {
+            est.textContent = `Amount too small to buy any ${isPro ? 'Pro ' : ''}credits.`;
+            return;
+        }
+        est.textContent = isPro
+            ? `${sats.toLocaleString()} sats = ${credits} Pro credit${credits === 1 ? '' : 's'} (1-6 per reply depending on model)`
+            : `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'} (1/msg, 2 for coding & reasoning)`;
     },
 
-    // Open the zap modal in "buy Nymbot credits" mode
-    showBotCreditsModal(giftRecipient) {
+    // Open the zap modal in "buy Nymbot credits" mode. tier preselects the
+    // Standard/Pro switch (e.g. when the user ran out of Pro credits).
+    showBotCreditsModal(giftRecipient, tier) {
         const botPubkey = this.verifiedBot.pubkey;
         const isGift = !!(giftRecipient && giftRecipient.pubkey);
         this.currentZapTarget = {
@@ -459,6 +524,7 @@ Object.assign(NYM.prototype, {
             giftRecipientPubkey: isGift ? giftRecipient.pubkey : null,
             giftRecipientNym: isGift ? giftRecipient.nym : null
         };
+        this._botCreditTier = tier === 'pro' ? 'pro' : 'standard';
         this._captureDefaultZapAmounts();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
@@ -467,6 +533,15 @@ Object.assign(NYM.prototype, {
             : 'Buy Nymbot private message credits';
         document.getElementById('zapCustomAmount').value = '';
         document.getElementById('zapComment').value = '';
+        const refreshTier = () => {
+            this._renderBotCreditAmounts();
+            this._updateBotCreditEstimate();
+            this._wireZapAutoGenerate(
+                () => this.generateBotCreditInvoice(),
+                () => this._updateBotCreditEstimate()
+            );
+        };
+        this._renderBotCreditTierToggle(refreshTier);
         this._renderBotCreditAmounts();
         this._setupBotCreditEstimate();
         this._wireZapAutoGenerate(
@@ -500,14 +575,19 @@ Object.assign(NYM.prototype, {
             const apiHost = this._getApiHost();
             if (!apiHost) throw new Error('Bot API unavailable');
             const auth = await this._signBotAuth('create-invoice');
-            const credits = this._botCreditsForSats(amount);
+            const isPro = this._botCreditTier === 'pro';
+            const credits = this._botCreditsForSatsTier(amount);
             const giftNym = this.currentZapTarget.giftRecipientNym;
+            const creditWord = isPro
+                ? `${credits} Pro credit${credits === 1 ? '' : 's'}`
+                : `${credits} message${credits === 1 ? '' : 's'}`;
             const purchaseComment = giftNym
-                ? `Nymbot credits gift for @${giftNym} — ${credits} message${credits === 1 ? '' : 's'}`
-                : `Nymbot credits — ${credits} message${credits === 1 ? '' : 's'}`;
+                ? `Nymbot ${isPro ? 'Pro ' : ''}credits gift for @${giftNym} — ${creditWord}`
+                : `Nymbot ${isPro ? 'Pro ' : ''}credits — ${creditWord}`;
             let zapRequest = null;
             try { zapRequest = await this.createZapRequest(amount, purchaseComment); } catch (e) { }
             const reqBody = { action: 'create-invoice', pubkey: this.pubkey, auth, amountSats: amount, zapRequest, comment: purchaseComment };
+            if (isPro) reqBody.tier = 'pro';
             const giftPk = this.currentZapTarget.giftRecipientPubkey;
             if (giftPk && giftPk !== this.pubkey) reqBody.recipientPubkey = giftPk;
             const resp = await fetch(`https://${apiHost}/api/bot`, {
@@ -682,6 +762,7 @@ Object.assign(NYM.prototype, {
                 break;
             }
             if (data && typeof data.credited === 'number') {
+                const isPro = data.tier === 'pro';
                 if (data.gift) {
                     if (data.giftEvent) {
                         try { this.sendDMToRelays(['EVENT', data.giftEvent]); } catch (e) { }
@@ -689,7 +770,10 @@ Object.assign(NYM.prototype, {
                     // Verify the k tag is for one of our supported kinds. If
                     // missing, fall through (legacy compat) but only display
                     // if we actually have the message in storage.
-                    this.displaySystemMessage(`Gifted +${data.credited} Nymbot credits to @${recipientNym || 'user'}.`);
+                    this.displaySystemMessage(`Gifted +${data.credited} Nymbot ${isPro ? 'Pro ' : ''}credits to @${recipientNym || 'user'}.`);
+                } else if (isPro) {
+                    this._setBotProCreditDisplay(data.balance);
+                    this.displaySystemMessage(`Nymbot Pro credits added: +${data.credited}. Pro balance: ${data.balance}. Pick a model with ?model in the Nymbot chat.`);
                 } else {
                     this._setBotCreditDisplay(data.balance);
                     this.displaySystemMessage(`Nymbot credits added: +${data.credited}. New balance: ${data.balance} private message${data.balance === 1 ? '' : 's'}.`);

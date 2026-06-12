@@ -4207,7 +4207,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.70.484';
+const NYMCHAT_VERSION = 'v3.71.484';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6036,6 +6036,13 @@ async function applyNostrSettings(s) {
     }
     if (s.botPmWelcomed === true) {
         try { localStorage.setItem('nym_botpm_welcomed', 'true'); } catch (_) { }
+    }
+    // ?clear marker is monotonic: take the newest clear time seen on any
+    // device so a cleared Nymbot thread stays cleared everywhere.
+    if (typeof s.botPmClearedAt === 'number' && s.botPmClearedAt > 0 &&
+        typeof nym._getBotPmClearedAt === 'function' &&
+        s.botPmClearedAt > nym._getBotPmClearedAt()) {
+        try { nym._setBotPmClearedAt(s.botPmClearedAt); } catch (_) { }
     }
 
     // Cross-device preference for identity-encryption-at-rest

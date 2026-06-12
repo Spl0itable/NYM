@@ -1191,6 +1191,83 @@ body.chat-bubbles .read-more-btn {
     color: var(--primary);
 }
 
+.bot-think {
+    margin: 2px 0 8px;
+    border: 1px solid var(--glass-border);
+    border-left: 3px solid rgb(from var(--primary) r g b / 0.45);
+    border-radius: var(--radius-xs);
+    background: rgb(from var(--secondary) r g b / 0.08);
+    font-size: 0.88em;
+}
+
+.bot-think summary {
+    padding: 5px 10px;
+    cursor: pointer;
+    color: var(--text-dim);
+    user-select: none;
+    list-style: none;
+}
+
+.bot-think summary::-webkit-details-marker {
+    display: none;
+}
+
+.bot-think summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform var(--transition);
+}
+
+.bot-think[open] summary::before {
+    transform: rotate(90deg);
+}
+
+.bot-think[open] summary {
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.bot-think-body {
+    padding: 8px 10px;
+    color: var(--text-dim);
+    font-style: italic;
+    line-height: 1.5;
+    max-height: 320px;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+}
+
+.bot-credit-tier-toggle {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.bot-credit-tier-btn {
+    flex: 1;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.bot-credit-tier-btn:hover {
+    border-color: rgba(247, 147, 26, 0.4);
+    color: var(--text);
+}
+
+.bot-credit-tier-btn.active {
+    border-color: rgba(247, 147, 26, 0.5);
+    background: rgba(247, 147, 26, 0.12);
+    color: var(--lightning);
+    font-weight: bold;
+}
+
 .message-content blockquote {
     border-left: 3px solid rgb(from var(--primary) r g b / 0.4);
     padding-left: 12px;
