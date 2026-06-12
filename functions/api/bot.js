@@ -228,12 +228,60 @@ function proNormalizeMessage(resp) {
   return null;
 }
 
+// The gateway validates anthropic/* requests against Anthropic's native
+// schema: system prompt as a top-level field (no "system" role in messages),
+// tool calls/results as content blocks, and Anthropic-format tool defs.
+// Translate our internal OpenAI-style conversation at the transport boundary.
+function anthropicizeRequest(messages, maxTokens, tools) {
+  var system = "";
+  var out = [];
+  for (var i = 0; i < (messages || []).length; i++) {
+    var m = messages[i];
+    if (!m) continue;
+    if (m.role === "system") {
+      system += (system ? "\n\n" : "") + (typeof m.content === "string" ? m.content : "");
+      continue;
+    }
+    if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      var blocks = [];
+      if (m.content) blocks.push({ type: "text", text: String(m.content) });
+      for (var t = 0; t < m.tool_calls.length; t++) {
+        var tc = m.tool_calls[t];
+        var args = {};
+        try { args = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
+        blocks.push({ type: "tool_use", id: tc.id, name: tc.function && tc.function.name, input: args });
+      }
+      out.push({ role: "assistant", content: blocks });
+      continue;
+    }
+    if (m.role === "tool") {
+      out.push({ role: "user", content: [{ type: "tool_result", tool_use_id: m.tool_call_id, content: String(m.content || "") }] });
+      continue;
+    }
+    out.push({ role: m.role, content: m.content });
+  }
+  var req = { messages: out, max_tokens: maxTokens };
+  if (system) req.system = system;
+  if (tools && tools.length) {
+    req.tools = tools.map(function (t) {
+      var f = t.function || {};
+      return { name: f.name, description: f.description || "", input_schema: f.parameters || { type: "object" } };
+    });
+  }
+  return req;
+}
+
 async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
-  var req = { messages: messages };
-  if (tools && tools.length) req.tools = tools;
-  // OpenAI's newest models reject max_tokens; Anthropic requires it.
-  if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
-  else req.max_tokens = maxTokens;
+  var req;
+  if (/^anthropic\//.test(modelId)) {
+    req = anthropicizeRequest(messages, maxTokens, tools);
+  } else {
+    req = { messages: messages };
+    if (tools && tools.length) req.tools = tools;
+    // OpenAI's newest models reject max_tokens in favor of this.
+    if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
+    else req.max_tokens = maxTokens;
+  }
 
   if (!env.AI_GATEWAY_URL && proBindingAvailable(env)) {
     var bound;
