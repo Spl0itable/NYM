@@ -204,10 +204,19 @@ function proConfigured(env) {
 }
 
 // Normalize the model reply across transports/providers: OpenAI chat
-// completions, Anthropic-native content blocks, or Workers AI {response}.
+// completions, Anthropic-native content blocks, Workers AI {response}, or
+// any of those wrapped in a Cloudflare {success, result} envelope.
 function proNormalizeMessage(resp) {
   if (!resp || typeof resp !== "object") return null;
+  if (typeof resp.result === "string" && resp.result) return { content: resp.result };
+  if (resp.result && typeof resp.result === "object" &&
+      (resp.result.choices || resp.result.content || typeof resp.result.response === "string")) {
+    return proNormalizeMessage(resp.result);
+  }
   if (resp.choices && resp.choices[0] && resp.choices[0].message) return resp.choices[0].message;
+  if (typeof resp.content === "string" && resp.content) {
+    return { content: resp.content, reasoning_content: resp.reasoning_content, reasoning: resp.reasoning };
+  }
   if (Array.isArray(resp.content)) {
     var text = "";
     var toolCalls = [];
@@ -290,7 +299,7 @@ async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
     } catch (e) {
       throw new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
     }
-    return proNormalizeMessage(bound);
+    return proCheckedMessage(bound);
   }
 
   var body = Object.assign({ model: modelId }, req);
@@ -319,7 +328,20 @@ async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
     throw new Error("Pro model request failed: HTTP " + res.status +
       (detail ? " — " + String(detail).slice(0, 200) : ""));
   }
-  return proNormalizeMessage(data);
+  return proCheckedMessage(data);
+}
+
+// A reply with no text and no tool calls means we failed to recognize the
+// upstream shape — surface a payload snippet instead of a blank reply so
+// schema mismatches diagnose themselves. Nothing is charged on throw.
+function proCheckedMessage(payload) {
+  var msg = proNormalizeMessage(payload);
+  if (msg && (proMessageText(msg).trim() || (msg.tool_calls && msg.tool_calls.length))) {
+    return msg;
+  }
+  var snippet = "";
+  try { snippet = JSON.stringify(payload); } catch (e) { snippet = String(payload); }
+  throw new Error("Pro model returned an empty or unrecognized response: " + String(snippet || "").slice(0, 400));
 }
 
 function proMessageText(msg) {
