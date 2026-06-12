@@ -2582,18 +2582,26 @@ Object.assign(NYM.prototype, {
         document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {
             // Update only the author-clickable inner span to preserve bubble-time and click handler
             const clickable = el.querySelector('.author-clickable');
+            // Reuse the already-decoded avatar img across rewrites
+            const avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
             if (clickable) {
                 if (clickable.dataset.authorSig === authorSig) return;
                 clickable.dataset.authorSig = authorSig;
-                clickable.innerHTML = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendBadge}`;
+                const existingAvatar = clickable.querySelector('img.avatar-message');
+                clickable.innerHTML = `<span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendBadge}`;
+                if (existingAvatar) clickable.prepend(existingAvatar);
+                else clickable.insertAdjacentHTML('afterbegin', avatarHtml);
                 if (typeof this._dedupeAuthorBadges === 'function') this._dedupeAuthorBadges(el);
             } else {
                 // Fallback: full rewrite with author-clickable wrapper for older messages missing it
                 const bubbleTime = el.querySelector('.bubble-time');
                 const bubbleHtml = bubbleTime ? bubbleTime.outerHTML : '';
-                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span>`;
+                const existingAvatar = el.querySelector('img.avatar-message');
+                el.innerHTML = `${bubbleHtml}<span class="author-clickable"><span class="nym-bracket">&lt;</span>${this.escapeHtml(clean)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span>`;
                 const newClickable = el.querySelector('.author-clickable');
                 if (newClickable) {
+                    if (existingAvatar) newClickable.prepend(existingAvatar);
+                    else newClickable.insertAdjacentHTML('afterbegin', avatarHtml);
                     newClickable.style.cursor = 'pointer';
                     const msgEl = el.closest('.message');
                     const msgId = msgEl ? msgEl.dataset.messageId : null;

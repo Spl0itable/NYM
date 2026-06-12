@@ -405,10 +405,18 @@ Object.assign(NYM.prototype, {
     cacheAvatarImage(pubkey, url) {
         if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
         if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
+        // Negative cache: don't re-fetch a recently failed URL on every kind 0 /
+        // presence redelivery, and don't re-push it into rendered imgs (where it
+        // errors back to the identicon and flickers).
+        if (!this._avatarFetchFailed) this._avatarFetchFailed = new Map();
+        const failed = this._avatarFetchFailed.get(pubkey);
+        const recentlyFailed = failed && failed.url === url && (Date.now() - failed.at) < 10 * 60 * 1000;
+        if (recentlyFailed) return Promise.resolve();
         const fetchUrl = this.getProxiedMediaUrl(url);
         const p = this._throttledProxyFetch(fetchUrl, { mode: 'cors' })
             .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
             .then(blob => {
+                this._avatarFetchFailed.delete(pubkey);
                 // Revoke old blob URL if avatar changed
                 const old = this.avatarBlobCache.get(pubkey);
                 if (old) URL.revokeObjectURL(old);
@@ -423,8 +431,11 @@ Object.assign(NYM.prototype, {
                 }
             })
             .catch(() => {
-                // Blob fetch failed (CORS, network, etc.) — fall back to raw URL
-                this.updateRenderedAvatars(pubkey, url);
+                // Blob fetch failed (CORS, network, etc.) — fall back to raw URL,
+                // but only on the first failure for this URL
+                const repeatFailure = failed && failed.url === url;
+                this._avatarFetchFailed.set(pubkey, { url, at: Date.now() });
+                if (!repeatFailure) this.updateRenderedAvatars(pubkey, url);
             })
             .finally(() => { this.avatarBlobInflight.delete(pubkey); });
         this.avatarBlobInflight.set(pubkey, p);
@@ -1173,20 +1184,32 @@ Object.assign(NYM.prototype, {
         if (eventTime < lastTimestamp) return;
         this.presenceTimestamps.set(pubkey, eventTime);
 
-        // Handle avatar update: clear cached avatar and re-fetch
+        // Handle avatar update. The avatar-update presence event is replaceable
+        // (kind 30078) and gets redelivered by every relay on each (re)subscribe,
+        // so only an actual URL change may bust the cache — otherwise every
+        // redelivery reloads all rendered avatars and they visibly flicker.
         if (avatarUpdateTag) {
             const newAvatarUrl = avatarUpdateTag[1];
-            const oldBlob = this.avatarBlobCache.get(pubkey);
-            if (oldBlob) URL.revokeObjectURL(oldBlob);
-            this.avatarBlobCache.delete(pubkey);
-            if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
+            const prevUrl = this.userAvatars.get(pubkey);
+            const clearCachedAvatar = () => {
+                const oldBlob = this.avatarBlobCache.get(pubkey);
+                if (oldBlob) URL.revokeObjectURL(oldBlob);
+                this.avatarBlobCache.delete(pubkey);
+                if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
+            };
 
             if (newAvatarUrl) {
-                this.userAvatars.set(pubkey, newAvatarUrl);
-                this.cacheAvatarImage(pubkey, newAvatarUrl);
-                this.updateRenderedAvatars(pubkey, newAvatarUrl);
-            } else {
+                if (newAvatarUrl !== prevUrl) {
+                    clearCachedAvatar();
+                    this.userAvatars.set(pubkey, newAvatarUrl);
+                    this.cacheAvatarImage(pubkey, newAvatarUrl);
+                    this.updateRenderedAvatars(pubkey, newAvatarUrl);
+                } else if (!this.avatarBlobCache.has(pubkey)) {
+                    this.cacheAvatarImage(pubkey, newAvatarUrl);
+                }
+            } else if (prevUrl || this.avatarBlobCache.has(pubkey)) {
                 // Avatar removed - fall back to generated identicon
+                clearCachedAvatar();
                 this.userAvatars.delete(pubkey);
                 this.updateRenderedAvatars(pubkey, this.getAvatarUrl(pubkey));
             }
