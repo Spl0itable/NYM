@@ -280,39 +280,7 @@ function anthropicizeRequest(messages, maxTokens, tools) {
   return req;
 }
 
-async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
-  var req;
-  if (/^anthropic\//.test(modelId)) {
-    req = anthropicizeRequest(messages, maxTokens, tools);
-  } else {
-    req = { messages: messages };
-    if (tools && tools.length) req.tools = tools;
-    // OpenAI's newest models reject max_tokens in favor of this.
-    if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
-    else req.max_tokens = maxTokens;
-  }
-
-  if (!env.AI_GATEWAY_URL && proBindingAvailable(env)) {
-    var bound;
-    try {
-      bound = await env.AI.run(modelId, req, { gateway: { id: env.AI_GATEWAY_NAME } });
-    } catch (e) {
-      throw new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
-    }
-    return proCheckedMessage(bound);
-  }
-
-  var body = Object.assign({ model: modelId }, req);
-  var url = proGatewayUrl(env);
-  if (!url) throw new Error("Nymbot Pro is not configured.");
-  var headers = { "Content-Type": "application/json" };
-  if (env.AI_GATEWAY_TOKEN) {
-    if (/^https:\/\/api\.cloudflare\.com\//.test(url)) {
-      headers["Authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    } else {
-      headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    }
-  }
+async function proHttpChat(url, headers, body) {
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) });
   var raw = await res.text();
   var data = null;
@@ -329,6 +297,61 @@ async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
       (detail ? " — " + String(detail).slice(0, 200) : ""));
   }
   return proCheckedMessage(data);
+}
+
+// Anthropic's own API names versions with hyphens (claude-haiku-4-5), unlike
+// Cloudflare's catalog ids (anthropic/claude-haiku-4.5).
+function proAnthropicModelId(catalogId) {
+  return String(catalogId).replace(/^anthropic\//, "").replace(/(\d)\.(\d)/g, "$1-$2");
+}
+
+async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
+  var isAnthropic = /^anthropic\//.test(modelId);
+  var req;
+  if (isAnthropic) {
+    req = anthropicizeRequest(messages, maxTokens, tools);
+  } else {
+    req = { messages: messages };
+    if (tools && tools.length) req.tools = tools;
+    // OpenAI's newest models reject max_tokens in favor of this.
+    if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
+    else req.max_tokens = maxTokens;
+  }
+
+  // The catalog/compat translation drops Anthropic message content (the reply
+  // comes back with usage counted but no content field), so Claude models go
+  // through the gateway's provider-native endpoint, which Unified Billing
+  // supports via cf-aig-authorization. Native request, native response, and
+  // tools/thinking work without translation.
+  if (isAnthropic && !env.AI_GATEWAY_URL && env.AI_GATEWAY_ACCOUNT_ID && env.AI_GATEWAY_NAME) {
+    var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
+    if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    var nativeUrl = "https://gateway.ai.cloudflare.com/v1/" + env.AI_GATEWAY_ACCOUNT_ID +
+      "/" + env.AI_GATEWAY_NAME + "/anthropic/v1/messages";
+    return proHttpChat(nativeUrl, nativeHeaders, Object.assign({ model: proAnthropicModelId(modelId) }, req));
+  }
+
+  if (!env.AI_GATEWAY_URL && proBindingAvailable(env)) {
+    var bound;
+    try {
+      bound = await env.AI.run(modelId, req, { gateway: { id: env.AI_GATEWAY_NAME } });
+    } catch (e) {
+      throw new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
+    }
+    return proCheckedMessage(bound);
+  }
+
+  var url = proGatewayUrl(env);
+  if (!url) throw new Error("Nymbot Pro is not configured.");
+  var headers = { "Content-Type": "application/json" };
+  if (env.AI_GATEWAY_TOKEN) {
+    if (/^https:\/\/api\.cloudflare\.com\//.test(url)) {
+      headers["Authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    } else {
+      headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    }
+  }
+  return proHttpChat(url, headers, Object.assign({ model: modelId }, req));
 }
 
 // A reply with no text and no tool calls means we failed to recognize the
