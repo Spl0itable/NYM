@@ -165,7 +165,7 @@ Nymchat group chats go beyond standard NIP-17 with rotating ephemeral recipient 
 
 Nymbot is a built-in AI-powered chat bot that responds to `?` commands in any channel. You can also mention **@Nymbot** in a message, or quote-reply to a Nymbot response to continue a conversation.
 
-You can also have a private 1:1 chat with Nymbot. Private replies are a paid feature funded with credits you buy over Lightning. Type `?balance` to see your credit balance, `?buy` to purchase more, and `?gift @nym` to gift credits to someone else.
+You can also have a private, end-to-end encrypted 1:1 chat with Nymbot. Private replies are a paid feature funded with credits you buy over Lightning. Type `?balance` to see your credit balance, `?buy` to purchase more, and `?gift @nym` to gift credits to someone else.
 
 The private chat has two tiers. **Standard** replies are auto-routed to the best model for each task and spend standard credits (10 sats each). **Pro** lets you pin every reply to a specific frontier model — Claude Fable 5, Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5, GPT-5.1, GPT-5 mini, or GPT-5.1 Codex, and paid with separate Pro credits (100 sats each; 1–6 per reply depending on the model). Pick a model with `?model <name>`, switch back with `?model off`, and buy Pro credits via the Standard/Pro switch in the `?buy` modal.
 
