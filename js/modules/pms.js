@@ -1638,7 +1638,7 @@ Object.assign(NYM.prototype, {
             '• <code>?git</code> — connect a git repo (GitHub, GitLab, Gitea/Codeberg) so Pro replies read your actual code and can even commit, branch, and open PRs — like a chat-based coding agent.',
             '• <code>?transfer @nym#xxxx confirm</code> — move ALL your credits to another pubkey (great for switching nyms).',
             '',
-            '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Pro replies cost <strong>1–6 Pro credits</strong> depending on the model you pick. Credits are tied to your nym — save your nsec so you don\'t lose them.',
+            '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Pro replies start at <strong>1–2 Pro credits</strong> and scale with reply length (each model\'s range is in <code>?model</code>). Credits are tied to your nym — save your nsec so you don\'t lose them.',
             '',
             'So, what can I help you with?'
         ].join('<br>');
@@ -1652,7 +1652,7 @@ Object.assign(NYM.prototype, {
         const std = this._lastBotCredits;
         const pro = this._lastBotProCredits;
         const modelLines = this._botProModels.map(m =>
-            `&nbsp;&nbsp;<code>${m.key}</code> — ${this.escapeHtml(m.label)}, ${m.credits} Pro credit${m.credits === 1 ? '' : 's'}/reply`);
+            `&nbsp;&nbsp;<code>${m.key}</code> — ${this.escapeHtml(m.label)}, ${this._botProPriceLabel(m)}`);
         const statusBits = [];
         if (typeof std === 'number') statusBits.push(`${std} standard credit${std === 1 ? '' : 's'}`);
         if (typeof pro === 'number') statusBits.push(`${pro} Pro credit${pro === 1 ? '' : 's'}`);
@@ -2001,14 +2001,21 @@ Object.assign(NYM.prototype, {
 
     // Nymbot Pro model catalog (mirrors BOT_PRO_MODELS in functions/api/bot.js)
     _botProModels: [
-        { key: 'claude-fable', label: 'Claude Fable 5', credits: 6 },
-        { key: 'claude-opus', label: 'Claude Opus 4.8', credits: 3 },
-        { key: 'claude-sonnet', label: 'Claude Sonnet 4.6', credits: 2 },
-        { key: 'claude-haiku', label: 'Claude Haiku 4.5', credits: 1 },
-        { key: 'gpt-5', label: 'GPT-5.1', credits: 2 },
-        { key: 'gpt-5-mini', label: 'GPT-5 mini', credits: 1 },
-        { key: 'codex', label: 'GPT-5.1 Codex', credits: 2 }
+        { key: 'claude-fable', label: 'Claude Fable 5', credits: 2, max: 16 },
+        { key: 'claude-opus', label: 'Claude Opus 4.8', credits: 1, max: 8 },
+        { key: 'claude-sonnet', label: 'Claude Sonnet 4.6', credits: 1, max: 6 },
+        { key: 'claude-haiku', label: 'Claude Haiku 4.5', credits: 1, max: 1 },
+        { key: 'gpt-5', label: 'GPT-5.1', credits: 1, max: 4 },
+        { key: 'gpt-5-mini', label: 'GPT-5 mini', credits: 1, max: 1 },
+        { key: 'codex', label: 'GPT-5.1 Codex', credits: 1, max: 4 }
     ],
+
+    // "2 credits/reply" for flat models, "from 2 (up to 16 for max-length
+    // replies)" for usage-scaled ones — mirrors the worker's hybrid pricing.
+    _botProPriceLabel(m) {
+        const base = `${m.credits} Pro credit${m.credits === 1 ? '' : 's'}`;
+        return m.max > m.credits ? `from ${base}, up to ${m.max} for max-length replies` : `${base}/reply`;
+    },
 
     _getBotProModel() {
         try {
@@ -2032,12 +2039,13 @@ Object.assign(NYM.prototype, {
         const plural = n => n === 1 ? '' : 's';
         if (!arg) {
             const lines = this._botProModels.map(m =>
-                `• <code>${m.key}</code>${current && current.key === m.key ? ' ✓' : ''} — ${this.escapeHtml(m.label)}, ${m.credits} Pro credit${plural(m.credits)}/reply`);
+                `• <code>${m.key}</code>${current && current.key === m.key ? ' ✓' : ''} — ${this.escapeHtml(m.label)}, ${this._botProPriceLabel(m)}`);
             this._displayBotInfoMessage([
                 current
-                    ? `Nymbot Pro model: <strong>${this.escapeHtml(current.label)}</strong> (${current.credits} Pro credit${plural(current.credits)} per reply).`
+                    ? `Nymbot Pro model: <strong>${this.escapeHtml(current.label)}</strong> (${this._botProPriceLabel(current)}).`
                     : 'Nymbot Pro is off — replies use standard multi-model routing and standard credits.',
                 ...lines,
+                'Short replies cost the base price; long replies scale with length. The maximum is reserved from your balance per message and only the actual cost is charged.',
                 'Use <code>?model &lt;name&gt;</code> to select one, or <code>?model off</code> for standard routing. Pro credits: <code>?buy</code> → Pro.'
             ].join('<br>'));
             return;
@@ -2053,7 +2061,7 @@ Object.assign(NYM.prototype, {
             return;
         }
         this._setBotProModel(picked.key);
-        this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it and costs ${picked.credits} Pro credit${plural(picked.credits)}. Type ?model off to switch back.`);
+        this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it (${this._botProPriceLabel(picked)}). Type ?model off to switch back.`);
     },
 
     // Git repo mode (GitHub, GitLab, Gitea/Forgejo incl. Codeberg and
@@ -2254,7 +2262,7 @@ Object.assign(NYM.prototype, {
             `Pro model: ${proModel ? this.escapeHtml(proModel.label) : 'none — repo mode requires one (<code>?model</code>)'}`,
             '',
             'Commands: <code>?git provider …</code> · <code>?git token &lt;pat&gt;</code> · <code>?git repos</code> · <code>?git repo owner/name [branch]</code> · <code>?git branch [name]</code> · <code>?git writes on|off</code> · <code>?git off</code> · <code>?git disconnect</code>',
-            `Pricing: repo tasks run as an agent with up to 6 model calls per message${proModel ? `, each costing ${proModel.credits} Pro credit${proModel.credits === 1 ? '' : 's'} with ${this.escapeHtml(proModel.label)}` : ''} — you're only charged for calls actually used.`,
+            `Pricing: repo tasks run as an agent with up to 6 model calls per message${proModel ? ` (${this.escapeHtml(proModel.label)}: ${this._botProPriceLabel(proModel)} per call)` : ''} — the worst case is reserved from your balance, but you're only charged for the calls and reply length actually used.`,
             'Privacy: the token stays on this device (cleared by Panic Mode), is sent only to the Nymbot worker with each repo message, and is never stored server-side or published to relays. Use a token scoped to just the repos you need — read-only unless you enable writes.'
         ].join('<br>'));
     },
@@ -2417,6 +2425,11 @@ Object.assign(NYM.prototype, {
                 else this._setBotCreditDisplay(data.balance);
                 if (data.git && data.cost) {
                     this.displaySystemMessage(`Repo task used ${data.cost} Pro credit${data.cost === 1 ? '' : 's'}${data.modelCalls > 1 ? ` (${data.modelCalls} model calls)` : ''}. Pro balance: ${data.balance}.`);
+                } else if (data.pro && data.cost) {
+                    const sel = this._getBotProModel();
+                    if (sel && data.cost > sel.credits) {
+                        this.displaySystemMessage(`Long reply used ${data.cost} Pro credits (scales with length). Pro balance: ${data.balance}.`);
+                    }
                 } else if (!data.pro && data.cost && data.cost > 1) {
                     this.displaySystemMessage(`${data.taskType || 'Heavy'} reply used ${data.cost} credits. Balance: ${data.balance}.`);
                 }

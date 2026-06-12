@@ -149,7 +149,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.71.489";
+var NYMCHAT_VERSION = "3.71.490";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -177,14 +177,27 @@ var BOT_PM_MAX_TOKENS = {
 // GPT-5.1 $1.25/$10).
 var BOT_PRO_SATS_PER_CREDIT = 100;
 var BOT_PRO_MODELS = {
-  "claude-fable": { label: "Claude Fable 5", model: "anthropic/claude-fable-5", credits: 6, maxTokens: 8192 },
-  "claude-opus": { label: "Claude Opus 4.8", model: "anthropic/claude-opus-4.8", credits: 3, maxTokens: 8192 },
-  "claude-sonnet": { label: "Claude Sonnet 4.6", model: "anthropic/claude-sonnet-4.6", credits: 2, maxTokens: 8192 },
-  "claude-haiku": { label: "Claude Haiku 4.5", model: "anthropic/claude-haiku-4.5", credits: 1, maxTokens: 4096 },
-  "gpt-5": { label: "GPT-5.1", model: "openai/gpt-5.1", credits: 2, maxTokens: 8192 },
-  "gpt-5-mini": { label: "GPT-5 mini", model: "openai/gpt-5-mini", credits: 1, maxTokens: 8192 },
-  "codex": { label: "GPT-5.1 Codex", model: "openai/gpt-5.1-codex", credits: 2, maxTokens: 8192 }
+  "claude-fable": { label: "Claude Fable 5", model: "anthropic/claude-fable-5", baseCredits: 2, outTokensPerCredit: 600, maxTokens: 8192 },
+  "claude-opus": { label: "Claude Opus 4.8", model: "anthropic/claude-opus-4.8", baseCredits: 1, outTokensPerCredit: 1200, maxTokens: 8192 },
+  "claude-sonnet": { label: "Claude Sonnet 4.6", model: "anthropic/claude-sonnet-4.6", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192 },
+  "claude-haiku": { label: "Claude Haiku 4.5", model: "anthropic/claude-haiku-4.5", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 4096 },
+  "gpt-5": { label: "GPT-5.1", model: "openai/gpt-5.1", baseCredits: 1, outTokensPerCredit: 3000, maxTokens: 8192 },
+  "gpt-5-mini": { label: "GPT-5 mini", model: "openai/gpt-5-mini", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 8192 },
+  "codex": { label: "GPT-5.1 Codex", model: "openai/gpt-5.1-codex", baseCredits: 1, outTokensPerCredit: 3000, maxTokens: 8192 }
 };
+
+function botProMaxCost(m) {
+  return (m.baseCredits || 1) + (m.outTokensPerCredit ? Math.ceil(m.maxTokens / m.outTokensPerCredit) : 0);
+}
+
+function botProCost(m, calls, outputTokens) {
+  calls = Math.max(1, Math.floor(Number(calls) || 1));
+  var cost = (m.baseCredits || 1) * calls;
+  if (m.outTokensPerCredit && outputTokens > 0) {
+    cost += Math.ceil(outputTokens / m.outTokensPerCredit);
+  }
+  return Math.min(cost, botProMaxCost(m) * calls);
+}
 
 function proGatewayUrl(env) {
   if (env.AI_GATEWAY_URL) return env.AI_GATEWAY_URL;
@@ -376,11 +389,22 @@ async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
 function proCheckedMessage(payload) {
   var msg = proNormalizeMessage(payload);
   if (msg && (proMessageText(msg).trim() || (msg.tool_calls && msg.tool_calls.length))) {
-    return msg;
+    return { msg: msg, outputTokens: proUsageOutputTokens(payload) };
   }
   var snippet = "";
   try { snippet = JSON.stringify(payload); } catch (e) { snippet = String(payload); }
   throw new Error("Pro model returned an empty or unrecognized response: " + String(snippet || "").slice(0, 400));
+}
+
+// Billable output tokens across response shapes (Anthropic usage.output_tokens,
+// OpenAI usage.completion_tokens, either possibly under a CF result envelope).
+function proUsageOutputTokens(resp) {
+  if (!resp || typeof resp !== "object") return 0;
+  if (resp.result && typeof resp.result === "object") return proUsageOutputTokens(resp.result);
+  var u = resp.usage;
+  if (!u || typeof u !== "object") return 0;
+  var n = Number(u.output_tokens != null ? u.output_tokens : u.completion_tokens);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 function proMessageText(msg) {
@@ -404,7 +428,8 @@ function proMessageWithThinking(msg) {
 }
 
 async function runProGatewayModel(env, modelId, messages, maxTokens) {
-  return proMessageWithThinking(await proGatewayChat(env, modelId, messages, maxTokens, null));
+  var r = await proGatewayChat(env, modelId, messages, maxTokens, null);
+  return { text: proMessageWithThinking(r.msg), outputTokens: r.outputTokens };
 }
 
 // Git repo mode: the user lends Nymbot a personal access token so Pro
@@ -860,13 +885,16 @@ async function runProGitChat(env, proModel, cfg, messages) {
   var tools = gitToolDefs(cfg.allowWrites);
   var convo = messages.slice();
   var calls = 0;
+  var outputTokens = 0;
   while (true) {
     calls++;
     var lastTurn = calls >= BOT_GIT_MAX_TURNS;
-    var msg = await proGatewayChat(env, proModel.model, convo, proModel.maxTokens, lastTurn ? null : tools);
+    var r = await proGatewayChat(env, proModel.model, convo, proModel.maxTokens, lastTurn ? null : tools);
+    var msg = r.msg;
+    outputTokens += r.outputTokens || 0;
     var toolCalls = msg && Array.isArray(msg.tool_calls) ? msg.tool_calls.slice(0, BOT_GIT_MAX_TOOLS_PER_TURN) : [];
     if (!toolCalls.length || lastTurn) {
-      return { reply: proMessageWithThinking(msg), modelCalls: calls };
+      return { reply: proMessageWithThinking(msg), modelCalls: calls, outputTokens: outputTokens };
     }
     convo.push({ role: "assistant", content: msg.content || null, tool_calls: toolCalls });
     for (var i = 0; i < toolCalls.length; i++) {
@@ -923,7 +951,7 @@ function buildNymbotPmSystemPrompt(proModel) {
   var tierSection = proModel ? [
     "=== PRO MODE (USER-SELECTED MODEL) ===",
     "This user has Nymbot Pro and chose " + proModel.label + " — every reply in this chat is generated by that frontier model. You ARE " + proModel.label + " speaking as Nymbot; if the user asks which model they're talking to, tell them it's " + proModel.label + ". Don't name the gateway infrastructure used to reach it.",
-    "Pricing: each Pro reply with " + proModel.label + " costs " + proModel.credits + " Pro credit" + (proModel.credits === 1 ? "" : "s") + ". Pro credits are a separate balance from standard credits (1 Pro credit = " + BOT_PRO_SATS_PER_CREDIT + " sats vs " + BOT_SATS_PER_CREDIT + " sats for a standard credit) because frontier models cost more to run. ?buy opens the purchase flow with a Standard/Pro switch.",
+    "Pricing: " + proModel.label + " replies cost " + proModel.baseCredits + " Pro credit" + (proModel.baseCredits === 1 ? "" : "s") + (proModel.outTokensPerCredit ? " plus 1 more per ~" + proModel.outTokensPerCredit + " tokens of reply length (max " + botProMaxCost(proModel) + " for a maximum-length reply) — short answers cost the base, long ones scale" : " flat") + ". Pro credits are a separate balance from standard credits (1 Pro credit = " + BOT_PRO_SATS_PER_CREDIT + " sats vs " + BOT_SATS_PER_CREDIT + " sats for a standard credit) because frontier models cost more to run. ?buy opens the purchase flow with a Standard/Pro switch.",
     "The user can switch models anytime with ?model <name> (e.g. ?model claude-opus), or type ?model off to drop back to standard multi-model routing which spends standard credits.",
     "GIT REPOS: Pro users can connect a repository with ?git — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg and self-hosted) — so you can read the codebase and, when writes are enabled, commit, branch, and open pull/merge requests. When a repo is connected, a GIT REPO MODE section appears below with your tools; without it you have NO repo access — point curious users at ?git."
   ] : [
@@ -1169,11 +1197,10 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     if (ghConfig) {
       messages[0].content += "\n" + await buildGitContext(ghConfig);
       var ghResult = await runProGitChat(context.env, proModel, ghConfig, messages);
-      return { reply: sanitizeBotResponse(ghResult.reply, true), taskType: taskType, modelCalls: ghResult.modelCalls };
+      return { reply: sanitizeBotResponse(ghResult.reply, true), taskType: taskType, modelCalls: ghResult.modelCalls, outputTokens: ghResult.outputTokens };
     }
-    var proReply = sanitizeBotResponse(await runProGatewayModel(
-      context.env, proModel.model, messages, proModel.maxTokens), true);
-    return { reply: proReply, taskType: taskType };
+    var proResult = await runProGatewayModel(context.env, proModel.model, messages, proModel.maxTokens);
+    return { reply: sanitizeBotResponse(proResult.text, true), taskType: taskType, outputTokens: proResult.outputTokens };
   }
   var pmModel = BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general;
   var maxOut = BOT_PM_MAX_TOKENS[taskType] || BOT_PM_MAX_TOKENS.general;
@@ -1415,9 +1442,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       return json({ error: "Slow down — too many messages. Try again in a minute." }, 429);
     }
     if (proModel) {
-      // Repo tasks can use several model calls; require the worst case up
-      // front and only charge for the calls actually made.
-      var proRequired = proModel.credits * (ghConfig ? BOT_GIT_MAX_TURNS : 1);
+      // Reserve the per-message worst case (base + max-length output, times
+      // max calls for repo tasks); only the actual usage-based cost is spent.
+      var proRequired = botProMaxCost(proModel) * (ghConfig ? BOT_GIT_MAX_TURNS : 1);
       if ((proRecord.balance || 0) < proRequired) {
         return json({
           noCredits: true,
@@ -1425,9 +1452,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           balance: proRecord.balance || 0,
           required: proRequired,
           error: ghConfig
-            ? "Repo tasks with " + proModel.label + " reserve up to " + proRequired + " Pro credits (" + proModel.credits + " per model call, max " + BOT_GIT_MAX_TURNS + " calls) and you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up."
-            : proModel.label + " replies cost " + proModel.credits + " Pro credit" + (proModel.credits === 1 ? "" : "s") +
-              " and you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up, or ?model off for standard replies."
+            ? "Repo tasks with " + proModel.label + " reserve up to " + proRequired + " Pro credits (charged by actual model calls and reply length, from " + proModel.baseCredits + " per call) and you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up."
+            : proModel.label + " replies reserve " + proRequired + " Pro credits and charge by reply length (from " + proModel.baseCredits + ") — you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up, or ?model off for standard replies."
         });
       }
     } else if (record.balance <= 0) {
@@ -1487,7 +1513,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         taskType = "general";
       }
     }
-    var cost = proModel ? proModel.credits : botCreditsForTask(taskType);
+    var cost = proModel ? (proModel.baseCredits || 1) : botCreditsForTask(taskType);
     if (!proModel && record.balance < cost) {
       return json({
         noCredits: true,
@@ -1505,7 +1531,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var reply = chatResult && chatResult.reply;
     if (!reply) return json({ error: "Nymbot returned an empty response" }, 500);
-    if (proModel && chatResult.modelCalls > 1) cost = proModel.credits * chatResult.modelCalls;
+    if (proModel) {
+      // Charge by what was actually generated; estimate from reply size when a
+      // transport returns no usage. Never exceed the reserved amount.
+      var outTok = chatResult.outputTokens || Math.ceil(String(reply).length / 4);
+      cost = Math.min(botProCost(proModel, chatResult.modelCalls || 1, outTok), proRequired);
+    }
     // Atomic spend (re-checks balance under the ledger lock so concurrent
     // messages can't overspend). Falls back to a direct write only if the
     // ledger binding is absent.
@@ -2237,7 +2268,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.71.489 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.71.490 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3081,7 +3112,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.71.489")
+  // Prefix match (e.g. "3.61" matches "3.71.490")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3136,7 +3167,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.71.489", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.71.490", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

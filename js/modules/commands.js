@@ -400,7 +400,7 @@ Object.assign(NYM.prototype, {
                 base: `${cmd} `,
                 remainder: rest,
                 entries: (this._botProModels || []).map(m =>
-                    [m.key, `${m.label} — ${m.credits} Pro credit${m.credits === 1 ? '' : 's'}/reply`]
+                    [m.key, `${m.label} — ${this._botProPriceLabel(m)}`]
                 ).concat([['off', 'Back to standard multi-model routing']])
             };
         }

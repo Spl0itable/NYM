@@ -462,10 +462,10 @@ Object.assign(NYM.prototype, {
 
     _botProCreditPricingNote() {
         const models = (this._botProModels || []).map(m =>
-            `${this.escapeHtml(m.label)} (<strong>${m.credits} credit${m.credits === 1 ? '' : 's'}</strong>)`).join(' · ');
+            `${this.escapeHtml(m.label)} (<strong>${m.max > m.credits ? 'from ' : ''}${m.credits} credit${m.credits === 1 ? '' : 's'}</strong>)`).join(' · ');
         return [
             '<strong>Pro credits</strong> unlock replies from a frontier model you pick with <code>?model</code> in the Nymbot chat.',
-            'Per reply: ' + models + '.',
+            'Per reply: ' + models + ' — long replies scale with length.',
             'Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.'
         ].join('<br>');
     },
@@ -506,7 +506,7 @@ Object.assign(NYM.prototype, {
             return;
         }
         est.textContent = isPro
-            ? `${sats.toLocaleString()} sats = ${credits} Pro credit${credits === 1 ? '' : 's'} (1-6 per reply depending on model)`
+            ? `${sats.toLocaleString()} sats = ${credits} Pro credit${credits === 1 ? '' : 's'} (replies from 1-2, scaling with length)`
             : `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'} (1/msg, 2 for coding & reasoning)`;
     },
 
