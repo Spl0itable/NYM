@@ -319,9 +319,26 @@ async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
     }
     var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
     if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    if (/fable/.test(modelId)) nativeHeaders["cf-aig-zdr"] = "false";
+    if (/fable/.test(modelId)) {
+      nativeHeaders["cf-aig-zdr"] = "false";
+      if (env.ANTHROPIC_API_KEY) nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
+    }
     var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
-    return proHttpChat(nativeUrl, nativeHeaders, Object.assign({ model: proAnthropicModelId(modelId) }, nativeReq));
+    var nativeBody = Object.assign({ model: proAnthropicModelId(modelId) }, nativeReq);
+    try {
+      return await proHttpChat(nativeUrl, nativeHeaders, nativeBody);
+    } catch (e) {
+      if (/x-api-key/i.test(String((e && e.message) || "")) && proBindingAvailable(env)) {
+        var bound;
+        try {
+          bound = await env.AI.run(modelId, nativeReq, { gateway: { id: env.AI_GATEWAY_NAME } });
+        } catch (e2) {
+          throw new Error("Pro model request failed: " + String((e2 && e2.message) || e2).slice(0, 300));
+        }
+        return proCheckedMessage(bound);
+      }
+      throw e;
+    }
   }
 
   var req = { messages: messages };
