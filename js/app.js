@@ -4207,7 +4207,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.71.490';
+const NYMCHAT_VERSION = 'v3.71.491';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6643,7 +6643,7 @@ async function applyNostrSettings(s) {
                 nym.pmConversations.delete(pk);
                 const convKey = nym.getPMConversationKey(pk);
                 nym.pmMessages.delete(convKey);
-                const item = document.querySelector(`[data-pubkey="${pk}"]`);
+                const item = document.getElementById('pmList')?.querySelector(`.pm-item[data-pubkey="${pk}"]`);
                 if (item) item.remove();
             }
         }

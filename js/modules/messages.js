@@ -799,9 +799,9 @@ Object.assign(NYM.prototype, {
                     } else if (message.deliveryStatus === 'delivered') {
                         deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
                     } else if (message.deliveryStatus === 'failed') {
-                        deliveryCheckmark = `<span class="delivery-status failed nm-pointer" title="Failed to deliver - click to retry" data-retry-event-id="${message.id}">!</span>`;
+                        deliveryCheckmark = `<span class="delivery-status failed nm-pointer" title="Failed to send - click to retry" data-retry-event-id="${message.id}">!</span>`;
                     } else if (message.deliveryStatus === 'sent') {
-                        deliveryCheckmark = '<span class="delivery-status sent" title="Sent">○</span>';
+                        deliveryCheckmark = '<span class="delivery-status sent" title="Sent">✓</span>';
                     }
                 }
             }

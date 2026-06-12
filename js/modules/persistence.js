@@ -216,6 +216,10 @@
             if (m.timestamp && !(m.timestamp instanceof Date)) {
                 try { m.timestamp = new Date(m.timestamp); } catch (_) { }
             }
+            // Legacy false positive: a real event id means it reached the relays
+            if (m.deliveryStatus === 'failed' && m.id && !String(m.id).startsWith('failed-')) {
+                m.deliveryStatus = 'sent';
+            }
             return m;
         },
 

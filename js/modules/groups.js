@@ -2460,8 +2460,14 @@ Object.assign(NYM.prototype, {
             item.dataset.groupId = groupId;
             item.dataset.lastMessageTime = timestamp;
             item.innerHTML = this._buildGroupItemHTML(groupId, name, allMembers);
+            item.dataset.groupSig = this._groupItemSignature(this.groupConversations.get(groupId));
             item.dataset.action = 'openGroupItem';
             this.insertPMInOrder(item, pmList);
+
+            // Show any unread count persisted from a previous session
+            const convKey = this.getGroupConversationKey(groupId);
+            const unread = this.unreadCounts.get(convKey) || 0;
+            if (unread > 0) this._renderUnreadBadge(convKey, unread);
 
             // Apply active search filter
             const searchInput = document.getElementById('pmSearch');
@@ -2902,6 +2908,9 @@ Object.assign(NYM.prototype, {
             if (item.dataset.groupSig !== sig) {
                 item.innerHTML = this._buildGroupItemHTML(groupId, group.name, group.members);
                 item.dataset.groupSig = sig;
+                // Rebuilding innerHTML resets the unread badge — restore it
+                const convKey = this.getGroupConversationKey(groupId);
+                this._renderUnreadBadge(convKey, this.unreadCounts.get(convKey) || 0);
             }
             item.dataset.action = 'openGroupItem';
         }

@@ -1500,17 +1500,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _renderUnreadBadge(channel, count) {
         let item = null;
+        const pmList = document.getElementById('pmList');
+        const channelList = document.getElementById('channelList');
         if (channel.startsWith('pm-')) {
             const keys = channel.substring(3).split('-');
-            const otherPubkey = keys.find(k => k !== this.pubkey);
-            if (otherPubkey) item = document.querySelector(`[data-pubkey="${otherPubkey}"]`);
+            const otherPubkey = keys.find(k => k !== this.pubkey) || keys[0];
+            if (otherPubkey) item = pmList?.querySelector(`.pm-item[data-pubkey="${otherPubkey}"]`);
         } else if (channel.startsWith('group-')) {
             const groupId = channel.substring(6);
-            item = document.querySelector(`[data-group-id="${groupId}"]`);
+            item = pmList?.querySelector(`[data-group-id="${groupId}"]`);
         } else if (channel.startsWith('#')) {
-            item = document.querySelector(`[data-geohash="${channel.substring(1)}"]`);
+            item = channelList?.querySelector(`[data-geohash="${channel.substring(1)}"]`);
         } else {
-            item = document.querySelector(`[data-channel="${channel}"][data-geohash=""]`);
+            item = channelList?.querySelector(`[data-channel="${channel}"][data-geohash=""]`);
         }
         if (!item) return;
         const badge = item.querySelector('.unread-badge');
@@ -1646,7 +1648,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     clearUnreadCount(channel) {
         if (!this.channelLastRead) this.channelLastRead = new Map();
-        let lastTs = Math.floor(Date.now() / 1000);
+        let lastTs = Math.max(Math.floor(Date.now() / 1000), this.channelLastRead.get(channel) || 0);
         let messages;
         if (channel.startsWith('pm-') || channel.startsWith('group-')) {
             messages = this.pmMessages && this.pmMessages.get(channel);
@@ -1772,9 +1774,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.unreadCounts) for (const k of this.unreadCounts.keys()) keys.add(k);
         for (const k of keys) {
             if (!k) continue;
-            const count = this._recomputeUnreadCount(k);
-            if (count > 0) this.unreadCounts.set(k, count);
-            else this.unreadCounts.delete(k);
+            const store = (k.startsWith('pm-') || k.startsWith('group-')) ? this.pmMessages : this.messages;
+            const cached = store && store.get(k);
+            let count;
+            if (Array.isArray(cached) && cached.length > 0) {
+                count = this._recomputeUnreadCount(k);
+                if (count > 0) this.unreadCounts.set(k, count);
+                else this.unreadCounts.delete(k);
+            } else {
+                // No cached messages to derive from — keep the persisted count
+                count = this.unreadCounts.get(k) || 0;
+            }
             this._renderUnreadBadge(k, count);
         }
         this._persistUnreadCounts(true);

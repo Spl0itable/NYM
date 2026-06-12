@@ -118,27 +118,9 @@ Object.assign(NYM.prototype, {
             // Only retry if enough time has passed since last attempt
             if (now - pending.lastAttempt < this.dmRetryCheckMs) continue;
 
-            // Check if max attempts reached
+            // Max re-sends reached: stop retrying but stay 'sent' — a missing
+            // receipt means the recipient is offline, not a send failure
             if (pending.attempts >= pending.maxAttempts) {
-                // Mark as failed in the message list
-                if (msgs) {
-                    const msg = msgs.find(m => m.id === eventId);
-                    if (msg && msg.deliveryStatus === 'sent') {
-                        msg.deliveryStatus = 'failed';
-                        // Update the failed checkmark in-place
-                        const msgEl = this.findMessageElementAnywhere(eventId);
-                        if (msgEl) {
-                            let statusEl = msgEl.querySelector('.delivery-status');
-                            if (statusEl) {
-                                statusEl.className = 'delivery-status failed';
-                                statusEl.title = 'Failed to deliver - click to retry';
-                                statusEl.textContent = '!';
-                                statusEl.style.cursor = 'pointer';
-                                statusEl.onclick = () => this.manualRetryDM(eventId);
-                            }
-                        }
-                    }
-                }
                 this.pendingDMs.delete(eventId);
                 continue;
             }
@@ -153,31 +135,24 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Manual retry for a failed DM (triggered by clicking the ! indicator)
+    // Manual retry for a failed DM: drop the failed bubble and re-send fresh
     manualRetryDM(eventId) {
-        const msgs = this.pmMessages.get(this.getPMConversationKey(this.currentPM));
+        if (!this.currentPM) return;
+        const conversationKey = this.getPMConversationKey(this.currentPM);
+        const msgs = this.pmMessages.get(conversationKey);
         if (!msgs) return;
-        const msg = msgs.find(m => m.id === eventId);
-        if (!msg) return;
+        const idx = msgs.findIndex(m => m.id === eventId);
+        if (idx === -1) return;
+        const msg = msgs[idx];
+        const recipient = msg.conversationPubkey || this.currentPM;
 
-        // Re-send the original message content
-        msg.deliveryStatus = 'sent';
+        msgs.splice(idx, 1);
+        this.channelDOMCache.delete(conversationKey);
+        this.persistPMMessages(conversationKey);
+        const msgEl = this.findMessageElementAnywhere(msg.nymMessageId || msg.id);
+        if (msgEl) msgEl.remove();
 
-        // Update UI immediately (live DOM or any cached fragment)
-        const msgEl = this.findMessageElementAnywhere(eventId);
-        if (msgEl) {
-            let statusEl = msgEl.querySelector('.delivery-status');
-            if (statusEl) {
-                statusEl.className = 'delivery-status sent';
-                statusEl.title = 'Sent';
-                statusEl.textContent = '○';
-                statusEl.style.cursor = '';
-                statusEl.onclick = null;
-            }
-        }
-
-        // Re-send by composing a new PM to the same recipient
-        this.sendNIP17PM(msg.content, msg.conversationPubkey);
+        this.sendPM(msg.content, recipient);
     },
 
     // Persist the newest gift-wrap timestamp we've processed
@@ -2696,6 +2671,11 @@ Object.assign(NYM.prototype, {
 
             this.insertPMInOrder(item, pmList);
 
+            // Show any unread count persisted from a previous session
+            const convKey = this.getPMConversationKey(pubkey);
+            const unread = this.unreadCounts.get(convKey) || 0;
+            if (unread > 0) this._renderUnreadBadge(convKey, unread);
+
             // Hide new item if it doesn't match active search filter
             const searchInput = document.getElementById('pmSearch');
             if (searchInput && searchInput.value.trim().length > 0) {
@@ -2791,7 +2771,7 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
         // Remove from UI
-        const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
+        const item = document.getElementById('pmList')?.querySelector(`.pm-item[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
 
         // If currently viewing this PM, switch to bar
@@ -2818,7 +2798,7 @@ Object.assign(NYM.prototype, {
         try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
         try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes))); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        const item = document.querySelector(`[data-pubkey="${pubkey}"]`);
+        const item = document.getElementById('pmList')?.querySelector(`.pm-item[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
         if (this.inPMMode && this.currentPM === pubkey) {
             this.switchChannel('nymchat', 'nymchat');
