@@ -286,8 +286,6 @@ async function proHttpChat(url, headers, body) {
   var data = null;
   try { data = JSON.parse(raw); } catch (e) { }
   if (!res.ok) {
-    // Provider-style ({error:{message}}), Cloudflare envelope ({errors:[..]}),
-    // or non-JSON body — surface whichever detail exists.
     var detail = (data && data.error && (data.error.message || data.error)) ||
       (data && Array.isArray(data.errors) && data.errors[0] &&
         ((data.errors[0].code ? data.errors[0].code + ": " : "") + data.errors[0].message)) ||
@@ -299,37 +297,41 @@ async function proHttpChat(url, headers, body) {
   return proCheckedMessage(data);
 }
 
-// Anthropic's own API names versions with hyphens (claude-haiku-4-5), unlike
-// Cloudflare's catalog ids (anthropic/claude-haiku-4.5).
 function proAnthropicModelId(catalogId) {
   return String(catalogId).replace(/^anthropic\//, "").replace(/(\d)\.(\d)/g, "$1-$2");
 }
 
-async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
-  var isAnthropic = /^anthropic\//.test(modelId);
-  var req;
-  if (isAnthropic) {
-    req = anthropicizeRequest(messages, maxTokens, tools);
-  } else {
-    req = { messages: messages };
-    if (tools && tools.length) req.tools = tools;
-    // OpenAI's newest models reject max_tokens in favor of this.
-    if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
-    else req.max_tokens = maxTokens;
+function proAnthropicNativeUrl(env) {
+  var acct = env.AI_GATEWAY_ACCOUNT_ID || "";
+  var name = env.AI_GATEWAY_NAME || "";
+  var fromGateway = /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/([^/]+)\/([^/]+)\//.exec(env.AI_GATEWAY_URL || "");
+  if (fromGateway) {
+    if (!acct) acct = fromGateway[1];
+    if (!name) name = fromGateway[2];
   }
+  var fromApi = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/([^/]+)\//.exec(env.AI_GATEWAY_URL || "");
+  if (fromApi && !acct) acct = fromApi[1];
+  if (!acct || !name) return null;
+  return "https://gateway.ai.cloudflare.com/v1/" + acct + "/" + name + "/anthropic/v1/messages";
+}
 
-  // The catalog/compat translation drops Anthropic message content (the reply
-  // comes back with usage counted but no content field), so Claude models go
-  // through the gateway's provider-native endpoint, which Unified Billing
-  // supports via cf-aig-authorization. Native request, native response, and
-  // tools/thinking work without translation.
-  if (isAnthropic && !env.AI_GATEWAY_URL && env.AI_GATEWAY_ACCOUNT_ID && env.AI_GATEWAY_NAME) {
+async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
+  if (/^anthropic\//.test(modelId)) {
+    var nativeUrl = proAnthropicNativeUrl(env);
+    if (!nativeUrl) {
+      throw new Error("Claude Pro models need AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_NAME configured on the worker (Cloudflare's OpenAI-compat translation drops Anthropic replies, so they must use the gateway's native endpoint).");
+    }
     var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
     if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    var nativeUrl = "https://gateway.ai.cloudflare.com/v1/" + env.AI_GATEWAY_ACCOUNT_ID +
-      "/" + env.AI_GATEWAY_NAME + "/anthropic/v1/messages";
-    return proHttpChat(nativeUrl, nativeHeaders, Object.assign({ model: proAnthropicModelId(modelId) }, req));
+    var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
+    return proHttpChat(nativeUrl, nativeHeaders, Object.assign({ model: proAnthropicModelId(modelId) }, nativeReq));
   }
+
+  var req = { messages: messages };
+  if (tools && tools.length) req.tools = tools;
+  // OpenAI's newest models reject max_tokens in favor of this.
+  if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
+  else req.max_tokens = maxTokens;
 
   if (!env.AI_GATEWAY_URL && proBindingAvailable(env)) {
     var bound;
