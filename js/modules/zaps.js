@@ -462,10 +462,10 @@ Object.assign(NYM.prototype, {
 
     _botProCreditPricingNote() {
         const models = (this._botProModels || []).map(m =>
-            `${this.escapeHtml(m.label)} <strong>${m.credits}</strong>`).join(' · ');
+            `${this.escapeHtml(m.label)} (<strong>${m.credits} credit${m.credits === 1 ? '' : 's'}</strong>)`).join(' · ');
         return [
             '<strong>Pro credits</strong> unlock replies from a frontier model you pick with <code>?model</code> in the Nymbot chat.',
-            'Per reply: ' + models + ' Pro credit(s).',
+            'Per reply: ' + models + '.',
             'Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.'
         ].join('<br>');
     },

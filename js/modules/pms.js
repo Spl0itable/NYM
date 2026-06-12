@@ -2277,9 +2277,9 @@ Object.assign(NYM.prototype, {
             return;
         }
         if (typeof std !== 'number') return;
-        let text = `${std} credit${std === 1 ? '' : 's'}`;
-        if (typeof pro === 'number' && pro > 0) text += ` · ${pro} Pro`;
-        el.textContent = text + ' left';
+        el.textContent = (typeof pro === 'number' && pro > 0)
+            ? `${std} standard · ${pro} Pro credits left`
+            : `${std} credit${std === 1 ? '' : 's'} left`;
     },
 
     // Paint the header credit indicator for the open Nymbot chat, then refresh it

@@ -270,8 +270,11 @@ Object.assign(NYM.prototype, {
         };
         // PM-only Nymbot commands — surfaced only inside the Nymbot private chat
         this.botPMCommands = {
-            '?buy': { desc: 'Buy Nymbot private message credits' },
-            '?balance': { desc: 'Check your Nymbot credit balance' },
+            '?help': { desc: 'Guide to premium, Pro models & git repos (free)' },
+            '?model': { desc: 'Pick a Pro frontier model (?model off for standard)' },
+            '?git': { desc: 'Connect a git repo to Pro replies (GitHub/GitLab/Gitea)' },
+            '?buy': { desc: 'Buy Nymbot credits (Standard/Pro switch)' },
+            '?balance': { desc: 'Check your standard & Pro credit balances' },
             '?gift': { desc: 'Gift Nymbot credits to another user' },
             '?transfer': { desc: 'Transfer ALL your Nymbot credits to another pubkey' },
             '?clear': { desc: 'Clear Nymbot chat history and start fresh' },
@@ -388,14 +391,67 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Deeper completions shown after "?model " / "?git " (and "?git provider ")
+    // in the bot PM. Returns { base, remainder, entries } where base is the
+    // already-typed prefix each completed entry is appended to.
+    _botPMSubcommands(cmd, rest) {
+        if (cmd === '?model') {
+            return {
+                base: `${cmd} `,
+                remainder: rest,
+                entries: (this._botProModels || []).map(m =>
+                    [m.key, `${m.label} — ${m.credits} Pro credit${m.credits === 1 ? '' : 's'}/reply`]
+                ).concat([['off', 'Back to standard multi-model routing']])
+            };
+        }
+        if (cmd === '?git') {
+            const providerArg = /^provider\s+(.*)$/.exec(rest);
+            if (providerArg) {
+                return {
+                    base: `${cmd} provider `,
+                    remainder: providerArg[1],
+                    entries: Object.entries(this._gitProviders || {}).map(([key, p]) =>
+                        [key, `${p.label} — default host ${p.host}; append a custom host for self-hosted`])
+                };
+            }
+            return {
+                base: `${cmd} `,
+                remainder: rest,
+                entries: [
+                    ['provider', 'Choose github, gitlab, or gitea [host]'],
+                    ['token', 'Save your personal access token'],
+                    ['repos', 'List repos the token can access'],
+                    ['repo', 'Select working repo (owner/name [branch])'],
+                    ['branch', 'Set the working branch'],
+                    ['writes on', 'Allow commits, branches & pull requests'],
+                    ['writes off', 'Back to read-only repo access'],
+                    ['off', 'Disconnect the repo (keeps the token)'],
+                    ['disconnect', 'Remove token and repo from this device']
+                ]
+            };
+        }
+        return null;
+    },
+
     showBotCommandPalette(input) {
         const palette = document.getElementById('commandPalette');
         // The premium Nymbot private chat only supports the PM commands — the
         // public-channel bot commands aren't wired there, so don't list them.
         const inBotPM = this.inPMMode && this.currentPM && this.isVerifiedBot(this.currentPM);
         const available = inBotPM ? this.botPMCommands : this.botCommands;
-        const matchingCommands = Object.entries(available)
+        let matchingCommands = Object.entries(available)
             .filter(([cmd]) => cmd.startsWith(input.toLowerCase()));
+        // Once a multi-step command plus a space is typed (e.g. "?git "),
+        // surface its subcommands so users don't have to memorize them.
+        if (inBotPM && matchingCommands.length === 0) {
+            const m = /^(\?\w+)\s+(.*)$/.exec(input.toLowerCase());
+            const ctx = m && this._botPMSubcommands(m[1], m[2]);
+            if (ctx) {
+                matchingCommands = ctx.entries
+                    .filter(([sub]) => sub.startsWith(ctx.remainder))
+                    .map(([sub, desc]) => [`${ctx.base}${sub}`, { desc }]);
+            }
+        }
 
         if (matchingCommands.length > 0) {
             palette.innerHTML = matchingCommands.map(([cmd, info], index) => `
