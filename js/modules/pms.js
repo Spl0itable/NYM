@@ -1658,7 +1658,7 @@ Object.assign(NYM.prototype, {
         if (typeof pro === 'number') statusBits.push(`${pro} Pro credit${pro === 1 ? '' : 's'}`);
         statusBits.push(proModel ? `Pro model: ${this.escapeHtml(proModel.label)}` : 'Pro model: off (standard routing)');
         if (git && git.token && git.repo) statusBits.push(`repo: ${this.escapeHtml(git.repo)}${git.allowWrites ? ' (writes on)' : ' (read-only)'}`);
-        this.displaySystemMessage([
+        this._displayBotInfoMessage([
             '<strong>📖 Nymbot premium guide</strong>',
             `<em>You right now: ${statusBits.join(' · ')}.</em>`,
             '',
@@ -1683,11 +1683,14 @@ Object.assign(NYM.prototype, {
             'Start a message with <code>!</code> for a one-off answer that ignores history · <code>?clear</code> wipes the conversation · quote-reply any message to ask a follow-up about it.',
             '',
             'This guide is free — type <code>?help</code> anytime.'
-        ].join('<br>'), 'system', { html: true });
+        ].join('<br>'), 'nymbot-help-' + Date.now());
     },
 
-    // Render the Nymbot welcome as a message bubble from Nymbot itself
-    _displayBotWelcomeMessage() {
+    // Render transient bot-styled info bubbles (welcome, ?help guide, command
+    // outputs) that look like a message from Nymbot but are local-only and
+    // never persisted.
+    _displayBotInfoMessage(html, messageId) {
+        if (!messageId) messageId = 'nymbot-info-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
         const container = document.getElementById('messagesContainer');
         if (!container || !this.verifiedBot) return;
         const pubkey = this.verifiedBot.pubkey;
@@ -1712,17 +1715,22 @@ Object.assign(NYM.prototype, {
         const el = document.createElement('div');
         el.className = 'message pm';
         el.dataset.pubkey = pubkey;
-        el.dataset.messageId = 'nymbot-welcome';
+        el.dataset.messageId = messageId;
         el.dataset.author = botNym;
         el.dataset.timestamp = now.getTime();
         el.innerHTML = `
     ${time ? `<span class="message-time ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${time}</span>` : ''}
     <span class="message-author ${userColorClass}"><span class="bubble-time" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}</span><span class="nym-bracket">&gt;</span></span>
-    <span class="message-content ${userColorClass}">${this._botWelcomeHtml()}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span></span>
+    <span class="message-content ${userColorClass}">${html}<span class="bubble-time-inner" data-full-time="${fullTimestamp}" title="${fullTimestamp}">${bubbleTime}</span></span>
 `;
         container.appendChild(el);
         this._updateBubbleGrouping(el);
         this._scheduleScrollToBottom();
+    },
+
+    // Render the Nymbot welcome as a message bubble from Nymbot itself
+    _displayBotWelcomeMessage() {
+        this._displayBotInfoMessage(this._botWelcomeHtml(), 'nymbot-welcome');
     },
 
     // Slightly-edited welcome used for the proactive first-contact PM that brand-new
@@ -2025,13 +2033,13 @@ Object.assign(NYM.prototype, {
         if (!arg) {
             const lines = this._botProModels.map(m =>
                 `• <code>${m.key}</code>${current && current.key === m.key ? ' ✓' : ''} — ${this.escapeHtml(m.label)}, ${m.credits} Pro credit${plural(m.credits)}/reply`);
-            this.displaySystemMessage([
+            this._displayBotInfoMessage([
                 current
                     ? `Nymbot Pro model: <strong>${this.escapeHtml(current.label)}</strong> (${current.credits} Pro credit${plural(current.credits)} per reply).`
                     : 'Nymbot Pro is off — replies use standard multi-model routing and standard credits.',
                 ...lines,
                 'Use <code>?model &lt;name&gt;</code> to select one, or <code>?model off</code> for standard routing. Pro credits: <code>?buy</code> → Pro.'
-            ].join('<br>'), 'system', { html: true });
+            ].join('<br>'));
             return;
         }
         if (arg === 'off' || arg === 'standard' || arg === 'none') {
@@ -2174,7 +2182,7 @@ Object.assign(NYM.prototype, {
             }
             if (!res.data.length) { sys(`The token can't see any repos. Grant it repository access on ${provInfo.label}.`); return; }
             const lines = res.data.map(r => `• <code>${this.escapeHtml(this._gitRepoFullName(cfg, r) || '')}</code>${(r.private || r.visibility === 'private') ? ' 🔒' : ''}`);
-            sys(['Repos this token can access:', ...lines, 'Select one with <code>?git repo owner/name [branch]</code>.'].join('<br>'));
+            this._displayBotInfoMessage(['Repos this token can access:', ...lines, 'Select one with <code>?git repo owner/name [branch]</code>.'].join('<br>'));
             return;
         }
 
@@ -2238,7 +2246,7 @@ Object.assign(NYM.prototype, {
         }
 
         const proModel = this._getBotProModel();
-        sys([
+        this._displayBotInfoMessage([
             '<strong>Nymbot × Git</strong> — let Pro replies work inside one of your repos, Claude Code-style: it reads your actual files and, if you allow writes, commits to a branch (or directly) and opens pull/merge requests. Supports GitHub, GitLab, and Gitea/Forgejo (incl. Codeberg and self-hosted).',
             `Provider: <strong>${provInfo.label}</strong> at <strong>${this.escapeHtml(cfg.host || provInfo.host)}</strong> — change with <code>?git provider github|gitlab|gitea [host]</code>`,
             `Token: ${cfg.token ? (cfg.login ? `connected as <strong>@${this.escapeHtml(cfg.login)}</strong>` : 'saved') : `not set — <code>?git token &lt;token&gt;</code> (${provInfo.tokenHint})`}`,
@@ -2445,7 +2453,8 @@ Object.assign(NYM.prototype, {
             if (display) {
                 const b = data.balance || 0;
                 const p = data.proBalance || 0;
-                this.displaySystemMessage(`Nymbot credit balance: ${b} standard · ${p} Pro.` + (b <= 0 && p <= 0 ? ' Type ?buy to purchase more.' : ''));
+                this._displayBotInfoMessage(`Your balance: <strong>${b}</strong> standard credit${b === 1 ? '' : 's'} · <strong>${p}</strong> Pro credit${p === 1 ? '' : 's'}.` +
+                    (b <= 0 && p <= 0 ? ' Type <code>?buy</code> to purchase more.' : ''));
             }
             return data.balance;
         } catch (e) {
@@ -2953,7 +2962,8 @@ Object.assign(NYM.prototype, {
             container.innerHTML = '';
             this.displaySystemMessage('Start of private message');
             if (this.isVerifiedBot(this.currentPM)) {
-                if (!skipBotWelcome) {
+                // A ?clear-ed chat is empty but not new — don't re-welcome.
+                if (!skipBotWelcome && !this._getBotPmClearedAt()) {
                     this._displayBotWelcomeMessage();
                 }
                 this._checkBotCredits(false);
