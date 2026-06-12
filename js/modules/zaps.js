@@ -338,7 +338,9 @@ Object.assign(NYM.prototype, {
 
     // Preset purchase tiers for the Nymbot credit modal
     _botCreditTiers: [100, 500, 1000, 2500, 5000, 10000],
-    _botProCreditPresets: [500, 1000, 5000, 10000, 20000, 50000],
+    // Smallest Pro preset (2K sats = 20 credits) clears the largest per-message
+    // reserve (Claude Fable 5 at 16), so any purchase can use any model.
+    _botProCreditPresets: [2000, 5000, 10000, 20000, 50000, 100000],
 
     // Capture the default sats buttons once so regular zaps can restore them
     _captureDefaultZapAmounts() {
@@ -505,9 +507,13 @@ Object.assign(NYM.prototype, {
             est.textContent = `Amount too small to buy any ${isPro ? 'Pro ' : ''}credits.`;
             return;
         }
-        est.textContent = isPro
-            ? `${sats.toLocaleString()} sats = ${credits} Pro credit${credits === 1 ? '' : 's'} (replies from 1-2, scaling with length)`
-            : `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'} (1/msg, 2 for coding & reasoning)`;
+        if (isPro) {
+            const maxReserve = Math.max(...(this._botProModels || []).map(m => m.max || m.credits || 1));
+            est.textContent = `${sats.toLocaleString()} sats = ${credits} Pro credit${credits === 1 ? '' : 's'} (replies from 1-2, scaling with length)` +
+                (credits < maxReserve ? ` — note: the largest model reserves up to ${maxReserve} per reply` : '');
+            return;
+        }
+        est.textContent = `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'} (1/msg, 2 for coding & reasoning)`;
     },
 
     // Open the zap modal in "buy Nymbot credits" mode. tier preselects the
