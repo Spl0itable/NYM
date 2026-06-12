@@ -149,7 +149,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.71.486";
+var NYMCHAT_VERSION = "3.71.487";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -177,28 +177,17 @@ var BOT_PM_MAX_TOKENS = {
 // GPT-5.1 $1.25/$10).
 var BOT_PRO_SATS_PER_CREDIT = 100;
 var BOT_PRO_MODELS = {
-  "claude-fable": { label: "Claude Fable 5", model: "anthropic/claude-fable-5", credits: 6, maxTokens: 4096 },
-  "claude-opus": { label: "Claude Opus 4.8", model: "anthropic/claude-opus-4-8", credits: 3, maxTokens: 4096 },
-  "claude-sonnet": { label: "Claude Sonnet 4.6", model: "anthropic/claude-sonnet-4-6", credits: 2, maxTokens: 4096 },
-  "claude-haiku": { label: "Claude Haiku 4.5", model: "anthropic/claude-haiku-4-5", credits: 1, maxTokens: 4096 },
-  "gpt-5": { label: "GPT-5.1", model: "openai/gpt-5.1", credits: 2, maxTokens: 4096 },
-  "gpt-5-mini": { label: "GPT-5 mini", model: "openai/gpt-5-mini", credits: 1, maxTokens: 4096 },
-  "codex": { label: "GPT-5.1 Codex", model: "openai/gpt-5.1-codex", credits: 2, maxTokens: 4096 }
+  "claude-fable": { label: "Claude Fable 5", model: "anthropic/claude-fable-5", credits: 6, maxTokens: 8192 },
+  "claude-opus": { label: "Claude Opus 4.8", model: "anthropic/claude-opus-4.8", credits: 3, maxTokens: 8192 },
+  "claude-sonnet": { label: "Claude Sonnet 4.6", model: "anthropic/claude-sonnet-4.6", credits: 2, maxTokens: 8192 },
+  "claude-haiku": { label: "Claude Haiku 4.5", model: "anthropic/claude-haiku-4.5", credits: 1, maxTokens: 4096 },
+  "gpt-5": { label: "GPT-5.1", model: "openai/gpt-5.1", credits: 2, maxTokens: 8192 },
+  "gpt-5-mini": { label: "GPT-5 mini", model: "openai/gpt-5-mini", credits: 1, maxTokens: 8192 },
+  "codex": { label: "GPT-5.1 Codex", model: "openai/gpt-5.1-codex", credits: 2, maxTokens: 8192 }
 };
 
-// Two supported endpoints:
-// - Unified Billing (no provider keys): the Cloudflare API chat-completions
-//   endpoint, authed with a Cloudflare API token in the Authorization header.
-//   Built automatically when only AI_GATEWAY_ACCOUNT_ID is set.
-// - BYOK gateway: the gateway-host /compat endpoint, authed with the gateway
-//   token via cf-aig-authorization. Built from ACCOUNT_ID + NAME.
-// AI_GATEWAY_URL overrides either; the auth header is chosen by host.
 function proGatewayUrl(env) {
   if (env.AI_GATEWAY_URL) return env.AI_GATEWAY_URL;
-  if (env.AI_GATEWAY_ACCOUNT_ID && env.AI_GATEWAY_NAME) {
-    return "https://gateway.ai.cloudflare.com/v1/" + env.AI_GATEWAY_ACCOUNT_ID +
-      "/" + env.AI_GATEWAY_NAME + "/compat/chat/completions";
-  }
   if (env.AI_GATEWAY_ACCOUNT_ID) {
     return "https://api.cloudflare.com/client/v4/accounts/" + env.AI_GATEWAY_ACCOUNT_ID +
       "/ai/v1/chat/completions";
@@ -206,7 +195,57 @@ function proGatewayUrl(env) {
   return null;
 }
 
+function proBindingAvailable(env) {
+  return !!(env.AI && typeof env.AI.run === "function" && env.AI_GATEWAY_NAME);
+}
+
+function proConfigured(env) {
+  return !!(proBindingAvailable(env) || proGatewayUrl(env));
+}
+
+// Normalize the model reply across transports/providers: OpenAI chat
+// completions, Anthropic-native content blocks, or Workers AI {response}.
+function proNormalizeMessage(resp) {
+  if (!resp || typeof resp !== "object") return null;
+  if (resp.choices && resp.choices[0] && resp.choices[0].message) return resp.choices[0].message;
+  if (Array.isArray(resp.content)) {
+    var text = "";
+    var toolCalls = [];
+    for (var i = 0; i < resp.content.length; i++) {
+      var block = resp.content[i];
+      if (!block) continue;
+      if (block.type === "text") text += block.text || "";
+      else if (block.type === "thinking" && block.thinking) text = "<think>\n" + block.thinking + "\n</think>\n" + text;
+      else if (block.type === "tool_use") {
+        toolCalls.push({ id: block.id, function: { name: block.name, arguments: JSON.stringify(block.input || {}) } });
+      }
+    }
+    var normalized = { content: text };
+    if (toolCalls.length) normalized.tool_calls = toolCalls;
+    return normalized;
+  }
+  if (typeof resp.response === "string") return { content: resp.response };
+  return null;
+}
+
 async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
+  var req = { messages: messages };
+  if (tools && tools.length) req.tools = tools;
+  // OpenAI's newest models reject max_tokens; Anthropic requires it.
+  if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
+  else req.max_tokens = maxTokens;
+
+  if (!env.AI_GATEWAY_URL && proBindingAvailable(env)) {
+    var bound;
+    try {
+      bound = await env.AI.run(modelId, req, { gateway: { id: env.AI_GATEWAY_NAME } });
+    } catch (e) {
+      throw new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
+    }
+    return proNormalizeMessage(bound);
+  }
+
+  var body = Object.assign({ model: modelId }, req);
   var url = proGatewayUrl(env);
   if (!url) throw new Error("Nymbot Pro is not configured.");
   var headers = { "Content-Type": "application/json" };
@@ -217,19 +256,22 @@ async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
       headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
     }
   }
-  var body = { model: modelId, messages: messages };
-  if (tools && tools.length) body.tools = tools;
-  // OpenAI's newest models reject max_tokens; Anthropic requires it.
-  if (/^openai\//.test(modelId)) body.max_completion_tokens = maxTokens;
-  else body.max_tokens = maxTokens;
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body) });
+  var raw = await res.text();
   var data = null;
-  try { data = await res.json(); } catch (e) { }
+  try { data = JSON.parse(raw); } catch (e) { }
   if (!res.ok) {
-    var detail = (data && data.error && (data.error.message || data.error)) || ("HTTP " + res.status);
-    throw new Error("Pro model request failed: " + String(detail).slice(0, 200));
+    // Provider-style ({error:{message}}), Cloudflare envelope ({errors:[..]}),
+    // or non-JSON body — surface whichever detail exists.
+    var detail = (data && data.error && (data.error.message || data.error)) ||
+      (data && Array.isArray(data.errors) && data.errors[0] &&
+        ((data.errors[0].code ? data.errors[0].code + ": " : "") + data.errors[0].message)) ||
+      (raw && raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()) ||
+      "";
+    throw new Error("Pro model request failed: HTTP " + res.status +
+      (detail ? " — " + String(detail).slice(0, 200) : ""));
   }
-  return (data && data.choices && data.choices[0] && data.choices[0].message) || null;
+  return proNormalizeMessage(data);
 }
 
 function proMessageText(msg) {
@@ -1246,7 +1288,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (proModelKey && !proModel) {
       return json({ error: "Unknown Pro model. Type ?model to see the available models." }, 400);
     }
-    if (proModel && !proGatewayUrl(env)) {
+    if (proModel && !proConfigured(env)) {
       return json({ error: "Nymbot Pro is not configured on this server." }, 503);
     }
     var ghConfig = null;
@@ -2086,7 +2128,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.71.486 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.71.487 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -2930,7 +2972,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.71.486")
+  // Prefix match (e.g. "3.61" matches "3.71.487")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -2985,7 +3027,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.71.486", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.71.487", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

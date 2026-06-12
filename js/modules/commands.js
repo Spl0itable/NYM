@@ -493,7 +493,15 @@ Object.assign(NYM.prototype, {
             const input = document.getElementById('messageInput');
             input.value = cmd + ' ';
             input.focus();
-            this.hideCommandPalette();
+            // Programmatic value changes don't fire the input handler, so
+            // re-evaluate the palette: a multi-step ?command immediately shows
+            // its next-level options (typing afterwards re-filters as usual);
+            // anything without deeper options just hides the palette.
+            if (cmd.startsWith('?')) {
+                this.showBotCommandPalette(input.value);
+            } else {
+                this.hideCommandPalette();
+            }
         }
     },
 
