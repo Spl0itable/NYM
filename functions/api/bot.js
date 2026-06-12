@@ -237,10 +237,6 @@ function proNormalizeMessage(resp) {
   return null;
 }
 
-// The gateway validates anthropic/* requests against Anthropic's native
-// schema: system prompt as a top-level field (no "system" role in messages),
-// tool calls/results as content blocks, and Anthropic-format tool defs.
-// Translate our internal OpenAI-style conversation at the transport boundary.
 function anthropicizeRequest(messages, maxTokens, tools) {
   var system = "";
   var out = [];
@@ -323,6 +319,7 @@ async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
     }
     var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
     if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    if (/fable/.test(modelId)) nativeHeaders["cf-aig-zdr"] = "false";
     var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
     return proHttpChat(nativeUrl, nativeHeaders, Object.assign({ model: proAnthropicModelId(modelId) }, nativeReq));
   }
