@@ -62,11 +62,34 @@ async function run() {
   // public path ('/js/app.<hash>.js') -> 'sha256-<base64>' of the served bytes
   const manifestFiles = {};
 
-  // Minify + hash every JS file under js/.
-  for (const file of await walk(path.join(root, 'js'))) {
-    if (!file.endsWith('.js')) continue;
+  // Compact + hash vendored data files under data/ first so '/data/...'
+  // references in JS get rewritten to hashed names.
+  for (const file of await walk(path.join(root, 'data'))) {
+    if (!file.endsWith('.json')) continue;
     const rel = toPosix(path.relative(root, file));
-    const src = await fs.readFile(file, 'utf8');
+    const code = JSON.stringify(JSON.parse(await fs.readFile(file, 'utf8')));
+    const hashed = hashedName(rel, code);
+    await emit(hashed, code);
+    assetMap.set(rel, hashed);
+    manifestFiles['/' + hashed] = sha256b64(Buffer.from(code));
+  }
+
+  // Minify + hash every JS file under js/. Some JS references other JS by
+  // absolute path ('/js/...': worker scripts, importScripts, vendored libs),
+  // so leaves are processed first and those references rewritten to the
+  // hashed names before hashing the referrer.
+  const jsWave = (rel) => {
+    if (rel === 'js/nostr-tools.js' || rel.startsWith('js/vendor/')) return 0;
+    if (rel === 'js/verify-worker.js') return 1;
+    return 2;
+  };
+  const jsFiles = (await walk(path.join(root, 'js')))
+    .filter((f) => f.endsWith('.js'))
+    .sort((a, b) => jsWave(toPosix(path.relative(root, a))) - jsWave(toPosix(path.relative(root, b))));
+  for (const file of jsFiles) {
+    const rel = toPosix(path.relative(root, file));
+    let src = await fs.readFile(file, 'utf8');
+    for (const [orig, hashed] of assetMap) src = src.split('/' + orig).join('/' + hashed);
     const { code } = await transform(src, { loader: 'js', minify: true, legalComments: 'none' });
     const hashed = hashedName(rel, code);
     await emit(hashed, code);
@@ -166,6 +189,8 @@ async function run() {
 /js/*
   Cache-Control: public, max-age=31536000, immutable
 /css/*
+  Cache-Control: public, max-age=31536000, immutable
+/data/*
   Cache-Control: public, max-age=31536000, immutable
 /static/*
   Cache-Control: public, max-age=86400

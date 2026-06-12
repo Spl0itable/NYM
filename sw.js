@@ -1,5 +1,5 @@
 const CACHE = 'nym-' + '__CACHE_VERSION__';
-const ASSET_RE = /\/(js|css)\//;
+const ASSET_RE = /\/(js|css|data)\//;
 let PRECACHE = [];
 try { PRECACHE = JSON.parse('__PRECACHE_ASSETS__'); } catch (_) { }
 

@@ -235,7 +235,7 @@ Object.assign(NYM.prototype, {
         }
         const batch = toFetch.slice(0, 100);
         if (!batch.length) return found;
-        const pending = [];
+        const records = [];
         try {
             const resp = await this._storageApiStream('profile-get', { pubkeys: batch }, false);
             await this._readNdjsonStream(resp, (item) => {
@@ -243,21 +243,27 @@ Object.assign(NYM.prototype, {
                 const pk = item[0];
                 const rec = item[1];
                 if (!rec || !rec.event) return;
-                if (!this._verifyRelayEvent(rec.event)) return;
-                if (pk === this.pubkey && rec.event.id) this._lastMirroredOwnProfileId = rec.event.id;
-                pending.push((async () => {
-                    try {
-                        await this.handleEvent(rec.event);
-                        if (this.profileFetchedAt) this.profileFetchedAt.set(pk, Date.now());
-                        this._cacheD1Profile(pk, rec.event);
-                        found.add(pk);
-                    } catch (_) { }
-                })());
+                records.push([pk, rec]);
             });
         } catch (_) {
             return found;
         }
-        await Promise.all(pending);
+        // Verify in small slices off the stream callback so a 100-profile batch
+        // doesn't block the main thread
+        for (let i = 0; i < records.length; i++) {
+            const [pk, rec] = records[i];
+            if (!(await this._verifyRelayEventAsync(rec.event))) continue;
+            if (pk === this.pubkey && rec.event.id) this._lastMirroredOwnProfileId = rec.event.id;
+            try {
+                await this.handleEvent(rec.event);
+                if (this.profileFetchedAt) this.profileFetchedAt.set(pk, Date.now());
+                this._cacheD1Profile(pk, rec.event);
+                found.add(pk);
+            } catch (_) { }
+            if ((i + 1) % 10 === 0 && i + 1 < records.length && typeof this._yieldToIdle === 'function') {
+                await this._yieldToIdle();
+            }
+        }
         return found;
     },
 

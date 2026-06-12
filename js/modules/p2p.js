@@ -862,7 +862,11 @@ Object.assign(NYM.prototype, {
     async getTorrentClient() {
         if (!this.torrentClient) {
             if (typeof WebTorrent === 'undefined') {
-                try { await window.loadScriptOnce(window.NYM_CDN.webtorrent); } catch (_) { return null; }
+                // ESM-only bundle: dynamic import, then expose the usual global
+                try {
+                    const mod = await import(window.NYM_CDN.webtorrent);
+                    window.WebTorrent = mod.default || mod.WebTorrent;
+                } catch (_) { return null; }
             }
             if (typeof WebTorrent === 'undefined') return null;
             this.torrentClient = new WebTorrent();

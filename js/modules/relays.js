@@ -3875,22 +3875,153 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _verifyRelayEvent(event) {
+    // true/false when the id is known-verified (cheap hash check), undefined when unknown
+    _verifiedIdCheck(event) {
         try {
+            if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
+            const id = event && typeof event.id === 'string' ? event.id : null;
+            if (!id || !this._verifiedEventIds.has(id)) return undefined;
             const NT = window.NostrTools;
-            if (!NT || typeof NT.verifyEvent !== 'function') return false;
-            return NT.verifyEvent(event) === true;
+            if (!NT || typeof NT.getEventHash !== 'function') return undefined;
+            return NT.getEventHash(event) === id;
         } catch (_) {
             return false;
         }
     },
 
+    _noteVerifiedEventId(id) {
+        if (typeof id !== 'string' || !id) return;
+        if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
+        this._verifiedEventIds.add(id);
+        if (this._verifiedEventIds.size > 20000) {
+            let toDrop = this._verifiedEventIds.size - 15000;
+            for (const key of this._verifiedEventIds) {
+                if (toDrop-- <= 0) break;
+                this._verifiedEventIds.delete(key);
+            }
+        }
+    },
+
+    // Sync fallback when the worker is unavailable
+    _verifyRelayEvent(event) {
+        try {
+            const NT = window.NostrTools;
+            if (!NT || typeof NT.verifyEvent !== 'function') return false;
+            const cached = this._verifiedIdCheck(event);
+            if (cached !== undefined) return cached;
+            if (NT.verifyEvent(event) !== true) return false;
+            this._noteVerifiedEventId(event.id);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    },
+
+    async _verifyRelayEventAsync(event) {
+        const cached = this._verifiedIdCheck(event);
+        if (cached !== undefined) return cached;
+        if (!this._getVerifyWorker()) return this._verifyRelayEvent(event);
+        const ok = await this._workerVerify(event);
+        if (ok === null) return this._verifyRelayEvent(event);
+        if (ok === true) this._noteVerifiedEventId(event.id);
+        return ok === true;
+    },
+
+    _getVerifyWorker() {
+        if (this._verifyWorkerFailed) return null;
+        if (this._verifyWorker) return this._verifyWorker;
+        if (typeof Worker !== 'function') {
+            this._verifyWorkerFailed = true;
+            return null;
+        }
+        try {
+            const w = new Worker('/js/verify-worker.js');
+            this._verifyWorkerSeq = 0;
+            this._verifyWorkerPending = new Map();
+            w.onmessage = (e) => {
+                const d = e.data || {};
+                const resolve = this._verifyWorkerPending.get(d.seq);
+                if (resolve) {
+                    this._verifyWorkerPending.delete(d.seq);
+                    resolve(d.ok === true);
+                }
+            };
+            // On worker failure, resolve pending checks with null so callers
+            // fall back to sync verification
+            w.onerror = () => {
+                this._verifyWorkerFailed = true;
+                this._verifyWorker = null;
+                const pend = this._verifyWorkerPending;
+                this._verifyWorkerPending = new Map();
+                try { w.terminate(); } catch (_) { }
+                for (const resolve of pend.values()) resolve(null);
+            };
+            this._verifyWorker = w;
+            return w;
+        } catch (_) {
+            this._verifyWorkerFailed = true;
+            return null;
+        }
+    },
+
+    _workerVerify(event) {
+        return new Promise((resolve) => {
+            const w = this._getVerifyWorker();
+            if (!w) { resolve(null); return; }
+            const seq = ++this._verifyWorkerSeq;
+            this._verifyWorkerPending.set(seq, resolve);
+            try {
+                w.postMessage({ seq, event });
+            } catch (_) {
+                this._verifyWorkerPending.delete(seq);
+                resolve(null);
+            }
+        });
+    },
+
+    // FIFO gate: EVENTs verify in the worker; everything dispatches in arrival
+    // order so EOSE/OK never overtake the events that preceded them
     handleRelayMessage(msg, relayUrl) {
         if (!Array.isArray(msg)) return;
+        if (!this._relayMsgQueue) this._relayMsgQueue = [];
+        const entry = { msg, relayUrl, ready: true, ok: true };
+        if (msg[0] === 'EVENT') {
+            const ev = msg[2];
+            const cached = this._verifiedIdCheck(ev);
+            if (cached !== undefined) {
+                entry.ok = cached;
+            } else if (!this._getVerifyWorker()) {
+                entry.ok = this._verifyRelayEvent(ev);
+            } else {
+                entry.ready = false;
+                this._workerVerify(ev).then((ok) => {
+                    if (ok === null) ok = this._verifyRelayEvent(ev);
+                    else if (ok === true) this._noteVerifiedEventId(ev.id);
+                    entry.ok = ok === true;
+                    entry.ready = true;
+                    this._drainRelayMessageQueue();
+                });
+            }
+        }
+        this._relayMsgQueue.push(entry);
+        this._drainRelayMessageQueue();
+    },
 
+    _drainRelayMessageQueue() {
+        if (this._relayQueueDraining) return;
+        this._relayQueueDraining = true;
+        try {
+            while (this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
+                const entry = this._relayMsgQueue.shift();
+                if (entry.ok) this._dispatchRelayMessage(entry.msg, entry.relayUrl);
+            }
+        } finally {
+            this._relayQueueDraining = false;
+        }
+    },
+
+    _dispatchRelayMessage(msg, relayUrl) {
         const [type, ...data] = msg;
-
-        if (type === 'EVENT' && !this._verifyRelayEvent(data[1])) return;
 
         // Per-subscription side-handlers (e.g. batched profile fetch)
         if (this._subscriptionHandlers && this._subscriptionHandlers.size) {

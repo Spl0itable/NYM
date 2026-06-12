@@ -960,15 +960,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
         events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-        const CHUNK = 25;
-        for (let i = 0; i < events.length; i += CHUNK) {
-            const end = Math.min(i + CHUNK, events.length);
-            for (let k = i; k < end; k++) {
-                if (!this._verifyRelayEvent(events[k])) continue;
-                try { await this.handleEvent(events[k]); } catch (_) { }
+        let sliceStart = Date.now();
+        for (let i = 0; i < events.length; i++) {
+            if (await this._verifyRelayEventAsync(events[i])) {
+                try { await this.handleEvent(events[i]); } catch (_) { }
             }
-            if (end < events.length && typeof this._yieldToIdle === 'function') {
+            if (Date.now() - sliceStart > 16 && i + 1 < events.length && typeof this._yieldToIdle === 'function') {
                 await this._yieldToIdle();
+                sliceStart = Date.now();
             }
         }
     },

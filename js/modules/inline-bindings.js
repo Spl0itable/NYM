@@ -1,7 +1,7 @@
 // inline-bindings.js - Single delegated dispatcher that replaces inline event handlers
 
-// On-demand external script loader, cached per URL so heavy CDN libs load only
-// when a feature first needs them.
+// On-demand script loader, cached per URL so heavy libs load only when a
+// feature first needs them.
 window.loadScriptOnce = function (url) {
     window._loadedScripts = window._loadedScripts || new Map();
     if (window._loadedScripts.has(url)) return window._loadedScripts.get(url);
@@ -17,9 +17,10 @@ window.loadScriptOnce = function (url) {
     return p;
 };
 
+// Vendored libs, served same-origin and covered by the build manifest
 window.NYM_CDN = {
-    qrcode: 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
-    webtorrent: 'https://cdn.jsdelivr.net/npm/webtorrent@2.5.1/webtorrent.min.js'
+    qrcode: '/js/vendor/qrcode.min.js',
+    webtorrent: '/js/vendor/webtorrent.min.js'
 };
 
 // Collapsed/expanded state of the Settings modal category sections, persisted
