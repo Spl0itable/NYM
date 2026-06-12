@@ -964,6 +964,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         for (let i = 0; i < events.length; i += CHUNK) {
             const end = Math.min(i + CHUNK, events.length);
             for (let k = i; k < end; k++) {
+                if (!this._verifyRelayEvent(events[k])) continue;
                 try { await this.handleEvent(events[k]); } catch (_) { }
             }
             if (end < events.length && typeof this._yieldToIdle === 'function') {

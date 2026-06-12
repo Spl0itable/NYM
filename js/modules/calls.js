@@ -337,14 +337,29 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        const isGroup = !!data.isGroup;
+        const groupId = data.groupId || null;
+        const members = [sender, this.pubkey];
+        if (isGroup && groupId) {
+            const g = this.groupConversations && this.groupConversations.get(groupId);
+            const roster = (g && Array.isArray(g.members) && g.members.length) ? g.members : null;
+            const claimed = Array.isArray(data.members) ? data.members : [];
+            claimed.forEach(pk => {
+                if (pk && pk !== sender && pk !== this.pubkey && !members.includes(pk) &&
+                    (!roster || roster.includes(pk))) {
+                    members.push(pk);
+                }
+            });
+        }
+
         this.incomingCall = {
             callId: data.callId,
             kind: data.kind === 'video' ? 'video' : 'audio',
-            isGroup: !!data.isGroup,
-            groupId: data.groupId || null,
+            isGroup,
+            groupId,
             from: sender,
             nym: data.nym || this._nymForPubkey(sender),
-            members: Array.isArray(data.members) ? data.members : [sender, this.pubkey],
+            members,
             acceptedPeers: new Set(),
             timeout: null
         };
@@ -419,24 +434,30 @@ Object.assign(NYM.prototype, {
         this.incomingCall = null;
     },
 
+    _isCallParticipant(call, sender) {
+        return !!(call && Array.isArray(call.members) && call.members.includes(sender));
+    },
+
     _onCallAccept(sender, data) {
         if (this.activeCall && this.activeCall.callId === data.callId) {
+            if (!this._isCallParticipant(this.activeCall, sender)) return;
             if (this.activeCall.status === 'outgoing') {
                 this.activeCall.status = 'connecting';
                 if (this.activeCall.ringTimeout) clearTimeout(this.activeCall.ringTimeout);
                 this._setCallStatus('Connecting…');
             }
-            if (!this.activeCall.members.includes(sender)) this.activeCall.members.push(sender);
             this._connectToPeer(sender);
             return;
         }
         if (this.incomingCall && this.incomingCall.callId === data.callId) {
+            if (!this._isCallParticipant(this.incomingCall, sender)) return;
             this.incomingCall.acceptedPeers.add(sender);
         }
     },
 
     _onCallReject(sender, data) {
         if (!this.activeCall || this.activeCall.callId !== data.callId) return;
+        if (!this._isCallParticipant(this.activeCall, sender)) return;
         if (!this.activeCall.isGroup) {
             this.displaySystemMessage(data.reason === 'busy' ? 'User is busy' : 'Call declined');
             this._endCall();
@@ -445,6 +466,7 @@ Object.assign(NYM.prototype, {
 
     _onCallCancel(sender, data) {
         if (this.incomingCall && this.incomingCall.callId === data.callId) {
+            if (sender !== this.incomingCall.from) return;
             const inc = this.incomingCall;
             this._stopRingtone();
             if (inc.timeout) clearTimeout(inc.timeout);
@@ -458,6 +480,7 @@ Object.assign(NYM.prototype, {
 
     _onCallHangup(sender, data) {
         if (!this.activeCall || this.activeCall.callId !== data.callId) return;
+        if (!this._isCallParticipant(this.activeCall, sender)) return;
         this._removePeer(sender);
         if (!this.activeCall.isGroup || this.activeCall.peers.size === 0) {
             this.displaySystemMessage('Call ended');
@@ -538,6 +561,7 @@ Object.assign(NYM.prototype, {
 
     async _onCallOffer(sender, data) {
         if (!this.activeCall || this.activeCall.callId !== data.callId) return;
+        if (!this._isCallParticipant(this.activeCall, sender)) return;
         if (!this.activeCall.peers.has(sender)) this._connectToPeer(sender);
         const entry = this.activeCall.peers.get(sender);
         if (!entry) return;
@@ -554,6 +578,7 @@ Object.assign(NYM.prototype, {
     },
 
     async _onCallAnswer(sender, data) {
+        if (!this._isCallParticipant(this.activeCall, sender)) return;
         const entry = this.activeCall && this.activeCall.peers.get(sender);
         if (!entry) return;
         if (entry.pc.signalingState === 'stable') return;
@@ -567,6 +592,7 @@ Object.assign(NYM.prototype, {
     },
 
     async _onCallIce(sender, data) {
+        if (!this._isCallParticipant(this.activeCall, sender)) return;
         const entry = this.activeCall && this.activeCall.peers.get(sender);
         if (!entry || !data.candidate) return;
         if (entry.haveRemote) {

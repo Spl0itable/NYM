@@ -1,5 +1,4 @@
 // Nymchat Bot
-//
 // AI & Knowledge:
 //   ?ask <question>    - Ask the AI a question
 //   ?define <word>     - Word definition
@@ -63,6 +62,7 @@ import {
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
   verifyClientAuth,
+  enforceAuthReplay,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -120,6 +120,35 @@ async function fetchGiftWrapsByIds(ids, requiredId, timeoutMs) {
 // Private Nymbot messaging: auth, credits (D1), pricing
 var BOT_PM_RATE_LIMIT = 20;
 var BOT_PM_RATE_WINDOW_MS = 60000;
+
+//
+var BOT_PUBLIC_RATE_LIMIT = 20;
+var BOT_PUBLIC_RATE_WINDOW_MS = 60000;
+
+async function publicCommandRateOk(request) {
+  try {
+    if (typeof caches === "undefined" || !caches.default) return true;
+    var ip = request.headers.get("CF-Connecting-IP") || "";
+    if (!ip) return true;
+    var windowId = Math.floor(Date.now() / BOT_PUBLIC_RATE_WINDOW_MS);
+    var key = new Request("https://nymbot-ratelimit.invalid/public?ip=" +
+      encodeURIComponent(ip) + "&w=" + windowId);
+    var count = 0;
+    var hit = await caches.default.match(key);
+    if (hit) {
+      var n = parseInt(await hit.text(), 10);
+      if (Number.isFinite(n)) count = n;
+    }
+    if (count >= BOT_PUBLIC_RATE_LIMIT) return false;
+    var ttlSec = Math.ceil(BOT_PUBLIC_RATE_WINDOW_MS / 1000);
+    await caches.default.put(key, new Response(String(count + 1), {
+      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + ttlSec }
+    }));
+    return true;
+  } catch (_) {
+    return true;
+  }
+}
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -405,16 +434,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) {
     return json({ error: "Invalid pubkey" }, 400);
   }
-  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) {
+  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body })) {
     return json({ error: "Authentication failed" }, 401);
   }
-  // Money mutations require a single-use auth event (replay-protected via the
-  // ledger Durable Object) so a captured signature can't be re-submitted.
-  var MONEY_ACTIONS = { "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1 };
-  if (MONEY_ACTIONS[body.action]) {
-    var rp = await ledgerCall(env, { op: "replay", id: body.auth && body.auth.id, ttl: 130 });
-    if (rp && rp._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
-    if (!rp || !rp.fresh) return json({ error: "This authorization was already used. Please retry." }, 401);
+  var WRITE_ACTIONS = {
+    "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1, "clear-history": 1
+  };
+  if (WRITE_ACTIONS[body.action]) {
+    var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
+    if (!rp.ok) return json({ error: rp.error }, rp.status);
   }
 
   if (body.action === "balance") {
@@ -693,7 +721,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
 
 var BOT_NYM = "Nymbot";
-var NYMCHAT_VERSION = "3.70.483";
+var NYMCHAT_VERSION = "3.70.484";
 var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
@@ -773,6 +801,15 @@ async function onRequest(context) {
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  }
+
+  if (!(await publicCommandRateOk(request))) {
+    return new Response(JSON.stringify({
+      response: "\u{1F6D1} Whoa, slow down — too many requests. Give me a minute and try again."
+    }), {
+      status: 429,
       headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   }
@@ -1368,7 +1405,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.70.483 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.70.484 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -2193,7 +2230,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.70.483")
+  // Prefix match (e.g. "3.61" matches "3.70.484")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -2248,7 +2285,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.70.483", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.70.484", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

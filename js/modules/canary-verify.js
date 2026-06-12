@@ -9,11 +9,11 @@
     function verifySig(doc) {
         if (!doc || !doc.sig || !doc.pubkey || !doc.id) return 'unsigned';
         const NT = window.NostrTools;
-        if (!NT || typeof NT.verifyEvent !== 'function') return 'unsigned';
+        if (!NT || typeof NT.verifyEvent !== 'function') return 'unverifiable';
         try {
             return (NT.verifyEvent(doc) && doc.pubkey === CANARY_PUBKEY) ? 'valid' : 'invalid';
         } catch (_) {
-            return 'invalid';
+            return 'unverifiable';
         }
     }
 
@@ -28,7 +28,8 @@
         const updatedAt = c.updatedAt ? Date.parse(c.updatedAt) : NaN;
         const dueBy = c.nextUpdateBy ? Date.parse(c.nextUpdateBy) : NaN;
         const overdue = Number.isFinite(dueBy) && Date.now() > dueBy;
-        const clear = c.allClear !== false && !overdue && sig !== 'invalid';
+        const sigOk = sig === 'valid';
+        const clear = c.allClear !== false && !overdue && sigOk;
         return {
             state: sig === 'invalid' ? 'forged' : (clear ? 'ok' : 'stale'),
             sig,

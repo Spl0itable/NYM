@@ -811,7 +811,7 @@ function isPrivateUrl(urlStr) {
     if (host.includes(':')) return ipv6IsPrivate(parsed.hostname.toLowerCase());
     const v = ipv4ToInt(host);
     if (v !== null) return ipv4IntIsPrivate(v);
-    return false; // a regular DNS hostname; resolved-IP safety handled by safeFetch
+    return false;
   } catch {
     return true;
   }

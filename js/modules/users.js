@@ -261,14 +261,17 @@ Object.assign(NYM.prototype, {
     },
 
     formatNymWithPubkey(nym, pubkey) {
-        // If nym already has a pubkey suffix (#xxxx where xxxx is 4 hex chars), wrap it
+        if (pubkey && /^[0-9a-f]{64}$/i.test(pubkey)) {
+            const baseName = nym.replace(/#[0-9a-f]{4}$/i, '');
+            return `${this.escapeHtml(baseName)}<span class="nym-suffix">#${this.getPubkeySuffix(pubkey)}</span>`;
+        }
+
         const suffixMatch = nym.match(/#([0-9a-f]{4})$/i);
         if (suffixMatch) {
             const baseName = nym.substring(0, nym.length - 5);
             return `${this.escapeHtml(baseName)}<span class="nym-suffix">#${suffixMatch[1]}</span>`;
         }
 
-        // Get last 4 characters of pubkey
         const suffix = pubkey ? pubkey.slice(-4) : '????';
         return `${this.escapeHtml(nym)}<span class="nym-suffix">#${suffix}</span>`;
     },

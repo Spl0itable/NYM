@@ -39,7 +39,7 @@ self.addEventListener('fetch', (e) => {
             const cached = await caches.match(req);
             if (cached) return cached;
             const resp = await fetch(req);
-            if (resp && (resp.ok || resp.type === 'opaque')) {
+            if (resp && resp.ok) {
                 const cache = await caches.open(CACHE);
                 cache.put(req, resp.clone());
             }
@@ -53,12 +53,14 @@ self.addEventListener('fetch', (e) => {
     if (req.mode === 'navigate') {
         e.respondWith((async () => {
             const cache = await caches.open(CACHE);
-            const cached = (await cache.match(req)) || (await cache.match('/'));
-            const network = fetch(req).then((resp) => {
+            try {
+                const resp = await fetch(req);
                 if (resp && resp.ok) cache.put('/', resp.clone());
                 return resp;
-            }).catch(() => null);
-            return cached || (await network) || Response.error();
+            } catch (_) {
+                const cached = (await cache.match(req)) || (await cache.match('/'));
+                return cached || Response.error();
+            }
         })());
         return;
     }

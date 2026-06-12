@@ -945,7 +945,9 @@ TRANSFER TO PUBKEY
         const item = this.getShopItemById(id);
         if (!item) return '';
         if (id === 'flair-genesis' && edition) {
-            const txt = `<text x="12" y="19.4" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">${edition}</text>`;
+            const n = parseInt(edition, 10);
+            if (!Number.isInteger(n) || n < 0 || n > 1e7) return item.icon;
+            const txt = `<text x="12" y="19.4" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" stroke="none">${n}</text>`;
             return item.icon.replace('</svg>', txt + '</svg>');
         }
         return item.icon;
@@ -1815,6 +1817,7 @@ ${bundleCodes || (code ? `
                 <div class="nm-shop-27">
                     <div class="nm-shop-28">
                         <div class="nm-shop-29">${this.escapeHtml(t.fromNym)}</div>
+                        <div class="nm-shop-30" title="${this.escapeHtml(t.fromPubkey)}">Verified sender key: ${this.escapeHtml(String(t.fromPubkey).slice(0, 16))}…${this.escapeHtml(String(t.fromPubkey).slice(-8))}</div>
                         <div class="nm-shop-30">${date}</div>
                         <div class="nm-shop-31">Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' : ''}${t.settings ? ', preferences' : ''}</div>
                     </div>

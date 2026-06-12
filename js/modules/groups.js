@@ -349,6 +349,8 @@ Object.assign(NYM.prototype, {
                     inviteEnabled: group.inviteEnabled === true,
                     inviteEpoch: group.inviteEpoch || 0,
                     metaUpdatedAt: group.metaUpdatedAt || 0,
+                    lastModTs: group.lastModTs || 0,
+                    lastModEventId: group.lastModEventId || null,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
                 };
             }
@@ -592,6 +594,8 @@ Object.assign(NYM.prototype, {
                         if (group.inviteEnabled === true) g.inviteEnabled = true;
                         if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
                         if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
+                        if (group.lastModTs) g.lastModTs = group.lastModTs;
+                        if (group.lastModEventId) g.lastModEventId = group.lastModEventId;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                     }
                 }
@@ -657,7 +661,7 @@ Object.assign(NYM.prototype, {
         if (existing && existing.receipts.has(dedupKey)) return;
 
         const isLive = (Date.now() - ((rumor.created_at || 0) * 1000)) <= 10000;
-        this._recordMessageZap(messageId, senderPubkey, amount, dedupKey, isLive);
+        this._recordMessageZap(messageId, senderPubkey, amount, dedupKey, isLive, true);
 
         const pTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
         if (senderPubkey !== this.pubkey && pTag && pTag[1] === this.pubkey) {
@@ -898,13 +902,24 @@ Object.assign(NYM.prototype, {
             // the user is actively joining via an invite link they chose to accept.
             const joiningViaInvite = !!(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId));
             if (!existingGroup && !senderIsClaimedOwner && !joiningViaInvite) return;
+            if (existingGroup && existingGroup.createdBy) {
+                const isOwnerSender = existingGroup.createdBy === senderPubkey;
+                const isModSender = Array.isArray(existingGroup.mods) && existingGroup.mods.includes(senderPubkey);
+                const isMemberSender = Array.isArray(existingGroup.members) && existingGroup.members.includes(senderPubkey);
+                const memberInvitesAllowed = existingGroup.allowMemberInvites !== false;
+                if (!isOwnerSender && !isModSender && !(isMemberSender && memberInvitesAllowed)) return;
+            }
             const trustBootstrap = senderIsClaimedOwner || (joiningViaInvite && !existingGroup);
+            const bannedSet = existingGroup && Array.isArray(existingGroup.banned)
+                ? new Set(existingGroup.banned) : new Set();
+            const addMemberPubkeys = bannedSet.size > 0
+                ? memberPubkeys.filter(pk => !bannedSet.has(pk)) : memberPubkeys;
             const existingMembers = existingGroup ? new Set(existingGroup.members) : new Set();
-            const newMembers = memberPubkeys.filter(pk => !existingMembers.has(pk));
+            const newMembers = addMemberPubkeys.filter(pk => !existingMembers.has(pk));
             this.addGroupConversation(
                 groupId,
                 groupName,
-                memberPubkeys,
+                addMemberPubkeys,
                 (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
                 {
                     createdBy: trustBootstrap ? claimedOwner : undefined,
@@ -960,6 +975,7 @@ Object.assign(NYM.prototype, {
             // Verify the kick was actually issued by the owner or a moderator
             const grpForCheck = this.groupConversations.get(groupId);
             if (grpForCheck) {
+                if (this._isStaleModEvent(grpForCheck, rumor, event)) return;
                 const isOwnerKick = grpForCheck.createdBy === senderPubkey;
                 const isModKick = Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(senderPubkey);
                 if (!isOwnerKick && !isModKick) return;
@@ -968,6 +984,7 @@ Object.assign(NYM.prototype, {
                     if (grpForCheck.createdBy === removedPubkey) return;
                     if (Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(removedPubkey)) return;
                 }
+                this._recordModEvent(grpForCheck, rumor, event);
             }
             // Fetch profiles so nicknames display correctly instead of nym#xxxx
             const profileFetches = [];
@@ -1040,6 +1057,8 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (grp.createdBy !== senderPubkey) return; // only owner can promote
+            if (this._isStaleModEvent(grp, rumor, event)) return;
+            this._recordModEvent(grp, rumor, event);
             if (!Array.isArray(grp.mods)) grp.mods = [];
             if (!grp.mods.includes(targetPubkey)) grp.mods.push(targetPubkey);
             this._appendModLog(grp, { type: 'promote', actor: senderPubkey, target: targetPubkey });
@@ -1078,6 +1097,8 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (grp.createdBy !== senderPubkey) return;
+            if (this._isStaleModEvent(grp, rumor, event)) return;
+            this._recordModEvent(grp, rumor, event);
             if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== targetPubkey);
             this._appendModLog(grp, { type: 'revoke', actor: senderPubkey, target: targetPubkey });
             this.groupConversations.set(groupId, grp);
@@ -1115,6 +1136,8 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (grp.createdBy !== senderPubkey) return;
+            if (this._isStaleModEvent(grp, rumor, event)) return;
+            this._recordModEvent(grp, rumor, event);
             grp.createdBy = newOwner;
             if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== newOwner);
             this._appendModLog(grp, { type: 'transfer', actor: senderPubkey, target: newOwner });
@@ -2097,6 +2120,27 @@ Object.assign(NYM.prototype, {
         tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
         tags.push(['invite_enabled', group.inviteEnabled ? '1' : '0']);
         tags.push(['invite_epoch', String(group.inviteEpoch || 0)]);
+    },
+
+    _isStaleModEvent(grp, rumor, event) {
+        if (!grp) return false;
+        const ts = Math.floor(rumor.created_at || 0);
+        const last = grp.lastModTs || 0;
+        if (ts < last) return true;
+        const evId = rumor && rumor.id;
+        if (ts === last && evId && grp.lastModEventId && evId === grp.lastModEventId) return true;
+        return false;
+    },
+
+    _recordModEvent(grp, rumor, event) {
+        if (!grp) return;
+        const nowSec = Math.floor(Date.now() / 1000);
+        const ts = Math.min(Math.floor(rumor.created_at || 0), nowSec + 300);
+        if (ts >= (grp.lastModTs || 0)) {
+            grp.lastModTs = ts;
+            const evId = rumor && rumor.id;
+            if (evId) grp.lastModEventId = evId;
+        }
     },
 
     _applyGroupMetadataTags(rumor, groupId, senderPubkey, metaTs) {

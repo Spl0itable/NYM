@@ -200,6 +200,7 @@ Object.assign(NYM.prototype, {
     },
 
     handleReaction(event) {
+        if (event && this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
         // Register any NIP-30 custom emoji declared on this reaction
         this.ingestEmojiTags(event.tags);
         const reactionContent = event.content;

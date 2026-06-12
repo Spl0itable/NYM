@@ -815,6 +815,7 @@ Object.assign(NYM.prototype, {
 
             // Route encrypted settings events to settings handler
             if (rumor.kind === 30078) {
+                if (!senderVerified) return;
                 const dTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'd' && t[1])?.[1];
                 const isOwn = !!this.pubkey && rumor.pubkey === this.pubkey;
 
@@ -981,6 +982,8 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            if (!isOwn && this.blockedUsers && this.blockedUsers.has(senderPubkey)) return;
+
             // Archive only durable content; settings/signaling/typing/receipts already returned.
             if (!fromD1) this._archivePMEvent(event);
 
@@ -992,6 +995,7 @@ Object.assign(NYM.prototype, {
             // Route group messages before 1:1 PM logic
             const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && typeof t[1] === 'string');
             if (groupTag) {
+                if (!senderVerified) return;
                 await this.handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified);
                 return;
             }
@@ -1060,7 +1064,7 @@ Object.assign(NYM.prototype, {
                     const existing = this.zaps.get(zapMessageId);
                     if (amount && !(existing && existing.receipts.has(dedupKey))) {
                         const isLive = (Date.now() - ((rumor.created_at || 0) * 1000)) <= 10000;
-                        this._recordMessageZap(zapMessageId, senderPubkey, amount, dedupKey, isLive);
+                        this._recordMessageZap(zapMessageId, senderPubkey, amount, dedupKey, isLive, senderVerified);
 
                         const pTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
                         if (senderPubkey !== this.pubkey && pTag && pTag[1] === this.pubkey) {
@@ -1538,7 +1542,7 @@ Object.assign(NYM.prototype, {
             'transfer-credits': 1, 'create-invoice': 1, 'claim-credits': 1,
             'shop-buy-invoice': 1, 'shop-claim': 1, 'shop-transfer': 1, 'shop-redeem': 1
         };
-        const sensitive = !!MONEY[action];
+        const sensitive = !!MONEY[action] || action === 'clear-history';
         const cacheKey = (action || '') + '|' + url;
         if (!(this._botAuthCache instanceof Map)) this._botAuthCache = new Map();
         if (!sensitive) {

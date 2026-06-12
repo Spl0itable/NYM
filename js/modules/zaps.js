@@ -47,6 +47,7 @@ Object.assign(NYM.prototype, {
                 if (kTag) {
                     if (kTag[1] === '20000' || kTag[1] === '23333') scope = 'channel';
                     else if (kTag[1] === '1059') scope = 'pm';
+                    // Ignore parse errors
                 }
             } catch (_) { }
         }
@@ -685,6 +686,9 @@ Object.assign(NYM.prototype, {
                     if (data.giftEvent) {
                         try { this.sendDMToRelays(['EVENT', data.giftEvent]); } catch (e) { }
                     }
+                    // Verify the k tag is for one of our supported kinds. If
+                    // missing, fall through (legacy compat) but only display
+                    // if we actually have the message in storage.
                     this.displaySystemMessage(`Gifted +${data.credited} Nymbot credits to @${recipientNym || 'user'}.`);
                 } else {
                     this._setBotCreditDisplay(data.balance);
@@ -1065,6 +1069,8 @@ Object.assign(NYM.prototype, {
         // our own zap is already recorded locally at payment time.
         if (this._ownPublishedZapIds && this._ownPublishedZapIds.has(event.id)) return;
 
+        if (this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
+
         // Parse zap receipt
         const eTag = event.tags.find(t => t[0] === 'e');
         const pTag = event.tags.find(t => t[0] === 'p');
@@ -1135,49 +1141,47 @@ Object.assign(NYM.prototype, {
 
         // Parse amount from bolt11
         const amount = this.parseAmountFromBolt11(bolt11);
+        if (!amount) return;
 
-        if (amount) {
-            // Get zapper pubkey from description if available
-            let zapperPubkey = event.pubkey;
+        const zapRequest = this._parseZapRequestFromDescription(descriptionTag, amount);
+        if (descriptionTag && !zapRequest) return;
 
-            if (descriptionTag) {
-                try {
-                    const zapRequest = JSON.parse(descriptionTag[1]);
-                    if (zapRequest.pubkey) {
-                        zapperPubkey = zapRequest.pubkey;
-                    }
-
-                    // Verify the k tag is for one of our supported kinds. If
-                    // missing, fall through (legacy compat) but only display
-                    // if we actually have the message in storage.
-                    const kTag = zapRequest.tags?.find(t => t[0] === 'k');
-                    if (kTag && !['20000', '23333', '1059'].includes(kTag[1])) {
-                        return;
-                    }
-                    if (!kTag && !this._messageIdKnown(messageId)) {
-                        return;
-                    }
-                } catch (e) {
-                    // Ignore parse errors
-                }
+        let zapperPubkey = event.pubkey;
+        if (zapRequest) {
+            if (zapRequest.pubkey) {
+                zapperPubkey = zapRequest.pubkey;
             }
 
-            // Dedup by bolt11 so the LNURL receipt and our own zap-occurred
-            // event for the same payment only count once, falling back to the
-            // event id when no invoice is present.
-            const dedupKey = bolt11 ? 'b:' + bolt11.toLowerCase() : event.id;
-            const existing = this.zaps.get(messageId);
-            if (existing && existing.receipts.has(dedupKey)) return;
+            const kTag = zapRequest.tags?.find(t => t[0] === 'k');
+            if (kTag && !['20000', '23333', '1059'].includes(kTag[1])) {
+                return;
+            }
+            if (!kTag && !this._messageIdKnown(messageId)) {
+                return;
+            }
+        }
 
-            // Only animate genuinely live zaps, not historical receipts replayed
-            // by relays on reload or channel switch.
-            const isLive = (Date.now() - (event.created_at * 1000)) <= 10000;
+        if (this.blockedUsers && this.blockedUsers.has(zapperPubkey)) return;
 
-            // Our own zap: dedup by bolt11 since handleZapPaymentSuccess may have
-            // already counted it via the verify-URL confirmation.
-            if (zapperPubkey === this.pubkey) {
+        const dedupKey = bolt11 ? 'b:' + bolt11.toLowerCase() : event.id;
+        const existing = this.zaps.get(messageId);
+        if (existing && existing.receipts.has(dedupKey) &&
+            !(existing.unverified && existing.unverified.has(dedupKey))) return;
+
+        const isLive = (Date.now() - (event.created_at * 1000)) <= 10000;
+
+        const recipientPubkey = (pTag && pTag[1]) || null;
+        this._getZapProviderPubkey(recipientPubkey).then((providerPubkey) => {
+            const verified = !!providerPubkey && typeof event.pubkey === 'string' &&
+                event.pubkey.toLowerCase() === providerPubkey;
+
+            const zapper = (verified || zapperPubkey === event.pubkey) ? zapperPubkey : event.pubkey;
+            if (this.blockedUsers && this.blockedUsers.has(zapper)) return;
+
+            if (zapper === this.pubkey) {
+                if (!verified && event.pubkey !== this.pubkey) return;
                 this._rebroadcastZapReceipt(event);
-                if (this.currentZapTarget && this.currentZapTarget.messageId === messageId) {
+                if (verified && this.currentZapTarget && this.currentZapTarget.messageId === messageId) {
                     this.handleZapPaymentSuccess(amount);
                 } else {
                     this._recordOwnMessageZap(messageId, amount, bolt11, isLive);
@@ -1185,12 +1189,15 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            this._recordMessageZap(messageId, zapperPubkey, amount, dedupKey, isLive);
+            const counted = this._recordMessageZap(messageId, zapper, amount, dedupKey, isLive, verified);
+            if (!counted) return;
 
-            if (pTag && pTag[1] === this.pubkey && zapperPubkey !== this.pubkey) {
-                this._notifyZapToOurMessage(messageId, amount, zapperPubkey, event);
+            if (pTag && pTag[1] === this.pubkey && zapper !== this.pubkey) {
+                if (verified || !providerPubkey) {
+                    this._notifyZapToOurMessage(messageId, amount, zapper, event);
+                }
             }
-        }
+        }).catch(() => { });
     },
 
     _messageIdKnown(messageId) {
@@ -1211,37 +1218,46 @@ Object.assign(NYM.prototype, {
         if (this._profileZapReceipts.has(event.id)) return;
         this._profileZapReceipts.add(event.id);
 
+        if (this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
+
         const amount = this.parseAmountFromBolt11(boltTag[1]);
         if (!amount) return;
 
+        const zapRequest = this._parseZapRequestFromDescription(descriptionTag, amount);
+        if (descriptionTag && !zapRequest) return;
+
         let zapperPubkey = event.pubkey;
-        if (descriptionTag) {
-            try {
-                const zapRequest = JSON.parse(descriptionTag[1]);
-                if (zapRequest.pubkey) zapperPubkey = zapRequest.pubkey;
-                // If the zap request explicitly tagged a non-profile kind,
-                // ignore — this isn't actually a profile zap.
-                const kTag = zapRequest.tags?.find(t => t[0] === 'k');
-                if (kTag && kTag[1] !== '0') return;
-            } catch (_) { }
+        if (zapRequest) {
+            if (zapRequest.pubkey) zapperPubkey = zapRequest.pubkey;
+            const kTag = zapRequest.tags?.find(t => t[0] === 'k');
+            if (kTag && kTag[1] !== '0') return;
         }
         if (zapperPubkey === this.pubkey) return;
+        if (this.blockedUsers && this.blockedUsers.has(zapperPubkey)) return;
 
-        const zapperNym = this.getNymFromPubkey(zapperPubkey);
-        const ts = (event && event.created_at ? event.created_at * 1000 : Date.now());
-        const sats = this.abbreviateNumber ? this.abbreviateNumber(amount) : String(amount);
-        const body = `⚡ zapped ${sats} sats to your profile`;
-        const channelInfo = {
-            type: 'reaction',
-            id: event.id,
-            eventId: event.id,
-            pubkey: zapperPubkey,
-            sourceType: 'pm',
-            sourcePubkey: zapperPubkey
-        };
-        const isHistorical = (Date.now() - ts) > 10000;
-        if (isHistorical) this._addNotificationToHistory(zapperNym, body, channelInfo, ts);
-        else this.showNotification(zapperNym, body, channelInfo, ts);
+        this._getZapProviderPubkey(this.pubkey).then((providerPubkey) => {
+            const verified = !!providerPubkey && typeof event.pubkey === 'string' &&
+                event.pubkey.toLowerCase() === providerPubkey;
+            if (providerPubkey && !verified) return;
+            if (!verified && zapperPubkey !== event.pubkey) zapperPubkey = event.pubkey;
+            if (zapperPubkey === this.pubkey) return;
+
+            const zapperNym = this.getNymFromPubkey(zapperPubkey);
+            const ts = (event && event.created_at ? event.created_at * 1000 : Date.now());
+            const sats = this.abbreviateNumber ? this.abbreviateNumber(amount) : String(amount);
+            const body = `⚡ zapped ${sats} sats to your profile${verified ? '' : ' (unverified)'}`;
+            const channelInfo = {
+                type: 'reaction',
+                id: event.id,
+                eventId: event.id,
+                pubkey: zapperPubkey,
+                sourceType: 'pm',
+                sourcePubkey: zapperPubkey
+            };
+            const isHistorical = (Date.now() - ts) > 10000;
+            if (isHistorical) this._addNotificationToHistory(zapperNym, body, channelInfo, ts);
+            else this.showNotification(zapperNym, body, channelInfo, ts);
+        }).catch(() => { });
     },
 
     _notifyZapToOurMessage(messageId, amount, zapperPubkey, event) {
@@ -1342,20 +1358,71 @@ Object.assign(NYM.prototype, {
 
     // Parse amount from bolt11 invoice
     parseAmountFromBolt11(bolt11) {
-        const match = bolt11.match(/lnbc(\d+)([munp])/i);
-        if (match) {
-            const amount = parseInt(match[1]);
-            const multiplier = match[2];
-
-            switch (multiplier) {
-                case 'm': return amount * 100000; // millisats to sats
-                case 'u': return amount * 100; // microsats to sats
-                case 'n': return Math.round(amount / 10); // nanosats to sats
-                case 'p': return Math.round(amount / 10000); // picosats to sats
-                default: return amount;
-            }
+        if (typeof bolt11 !== 'string' || bolt11.length < 6 || bolt11.length > 4096) return null;
+        const match = bolt11.match(/^lnbc(\d{1,15})([munp])/i);
+        if (!match) return null;
+        const amount = parseInt(match[1], 10);
+        if (!Number.isSafeInteger(amount) || amount <= 0) return null;
+        let sats;
+        switch (match[2].toLowerCase()) {
+            case 'm': sats = amount * 100000; break;
+            case 'u': sats = amount * 100; break;
+            case 'n': sats = Math.round(amount / 10); break;
+            case 'p': sats = Math.round(amount / 10000); break;
+            default: return null;
         }
-        return null;
+        if (!Number.isSafeInteger(sats) || sats <= 0 || sats > 1000000000) return null;
+        return sats;
+    },
+
+    async _getZapProviderPubkey(recipientPubkey) {
+        if (!recipientPubkey) return null;
+        if (!this._zapProviderPubkeys) this._zapProviderPubkeys = new Map();
+        const cached = this._zapProviderPubkeys.get(recipientPubkey);
+        if (cached && (cached.pk || (Date.now() - cached.ts) < 300000)) return cached.pk;
+        if (!this._zapProviderLookups) this._zapProviderLookups = new Map();
+        if (this._zapProviderLookups.has(recipientPubkey)) {
+            return this._zapProviderLookups.get(recipientPubkey);
+        }
+        const lookup = (async () => {
+            try {
+                let lnAddress = this.userLightningAddresses && this.userLightningAddresses.get(recipientPubkey);
+                if (!lnAddress && recipientPubkey === this.pubkey) lnAddress = this.lightningAddress;
+                if (!lnAddress || typeof lnAddress !== 'string') return null;
+                const [username, domain] = lnAddress.split('@');
+                if (!username || !domain) return null;
+                const resp = await this.proxiedJsonFetch(`https://${domain}/.well-known/lnurlp/${username}`);
+                if (!resp.ok) return null;
+                const data = await resp.json();
+                if (data && data.allowsNostr && typeof data.nostrPubkey === 'string' &&
+                    /^[0-9a-f]{64}$/i.test(data.nostrPubkey)) {
+                    return data.nostrPubkey.toLowerCase();
+                }
+                return null;
+            } catch (_) {
+                return null;
+            }
+        })();
+        this._zapProviderLookups.set(recipientPubkey, lookup);
+        const pk = await lookup;
+        this._zapProviderLookups.delete(recipientPubkey);
+        this._zapProviderPubkeys.set(recipientPubkey, { pk, ts: Date.now() });
+        return pk;
+    },
+
+    _parseZapRequestFromDescription(descriptionTag, amountSats) {
+        if (!descriptionTag || typeof descriptionTag[1] !== 'string') return null;
+        let req = null;
+        try { req = JSON.parse(descriptionTag[1]); } catch (_) { return null; }
+        if (!req || typeof req !== 'object' || req.kind !== 9734) return null;
+        if (!Array.isArray(req.tags)) return null;
+        const amountTag = req.tags.find(t => Array.isArray(t) && t[0] === 'amount');
+        if (amountTag && amountTag[1] != null) {
+            const msats = parseInt(amountTag[1], 10);
+            if (!Number.isSafeInteger(msats) || msats <= 0) return null;
+            if (amountSats != null && Math.round(msats / 1000) !== amountSats) return null;
+        }
+        return req;
     },
 
     // Re-broadcast a zap receipt for our own zap to our full relay set, so more
@@ -1452,19 +1519,29 @@ Object.assign(NYM.prototype, {
         this._selfCountedZapInvoices.add(key);
         // Key on the invoice so our own zap and its echo (public receipt or a
         // gift-wrapped announcement) dedup against each other.
-        this._recordMessageZap(messageId, this.pubkey, amount, 'b:' + key, isLive);
+        this._recordMessageZap(messageId, this.pubkey, amount, 'b:' + key, isLive, true);
     },
 
-    // Record a zap against a message and refresh its badge (deduped by receipt)
-    _recordMessageZap(messageId, zapperPubkey, amount, receiptId, isLive) {
+    _recordMessageZap(messageId, zapperPubkey, amount, receiptId, isLive, verified) {
         const sats = Number(amount) || 0;
-        if (!messageId || !sats) return;
+        if (!messageId || !sats) return false;
         if (!this.zaps.has(messageId)) {
-            this.zaps.set(messageId, { receipts: new Set(), amounts: new Map() });
+            this.zaps.set(messageId, { receipts: new Set(), amounts: new Map(), unverified: new Map() });
         }
         const messageZaps = this.zaps.get(messageId);
-        if (receiptId && messageZaps.receipts.has(receiptId)) return;
-        if (receiptId) messageZaps.receipts.add(receiptId);
+        if (!messageZaps.unverified) messageZaps.unverified = new Map();
+        if (receiptId && messageZaps.receipts.has(receiptId)) {
+            if (verified && messageZaps.unverified.has(receiptId)) {
+                messageZaps.unverified.delete(receiptId);
+                this.updateMessageZaps(messageId);
+                return true;
+            }
+            return false;
+        }
+        if (receiptId) {
+            messageZaps.receipts.add(receiptId);
+            if (!verified) messageZaps.unverified.set(receiptId, sats);
+        }
         const currentAmount = messageZaps.amounts.get(zapperPubkey) || 0;
         messageZaps.amounts.set(zapperPubkey, currentAmount + sats);
         const applied = this.updateMessageZaps(messageId);
@@ -1475,6 +1552,7 @@ Object.assign(NYM.prototype, {
             // so the zap badge and quick-zap button appear on next navigation.
             this._invalidateZapDOMCache(messageId);
         }
+        return true;
     },
 
     _invalidateZapDOMCache(messageId) {
@@ -1583,7 +1661,11 @@ Object.assign(NYM.prototype, {
 `;
 
             const zapperCount = messageZaps.amounts.size;
-            zapBadge.title = `${this.abbreviateNumber(zapperCount)} zapper${zapperCount > 1 ? 's' : ''} • ${this.abbreviateNumber(totalZaps)} sats total`;
+            let zapTitle = `${this.abbreviateNumber(zapperCount)} zapper${zapperCount > 1 ? 's' : ''} • ${this.abbreviateNumber(totalZaps)} sats total`;
+            let unverifiedSats = 0;
+            if (messageZaps.unverified) messageZaps.unverified.forEach(s => { unverifiedSats += s; });
+            if (unverifiedSats > 0) zapTitle += ` (${this.abbreviateNumber(unverifiedSats)} unverified)`;
+            zapBadge.title = zapTitle;
 
             // Insert at beginning of reactions row
             reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);

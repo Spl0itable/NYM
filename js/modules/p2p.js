@@ -2,6 +2,48 @@
 
 Object.assign(NYM.prototype, {
 
+    P2P_MAX_FILE_SIZE: 2 * 1024 * 1024 * 1024,
+
+    sanitizeDownloadFilename(name) {
+        let safe = String(name || '')
+            .replace(/[\/\\]/g, '_')
+            .replace(/[\x00-\x1f\x7f]/g, '')
+            .replace(/^\.+/, '');
+        safe = safe.replace(/\.(?=[^.]*\.)/g, '_');
+        if (safe.length > 255) safe = safe.slice(safe.length - 255);
+        return safe || 'download';
+    },
+
+    abortReceivedTransfer(transferId, message) {
+        this.updateTransferStatus(transferId, 'error', message);
+        this.p2pReceivedChunks.delete(transferId);
+        const connectionsToDelete = [];
+        this.p2pConnections.forEach((pc, connectionId) => {
+            if (connectionId.endsWith(transferId)) {
+                try { pc.close(); } catch (e) { /* ignore */ }
+                connectionsToDelete.push(connectionId);
+            }
+        });
+        connectionsToDelete.forEach(id => {
+            this.p2pConnections.delete(id);
+            if (this.p2pDataChannels.has(id)) {
+                try { this.p2pDataChannels.get(id).close(); } catch (e) { /* ignore */ }
+                this.p2pDataChannels.delete(id);
+            }
+        });
+        this.displaySystemMessage(message);
+    },
+
+    getValidatedMagnetInfoHash(magnetURI) {
+        if (typeof magnetURI !== 'string' || !magnetURI.startsWith('magnet:?')) return null;
+        const match = magnetURI.match(/xt=urn:btih:([^&]+)/i);
+        if (!match) return null;
+        const hash = match[1];
+        if (/^[a-fA-F0-9]{40}$/.test(hash)) return hash.toLowerCase();
+        if (/^[a-zA-Z2-7]{32}$/.test(hash)) return hash.toUpperCase();
+        return null;
+    },
+
     // Handle incoming P2P signaling events
     handleP2PSignalingEvent(event) {
         try {
@@ -447,7 +489,7 @@ Object.assign(NYM.prototype, {
                     transfer.metadata = msg;
                     return;
                 } else if (msg.type === 'complete') {
-                    this.completeFileTransfer(transferId);
+                    Promise.resolve(this.completeFileTransfer(transferId)).catch(() => { });
                     return;
                 } else if (msg.type === 'error') {
                     this.updateTransferStatus(transferId, 'error', msg.message);
@@ -463,6 +505,15 @@ Object.assign(NYM.prototype, {
         if (data instanceof ArrayBuffer) {
             const chunks = this.p2pReceivedChunks.get(transferId);
             if (chunks) {
+                const newTotal = transfer.bytesReceived + data.byteLength;
+                if (newTotal > this.P2P_MAX_FILE_SIZE) {
+                    this.abortReceivedTransfer(transferId, 'Transfer aborted: file exceeds maximum allowed size');
+                    return;
+                }
+                if (transfer.offer && typeof transfer.offer.size === 'number' && newTotal > transfer.offer.size) {
+                    this.abortReceivedTransfer(transferId, 'Transfer aborted: received more data than advertised');
+                    return;
+                }
                 chunks.push(data);
                 transfer.bytesReceived += data.byteLength;
 
@@ -476,22 +527,48 @@ Object.assign(NYM.prototype, {
     },
 
     // Complete file transfer and trigger download
-    completeFileTransfer(transferId) {
+    async completeFileTransfer(transferId) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         const chunks = this.p2pReceivedChunks.get(transferId);
 
         if (!transfer || !chunks) return;
-
         // Combine chunks into blob
-        const blob = new Blob(chunks, {
-            type: transfer.metadata?.mimeType || transfer.offer?.type || 'application/octet-stream'
-        });
+
+        const offer = transfer.offer;
+
+        if (transfer.bytesReceived > this.P2P_MAX_FILE_SIZE) {
+            this.abortReceivedTransfer(transferId, 'Transfer rejected: file exceeds maximum allowed size');
+            return;
+        }
+        if (offer && typeof offer.size === 'number' && transfer.bytesReceived !== offer.size) {
+            this.abortReceivedTransfer(transferId, 'Transfer rejected: received size does not match advertised size');
+            return;
+        }
+
+        const blob = new Blob(chunks, { type: 'application/octet-stream' });
+
+        if (offer && offer.hash) {
+            try {
+                const buffer = await blob.arrayBuffer();
+                const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+                const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+                if (hashHex !== String(offer.hash).toLowerCase()) {
+                    this.abortReceivedTransfer(transferId, 'Transfer rejected: file content does not match advertised hash');
+                    return;
+                }
+            } catch (e) {
+                this.abortReceivedTransfer(transferId, 'Transfer rejected: could not verify file integrity');
+                return;
+            }
+        } else {
+            console.warn('P2P offer has no advertised hash; skipping integrity check for transfer', transferId);
+        }
 
         // Create download link
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = transfer.metadata?.name || transfer.offer?.name || 'download';
+        a.download = this.sanitizeDownloadFilename(transfer.metadata?.name || offer?.name || 'download');
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -576,10 +653,16 @@ Object.assign(NYM.prototype, {
             return; // We don't have this file
         }
 
+        const fileOffer = this.p2pFileOffers.get(offerId);
+        if (!fileOffer || fileOffer.seederPubkey !== this.pubkey) {
+            console.warn('Rejected P2P file request: offer seeder pubkey mismatch for', offerId);
+            return;
+        }
+
         // Create transfer state for sending
         this.p2pActiveTransfers.set(transferId, {
             offerId: offerId,
-            offer: this.p2pFileOffers.get(offerId),
+            offer: fileOffer,
             status: 'connecting',
             bytesSent: 0,
             startTime: Date.now()
@@ -921,6 +1004,18 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        const magnetHash = this.getValidatedMagnetInfoHash(offer.magnetURI);
+        if (!magnetHash) {
+            this.displaySystemMessage('Invalid or malformed magnet link in this offer');
+            return;
+        }
+
+        const advertisedHash = String(offer.infoHash || offer.hash || '').toLowerCase();
+        if (/^[a-f0-9]{40}$/.test(advertisedHash) && magnetHash.length === 40 && magnetHash !== advertisedHash) {
+            this.displaySystemMessage('Torrent rejected: magnet infohash does not match advertised hash');
+            return;
+        }
+
         const client = await this.getTorrentClient();
         if (!client) {
             this.displaySystemMessage('WebTorrent is not available in this browser');
@@ -940,7 +1035,7 @@ Object.assign(NYM.prototype, {
         }
 
         // Check if already downloading this torrent
-        const existingTorrent = client.get(offer.infoHash || offer.magnetURI);
+        const existingTorrent = client.get(magnetHash);
         if (existingTorrent) {
             this.displaySystemMessage('Already downloading this torrent');
             return;
@@ -956,9 +1051,20 @@ Object.assign(NYM.prototype, {
             isTorrent: true
         });
 
-        client.add(offer.magnetURI, (torrent) => {
+        const safeMagnetURI = 'magnet:?xt=urn:btih:' + magnetHash;
+
+        client.add(safeMagnetURI, { announce: [] }, (torrent) => {
             const transfer = this.p2pActiveTransfers.get(transferId);
             if (!transfer) return; // Was cancelled
+
+            if (torrent.length > this.P2P_MAX_FILE_SIZE ||
+                (typeof offer.size === 'number' && torrent.length > offer.size)) {
+                try { torrent.destroy(); } catch (e) { /* ignore */ }
+                this.updateTransferStatus(transferId, 'error', 'Torrent rejected: larger than advertised size');
+                this.p2pActiveTransfers.delete(transferId);
+                this.displaySystemMessage('Torrent rejected: larger than advertised size');
+                return;
+            }
 
             transfer.status = 'transferring';
             transfer.torrent = torrent;
@@ -982,10 +1088,11 @@ Object.assign(NYM.prototype, {
                             return;
                         }
 
-                        const url = URL.createObjectURL(blob);
+                        const safeBlob = new Blob([blob], { type: 'application/octet-stream' });
+                        const url = URL.createObjectURL(safeBlob);
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = file.name;
+                        a.download = this.sanitizeDownloadFilename(file.name);
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);

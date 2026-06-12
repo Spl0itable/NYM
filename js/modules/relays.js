@@ -3009,11 +3009,27 @@ Object.assign(NYM.prototype, {
         this.poolSockets = this.poolSockets.filter(p => newShardIds.has(p.id));
     },
 
+    _isUnsafeRelayUrl(url) {
+        if (typeof url !== 'string') return true;
+        let u;
+        try { u = new URL(url.trim()); } catch (_) { return true; }
+        if (u.protocol !== 'wss:') return true;
+        const h = (u.hostname || '').toLowerCase();
+        if (!h) return true;
+        if (h === 'localhost' || h.endsWith('.localhost')) return true;
+        if (h.endsWith('.onion') || h.endsWith('.i2p')) return true;
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
+        if (h.startsWith('[') || h.includes(':')) return true;
+        return false;
+    },
+
     async connectToRelay(relayUrl, type = 'relay') {
         // Pool mode: all relay connections are managed by the multiplexed pool worker
         if (this.useRelayProxy) return;
 
         if (relayUrl === this.appRelay) return;
+
+        if (this._isUnsafeRelayUrl(relayUrl)) return;
 
         // Block known-bad relays entirely - never connect
         if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
@@ -3859,10 +3875,22 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _verifyRelayEvent(event) {
+        try {
+            const NT = window.NostrTools;
+            if (!NT || typeof NT.verifyEvent !== 'function') return false;
+            return NT.verifyEvent(event) === true;
+        } catch (_) {
+            return false;
+        }
+    },
+
     handleRelayMessage(msg, relayUrl) {
         if (!Array.isArray(msg)) return;
 
         const [type, ...data] = msg;
+
+        if (type === 'EVENT' && !this._verifyRelayEvent(data[1])) return;
 
         // Per-subscription side-handlers (e.g. batched profile fetch)
         if (this._subscriptionHandlers && this._subscriptionHandlers.size) {

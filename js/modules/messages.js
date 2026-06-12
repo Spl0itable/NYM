@@ -1316,31 +1316,12 @@ Object.assign(NYM.prototype, {
                     // Wrap the #suffix in nym-suffix span for proper dimming
                     const suffixMatch = cleanAuthor.match(/^(.+)(#[0-9a-f]{4})$/i);
 
-                    // Fall back to the quoted suffix so verified identities still
-                    // resolve when they aren't in the live users map.
-                    if (!authorPubkey && suffixMatch) {
-                        const sfx = suffixMatch[2].slice(1).toLowerCase();
-                        if (this.verifiedBot && this.verifiedBot.pubkey.slice(-4) === sfx) {
-                            authorPubkey = this.verifiedBot.pubkey;
-                        } else if (this.verifiedDeveloper && this.verifiedDeveloper.pubkey.slice(-4) === sfx) {
-                            authorPubkey = this.verifiedDeveloper.pubkey;
-                        }
-                    }
-
-                    // Get author's flair if found
                     const flairHtml = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
-                    const verifiedHtml = authorPubkey
-                        ? (this.isVerifiedDeveloper(authorPubkey)
-                            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
-                            : (this.isVerifiedBot(authorPubkey)
-                                ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
-                                : ''))
-                        : '';
                     const displayAuthor = suffixMatch
                         ? `${this.escapeHtml(suffixMatch[1])}<span class="nym-suffix">${this.escapeHtml(suffixMatch[2])}</span>${flairHtml}`
                         : `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
 
-                    html += `<blockquote><span class="quote-author">${displayAuthor}${verifiedHtml}:</span> ${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
+                    html += `<blockquote><span class="quote-author">${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
                 } else {
                     // Regular quote without author
                     const quotedMessage = quoteLines.join('\n');

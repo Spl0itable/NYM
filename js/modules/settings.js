@@ -24,7 +24,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
     data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed']
 };
 
-function _normalizeIndicatorScope(value, fallback = 'everywhere') {
+function _normalizeIndicatorScope(value, fallback = 'pms-groups') {
     if (value === true || value === 'true') return 'everywhere';
     if (value === false || value === 'false') return 'disabled';
     if (typeof value === 'string' && INDICATOR_SCOPES.includes(value)) return value;
@@ -1028,11 +1028,11 @@ Object.assign(NYM.prototype, {
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
             readReceiptsScope: _normalizeIndicatorScope(
                 localStorage.getItem('nym_read_receipts_scope'),
-                localStorage.getItem('nym_read_receipts_enabled') === 'false' ? 'disabled' : 'everywhere'
+                localStorage.getItem('nym_read_receipts_enabled') === 'false' ? 'disabled' : 'pms-groups'
             ),
             typingIndicatorsScope: _normalizeIndicatorScope(
                 localStorage.getItem('nym_typing_indicators_scope'),
-                localStorage.getItem('nym_typing_indicators_enabled') === 'false' ? 'disabled' : 'everywhere'
+                localStorage.getItem('nym_typing_indicators_enabled') === 'false' ? 'disabled' : 'pms-groups'
             ),
             pinnedLandingChannel: pinnedLandingChannel,
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',

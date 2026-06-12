@@ -2641,6 +2641,18 @@ function nip44Decrypt(payload, conversationKey) {
 
 var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
 
+function authPayloadHashHex(text) {
+  return bytesToHex(sha256(utf8ToBytes(String(text))));
+}
+
+function canonicalAuthBody(body) {
+  if (!body || typeof body !== "object") return body;
+  var out = {};
+  var keys = Object.keys(body).filter(function (k) { return k !== "auth"; }).sort();
+  for (var i = 0; i < keys.length; i++) out[keys[i]] = body[keys[i]];
+  return out;
+}
+
 function verifyClientAuth(auth, expectedPubkey, binding) {
   try {
     if (!auth || typeof auth !== "object") return false;
@@ -2672,11 +2684,23 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
           if (ua.origin !== ub.origin || ua.pathname !== ub.pathname) return false;
         } catch (e) { return false; }
       }
+      var payloadTag = tagVal("payload");
+      if (payloadTag != null && typeof binding.body !== "undefined") {
+        var expected = authPayloadHashHex(JSON.stringify(canonicalAuthBody(binding.body)));
+        if (String(payloadTag).toLowerCase() !== expected) return false;
+      }
     }
     return true;
   } catch (e) {
     return false;
   }
+}
+
+async function enforceAuthReplay(ledgerCall, env, authId, ttl) {
+  var rp = await ledgerCall(env, { op: "replay", id: authId, ttl: ttl || 130 });
+  if (rp && rp._noLedger) return { ok: false, status: 503, error: "Service temporarily unavailable." };
+  if (!rp || !rp.fresh) return { ok: false, status: 401, error: "This authorization was already used. Please retry." };
+  return { ok: true };
 }
 
 // Validate a NIP-57 zap receipt (kind 9735) as proof an invoice was paid.
@@ -2887,6 +2911,9 @@ export {
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
   verifyClientAuth,
+  canonicalAuthBody,
+  authPayloadHashHex,
+  enforceAuthReplay,
   validateZapReceipt,
   parseNwcUri,
   nwcInvoicePaid,

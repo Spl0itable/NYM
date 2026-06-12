@@ -243,6 +243,7 @@ Object.assign(NYM.prototype, {
                 const pk = item[0];
                 const rec = item[1];
                 if (!rec || !rec.event) return;
+                if (!this._verifyRelayEvent(rec.event)) return;
                 if (pk === this.pubkey && rec.event.id) this._lastMirroredOwnProfileId = rec.event.id;
                 pending.push((async () => {
                     try {
@@ -429,7 +430,14 @@ Object.assign(NYM.prototype, {
             if (offerTag) {
                 try {
                     fileOffer = JSON.parse(offerTag[1]);
-                    this.p2pFileOffers.set(fileOffer.offerId, fileOffer);
+                    if (fileOffer && typeof fileOffer === 'object' && fileOffer.offerId) {
+                        if (fileOffer.seederPubkey && fileOffer.seederPubkey !== event.pubkey) {
+                            fileOffer = null;
+                        } else {
+                            fileOffer.seederPubkey = event.pubkey;
+                            this.p2pFileOffers.set(fileOffer.offerId, fileOffer);
+                        }
+                    }
                 } catch (e) {
                     console.error('Error parsing file offer:', e);
                 }

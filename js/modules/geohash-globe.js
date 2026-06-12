@@ -3,8 +3,9 @@
 (function () {
 
     const WORLD_TOPO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
-    const ADMIN1_GEOJSON_URL = 'https://cdn.jsdelivr.net/gh/martynafford/natural-earth-geojson@master/50m/cultural/ne_50m_admin_1_states_provinces_lakes.json';
-    const CITIES_GEOJSON_URL = 'https://cdn.jsdelivr.net/gh/martynafford/natural-earth-geojson@master/50m/cultural/ne_50m_populated_places_simple.json';
+    const NE_GEOJSON_COMMIT = '0b9a6ceb0a7032713abd9460ac1e995a9c60cd1e';
+    const ADMIN1_GEOJSON_URL = `https://cdn.jsdelivr.net/gh/martynafford/natural-earth-geojson@${NE_GEOJSON_COMMIT}/50m/cultural/ne_50m_admin_1_states_provinces_lakes.json`;
+    const CITIES_GEOJSON_URL = `https://cdn.jsdelivr.net/gh/martynafford/natural-earth-geojson@${NE_GEOJSON_COMMIT}/50m/cultural/ne_50m_populated_places_simple.json`;
 
     const ADMIN1_ZOOM_THRESHOLD = 2.5;
     const CITY_ZOOM_THRESHOLD = 2.5;

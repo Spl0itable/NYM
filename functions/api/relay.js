@@ -18,7 +18,6 @@ function isNymchatClient(request) {
   const ua = request.headers.get('User-Agent') || '';
   return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
 }
-
 // Reject relay hostnames that resolve to private/loopback/link-local space so
 // the proxy can't be used to reach internal services (SSRF).
 function isPrivateRelayHost(hostname) {
@@ -63,6 +62,10 @@ export async function onRequest(context) {
   const upgradeHeader = request.headers.get('Upgrade');
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket upgrade', { status: 426 });
+  }
+
+  if (!isNymchatClient(request)) {
+    return new Response('Forbidden', { status: 403 });
   }
 
   const url = new URL(request.url);
