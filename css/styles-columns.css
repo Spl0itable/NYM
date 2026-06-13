@@ -498,6 +498,7 @@ body.solid-ui .cv-column-header {
         border-top: none;
         border-left: none;
         border-right: none;
+        touch-action: pan-y;
     }
 
     body.columns-mode .cv-column.focused {
