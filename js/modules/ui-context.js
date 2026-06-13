@@ -1258,8 +1258,11 @@ Object.assign(NYM.prototype, {
         sendBtn.addEventListener('touchcancel', cancelSendLongPress);
         sendBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
 
-        // Long-press on messages to show quick emoji reaction popup
-        const messagesEl = document.getElementById('messagesContainer');
+        // Long-press on messages to show quick emoji reaction popup. Bound to
+        // .main-content so it covers both the single chat view and every
+        // column (modals live outside .main-content, so they're safe).
+        const messagesEl = document.querySelector('.main-content') || document.getElementById('messagesContainer');
+        const _dimScroller = (el) => el && el.closest('.messages-container');
         let msgLongPressTimer = null;
         let msgLongPressFired = false;
 
@@ -1292,8 +1295,10 @@ Object.assign(NYM.prototype, {
             document.querySelectorAll('.quick-react-popup, .quick-context-menu').forEach(el => el.remove());
 
             // Highlight the long-pressed message and dim the others
-            messagesEl.classList.add('has-long-press-highlight');
-            messagesEl.querySelectorAll('.message.long-press-highlight').forEach(el => el.classList.remove('long-press-highlight'));
+            document.querySelectorAll('.messages-container.has-long-press-highlight').forEach(el => el.classList.remove('has-long-press-highlight'));
+            document.querySelectorAll('.message.long-press-highlight').forEach(el => el.classList.remove('long-press-highlight'));
+            const _dimEl = _dimScroller(msgEl);
+            if (_dimEl) _dimEl.classList.add('has-long-press-highlight');
             msgEl.classList.add('long-press-highlight');
 
             const popup = document.createElement('div');
@@ -1471,7 +1476,7 @@ Object.assign(NYM.prototype, {
             });
 
             const cleanupHighlight = () => {
-                messagesEl.classList.remove('has-long-press-highlight');
+                document.querySelectorAll('.messages-container.has-long-press-highlight').forEach(el => el.classList.remove('has-long-press-highlight'));
                 msgEl.classList.remove('long-press-highlight');
             };
 

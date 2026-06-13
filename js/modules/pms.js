@@ -2872,7 +2872,55 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage('PM conversation deleted');
     },
 
+    // Render the PM conversation header into the shared chat header. Split out
+    // of openPM so column-view focus can show the same header.
+    _renderPMHeader(nym, pubkey) {
+        const known = this.users.get(pubkey);
+        const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.parseNymFromDisplay(nym);
+        const suffix = this.getPubkeySuffix(pubkey);
+        const pmAvatarSrc = this.getAvatarUrl(pubkey);
+        const safePk = this._safePubkey(pubkey);
+        const flairHtml = this.getFlairForUser(pubkey);
+        const friendBadge = this.getFriendBadgeHtml(pubkey);
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            : this.isVerifiedBot(pubkey)
+                ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                : '';
+        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
+        const lastSeenHtml = this._pmLastSeenHtml(pubkey);
+        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
+
+        const _pmHeaderEl = document.getElementById('currentChannel');
+        _pmHeaderEl.innerHTML = pmHeaderHtml;
+        _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
+        delete _pmHeaderEl.dataset.groupHeaderSig;
+
+        const _pmHeaderRow = _pmHeaderEl.querySelector('.pm-header-row');
+        if (_pmHeaderRow) {
+            _pmHeaderRow.classList.add('header-clickable');
+            _pmHeaderRow.onclick = (e) => this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, true);
+        }
+        const lockSvgPM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-pms-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+        if (this.isVerifiedBot(pubkey)) {
+            document.getElementById('channelMeta').innerHTML =
+                `${lockSvgPM}E2E encrypted · <span id="botCreditMeta">checking credits…</span>`;
+            this._refreshBotCreditMeta();
+        } else {
+            document.getElementById('channelMeta').innerHTML = `${lockSvgPM}End-to-end encrypted private message`;
+        }
+
+        this._ensurePMHeaderTimer();
+
+        const shareBtn = document.getElementById('shareChannelBtn');
+        if (shareBtn) shareBtn.style.display = 'none';
+        const favBtn = document.getElementById('favoriteChannelBtn');
+        if (favBtn) favBtn.style.display = 'none';
+        if (typeof this._refreshCallButtons === 'function') this._refreshCallButtons();
+    },
+
     openPM(nym, pubkey) {
+        if (this._cvActive) { this._cvOpenConversation({ type: 'pm', pubkey, nym }); return; }
         this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
@@ -2904,55 +2952,8 @@ Object.assign(NYM.prototype, {
         // Re-render typing indicator for the new conversation
         this.renderTypingIndicator();
 
-        // Format the nym with pubkey suffix for display
-        const known = this.users.get(pubkey);
-        const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.parseNymFromDisplay(nym);
-        const suffix = this.getPubkeySuffix(pubkey);
-        const pmAvatarSrc = this.getAvatarUrl(pubkey);
-        const safePk = this._safePubkey(pubkey);
-        const flairHtml = this.getFlairForUser(pubkey);
-        const friendBadge = this.getFriendBadgeHtml(pubkey);
-        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
-            : this.isVerifiedBot(pubkey)
-                ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
-                : '';
-        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
-        const lastSeenHtml = this._pmLastSeenHtml(pubkey);
-        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
-
-        // Update UI with formatted nym
-        const _pmHeaderEl = document.getElementById('currentChannel');
-        _pmHeaderEl.innerHTML = pmHeaderHtml;
-        _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
-        delete _pmHeaderEl.dataset.groupHeaderSig;
-
-        // Click the header to open this contact's profile context menu.
-        const _pmHeaderRow = _pmHeaderEl.querySelector('.pm-header-row');
-        if (_pmHeaderRow) {
-            _pmHeaderRow.classList.add('header-clickable');
-            _pmHeaderRow.onclick = (e) => this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, true);
-        }
-        const lockSvgPM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-pms-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
-        if (this.isVerifiedBot(pubkey)) {
-            document.getElementById('channelMeta').innerHTML =
-                `${lockSvgPM}E2E encrypted · <span id="botCreditMeta">checking credits…</span>`;
-            this._refreshBotCreditMeta();
-        } else {
-            document.getElementById('channelMeta').innerHTML = `${lockSvgPM}End-to-end encrypted private message`;
-        }
-
-        // Keep the "Last seen …" line ticking while this conversation is open.
-        this._ensurePMHeaderTimer();
-
-        // Hide share button in PM mode
-        const shareBtn = document.getElementById('shareChannelBtn');
-        if (shareBtn) {
-            shareBtn.style.display = 'none';
-        }
-        const favBtn = document.getElementById('favoriteChannelBtn');
-        if (favBtn) favBtn.style.display = 'none';
-        if (typeof this._refreshCallButtons === 'function') this._refreshCallButtons();
+        // Render the conversation header (shared with column-view focus)
+        this._renderPMHeader(nym, pubkey);
 
         // Update active states
         document.querySelectorAll('.channel-item').forEach(item => {
@@ -3693,8 +3694,8 @@ Object.assign(NYM.prototype, {
 
     // Load older PM/group messages when user scrolls to top
     loadOlderPMMessages(conversationKey) {
-        const container = document.getElementById('messagesContainer');
-        const scroller = this._getMessagesScroller();
+        const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
+        const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
         if (!container || !scroller) return false;
 
         const currentStart = this.pmRenderedStart.get(conversationKey);

@@ -3559,6 +3559,12 @@ async function showSettings() {
         opt.classList.toggle('selected', opt.dataset.layout === currentLayout);
     });
 
+    // Initialize chat view selection
+    const currentView = nym.settings.chatViewMode === 'columns' ? 'columns' : 'single';
+    document.querySelectorAll('.view-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.view === currentView);
+    });
+
     // Initialize transparency toggle
     const transparencySel = document.getElementById('transparencySelect');
     if (transparencySel) {
@@ -4087,6 +4093,19 @@ async function resetSettings() {
     closeModal('settingsModal');
 }
 
+// Chat View (single vs columns)
+function selectChatView(view) {
+    const mode = view === 'columns' ? 'columns' : 'single';
+    document.querySelectorAll('.view-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.view === mode);
+    });
+    nym.settings.chatViewMode = mode;
+    localStorage.setItem('nym_chat_view_mode', mode);
+    if (typeof nym.applyChatViewMode === 'function') nym.applyChatViewMode(mode);
+    nostrSettingsSave();
+}
+window.selectChatView = selectChatView;
+
 // Message Layout Functions
 function selectMessageLayout(layout) {
     document.querySelectorAll('.layout-option').forEach(opt => {
@@ -4197,7 +4216,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.71.496';
+const NYMCHAT_VERSION = 'v3.72.496';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6233,6 +6252,22 @@ async function applyNostrSettings(s) {
         }
     }
 
+    // Saved column layout (applied when chat view mode is columns)
+    if (Array.isArray(s.columnsLayout)) {
+        nym.columnsLayout = s.columnsLayout;
+        try { localStorage.setItem('nym_columns_layout', JSON.stringify(s.columnsLayout)); } catch (e) { }
+    }
+
+    // Chat view mode (single vs columns)
+    if (s.chatViewMode === 'single' || s.chatViewMode === 'columns') {
+        nym.settings.chatViewMode = s.chatViewMode;
+        localStorage.setItem('nym_chat_view_mode', s.chatViewMode);
+        document.querySelectorAll('.view-option').forEach(opt => {
+            opt.classList.toggle('selected', opt.dataset.view === s.chatViewMode);
+        });
+        if (typeof nym.applyChatViewMode === 'function') nym.applyChatViewMode(s.chatViewMode);
+    }
+
     // Lightning address
     if (s.lightningAddress) {
         localStorage.setItem('nym_lightning_address_global', s.lightningAddress);
@@ -6744,6 +6779,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     nym = new NYM();
     window.nym = nym;
     installNativeWalletBridgeCompat(nym);
+
+    // Reveal scrollbars only while scrolling, then fade them back out.
+    let _scrollHideTimer = null;
+    document.addEventListener('scroll', () => {
+        document.body.classList.add('is-scrolling');
+        clearTimeout(_scrollHideTimer);
+        _scrollHideTimer = setTimeout(() => document.body.classList.remove('is-scrolling'), 900);
+    }, { passive: true, capture: true });
 
     // If the user enabled identity encryption, unlock (decrypt the stored
     // secrets into memory) before any identity-restore code reads them.

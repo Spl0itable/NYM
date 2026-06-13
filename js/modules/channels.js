@@ -973,6 +973,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     switchChannel(channel, geohash = '') {
+        if (this._cvActive) { this._cvOpenConversation({ type: 'channel', channel, geohash: geohash || '' }); return; }
         // Keep the current conversation's unsent input before switching away
         this._saveCurrentDraft();
         // Store previous state

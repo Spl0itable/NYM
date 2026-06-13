@@ -1278,7 +1278,11 @@ Object.assign(NYM.prototype, {
                     this.addChannel(geohash, geohash);
                 }
 
-                this.switchChannel(geohash, geohash);
+                if (this._cvActive) {
+                    this._cvOpenConversation({ type: 'channel', channel: geohash, geohash }, { forceNew: true });
+                } else {
+                    this.switchChannel(geohash, geohash);
+                }
 
                 this.userJoinedChannels.add(geohash);
                 this.saveUserChannels();

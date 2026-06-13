@@ -48,6 +48,7 @@
     <link rel="stylesheet" href="css/styles-chat.css">
     <link rel="stylesheet" href="css/styles-components.css">
     <link rel="stylesheet" href="css/styles-themes-responsive.css">
+    <link rel="stylesheet" href="css/styles-columns.css">
     <link rel="stylesheet" href="css/no-inline.css">
     <link rel="preload" href="css/styles-features.css" as="style" data-defer-style>
     <noscript>
@@ -1349,6 +1350,28 @@
                     </div>
 
                     <div class="form-group">
+                        <label class="form-label">Chat View</label>
+                        <div class="view-grid" id="viewGrid">
+                            <div class="view-option selected" data-view="single" data-action="selectChatView">
+                                <div class="view-preview view-preview-single">
+                                    <div class="vp-col"><span class="vp-bar"></span><span class="vp-bar short"></span><span class="vp-bar"></span><span class="vp-bar short"></span></div>
+                                </div>
+                                <span class="view-label">Single Chat (Default)</span>
+                            </div>
+                            <div class="view-option" data-view="columns" data-action="selectChatView">
+                                <div class="view-preview view-preview-columns">
+                                    <div class="vp-col"><span class="vp-bar"></span><span class="vp-bar short"></span></div>
+                                    <div class="vp-col"><span class="vp-bar short"></span><span class="vp-bar"></span></div>
+                                    <div class="vp-col"><span class="vp-bar"></span></div>
+                                </div>
+                                <span class="view-label">Column View</span>
+                            </div>
+                        </div>
+                        <div class="form-hint">Single shows one conversation at a time. Column view shows channels, PMs, and group chats side by side in scrollable columns you can add, remove, and drag to reorder.</div>
+                        <button class="btn-small" data-action="resetColumnView">Reset columns to defaults</button>
+                    </div>
+
+                    <div class="form-group">
                         <label class="form-label">Chat Wallpaper</label>
                         <div class="wallpaper-grid" id="wallpaperGrid">
                             <div class="wallpaper-option selected" data-wallpaper="none" data-action="selectWallpaper">
@@ -2178,6 +2201,7 @@
     <script defer src="js/modules/calls.js"></script>
     <script defer src="js/modules/translate.js"></script>
     <script defer src="js/modules/sidebar-sections.js"></script>
+    <script defer src="js/modules/columns.js"></script>
     <script defer src="js/modules/polls.js"></script>
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>

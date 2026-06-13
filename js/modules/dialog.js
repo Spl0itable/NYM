@@ -14,6 +14,7 @@
                     '<div class="modal-header" id="appDialogTitle">Confirm</div>' +
                     '<div class="modal-body">' +
                         '<div class="app-dialog-message" id="appDialogMessage"></div>' +
+                        '<label class="app-dialog-checkbox nm-hidden" id="appDialogCheckboxRow"><input type="checkbox" id="appDialogCheckbox"><span id="appDialogCheckboxLabel"></span></label>' +
                         '<input type="text" class="form-input app-dialog-input nm-hidden" id="appDialogInput" autocomplete="off">' +
                         '<textarea class="form-textarea app-dialog-textarea nm-hidden" id="appDialogTextarea" rows="4"></textarea>' +
                         '<div class="input-char-count nm-hidden" id="appDialogCharCount"></div>' +
@@ -48,6 +49,10 @@
         if (!pending) return undefined;
         if (pending.alertOnly) return undefined;
         if (pending.prompt) return ok ? (promptField().value || '') : null;
+        if (pending.hasCheckbox) {
+            var cb = document.getElementById('appDialogCheckbox');
+            return { confirmed: ok, checked: !!(cb && cb.checked) };
+        }
         return ok;
     }
 
@@ -77,7 +82,16 @@
         ensureModal();
         if (pending) settle(resultFor(false));
         return new Promise(function (resolve) {
-            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline, maxLength: opts.maxLength || 0 };
+            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline, maxLength: opts.maxLength || 0, hasCheckbox: !!opts.checkboxLabel };
+            var cbRow = document.getElementById('appDialogCheckboxRow');
+            var cb = document.getElementById('appDialogCheckbox');
+            if (opts.checkboxLabel) {
+                document.getElementById('appDialogCheckboxLabel').textContent = opts.checkboxLabel;
+                if (cb) cb.checked = false;
+                cbRow.classList.remove('nm-hidden');
+            } else {
+                cbRow.classList.add('nm-hidden');
+            }
             document.getElementById('appDialogTitle').textContent =
                 opts.title || (opts.alertOnly ? 'Notice' : 'Confirm');
             document.getElementById('appDialogMessage').textContent = opts.message || '';
@@ -114,6 +128,8 @@
         });
     }
 
+    // With opts.checkboxLabel the promise resolves to { confirmed, checked };
+    // otherwise it resolves to a boolean.
     window.showAppConfirm = function (message, opts) {
         opts = opts || {};
         return open({
@@ -121,7 +137,8 @@
             title: opts.title,
             okLabel: opts.okLabel,
             cancelLabel: opts.cancelLabel,
-            danger: opts.danger
+            danger: opts.danger,
+            checkboxLabel: opts.checkboxLabel
         });
     };
 

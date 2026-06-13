@@ -7,8 +7,8 @@ const INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere
 // fall through to a "misc" section so future settings still sync.
 const NYM_SETTINGS_SECTION_KEYS = {
     appearance: ['theme', 'sound', 'autoscroll', 'showTimestamps', 'timeFormat', 'dateFormat',
-        'blurOthersImages', 'chatLayout', 'nickStyle', 'colorMode', 'wallpaperType',
-        'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'sidebarSectionOrder'],
+        'blurOthersImages', 'chatLayout', 'chatViewMode', 'columnsLayout', 'nickStyle', 'colorMode',
+        'wallpaperType', 'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'sidebarSectionOrder'],
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
@@ -115,6 +115,8 @@ Object.assign(NYM.prototype, {
             typingIndicatorsScope: _normalizeIndicatorScope(this.settings.typingIndicatorsScope),
             pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' },
             chatLayout: this.settings.chatLayout || 'irc',
+            chatViewMode: this.settings.chatViewMode === 'columns' ? 'columns' : 'single',
+            columnsLayout: Array.isArray(this.columnsLayout) ? this.columnsLayout : [],
             nickStyle: this.settings.nickStyle || 'fancy',
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
             wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
@@ -1057,6 +1059,7 @@ Object.assign(NYM.prototype, {
             pinnedLandingChannel: pinnedLandingChannel,
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
             chatLayout: localStorage.getItem('nym_chat_layout') || 'bubbles',
+            chatViewMode: localStorage.getItem('nym_chat_view_mode') === 'columns' ? 'columns' : 'single',
             lowDataMode: localStorage.getItem('nym_low_data_mode') === 'true',
             textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             transparencyEnabled: localStorage.getItem('nym_transparency_enabled') === 'true',

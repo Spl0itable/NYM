@@ -3243,10 +3243,28 @@ Object.assign(NYM.prototype, {
     },
 
     // Open a group conversation in the main chat area
+    // Render the group conversation header into the shared chat header. Split
+    // out of openGroup so column-view focus can show the same header.
+    _renderGroupHeader(groupId) {
+        const channelEl = document.getElementById('currentChannel');
+        channelEl.innerHTML = this._buildGroupHeaderHtml(groupId);
+        channelEl.dataset.groupHeaderSig = this._groupHeaderSig(groupId);
+        delete channelEl.dataset.pmHeaderSig;
+        this._wireGroupHeaderClick(channelEl, groupId);
+        const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-grp-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+        document.getElementById('channelMeta').innerHTML = `${lockSvg}End-to-end encrypted group chat`;
+        const shareBtn = document.getElementById('shareChannelBtn');
+        if (shareBtn) shareBtn.style.display = 'none';
+        const favBtn = document.getElementById('favoriteChannelBtn');
+        if (favBtn) favBtn.style.display = 'none';
+        if (typeof this._refreshCallButtons === 'function') this._refreshCallButtons();
+    },
+
     openGroup(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
 
+        if (this._cvActive) { this._cvOpenConversation({ type: 'group', groupId }); return; }
         this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
@@ -3272,20 +3290,7 @@ Object.assign(NYM.prototype, {
         this.renderTypingIndicator();
 
         // Build the group header (custom avatar or stacked member avatars).
-        const channelEl = document.getElementById('currentChannel');
-        channelEl.innerHTML = this._buildGroupHeaderHtml(groupId);
-        channelEl.dataset.groupHeaderSig = this._groupHeaderSig(groupId);
-        delete channelEl.dataset.pmHeaderSig;
-        this._wireGroupHeaderClick(channelEl, groupId);
-        const lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nm-grp-2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
-        const metaText = `${lockSvg}End-to-end encrypted group chat`;
-        document.getElementById('channelMeta').innerHTML = metaText;
-
-        const shareBtn = document.getElementById('shareChannelBtn');
-        if (shareBtn) shareBtn.style.display = 'none';
-        const favBtn = document.getElementById('favoriteChannelBtn');
-        if (favBtn) favBtn.style.display = 'none';
-        if (typeof this._refreshCallButtons === 'function') this._refreshCallButtons();
+        this._renderGroupHeader(groupId);
 
         // Mark only the matching group item as active
         document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));

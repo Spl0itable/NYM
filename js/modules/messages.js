@@ -455,9 +455,16 @@ Object.assign(NYM.prototype, {
             return; // Don't display blocked messages
         }
 
+        // Column view mode routes each message to its own column rather
+        // than the single active conversation; null means no open column for it.
+        let _cvContainer = null;
+
         // Handle PM messages differently
         if (message.isPM) {
-            if (message.isGroup) {
+            if (this._cvActive) {
+                _cvContainer = this._cvListForKey(message.conversationKey);
+                if (!_cvContainer) return;
+            } else if (message.isGroup) {
                 // Group message: only display when viewing the correct group
                 if (!this.inPMMode || this.currentGroup !== message.groupId) return;
                 if (message.conversationKey !== this.getGroupConversationKey(this.currentGroup)) return;
@@ -528,7 +535,18 @@ Object.assign(NYM.prototype, {
             }
 
             // Now check if we should actually render this message
-            if (this.inPMMode) {
+            if (this._cvActive) {
+                _cvContainer = this._cvListForKey(storageKey);
+                if (!_cvContainer) {
+                    if (!message.isOwn && !exists && !message.isHistorical) {
+                        this.updateUnreadCount(storageKey);
+                    }
+                    return;
+                }
+                if (typeof this._markChannelRead === 'function' && message.created_at) {
+                    this._markChannelRead(storageKey, message.created_at);
+                }
+            } else if (this.inPMMode) {
                 // In PM mode — message is stored but don't render channel
                 // messages. Leave the cached DOM alone; loadChannelMessages
                 // does a partial-cache restore that appends trailing new
@@ -537,31 +555,31 @@ Object.assign(NYM.prototype, {
                     this.updateUnreadCount(storageKey);
                 }
                 return;
-            }
-
-            // Check if this is for current channel
-            const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-            if (storageKey !== currentKey) {
-                // Message is for different channel — same partial-cache
-                // strategy as the PM branch above; no cache invalidation
-                // needed.
-                if (!message.isOwn && !exists && !message.isHistorical) {
-                    this.updateUnreadCount(storageKey);
+            } else {
+                // Check if this is for current channel
+                const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                if (storageKey !== currentKey) {
+                    // Message is for different channel — same partial-cache
+                    // strategy as the PM branch above; no cache invalidation
+                    // needed.
+                    if (!message.isOwn && !exists && !message.isHistorical) {
+                        this.updateUnreadCount(storageKey);
+                    }
+                    return;
                 }
-                return;
-            }
-            if (typeof this._markChannelRead === 'function' && message.created_at) {
-                this._markChannelRead(storageKey, message.created_at);
-            }
+                if (typeof this._markChannelRead === 'function' && message.created_at) {
+                    this._markChannelRead(storageKey, message.created_at);
+                }
 
-            // Send a public read receipt (kind 24421) only for messages the
-            // user can actually see: fresh, in the current channel, tab
-            // visible, and not scrolled away from the bottom.
-            const canBeSeen = !document.hidden && !this.userScrolledUp;
-            if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
-                message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
-                typeof this.sendChannelReadReceipt === 'function') {
-                this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
+                // Send a public read receipt (kind 24421) only for messages the
+                // user can actually see: fresh, in the current channel, tab
+                // visible, and not scrolled away from the bottom.
+                const canBeSeen = !document.hidden && !this.userScrolledUp;
+                if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
+                    message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
+                    typeof this.sendChannelReadReceipt === 'function') {
+                    this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
+                }
             }
         }
 
@@ -572,8 +590,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Now actually display the message in the DOM
-        const container = document.getElementById('messagesContainer');
+        // Now actually display the message in the DOM (a column list in
+        // column view mode, otherwise the single shared container)
+        const container = _cvContainer || document.getElementById('messagesContainer');
 
         // Clamp timestamp to now so messages never appear in the future
         const now = new Date();
@@ -1739,7 +1758,8 @@ Object.assign(NYM.prototype, {
     },
 
     displaySystemMessage(content, type = 'system', { html = false } = {}) {
-        const container = document.getElementById('messagesContainer');
+        const container = (this._cvActive && this._cvFocusedListEl && this._cvFocusedListEl())
+            || document.getElementById('messagesContainer');
         const messageEl = document.createElement('div');
         messageEl.className = type === 'action' ? 'action-message' : 'system-message';
         if (html) {
@@ -1749,7 +1769,12 @@ Object.assign(NYM.prototype, {
         }
         container.appendChild(messageEl);
 
-        this._scheduleScrollToBottom();
+        if (this._cvActive && container !== document.getElementById('messagesContainer')) {
+            const sc = container.closest('.messages-container');
+            if (sc) sc.scrollTop = 0;
+        } else {
+            this._scheduleScrollToBottom();
+        }
     },
 
     // The scroll viewport that wraps the message list.
@@ -1799,13 +1824,21 @@ Object.assign(NYM.prototype, {
             this._applyBubbleGroupingTo(messageEl.nextElementSibling);
             return;
         }
-        const container = document.getElementById('messagesContainer');
-        if (container && (container.contains(messageEl) || messageEl.parentNode === null)) {
+        // Regroup the list the message actually lives in — the single-view
+        // container or, in column view, the focused column's list.
+        const container = messageEl.closest('.messages-list') ||
+            (messageEl.parentNode === null ? document.getElementById('messagesContainer') : null);
+        if (container) {
+            if (!this._bubbleRegroupQueue) this._bubbleRegroupQueue = new Set();
+            this._bubbleRegroupQueue.add(container);
             if (!this._bubbleRegroupRAF) {
                 this._bubbleRegroupRAF = requestAnimationFrame(() => {
                     this._bubbleRegroupRAF = null;
-                    const c = document.getElementById('messagesContainer');
-                    if (c) this._recomputeAllBubbleGrouping(c);
+                    const queued = this._bubbleRegroupQueue;
+                    this._bubbleRegroupQueue = null;
+                    if (queued) for (const c of queued) {
+                        if (c && c.isConnected) this._recomputeAllBubbleGrouping(c);
+                    }
                 });
             }
             return;
@@ -2339,8 +2372,7 @@ Object.assign(NYM.prototype, {
         return ACTIONS[action] || null;
     },
 
-    setupSwipeToReply() {
-        const container = document.getElementById('messagesContainer');
+    setupSwipeToReply(container = document.getElementById('messagesContainer')) {
         if (!container) return;
 
         let startX = 0;
@@ -2491,8 +2523,7 @@ Object.assign(NYM.prototype, {
         container.addEventListener('touchcancel', handleTouchEnd, { passive: true });
     },
 
-    setupDoubleClickToReply() {
-        const container = document.getElementById('messagesContainer');
+    setupDoubleClickToReply(container = document.getElementById('messagesContainer')) {
         if (!container) return;
 
         container.addEventListener('dblclick', (e) => {
@@ -3232,8 +3263,8 @@ Object.assign(NYM.prototype, {
     },
 
     loadOlderChannelMessages(storageKey) {
-        const container = document.getElementById('messagesContainer');
-        const scroller = this._getMessagesScroller();
+        const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
+        const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
         if (!container || !scroller) return false;
 
         const currentStart = this.channelRenderedStart.get(storageKey);

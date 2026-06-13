@@ -371,6 +371,8 @@ window.nymHapticTap = function (ms) {
         'triggerWallpaperUpload':     function () { window.triggerWallpaperUpload(); },
         'handleWallpaperUpload':      function (e) { window.handleWallpaperUpload(e); },
         'selectMessageLayout':        function (_e, t) { window.selectMessageLayout(t.dataset.layout); },
+        'selectChatView':             function (_e, t) { window.selectChatView(t.dataset.view); },
+        'resetColumnView':            function () { nym().cvResetColumns(); },
         'previewTextSize':            function (_e, t) { window.previewTextSize(t.value); },
         'commitTextSize':             function (_e, t) { window.commitTextSize(t.value); },
         'resetTextSize':              function () { window.resetTextSize(); },

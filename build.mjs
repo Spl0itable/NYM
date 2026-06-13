@@ -141,7 +141,8 @@ async function run() {
   // Critical shell assets to precache on SW install (hashed names)
   const criticalSources = [
     'css/styles-core.css', 'css/styles-shell.css', 'css/styles-chat.css',
-    'css/styles-components.css', 'css/styles-themes-responsive.css', 'css/no-inline.css',
+    'css/styles-components.css', 'css/styles-themes-responsive.css', 'css/styles-columns.css',
+    'css/no-inline.css',
     'js/defer-css.js', 'js/theme-init.js', 'js/setup-modal-init.js',
     'js/modules/inline-bindings.js', 'js/modules/dialog.js', 'js/nostr-tools.js',
     'js/app.js', 'js/nym-crypto.js', 'js/modules/crypto-pool.js',
@@ -150,6 +151,7 @@ async function run() {
     'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',
     'js/modules/pms.js', 'js/modules/groups.js', 'js/modules/ui-context.js',
     'js/modules/init.js', 'js/modules/build-verify.js', 'js/modules/canary-verify.js',
+    'js/modules/columns.js',
   ];
   const precache = criticalSources
     .map((rel) => assetMap.get(rel))

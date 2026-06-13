@@ -1058,6 +1058,9 @@ Object.assign(NYM.prototype, {
 
                     // Switch to pinned landing channel (or PM-only mode landing)
                     setTimeout(() => {
+                        if (this.settings.chatViewMode === 'columns' && typeof this.applyChatViewMode === 'function') {
+                            this.applyChatViewMode('columns');
+                        }
                         if (window.pendingChannel || window.urlChannelRouted) return;
                         // Don't override if user already navigated (e.g. joined a channel from search, created a group)
                         if (this.navigationHistory.length > 0) return;

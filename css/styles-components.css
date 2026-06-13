@@ -2195,12 +2195,42 @@ body.chat-bubbles .crypto-lock-irc {
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.12);
+    background: transparent;
     border-radius: 10px;
+    transition: background 0.3s ease;
+}
+
+body.is-scrolling ::-webkit-scrollbar-thumb,
+*:hover>::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
 }
 
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.2);
+}
+
+html {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+
+body.is-scrolling {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.app-dialog-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+}
+
+.app-dialog-checkbox input {
+    cursor: pointer;
 }
 
 .bitchat-user-0 {
