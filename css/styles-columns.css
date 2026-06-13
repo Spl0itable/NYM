@@ -21,6 +21,10 @@ body.columns-mode .chat-header {
     height: calc(37px + max(68px, (var(--user-text-size) + 3px) * 1.4 + 35px));
 }
 
+[data-action="resetColumnView"] {
+    margin-top: 10px;
+}
+
 .cv-strip {
     flex: 1;
     min-height: 0;

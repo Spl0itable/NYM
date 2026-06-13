@@ -1659,9 +1659,9 @@ body.chat-bubbles .edited-indicator-irc {
     font-family: var(--font-sans);
     font-size: var(--user-text-size);
     outline: none;
-    resize: vertical;
+    resize: none;
     min-height: 42px;
-    max-height: 120px;
+    max-height: 160px;
     transition: all var(--transition);
 }
 
