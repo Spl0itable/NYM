@@ -36,7 +36,6 @@ Object.assign(NYM.prototype, {
             // Setup event listeners
             this.setupEventListeners();
             this.setupCommands();
-            this.setupEmojiPicker();
             this.setupContextMenu();
             this.setupMobileGestures();
             this.setupTranslateInput();

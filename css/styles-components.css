@@ -1309,6 +1309,16 @@
     gap: 5px;
 }
 
+.emoji-section,
+.emoji-picker-section {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 320px;
+}
+
+.emoji-hidden {
+    display: none !important;
+}
+
 .reaction-emoji,
 .emoji-option {
     background: transparent;

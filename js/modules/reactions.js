@@ -143,6 +143,7 @@ Object.assign(NYM.prototype, {
         this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
         this.recentEmojis.unshift(emoji);
         this.recentEmojis = this.recentEmojis.slice(0, 24);
+        this._emojiRecentsDirty = true;
         this.saveRecentEmojis();
     },
 
@@ -685,6 +686,129 @@ Object.assign(NYM.prototype, {
         this.showEnhancedReactionPicker(messageId, button);
     },
 
+    // The enhanced modal DOM is expensive (~7k nodes), so it's built once,
+    // detached on close, and rebuilt only when packs/favorites/recents change.
+    _ensureEnhancedEmojiModal() {
+        let modal = this._cachedEmojiModal;
+        if (modal && this._emojiRecentsDirty && !this._emojiPickerDirty) {
+            this._refreshEmojiModalRecents(modal);
+            this._emojiRecentsDirty = false;
+        }
+        if (modal && !this._emojiPickerDirty) {
+            this._resetEmojiSearch(modal);
+            return modal;
+        }
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.className = 'enhanced-emoji-modal active';
+            this._bindEmojiModalEvents(modal);
+            this._cachedEmojiModal = modal;
+        }
+        modal.innerHTML = `
+<div class="emoji-modal-header">
+    <input type="text" class="emoji-search-input" placeholder="Search emoji by name..." id="emojiSearchInput">
+    <button class="modal-close emoji-modal-close" data-action="closeEnhancedEmojiModal" aria-label="Close">&#x2715;</button>
+</div>
+${this._emojiSectionsHtml()}`;
+        this._indexEmojiSearch(modal, '.emoji-option', '.emoji-section');
+        this._emojiPickerDirty = false;
+        this._emojiRecentsDirty = false;
+        return modal;
+    },
+
+    _refreshEmojiModalRecents(modal) {
+        const recents = this._recentEmojisForPicker();
+        const section = modal.querySelector('.emoji-section[data-category="recent"]');
+        if (!section) {
+            if (recents.length > 0) this._emojiPickerDirty = true;
+            return;
+        }
+        const grid = section.querySelector('.emoji-grid');
+        if (!grid) return;
+        const emojiToNames = this._getEmojiToNames();
+        grid.innerHTML = recents.map(e => this.emojiOptionHtml(e, emojiToNames)).join('');
+        this._reindexEmojiSection(modal, section);
+    },
+
+    _bindEmojiModalEvents(modal) {
+        modal.addEventListener('click', async (e) => {
+            if (e.target.closest('[data-action]')) return;
+            const btn = e.target.closest('.emoji-option');
+            if (!btn) return;
+            e.stopPropagation();
+            const emoji = btn.dataset.emoji;
+            if (this._activePickerMode === 'input') {
+                this.insertEmoji(emoji);
+                this.closeEnhancedEmojiModal();
+                return;
+            }
+            this.addToRecentEmojis(emoji);
+            const onSelect = this._activePickerOnSelect;
+            const messageId = this._activePickerMessageId;
+            if (typeof onSelect === 'function') {
+                onSelect(emoji);
+            } else {
+                await this.sendReaction(messageId, emoji);
+            }
+            this.closeEnhancedEmojiModal();
+        });
+        modal.addEventListener('input', (e) => {
+            if (!e.target.classList.contains('emoji-search-input')) return;
+            const value = e.target.value;
+            if (modal._searchTimer) clearTimeout(modal._searchTimer);
+            modal._searchTimer = setTimeout(() => {
+                modal._searchTimer = null;
+                this._applyEmojiSearch(modal, value);
+            }, 80);
+        });
+    },
+
+    _indexEmojiSearch(root, btnSel, sectionSel) {
+        const sections = [];
+        root.querySelectorAll(sectionSel).forEach(sec => {
+            sections.push({ el: sec, items: this._indexEmojiSectionItems(sec, btnSel) });
+        });
+        root._emojiSearch = { sections, btnSel, active: false };
+    },
+
+    _indexEmojiSectionItems(sec, btnSel) {
+        const items = [];
+        sec.querySelectorAll(btnSel).forEach(btn => {
+            items.push({ el: btn, text: btn.textContent, names: (btn.dataset.names || '').toLowerCase() });
+        });
+        return items;
+    },
+
+    _reindexEmojiSection(root, sec) {
+        const idx = root._emojiSearch;
+        if (!idx) return;
+        const entry = idx.sections.find(s => s.el === sec);
+        if (entry) entry.items = this._indexEmojiSectionItems(sec, idx.btnSel);
+    },
+
+    _applyEmojiSearch(root, value) {
+        const idx = root._emojiSearch;
+        if (!idx) return;
+        const search = (value || '').toLowerCase();
+        if (!search && !idx.active) return;
+        for (const sec of idx.sections) {
+            let visible = 0;
+            for (const item of sec.items) {
+                const show = !search || item.text.includes(search) || item.names.includes(search);
+                item.el.classList.toggle('emoji-hidden', !show);
+                if (show) visible++;
+            }
+            sec.el.classList.toggle('emoji-hidden', visible === 0);
+        }
+        idx.active = !!search;
+    },
+
+    _resetEmojiSearch(root) {
+        const input = root.querySelector('.emoji-search-input, .emoji-picker-search-input');
+        if (input && input.value) input.value = '';
+        this._applyEmojiSearch(root, '');
+    },
+
     showEnhancedReactionPicker(messageId, button, onSelect) {
         // Check if clicking the same button that opened the current modal
         if (this.enhancedEmojiModal && this.activeReactionPickerButton === button) {
@@ -702,41 +826,7 @@ Object.assign(NYM.prototype, {
         this._activePickerMessageId = messageId || null;
         this._activePickerMode = 'reaction';
 
-        const modal = document.createElement('div');
-        modal.className = 'enhanced-emoji-modal active';
-
-        // Create reverse lookup for emoji names
-        const emojiToNames = {};
-        Object.entries(this.emojiMap).forEach(([name, emoji]) => {
-            if (!emojiToNames[emoji]) {
-                emojiToNames[emoji] = [];
-            }
-            emojiToNames[emoji].push(name);
-        });
-
-        modal.innerHTML = `
-<div class="emoji-modal-header">
-    <input type="text" class="emoji-search-input" placeholder="Search emoji by name..." id="emojiSearchInput">
-    <button class="modal-close emoji-modal-close" data-action="closeEnhancedEmojiModal" aria-label="Close">&#x2715;</button>
-</div>
-${this.recentEmojis.length > 0 ? `
-    <div class="emoji-section">
-        <div class="emoji-section-title">Recently Used</div>
-        <div class="emoji-grid">
-            ${this._recentEmojisForPicker().map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
-        </div>
-    </div>
-` : ''}
-${this.buildCustomEmojiSectionsHtml()}
-${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
-    <div class="emoji-section" data-category="${category}">
-        <div class="emoji-section-title emoji-default-cat-title">${category.charAt(0).toUpperCase() + category.slice(1)}${this._emojiCategoryFavButtonHtml(category)}</div>
-        <div class="emoji-grid">
-            ${emojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
-        </div>
-    </div>
-`).join('')}
-`;
+        const modal = this._ensureEnhancedEmojiModal();
 
         // Position modal
         const rect = button.getBoundingClientRect();
@@ -756,50 +846,10 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
             css = `position:fixed;${vertical}${horizontal}max-height:400px;z-index:10010;`;
         }
         modal.style.cssText = css;
+        modal.scrollTop = 0;
 
         document.body.appendChild(modal);
         this.enhancedEmojiModal = modal;
-
-        // Add search functionality
-        const searchInput = modal.querySelector('#emojiSearchInput');
-        let searchDebounceTimer = null;
-        searchInput.addEventListener('input', (e) => {
-            const value = e.target.value;
-            if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-            searchDebounceTimer = setTimeout(() => {
-                searchDebounceTimer = null;
-                const search = value.toLowerCase();
-                modal.querySelectorAll('.emoji-option').forEach(btn => {
-                    const emoji = btn.textContent;
-                    const names = btn.dataset.names || '';
-                    const shouldShow = !search ||
-                        emoji.includes(search) ||
-                        names.toLowerCase().includes(search);
-                    btn.style.display = shouldShow ? '' : 'none';
-                });
-                // Hide empty sections
-                modal.querySelectorAll('.emoji-section').forEach(section => {
-                    const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
-                        .some(btn => btn.style.display !== 'none');
-                    section.style.display = hasVisible ? '' : 'none';
-                });
-            }, 80);
-        });
-
-        // Add click handlers
-        modal.querySelectorAll('.emoji-option').forEach(btn => {
-            btn.onclick = async (e) => {
-                e.stopPropagation();
-                const emoji = btn.dataset.emoji;
-                this.addToRecentEmojis(emoji);
-                if (typeof onSelect === 'function') {
-                    onSelect(emoji);
-                } else {
-                    await this.sendReaction(messageId, emoji);
-                }
-                this.closeEnhancedEmojiModal();
-            };
-        });
     },
 
     toggleEmojiPicker() {
@@ -825,96 +875,23 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
         this.activeReactionPickerButton = button;
         this._activePickerMode = 'input';
 
-        const modal = document.createElement('div');
-        modal.className = 'enhanced-emoji-modal active';
-
-        // Create reverse lookup for emoji names
-        const emojiToNames = {};
-        Object.entries(this.emojiMap).forEach(([name, emoji]) => {
-            if (!emojiToNames[emoji]) {
-                emojiToNames[emoji] = [];
-            }
-            emojiToNames[emoji].push(name);
-        });
-
-        modal.innerHTML = `
-<div class="emoji-modal-header">
-    <input type="text" class="emoji-search-input" placeholder="Search emoji by name..." id="emojiSearchInput">
-    <button class="modal-close emoji-modal-close" data-action="closeEnhancedEmojiModal" aria-label="Close">&#x2715;</button>
-</div>
-${this.recentEmojis.length > 0 ? `
-    <div class="emoji-section">
-        <div class="emoji-section-title">Recently Used</div>
-        <div class="emoji-grid">
-            ${this._recentEmojisForPicker().map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
-        </div>
-    </div>
-` : ''}
-${this.buildCustomEmojiSectionsHtml()}
-${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
-    <div class="emoji-section" data-category="${category}">
-        <div class="emoji-section-title emoji-default-cat-title">${category.charAt(0).toUpperCase() + category.slice(1)}${this._emojiCategoryFavButtonHtml(category)}</div>
-        <div class="emoji-grid">
-            ${emojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames)).join('')}
-        </div>
-    </div>
-`).join('')}
-`;
+        const modal = this._ensureEnhancedEmojiModal();
 
         // Position near button
         const rect = button.getBoundingClientRect();
-        modal.style.position = 'fixed';
-
-        // Check if on mobile
+        let css;
         if (window.innerWidth <= 768) {
-            modal.style.bottom = '60px';
-            modal.style.left = '50%';
-            modal.style.transform = 'translateX(-50%)';
-            modal.style.right = 'auto';
-            modal.style.maxWidth = '90%';
+            css = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);right:auto;max-width:90%;';
         } else {
-            modal.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
-            modal.style.right = Math.min(window.innerWidth - rect.right + 50, 10) + 'px';
+            const bottom = (window.innerHeight - rect.top + 10);
+            const right = Math.min(window.innerWidth - rect.right + 50, 10);
+            css = `position:fixed;bottom:${bottom}px;right:${right}px;`;
         }
+        modal.style.cssText = css;
+        modal.scrollTop = 0;
 
         document.body.appendChild(modal);
         this.enhancedEmojiModal = modal;
-
-        // Add search functionality
-        const searchInput = modal.querySelector('#emojiSearchInput');
-        let searchDebounceTimer = null;
-        searchInput.addEventListener('input', (e) => {
-            const value = e.target.value;
-            if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-            searchDebounceTimer = setTimeout(() => {
-                searchDebounceTimer = null;
-                const search = value.toLowerCase();
-                modal.querySelectorAll('.emoji-option').forEach(btn => {
-                    const emoji = btn.textContent;
-                    const names = btn.dataset.names || '';
-                    const shouldShow = !search ||
-                        emoji.includes(search) ||
-                        names.toLowerCase().includes(search);
-                    btn.style.display = shouldShow ? '' : 'none';
-                });
-                // Hide empty sections
-                modal.querySelectorAll('.emoji-section').forEach(section => {
-                    const hasVisible = Array.from(section.querySelectorAll('.emoji-option'))
-                        .some(btn => btn.style.display !== 'none');
-                    section.style.display = hasVisible ? '' : 'none';
-                });
-            }, 80);
-        });
-
-        // Add click handlers for inserting emoji into input
-        modal.querySelectorAll('.emoji-option').forEach(btn => {
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const emoji = btn.dataset.emoji;
-                this.insertEmoji(emoji);
-                this.closeEnhancedEmojiModal();
-            };
-        });
     },
 
     closeEnhancedEmojiModal() {
@@ -1219,71 +1196,34 @@ ${this._getOrderedDefaultEmojiEntries().map(([category, emojis]) => `
         const picker = document.getElementById('emojiPicker');
         if (!picker) return;
 
-        // Build reverse lookup for names
-        const emojiToNames = {};
-        Object.entries(this.emojiMap).forEach(([name, emoji]) => {
-            if (!emojiToNames[emoji]) emojiToNames[emoji] = [];
-            emojiToNames[emoji].push(name);
-        });
-
-        let html = `<div class="emoji-picker-search">
+        picker.innerHTML = `<div class="emoji-picker-search">
             <input type="text" class="emoji-picker-search-input" placeholder="Search emoji..." id="emojiPickerSearch">
-        </div>`;
-
-        // Recent emojis section
-        if (this.recentEmojis.length > 0) {
-            html += `<div class="emoji-picker-section" data-category="recent">
-                <div class="emoji-picker-section-title">Recent</div>
-                <div class="emoji-picker-grid">
-                    ${this._recentEmojisForPicker().map(emoji => this.emojiOptionHtml(emoji, emojiToNames, "emoji-btn")).join('')}
-                </div>
-            </div>`;
-        }
-
-        // NIP-30 custom emoji packs
-        html += this.buildCustomEmojiSectionsHtml({
+        </div>` + this._emojiSectionsHtml({
             sectionClass: 'emoji-picker-section',
             titleClass: 'emoji-picker-section-title',
             gridClass: 'emoji-picker-grid',
             btnClass: 'emoji-btn'
         });
 
-        // Default category sections, favorited categories first
-        this._getOrderedDefaultEmojiEntries().forEach(([category, emojis]) => {
-            html += `<div class="emoji-picker-section" data-category="${category}">
-                <div class="emoji-picker-section-title emoji-default-cat-title">${category.charAt(0).toUpperCase() + category.slice(1)}${this._emojiCategoryFavButtonHtml(category)}</div>
-                <div class="emoji-picker-grid">
-                    ${emojis.map(emoji => this.emojiOptionHtml(emoji, emojiToNames, 'emoji-btn')).join('')}
-                </div>
-            </div>`;
-        });
+        this._indexEmojiSearch(picker, '.emoji-btn', '.emoji-picker-section');
 
-        picker.innerHTML = html;
-
-        // Search handler
-        const searchInput = picker.querySelector('#emojiPickerSearch');
-        if (searchInput) {
-            searchInput.addEventListener('input', (e) => {
-                const search = e.target.value.toLowerCase();
-                picker.querySelectorAll('.emoji-btn').forEach(btn => {
-                    const names = btn.dataset.names || '';
-                    const shouldShow = !search ||
-                        btn.textContent.includes(search) ||
-                        names.toLowerCase().includes(search);
-                    btn.style.display = shouldShow ? '' : 'none';
-                });
-                picker.querySelectorAll('.emoji-picker-section').forEach(section => {
-                    const hasVisible = Array.from(section.querySelectorAll('.emoji-btn'))
-                        .some(btn => btn.style.display !== 'none');
-                    section.style.display = hasVisible ? '' : 'none';
-                });
+        if (!picker._emojiBound) {
+            picker._emojiBound = true;
+            picker.addEventListener('click', (e) => {
+                if (e.target.closest('[data-action]')) return;
+                const btn = e.target.closest('.emoji-btn');
+                if (btn) this.insertEmoji(btn.dataset.emoji || btn.textContent);
+            });
+            picker.addEventListener('input', (e) => {
+                if (!e.target.classList.contains('emoji-picker-search-input')) return;
+                const value = e.target.value;
+                if (picker._searchTimer) clearTimeout(picker._searchTimer);
+                picker._searchTimer = setTimeout(() => {
+                    picker._searchTimer = null;
+                    this._applyEmojiSearch(picker, value);
+                }, 80);
             });
         }
-
-        // Click handlers
-        picker.querySelectorAll('.emoji-btn').forEach(btn => {
-            btn.onclick = () => this.insertEmoji(btn.dataset.emoji || btn.textContent);
-        });
     },
 
     insertEmoji(emoji) {

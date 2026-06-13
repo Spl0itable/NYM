@@ -27,21 +27,25 @@ Object.assign(NYM.prototype, {
         if (this._emojiCacheSaveTimer) clearTimeout(this._emojiCacheSaveTimer);
         this._emojiCacheSaveTimer = setTimeout(() => {
             this._emojiCacheSaveTimer = null;
-            try {
-                const packs = Array.from(this.customEmojiPacks.values())
-                    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-                    .slice(0, 500);
-                localStorage.setItem('nym_custom_emoji_packs', JSON.stringify(packs));
-            } catch (err) {
-                if (err && err.name === 'QuotaExceededError') {
-                    try {
-                        const trimmed = Array.from(this.customEmojiPacks.values())
-                            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-                            .slice(0, 80);
-                        localStorage.setItem('nym_custom_emoji_packs', JSON.stringify(trimmed));
-                    } catch (_) { }
+            const write = () => {
+                try {
+                    const packs = Array.from(this.customEmojiPacks.values())
+                        .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+                        .slice(0, 200);
+                    localStorage.setItem('nym_custom_emoji_packs', JSON.stringify(packs));
+                } catch (err) {
+                    if (err && err.name === 'QuotaExceededError') {
+                        try {
+                            const trimmed = Array.from(this.customEmojiPacks.values())
+                                .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+                                .slice(0, 80);
+                            localStorage.setItem('nym_custom_emoji_packs', JSON.stringify(trimmed));
+                        } catch (_) { }
+                    }
                 }
-            }
+            };
+            if (typeof requestIdleCallback === 'function') requestIdleCallback(write, { timeout: 10000 });
+            else write();
         }, 2000);
     },
 
@@ -50,23 +54,46 @@ Object.assign(NYM.prototype, {
         if (this.settings && this.settings.lowDataMode) return;
         this._emojiPrefetchTimer = setTimeout(() => {
             this._emojiPrefetchTimer = null;
-            if (!this.customEmojis || this.customEmojis.size === 0) return;
-            if (!this._prefetchedEmojiUrls) this._prefetchedEmojiUrls = new Set();
-            let budget = 60;
-            for (const [, url] of this.customEmojis) {
-                if (budget <= 0) break;
-                if (this._prefetchedEmojiUrls.has(url)) continue;
-                this._prefetchedEmojiUrls.add(url);
-                budget--;
-                try {
-                    const img = new Image();
-                    img.decoding = 'async';
-                    img.loading = 'eager';
-                    img.referrerPolicy = 'no-referrer';
-                    img.src = this.getProxiedEmojiUrl(url);
-                } catch (_) { }
-            }
+            const run = () => this._runEmojiPrefetch();
+            if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 5000 });
+            else run();
         }, 3000);
+    },
+
+    // Warm only images the user is likely to see first (recents, then
+    // favorited/own/subscribed packs); everything else loads lazily on open.
+    _runEmojiPrefetch() {
+        if (!this.customEmojis || this.customEmojis.size === 0) return;
+        if (!this._prefetchedEmojiUrls) this._prefetchedEmojiUrls = new Set();
+        const urls = [];
+        for (const e of (this.recentEmojis || [])) {
+            const m = typeof e === 'string' && e.match(/^:([a-zA-Z0-9_]+):$/);
+            if (m && this.customEmojis.has(m[1])) urls.push(this.customEmojis.get(m[1]));
+        }
+        if (this.customEmojiPacks) {
+            for (const pack of this.customEmojiPacks.values()) {
+                if (!this.isEmojiPackFavorite(pack) && !this.isEmojiPackOwn(pack) &&
+                    !this.isEmojiPackSubscribed(pack)) continue;
+                for (const e of pack.emojis) {
+                    const url = this.customEmojis.get(e.shortcode);
+                    if (url) urls.push(url);
+                }
+            }
+        }
+        let budget = 60;
+        for (const url of urls) {
+            if (budget <= 0) break;
+            if (this._prefetchedEmojiUrls.has(url)) continue;
+            this._prefetchedEmojiUrls.add(url);
+            budget--;
+            try {
+                const img = new Image();
+                img.decoding = 'async';
+                img.loading = 'eager';
+                img.referrerPolicy = 'no-referrer';
+                img.src = this.getProxiedEmojiUrl(url);
+            } catch (_) { }
+        }
     },
 
     _saveCustomEmojiMap() {
@@ -94,6 +121,9 @@ Object.assign(NYM.prototype, {
         if (this.emojiMap && this.emojiMap[shortcode.toLowerCase()]) return;
         if (this.customEmojis.get(shortcode) === url) return;
         this.customEmojis.set(shortcode, url);
+        if (!this._pendingEmojiRefreshCodes) this._pendingEmojiRefreshCodes = new Set();
+        this._pendingEmojiRefreshCodes.add(shortcode);
+        this._emojiPickerDirty = true;
         this._saveCustomEmojiMap();
         this._scheduleEmojiDomRefresh();
         this._prefetchCustomEmojiImages();
@@ -112,6 +142,11 @@ Object.assign(NYM.prototype, {
 
     _refreshCustomEmojiInDom() {
         if (!this.customEmojis || this.customEmojis.size === 0) return;
+        // Only shortcodes learned since the last refresh can turn rendered text
+        // into images; everything older was handled at message render time.
+        const pending = this._pendingEmojiRefreshCodes;
+        if (!pending || pending.size === 0) return;
+        this._pendingEmojiRefreshCodes = new Set();
         const roots = document.querySelectorAll('.message-content, .notification-item-body');
         if (roots.length === 0) return;
         const skip = (node, root) => {
@@ -138,7 +173,7 @@ Object.assign(NYM.prototype, {
             for (const node of textNodes) {
                 const text = node.nodeValue;
                 const matches = [...text.matchAll(/:([a-zA-Z0-9_]+):/g)]
-                    .filter(mm => this.customEmojis.has(mm[1]));
+                    .filter(mm => pending.has(mm[1]) && this.customEmojis.has(mm[1]));
                 if (matches.length === 0) continue;
                 const frag = document.createDocumentFragment();
                 let last = 0;
@@ -175,6 +210,7 @@ Object.assign(NYM.prototype, {
         const existing = this.customEmojiPacks.get(key);
         if (existing && (existing.created_at || 0) >= (pack.created_at || 0)) return;
         this.customEmojiPacks.set(key, pack);
+        this._emojiPickerDirty = true;
         for (const e of pack.emojis) this.registerCustomEmoji(e.shortcode, e.url);
         if (persist) this._saveCustomEmojiCache();
         this._prefetchCustomEmojiImages();
@@ -192,6 +228,7 @@ Object.assign(NYM.prototype, {
                 _RX_EMOJI_SHORTCODE.test(t[1]) && _RX_EMOJI_URL.test(t[2]) && !seen.has(t[1])) {
                 seen.add(t[1]);
                 emojis.push({ shortcode: t[1], url: t[2] });
+                if (emojis.length >= 120) break;
             }
         }
         if (emojis.length === 0) return;
@@ -211,6 +248,7 @@ Object.assign(NYM.prototype, {
         if (this._userEmojiListTs && (event.created_at || 0) < this._userEmojiListTs) return;
         this._userEmojiListTs = event.created_at || 0;
         this.userEmojiPackRefs = new Set();
+        this._emojiPickerDirty = true;
         for (const t of event.tags) {
             if (t[0] === 'a' && typeof t[1] === 'string' && t[1].startsWith('30030:')) {
                 this.userEmojiPackRefs.add(t[1]);
@@ -240,7 +278,7 @@ Object.assign(NYM.prototype, {
         const safeUrl = this.escapeHtml(this.getProxiedEmojiUrl(url));
         const safeCode = this.escapeHtml(shortcode);
         const cls = 'custom-emoji' + (extraClass ? ' ' + extraClass : '');
-        return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" decoding="async" loading="lazy" draggable="false">`;
+        return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" width="30" height="30" decoding="async" loading="lazy" draggable="false">`;
     },
 
     // Build NIP-30 emoji tags for every known custom shortcode used in content
@@ -335,6 +373,7 @@ Object.assign(NYM.prototype, {
         if (nowFav) favs.push(category);
         else favs.splice(idx, 1);
         localStorage.setItem('nym_emoji_category_favorites', JSON.stringify(favs));
+        this._emojiPickerDirty = true;
         if (typeof nostrSettingsSave === 'function') {
             try { nostrSettingsSave(); } catch (_) { }
         }
@@ -396,6 +435,7 @@ Object.assign(NYM.prototype, {
         if (nowFav) favs.push(key);
         else favs.splice(idx, 1);
         localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(favs));
+        this._emojiPickerDirty = true;
         if (typeof nostrSettingsSave === 'function') {
             try { nostrSettingsSave(); } catch (_) { }
         }
@@ -446,6 +486,44 @@ Object.assign(NYM.prototype, {
             html += `<div class="${sectionClass}" data-category="custom">` +
                 `<div class="${titleClass} emoji-pack-title">${title}${favBtn}</div><div class="${gridClass}">` +
                 emojis.map(e => this.emojiOptionHtml(`:${e.shortcode}:`, null, btnClass)).join('') +
+                `</div></div>`;
+        }
+        return html;
+    },
+
+    _getEmojiToNames() {
+        if (!this._emojiToNames) {
+            const map = {};
+            for (const [name, emoji] of Object.entries(this.emojiMap)) {
+                (map[emoji] || (map[emoji] = [])).push(name);
+            }
+            this._emojiToNames = map;
+        }
+        return this._emojiToNames;
+    },
+
+    // Shared section markup for every emoji picker surface: recents, then
+    // custom packs, then default categories.
+    _emojiSectionsHtml(opts = {}) {
+        const sectionClass = opts.sectionClass || 'emoji-section';
+        const titleClass = opts.titleClass || 'emoji-section-title';
+        const gridClass = opts.gridClass || 'emoji-grid';
+        const btnClass = opts.btnClass || 'emoji-option';
+        const emojiToNames = this._getEmojiToNames();
+        let html = '';
+        const recents = this._recentEmojisForPicker();
+        if (recents.length > 0) {
+            html += `<div class="${sectionClass}" data-category="recent">` +
+                `<div class="${titleClass}">Recently Used</div><div class="${gridClass}">` +
+                recents.map(e => this.emojiOptionHtml(e, emojiToNames, btnClass)).join('') +
+                `</div></div>`;
+        }
+        html += this.buildCustomEmojiSectionsHtml(opts);
+        for (const [category, emojis] of this._getOrderedDefaultEmojiEntries()) {
+            html += `<div class="${sectionClass}" data-category="${category}">` +
+                `<div class="${titleClass} emoji-default-cat-title">${category.charAt(0).toUpperCase() + category.slice(1)}${this._emojiCategoryFavButtonHtml(category)}</div>` +
+                `<div class="${gridClass}">` +
+                emojis.map(e => this.emojiOptionHtml(e, emojiToNames, btnClass)).join('') +
                 `</div></div>`;
         }
         return html;
