@@ -459,6 +459,17 @@
                         const msgs = p.messages.map(m => this._hydrateMessage(m));
                         this.pmMessages.set(p.key, msgs);
                     }
+                    // Rebuild peer-format sets from cached messages — receipt
+                    // sending and reply wrapping consult these, and relay copies
+                    // are dedup-dropped so they never repopulate after a reload
+                    for (const msgs of this.pmMessages.values()) {
+                        if (!Array.isArray(msgs)) continue;
+                        for (const m of msgs) {
+                            if (!m || m.isOwn || m.isGroup || !m.pubkey) continue;
+                            if (m.nymMessageId) this.nymUsers.add(m.pubkey);
+                            else if (m.bitchatMessageId) this.bitchatUsers.add(m.pubkey);
+                        }
+                    }
                 } else {
                     this.clearPMCache().catch(() => { });
                 }

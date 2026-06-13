@@ -73,6 +73,46 @@ Object.assign(NYM.prototype, {
         statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
     },
 
+    // Buffer a receipt that arrived before its message (keyed by uppercased
+    // nym/bitchat message id), keeping the highest status per id
+    _bufferEarlyReceipt(receiptId, receiptType, senderPubkey) {
+        if (!this._earlyReceipts) this._earlyReceipts = new Map();
+        const order = { sent: 0, delivered: 1, read: 2 };
+        const cur = this._earlyReceipts.get(receiptId);
+        if (!cur || (order[receiptType] || 0) > (order[cur.receiptType] || 0)) {
+            this._earlyReceipts.set(receiptId, { receiptType, senderPubkey, at: Date.now() });
+        }
+        if (this._earlyReceipts.size > 1000) {
+            const keys = [...this._earlyReceipts.keys()].slice(0, 500);
+            for (const k of keys) this._earlyReceipts.delete(k);
+        }
+    },
+
+    // Apply a buffered receipt to a just-added own message, if one is waiting
+    _applyEarlyReceipt(msg, convKey) {
+        if (!this._earlyReceipts || !this._earlyReceipts.size || !msg || !msg.isOwn) return;
+        const order = { sent: 0, delivered: 1, read: 2 };
+        for (const rawId of [msg.nymMessageId, msg.bitchatMessageId]) {
+            if (!rawId) continue;
+            const id = rawId.toUpperCase();
+            const entry = this._earlyReceipts.get(id);
+            if (!entry) continue;
+            this._earlyReceipts.delete(id);
+            if ((order[entry.receiptType] || 0) < (order[msg.deliveryStatus] || 0)) continue;
+            msg.deliveryStatus = entry.receiptType;
+            this.pendingDMs.delete(msg.id);
+            if (msg.isGroup && msg.nymMessageId && entry.receiptType === 'read') {
+                if (!this.groupMessageReaders.has(msg.nymMessageId)) {
+                    this.groupMessageReaders.set(msg.nymMessageId, new Map());
+                }
+                this.groupMessageReaders.get(msg.nymMessageId).set(entry.senderPubkey, this.getNymFromPubkey(entry.senderPubkey));
+            } else {
+                this._updateDeliveryStatusEl(msg.nymMessageId || msg.id, entry.receiptType);
+            }
+            this.persistPMMessages(convKey);
+        }
+    },
+
     // Track a sent DM for retry if delivery receipt is not received
     trackPendingDM(eventId, wrappedEvents, recipientPubkey, conversationKey) {
         this.pendingDMs.set(eventId, {
@@ -890,13 +930,16 @@ Object.assign(NYM.prototype, {
 
                     if (receiptType === 'read') this.recordUserActivity(senderPubkey);
 
+                    let receiptMatched = false;
                     for (const [convKey, messages] of this.pmMessages) {
                         const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
                         if (msg && msg.isOwn) {
+                            receiptMatched = true;
                             const statusOrder = { sent: 0, delivered: 1, read: 2 };
                             if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                 msg.deliveryStatus = receiptType;
                                 this.pendingDMs.delete(msg.id);
+                                this.persistPMMessages(convKey);
 
                                 if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
                                     // Group read receipt: store the reader's avatar instead of checkmarks
@@ -919,6 +962,9 @@ Object.assign(NYM.prototype, {
                             break;
                         }
                     }
+                    // Receipt decrypted before its message (backlog ordering) —
+                    // buffer it so the message picks it up when it arrives
+                    if (!receiptMatched) this._bufferEarlyReceipt(receiptId, receiptType, senderPubkey);
                 }
                 return;
             }
@@ -933,19 +979,23 @@ Object.assign(NYM.prototype, {
                     if (receiptType === 'read') this.recordUserActivity(senderPubkey);
 
                     if (receiptId) {
-                        for (const [, messages] of this.pmMessages) {
+                        let receiptMatched = false;
+                        for (const [convKey, messages] of this.pmMessages) {
                             const msg = messages.find(m => m.bitchatMessageId?.toUpperCase() === receiptId);
                             if (msg && msg.isOwn) {
+                                receiptMatched = true;
                                 const statusOrder = { sent: 0, delivered: 1, read: 2 };
                                 if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                     msg.deliveryStatus = receiptType;
                                     this.pendingDMs.delete(msg.id);
+                                    this.persistPMMessages(convKey);
                                     const domId = msg.nymMessageId || msg.id;
                                     this._updateDeliveryStatusEl(domId, receiptType);
                                 }
                                 break;
                             }
                         }
+                        if (!receiptMatched) this._bufferEarlyReceipt(receiptId, receiptType, senderPubkey);
                     }
                     return;
                 }
@@ -1228,7 +1278,8 @@ Object.assign(NYM.prototype, {
                 senderVerified,
                 thinking: botThinking || undefined,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
-                nymMessageId: nymMsgId  // For sending Nymchat read receipts
+                nymMessageId: nymMsgId,  // For sending Nymchat read receipts
+                deliveryStatus: isOwn ? 'sent' : undefined
             };
             this._recordMsgVerification(nymMsgId, senderVerified);
 
@@ -1242,6 +1293,7 @@ Object.assign(NYM.prototype, {
             }
             this.pmMessages.set(conversationKey, list);
             this.persistPMMessages(conversationKey);
+            if (isOwn) this._applyEarlyReceipt(msg, conversationKey);
 
             // Send DELIVERED receipt back to Bitchat user
             if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
@@ -1971,7 +2023,10 @@ Object.assign(NYM.prototype, {
                 changed = true;
             }
         }
-        if (changed) this.channelDOMCache.delete(convKey);
+        if (changed) {
+            this.channelDOMCache.delete(convKey);
+            this.persistPMMessages(convKey);
+        }
     },
 
     // Nymbot Pro model catalog (mirrors BOT_PRO_MODELS in functions/api/bot.js)
@@ -2903,16 +2958,19 @@ Object.assign(NYM.prototype, {
         // Load PM messages
         this.loadPMMessages(conversationKey);
 
-        // Send READ receipts only for messages we haven't acknowledged
+        // Send READ receipts only for messages we haven't acknowledged.
+        // Gate on the ids stored with the message rather than the in-memory
+        // bitchatUsers/nymUsers sets — those are empty for messages hydrated
+        // from cache in a later session.
         const pmMsgs = this.pmMessages.get(conversationKey) || [];
         for (const msg of pmMsgs) {
             if (msg.isOwn || msg.readReceiptSent) continue;
             let sent = false;
-            if (msg.bitchatMessageId && this.bitchatUsers.has(msg.pubkey)) {
+            if (msg.bitchatMessageId && (this.bitchatUsers.has(msg.pubkey) || !msg.nymMessageId)) {
                 this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
                 sent = true;
             }
-            if (msg.nymMessageId && this.nymUsers.has(msg.pubkey)) {
+            if (msg.nymMessageId) {
                 this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
                 sent = true;
             }

@@ -1282,6 +1282,7 @@ Object.assign(NYM.prototype, {
         if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
         this.persistPMMessages(groupConvKey);
+        if (isOwn) this._applyEarlyReceipt(msg, groupConvKey);
 
         // Update or create group conversation entry
         this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
