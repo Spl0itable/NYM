@@ -1366,7 +1366,6 @@ Object.assign(NYM.prototype, {
         const textEl = document.getElementById('typingIndicatorText');
         if (!el || !avatarsEl || !textEl) return;
 
-        // Determine current conversation key
         let convKey = null;
         if (this.inPMMode && this.currentGroup) {
             convKey = this.getGroupConversationKey(this.currentGroup);

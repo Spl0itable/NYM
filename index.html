@@ -1371,6 +1371,15 @@
                         <button class="nm-h-58" data-action="resetColumnView">Reset columns to defaults</button>
                     </div>
 
+                    <div class="form-group cv-only-setting">
+                        <label class="form-label">Column Message Wallpaper</label>
+                        <select class="form-select" id="columnsWallpaperSelect" data-on-change="onColumnsWallpaperChange">
+                            <option value="false">Solid background</option>
+                            <option value="true">Show wallpaper through messages</option>
+                        </select>
+                        <div class="form-hint">In column view, let your chat wallpaper show through the message area of each column instead of a solid background.</div>
+                    </div>
+
                     <div class="form-group">
                         <label class="form-label">Chat Wallpaper</label>
                         <div class="wallpaper-grid" id="wallpaperGrid">

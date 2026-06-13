@@ -1439,10 +1439,10 @@ Object.assign(NYM.prototype, {
 
     // Open a persistent typing-only sub for the currently-viewed channel.
     // No-op if not the current channel or if one already exists.
-    _ensureChannelTypingSub(channelKey, channelType) {
+    _ensureChannelTypingSub(channelKey, channelType, force) {
         if (!channelKey) return;
         const isCurrent = channelKey === this.currentChannel || channelKey === this.currentGeohash;
-        if (!isCurrent) return;
+        if (!isCurrent && !force) return;
         if (!this._channelTypingSubs) this._channelTypingSubs = new Map();
         if (this._channelTypingSubs.has(channelKey)) return;
 

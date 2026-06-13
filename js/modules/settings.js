@@ -8,7 +8,7 @@ const INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere
 const NYM_SETTINGS_SECTION_KEYS = {
     appearance: ['theme', 'sound', 'autoscroll', 'showTimestamps', 'timeFormat', 'dateFormat',
         'blurOthersImages', 'chatLayout', 'chatViewMode', 'columnsLayout', 'nickStyle', 'colorMode',
-        'wallpaperType', 'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'sidebarSectionOrder'],
+        'wallpaperType', 'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'columnsWallpaper', 'sidebarSectionOrder'],
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
@@ -116,6 +116,7 @@ Object.assign(NYM.prototype, {
             pinnedLandingChannel: this.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' },
             chatLayout: this.settings.chatLayout || 'irc',
             chatViewMode: this.settings.chatViewMode === 'columns' ? 'columns' : 'single',
+            columnsWallpaper: this.settings.columnsWallpaper === true,
             columnsLayout: Array.isArray(this.columnsLayout) ? this.columnsLayout : [],
             nickStyle: this.settings.nickStyle || 'fancy',
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
@@ -1050,16 +1051,17 @@ Object.assign(NYM.prototype, {
             dmTTLSeconds: parseInt(localStorage.getItem('nym_dm_ttl_seconds') || '86400', 10),
             readReceiptsScope: _normalizeIndicatorScope(
                 localStorage.getItem('nym_read_receipts_scope'),
-                localStorage.getItem('nym_read_receipts_enabled') === 'false' ? 'disabled' : 'pms-groups'
+                localStorage.getItem('nym_read_receipts_enabled') === 'false' ? 'disabled' : 'everywhere'
             ),
             typingIndicatorsScope: _normalizeIndicatorScope(
                 localStorage.getItem('nym_typing_indicators_scope'),
-                localStorage.getItem('nym_typing_indicators_enabled') === 'false' ? 'disabled' : 'pms-groups'
+                localStorage.getItem('nym_typing_indicators_enabled') === 'false' ? 'disabled' : 'everywhere'
             ),
             pinnedLandingChannel: pinnedLandingChannel,
             nickStyle: localStorage.getItem('nym_nick_style') || 'fancy',
             chatLayout: localStorage.getItem('nym_chat_layout') || 'bubbles',
             chatViewMode: localStorage.getItem('nym_chat_view_mode') === 'columns' ? 'columns' : 'single',
+            columnsWallpaper: localStorage.getItem('nym_columns_wallpaper') === 'true',
             lowDataMode: localStorage.getItem('nym_low_data_mode') === 'true',
             textSize: parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             transparencyEnabled: localStorage.getItem('nym_transparency_enabled') === 'true',

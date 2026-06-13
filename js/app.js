@@ -651,6 +651,7 @@ class NYM {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
         }
         applyTransparency(this.settings.transparencyEnabled === true);
+        applyColumnsWallpaper(this.settings.columnsWallpaper === true);
         this.channelSubscriptionBatchSize = 15;
         this.channelMessageLimit = 1000;
         this.channelPageSize = 50;
@@ -2215,6 +2216,20 @@ function applyTransparency(enabled) {
     }
 }
 
+function applyColumnsWallpaper(enabled) {
+    document.body.classList.toggle('columns-wallpaper', !!enabled);
+}
+
+function onColumnsWallpaperChange(value) {
+    const enabled = value === 'true' || value === true;
+    nym.settings.columnsWallpaper = enabled;
+    localStorage.setItem('nym_columns_wallpaper', String(enabled));
+    applyColumnsWallpaper(enabled);
+    nostrSettingsSave();
+}
+window.onColumnsWallpaperChange = onColumnsWallpaperChange;
+window.applyColumnsWallpaper = applyColumnsWallpaper;
+
 function onTransparencyChange(value) {
     const enabled = value === 'true' || value === true;
     nym.settings.transparencyEnabled = enabled;
@@ -3569,6 +3584,11 @@ async function showSettings() {
     const transparencySel = document.getElementById('transparencySelect');
     if (transparencySel) {
         transparencySel.value = nym.settings.transparencyEnabled === true ? 'true' : 'false';
+    }
+
+    const columnsWallpaperSel = document.getElementById('columnsWallpaperSelect');
+    if (columnsWallpaperSel) {
+        columnsWallpaperSel.value = nym.settings.columnsWallpaper === true ? 'true' : 'false';
     }
 
     // Initialize text size slider
@@ -6318,6 +6338,14 @@ async function applyNostrSettings(s) {
         nym.settings.transparencyEnabled = s.transparencyEnabled;
         localStorage.setItem('nym_transparency_enabled', String(s.transparencyEnabled));
         applyTransparency(s.transparencyEnabled);
+    }
+
+    if (typeof s.columnsWallpaper === 'boolean') {
+        nym.settings.columnsWallpaper = s.columnsWallpaper;
+        localStorage.setItem('nym_columns_wallpaper', String(s.columnsWallpaper));
+        const cwSel = document.getElementById('columnsWallpaperSelect');
+        if (cwSel) cwSel.value = s.columnsWallpaper ? 'true' : 'false';
+        applyColumnsWallpaper(s.columnsWallpaper);
     }
 
     // Low data mode

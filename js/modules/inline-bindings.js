@@ -378,6 +378,7 @@ window.nymHapticTap = function (ms) {
         'resetTextSize':              function () { window.resetTextSize(); },
         'toggleLowDataModeFromStats': function (e) { window.toggleLowDataModeFromStats(e); },
         'onTransparencyChange':       function (_e, t) { window.onTransparencyChange(t.value); },
+        'onColumnsWallpaperChange':   function (_e, t) { window.onColumnsWallpaperChange(t.value); },
         'addBlockedKeyword':          function () { nym().addBlockedKeyword(); },
         'executeSettingsTransfer':    function () { nym().executeSettingsTransfer(); },
         'clearLocalStorageCache':     function () { window.clearLocalStorageCache(); },

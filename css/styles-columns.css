@@ -21,6 +21,53 @@ body.columns-mode .chat-header {
     height: calc(37px + max(68px, (var(--user-text-size) + 3px) * 1.4 + 35px));
 }
 
+body.columns-mode:not(.chat-bubbles) .cv-list .message {
+    flex-direction: column;
+    gap: 5px;
+}
+
+body.columns-mode:not(.chat-bubbles) .cv-list .message-time,
+body.columns-mode:not(.chat-bubbles) .cv-list .message-author {
+    display: inline;
+    margin-right: 10px;
+}
+
+body.columns-mode:not(.chat-bubbles) .cv-list .message-content {
+    width: 100%;
+    margin-top: 5px;
+}
+
+body.columns-mode:not(.chat-bubbles) .cv-list .delivery-status,
+body.columns-mode:not(.chat-bubbles) .cv-list .group-readers,
+body.columns-mode:not(.chat-bubbles) .cv-list .channel-readers {
+    width: 100%;
+    flex-basis: auto;
+}
+
+body.columns-mode.chat-bubbles .message-group.group-self {
+    padding-right: 0px;
+}
+
+.cv-only-setting {
+    display: none;
+}
+
+body.columns-mode .cv-only-setting {
+    display: block;
+}
+
+body.columns-wallpaper.columns-mode .cv-column {
+    background: transparent;
+}
+
+body.columns-wallpaper.columns-mode .cv-scroller {
+    background: transparent;
+}
+
+body.columns-mode .msg-hover-buttons {
+    flex-direction: column;
+}
+
 [data-action="resetColumnView"] {
     margin-top: 10px;
 }

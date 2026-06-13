@@ -444,6 +444,10 @@ Object.assign(NYM.prototype, {
             return `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(col.pubkey)}" alt="" width="20" height="20" decoding="async" loading="lazy">`;
         }
         if (col.type === 'group') {
+            const g = this.groupConversations && this.groupConversations.get(col.groupId);
+            if (g && g.avatar) {
+                return `<img class="avatar-pm" src="${this.escapeHtml(g.avatar)}" alt="" width="20" height="20" decoding="async" loading="lazy">`;
+            }
             return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
         }
         return '#';
@@ -489,6 +493,9 @@ Object.assign(NYM.prototype, {
         if (typeof this.loadChannelFromRelays === 'function') {
             const channelType = (geohash && this.isValidGeohash(geohash)) ? 'geohash' : 'non-geohash';
             this.loadChannelFromRelays(key, channelType);
+            if (typeof this._ensureChannelTypingSub === 'function') {
+                this._ensureChannelTypingSub(key, channelType, true);
+            }
         }
     },
 
@@ -513,6 +520,11 @@ Object.assign(NYM.prototype, {
         if (this.pendingEdit && this.cancelEditMessage) this.cancelEditMessage();
         this._cvSetComposeHeader(col);
         this._restoreDraftForContext && this._restoreDraftForContext();
+        if (col.type === 'group' && typeof this._markVisibleGroupMessagesRead === 'function') {
+            this._markVisibleGroupMessagesRead();
+        } else if (col.type === 'channel' && typeof this.markVisibleChannelMessagesRead === 'function') {
+            this.markVisibleChannelMessagesRead();
+        }
     },
 
     // Mirror the single-view header for the focused column's conversation type.
@@ -680,7 +692,10 @@ Object.assign(NYM.prototype, {
             for (const [groupId, g] of this.groupConversations) {
                 const desc = { type: 'group', groupId };
                 if (open.has(this._cvColKey(desc))) continue;
-                out.push({ label: g.name || 'Group chat', icon: '◧', desc });
+                const gicon = g.avatar
+                    ? `<img class="avatar-pm" src="${this.escapeHtml(g.avatar)}" alt="" width="20" height="20">`
+                    : '◧';
+                out.push({ label: g.name || 'Group chat', icon: gicon, desc });
             }
         }
         return out;
