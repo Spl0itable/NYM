@@ -988,6 +988,26 @@
     max-height: 60vh;
 }
 
+.notifications-mark-read-row {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 24px 0;
+}
+
+.notifications-mark-read-btn {
+    background: none;
+    border: none;
+    color: var(--primary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 2px 4px;
+}
+
+.notifications-mark-read-btn:hover {
+    text-decoration: underline;
+}
+
 .notifications-empty {
     text-align: center;
     color: var(--text-dim);

@@ -1717,7 +1717,7 @@ ${bundleCodes || (code ? `
             const s = transfer.settings;
             if (s) {
                 if (s.theme) document.getElementById('themeSelect').value = s.theme;
-                if (s.sound !== undefined) document.getElementById('soundSelect').value = s.sound;
+                if (s.sound !== undefined) document.getElementById('soundSelect').value = ({ icq: 'uhoh', msn: 'msnding' })[s.sound] || s.sound;
                 if (s.autoscroll !== undefined) document.getElementById('autoscrollSelect').value = String(s.autoscroll);
                 if (s.showTimestamps !== undefined) {
                     document.getElementById('timestampSelect').value = String(s.showTimestamps);

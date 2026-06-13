@@ -40,7 +40,7 @@ Object.assign(NYM.prototype, {
         // event's created_at — otherwise a delayed event with an older
         // created_at would be auto-marked viewed after the modal was opened.
         const receivedAt = Date.now();
-        this.notificationHistory.push({
+        const entry = {
             title: titleToShow,
             body: body,
             channelInfo: channelInfo,
@@ -48,10 +48,14 @@ Object.assign(NYM.prototype, {
             receivedAt,
             senderNym: baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
-            eventId: eventId || undefined,
-            viewed: receivedAt <= (this.notificationLastReadTime || 0)
-                || this._notificationAlreadySeen(channelInfo, ts)
-        });
+            eventId: eventId || undefined
+        };
+        const previouslySeen = this._isNotificationSeen(entry);
+        entry.viewed = previouslySeen
+            || receivedAt <= (this.notificationLastReadTime || 0)
+            || this._notificationAlreadySeen(channelInfo, ts);
+        if (entry.viewed) this._rememberNotificationSeen(entry);
+        this.notificationHistory.push(entry);
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
@@ -60,6 +64,9 @@ Object.assign(NYM.prototype, {
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave(8000);
         }
+
+        // Already seen on this or another device; record it silently.
+        if (previouslySeen) return;
 
         if (this.settings.sound !== 'none') {
             this.playSound(this.settings.sound);
@@ -136,7 +143,7 @@ Object.assign(NYM.prototype, {
         });
         if (isDupe) return;
         const receivedAt = Date.now();
-        this.notificationHistory.push({
+        const entry = {
             title: titleToShow,
             body: body,
             channelInfo: channelInfo,
@@ -144,10 +151,13 @@ Object.assign(NYM.prototype, {
             receivedAt,
             senderNym: baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
-            eventId: eventId || undefined,
-            viewed: receivedAt <= (this.notificationLastReadTime || 0)
-                || this._notificationAlreadySeen(channelInfo, ts)
-        });
+            eventId: eventId || undefined
+        };
+        entry.viewed = this._isNotificationSeen(entry)
+            || receivedAt <= (this.notificationLastReadTime || 0)
+            || this._notificationAlreadySeen(channelInfo, ts);
+        if (entry.viewed) this._rememberNotificationSeen(entry);
+        this.notificationHistory.push(entry);
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
         this._saveNotificationHistory();
         this._updateNotificationBadge();
@@ -222,6 +232,74 @@ Object.assign(NYM.prototype, {
         } catch { }
     },
 
+    // Durable record of which notifications the user has already seen, keyed by
+    // a stable identity so replayed/resynced events can't re-trigger the badge.
+    // Synced via the nymchat-notifications wrap for cross-device read state.
+    _notificationSeenKey(n) {
+        if (!n) return null;
+        const evId = n.eventId || n.channelInfo?.eventId || '';
+        if (evId) return `e:${evId}`;
+        const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
+        const ts = n.timestamp || 0;
+        if (!pk && !ts) return null;
+        // body prefix kept short of the 240-char sync truncation so the key
+        // matches across local (full body) and synced (truncated) copies
+        return `f:${pk}:${Math.floor(ts / 60000)}:${(n.body || '').slice(0, 40)}`;
+    },
+
+    _loadSeenNotificationKeys() {
+        try {
+            const raw = localStorage.getItem('nym_notification_seen');
+            if (!raw) return new Map();
+            const parsed = JSON.parse(raw);
+            const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+            const map = new Map();
+            for (const [k, ts] of Object.entries(parsed)) {
+                if (typeof ts === 'number' && ts > cutoff) map.set(k, ts);
+            }
+            return map;
+        } catch { return new Map(); }
+    },
+
+    _pruneSeenNotificationKeys() {
+        if (!this.seenNotificationKeys) { this.seenNotificationKeys = new Map(); return; }
+        const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+        for (const [k, ts] of this.seenNotificationKeys) {
+            if (!(ts > cutoff)) this.seenNotificationKeys.delete(k);
+        }
+        const MAX_SEEN_KEYS = 500;
+        if (this.seenNotificationKeys.size > MAX_SEEN_KEYS) {
+            const newest = [...this.seenNotificationKeys.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, MAX_SEEN_KEYS);
+            this.seenNotificationKeys = new Map(newest);
+        }
+    },
+
+    _saveSeenNotificationKeys() {
+        try {
+            this._pruneSeenNotificationKeys();
+            localStorage.setItem('nym_notification_seen',
+                JSON.stringify(Object.fromEntries(this.seenNotificationKeys)));
+        } catch { }
+    },
+
+    _isNotificationSeen(n) {
+        if (!this.seenNotificationKeys) return false;
+        const key = this._notificationSeenKey(n);
+        return !!(key && this.seenNotificationKeys.has(key));
+    },
+
+    _rememberNotificationSeen(n, save = true) {
+        const key = this._notificationSeenKey(n);
+        if (!key) return false;
+        if (!this.seenNotificationKeys) this.seenNotificationKeys = new Map();
+        if (this.seenNotificationKeys.has(key)) return false;
+        this.seenNotificationKeys.set(key, n.timestamp || Date.now());
+        if (save) this._saveSeenNotificationKeys();
+        return true;
+    },
+
     // Canonical conversation key for a notification, matching channelLastRead keys
     _notificationConvKey(channelInfo) {
         if (!channelInfo) return null;
@@ -272,14 +350,43 @@ Object.assign(NYM.prototype, {
             if (this._notificationConvKey(n.channelInfo) !== convKey) continue;
             if (Math.floor((n.timestamp || 0) / 1000) > tsSec) continue;
             n.viewed = true;
+            this._rememberNotificationSeen(n, false);
             changed = true;
         }
         if (changed) {
+            this._saveSeenNotificationKeys();
             this._saveNotificationHistory();
             this._updateNotificationBadge();
             this._refreshNotificationsModalIfOpen();
             if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(4000);
         }
+    },
+
+    markAllNotificationsRead() {
+        if (!Array.isArray(this.notificationHistory)) return;
+        let changed = false;
+        for (const n of this.notificationHistory) {
+            if (!n || n.viewed === true) continue;
+            n.viewed = true;
+            this._rememberNotificationSeen(n, false);
+            changed = true;
+        }
+        const btn = document.getElementById('markAllNotificationsReadBtn');
+        if (btn) btn.classList.add('nm-hidden');
+        if (!changed) return;
+        this._saveSeenNotificationKeys();
+        this._saveNotificationHistory();
+        this._updateNotificationBadge();
+        if (this._notifSeenObserver) {
+            this._notifSeenObserver.disconnect();
+            this._notifSeenObserver = null;
+        }
+        const body = document.getElementById('notificationsModalBody');
+        if (body) {
+            body.querySelectorAll('.notification-item-unread')
+                .forEach(el => el.classList.remove('notification-item-unread'));
+        }
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
     },
 
     _updateNotificationBadge() {
@@ -353,6 +460,9 @@ Object.assign(NYM.prototype, {
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             return true;
         }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+        const markAllBtn = document.getElementById('markAllNotificationsReadBtn');
+        if (markAllBtn) markAllBtn.classList.toggle('nm-hidden', !recent.some(n => !n.viewed));
 
         if (recent.length === 0) {
             body.innerHTML = '<div class="notifications-empty">No notifications in the last 24 hours</div>';
@@ -499,13 +609,17 @@ Object.assign(NYM.prototype, {
                 const n = el._notif;
                 if (n && !n.viewed) {
                     n.viewed = true;
+                    this._rememberNotificationSeen(n, false);
                     changed = true;
                     el.classList.remove('notification-item-unread');
                 }
             }
             if (changed) {
+                this._saveSeenNotificationKeys();
                 if (typeof this._saveNotificationHistory === 'function') this._saveNotificationHistory();
                 this._updateNotificationBadge();
+                const btn = document.getElementById('markAllNotificationsReadBtn');
+                if (btn && !body.querySelector('.notification-item-unread')) btn.classList.add('nm-hidden');
                 if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
             }
         };
@@ -558,36 +672,185 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Each sound is a sequence of notes (f = frequency in Hz, d = duration in seconds,
+    // optional f2 = glide target, gap = silence after the note, chord = simultaneous
+    // frequencies, g = gain override, noise = bandpass-filtered white noise at f with
+    // resonance q). The game jingles use square waves to match the original sound chips.
+    NOTIFICATION_SOUNDS: {
+        beep: { wave: 'sine', gain: 0.1, notes: [{ f: 800, d: 0.15 }] },
+        low: { wave: 'sine', gain: 0.15, notes: [{ f: 600, d: 0.15 }] },
+        high: { wave: 'sine', gain: 0.1, notes: [{ f: 1000, d: 0.15 }] },
+        uhoh: {
+            wave: 'sawtooth', gain: 0.08,
+            notes: [{ f: 587, f2: 523, d: 0.16, gap: 0.08 }, { f: 494, f2: 392, d: 0.28 }]
+        },
+        msnding: {
+            wave: 'sine', gain: 0.12,
+            notes: [{ f: 880, d: 0.1 }, { f: 1318.51, d: 0.45 }]
+        },
+        nudge: {
+            wave: 'sawtooth', gain: 0.1,
+            notes: [
+                { f: 130, f2: 90, d: 0.15 }, { f: 130, f2: 90, d: 0.15 }, { f: 130, f2: 90, d: 0.15 }
+            ]
+        },
+        nokia: {
+            wave: 'square', gain: 0.05,
+            notes: [
+                { f: 1396.91, d: 0.07, gap: 0.07 }, { f: 1396.91, d: 0.07, gap: 0.07 },
+                { f: 1396.91, d: 0.07, gap: 0.21 },
+                { f: 1396.91, d: 0.21, gap: 0.07 }, { f: 1396.91, d: 0.21, gap: 0.21 },
+                { f: 1396.91, d: 0.07, gap: 0.07 }, { f: 1396.91, d: 0.07, gap: 0.07 },
+                { f: 1396.91, d: 0.07 }
+            ]
+        },
+        nokiatune: {
+            wave: 'square', gain: 0.05,
+            notes: [
+                { f: 1318.51, d: 0.13 }, { f: 1174.66, d: 0.13 }, { f: 739.99, d: 0.26 }, { f: 830.61, d: 0.26 },
+                { f: 1108.73, d: 0.13 }, { f: 987.77, d: 0.13 }, { f: 587.33, d: 0.26 }, { f: 659.25, d: 0.26 },
+                { f: 987.77, d: 0.13 }, { f: 880.00, d: 0.13 }, { f: 554.37, d: 0.26 }, { f: 659.25, d: 0.26 },
+                { f: 880.00, d: 0.65 }
+            ]
+        },
+        dialup: {
+            wave: 'sine', gain: 0.06,
+            notes: [
+                { chord: [350, 440], d: 0.4, gap: 0.05 },
+                { chord: [770, 1209], d: 0.09, gap: 0.04 },
+                { chord: [852, 1336], d: 0.09, gap: 0.04 },
+                { chord: [697, 1477], d: 0.09, gap: 0.25 },
+                { f: 2225, d: 0.35, gap: 0.05 },
+                { f: 1270, d: 0.06 }, { f: 2225, d: 0.06 }, { f: 1270, d: 0.06 },
+                { f: 2225, d: 0.06 }, { f: 1270, d: 0.06 }, { f: 2225, d: 0.06 },
+                { chord: [1270, 2225], d: 0.4 }
+            ]
+        },
+        tetris: {
+            wave: 'square', gain: 0.06,
+            notes: [
+                { f: 659.25, d: 0.2 }, { f: 493.88, d: 0.1 }, { f: 523.25, d: 0.1 },
+                { f: 587.33, d: 0.2 }, { f: 523.25, d: 0.1 }, { f: 493.88, d: 0.1 },
+                { f: 440.00, d: 0.2 }, { f: 440.00, d: 0.1 }, { f: 523.25, d: 0.1 },
+                { f: 659.25, d: 0.2 }, { f: 587.33, d: 0.1 }, { f: 523.25, d: 0.1 },
+                { f: 493.88, d: 0.3 }, { f: 523.25, d: 0.1 }, { f: 587.33, d: 0.2 },
+                { f: 659.25, d: 0.2 }, { f: 523.25, d: 0.2 }, { f: 440.00, d: 0.2 },
+                { f: 440.00, d: 0.4 }
+            ]
+        },
+        chirp: {
+            wave: 'sine', gain: 0.1,
+            notes: [{ f: 900, f2: 2200, d: 0.08, gap: 0.06 }, { f: 900, f2: 2200, d: 0.08 }]
+        },
+        coin: {
+            wave: 'square', gain: 0.06,
+            notes: [{ f: 987.77, d: 0.08 }, { f: 1318.51, d: 0.65 }]
+        },
+        // Exact APU frequencies decoded from the SMB sound engine data
+        // (PowerUpGrabFreqData): rising C, Ab, Bb major arpeggios, one tone per 2 frames.
+        powerup: {
+            wave: 'square', gain: 0.06,
+            notes: [
+                { f: 522.7, d: 0.033 }, { f: 391.1, d: 0.033 }, { f: 522.7, d: 0.033 },
+                { f: 658.0, d: 0.033 }, { f: 782.2, d: 0.033 }, { f: 1045.4, d: 0.033 },
+                { f: 782.2, d: 0.033 }, { f: 414.3, d: 0.033 }, { f: 522.7, d: 0.033 },
+                { f: 621.4, d: 0.033 }, { f: 828.6, d: 0.033 }, { f: 621.4, d: 0.033 },
+                { f: 828.6, d: 0.033 }, { f: 1045.4, d: 0.033 }, { f: 1242.9, d: 0.033 },
+                { f: 1645.0, d: 0.033 }, { f: 1242.9, d: 0.033 }, { f: 466.1, d: 0.033 },
+                { f: 585.7, d: 0.033 }, { f: 694.8, d: 0.033 }, { f: 932.2, d: 0.033 },
+                { f: 694.8, d: 0.033 }, { f: 932.2, d: 0.033 }, { f: 1165.2, d: 0.033 },
+                { f: 1381.0, d: 0.033 }, { f: 1864.3, d: 0.033 }, { f: 1381.0, d: 0.15 }
+            ]
+        },
+        // Lead channel of the Gen 1 "Pokemon healed" fanfare, exact Game Boy
+        // frequencies decoded from the pokered disassembly (Music_PkmnHealed_Ch2).
+        pokeheal: {
+            wave: 'square', gain: 0.06,
+            notes: [
+                { f: 985.5, d: 0.45 }, { f: 985.5, d: 0.45 }, { f: 985.5, d: 0.23 },
+                { f: 829.6, d: 0.23 }, { f: 1310.7, d: 0.9 }
+            ]
+        },
+        f1: {
+            wave: 'sine', gain: 0.12,
+            notes: [
+                { f: 1800, d: 0.15, gap: 0.05 },
+                { noise: true, f: 1500, q: 1.5, g: 0.2, d: 0.25, gap: 0.05 },
+                { f: 1800, d: 0.15 }
+            ]
+        },
+        oneup: {
+            wave: 'square', gain: 0.06,
+            notes: [
+                { f: 659.25, d: 0.13 }, { f: 783.99, d: 0.13 }, { f: 1318.51, d: 0.13 },
+                { f: 1046.50, d: 0.13 }, { f: 1174.66, d: 0.13 }, { f: 1567.98, d: 0.4 }
+            ]
+        },
+        secret: {
+            wave: 'square', gain: 0.06,
+            notes: [
+                { f: 783.99, d: 0.11 }, { f: 739.99, d: 0.11 }, { f: 622.25, d: 0.11 },
+                { f: 440.00, d: 0.11 }, { f: 415.30, d: 0.11 }, { f: 659.25, d: 0.11 },
+                { f: 830.61, d: 0.11 }, { f: 1046.50, d: 0.4 }
+            ]
+        },
+        gameboy: {
+            wave: 'square', gain: 0.06,
+            notes: [{ f: 1046.50, d: 0.1 }, { f: 2093.00, d: 0.5 }]
+        },
+    },
+
     playSound(type) {
         // Deduplicate: don't replay within 2 seconds
         const now = Date.now();
         if (this._lastSoundPlayedAt && now - this._lastSoundPlayedAt < 2000) return;
         this._lastSoundPlayedAt = now;
 
+        // Legacy values from before the sounds were relabeled
+        const legacy = { icq: 'uhoh', msn: 'msnding' };
+        const sound = this.NOTIFICATION_SOUNDS[legacy[type] || type];
+        if (!sound) return;
+
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-
-        switch (type) {
-            case 'beep':
-                oscillator.frequency.value = 800;
-                gainNode.gain.value = 0.1;
-                break;
-            case 'icq':
-                oscillator.frequency.value = 600;
-                gainNode.gain.value = 0.15;
-                break;
-            case 'msn':
-                oscillator.frequency.value = 1000;
-                gainNode.gain.value = 0.1;
-                break;
+        let t = audioContext.currentTime;
+        for (const note of sound.notes) {
+            const gainNode = audioContext.createGain();
+            const gain = note.g || sound.gain;
+            gainNode.gain.setValueAtTime(gain, t);
+            if (note.d < 0.06) {
+                // Too short for a decay envelope; hold and release to avoid clicks
+                gainNode.gain.setValueAtTime(gain, t + note.d - 0.01);
+                gainNode.gain.linearRampToValueAtTime(0.0001, t + note.d);
+            } else {
+                gainNode.gain.exponentialRampToValueAtTime(0.001, t + note.d);
+            }
+            gainNode.connect(audioContext.destination);
+            if (note.noise) {
+                const buffer = audioContext.createBuffer(1, Math.ceil(audioContext.sampleRate * note.d), audioContext.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+                const source = audioContext.createBufferSource();
+                source.buffer = buffer;
+                const filter = audioContext.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.value = note.f;
+                filter.Q.value = note.q || 1;
+                source.connect(filter);
+                filter.connect(gainNode);
+                source.start(t);
+            } else {
+                for (const f of (note.chord || [note.f])) {
+                    const oscillator = audioContext.createOscillator();
+                    oscillator.type = sound.wave;
+                    oscillator.frequency.setValueAtTime(f, t);
+                    if (note.f2) oscillator.frequency.exponentialRampToValueAtTime(note.f2, t + note.d);
+                    oscillator.connect(gainNode);
+                    oscillator.start(t);
+                    oscillator.stop(t + note.d);
+                }
+            }
+            t += note.d + (note.gap || 0);
         }
-
-        oscillator.start();
-        oscillator.stop(audioContext.currentTime + 0.1);
     },
 
 });

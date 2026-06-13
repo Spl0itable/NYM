@@ -751,6 +751,7 @@ class NYM {
         this._typingExpireMs = 5000;
         this._typingStopTimer = null;
         this.notificationHistory = this._loadNotificationHistory();
+        this.seenNotificationKeys = this._loadSeenNotificationKeys();
         this.notificationLastReadTime = parseInt(localStorage.getItem('nym_notification_last_read') || '0');
         this._lastSettingsSyncTs = parseInt(localStorage.getItem('nym_last_settings_sync_ts') || '0', 10) || 0;
         this.notificationsEnabled = localStorage.getItem('nym_notifications_enabled') !== 'false';
@@ -3487,7 +3488,13 @@ async function showSettings() {
         nostrSettingsSave();
     };
 
-    document.getElementById('soundSelect').value = nym.settings.sound;
+    const soundSelect = document.getElementById('soundSelect');
+    soundSelect.value = nym.settings.sound;
+    soundSelect.onchange = function () {
+        // Preview the selected sound, bypassing the replay dedupe window
+        nym._lastSoundPlayedAt = 0;
+        nym.playSound(this.value);
+    };
     document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
     document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
     document.getElementById('timeFormatSelect').value = nym.settings.timeFormat;
@@ -4063,7 +4070,8 @@ async function resetSettings() {
         'nym_relay_url',
         'nym_nav',
         'nym_tutorial_seen', 'nym_botpm_welcomed',
-        'nym_notification_history', 'nym_notification_last_read'
+        'nym_notification_history', 'nym_notification_last_read',
+        'nym_notification_seen'
     ]);
     const SETTINGS_KEY_PREFIXES = ['nym_image_blur_'];
 
@@ -4207,7 +4215,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.71.491';
+const NYMCHAT_VERSION = 'v3.71.492';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -5746,6 +5754,38 @@ async function applyNostrSettingsAdditive(s) {
     nym._applyingRemoteSettings = true;
     try {
 
+    // Cross-device seen-notification keys: merge additively, then retroactively
+    // mark any matching local entries viewed so the badge clears.
+    if (s.seenNotifications && typeof s.seenNotifications === 'object') {
+        try {
+            if (!nym.seenNotificationKeys) nym.seenNotificationKeys = new Map();
+            const seenCutoff = Date.now() - 48 * 60 * 60 * 1000;
+            let added = false;
+            for (const [k, ts] of Object.entries(s.seenNotifications)) {
+                if (typeof k !== 'string' || typeof ts !== 'number' || ts <= seenCutoff) continue;
+                if (!nym.seenNotificationKeys.has(k)) {
+                    nym.seenNotificationKeys.set(k, ts);
+                    added = true;
+                }
+            }
+            if (added) {
+                nym._saveSeenNotificationKeys();
+                let retroChanged = false;
+                for (const n of nym.notificationHistory || []) {
+                    if (!n || n.viewed === true) continue;
+                    if (nym._isNotificationSeen(n)) {
+                        n.viewed = true;
+                        retroChanged = true;
+                    }
+                }
+                if (retroChanged) {
+                    if (typeof nym._saveNotificationHistory === 'function') nym._saveNotificationHistory();
+                    if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
+                }
+            }
+        } catch (_) { }
+    }
+
     // Notification read-state
     if (typeof s.notificationLastReadTime === 'number'
         && s.notificationLastReadTime > (nym.notificationLastReadTime || 0)) {
@@ -5758,11 +5798,13 @@ async function applyNostrSettingsAdditive(s) {
                 const observedAt = n.receivedAt || n.timestamp || 0;
                 if (observedAt <= nym.notificationLastReadTime) {
                     n.viewed = true;
+                    nym._rememberNotificationSeen(n, false);
                     retroChanged = true;
                 }
             }
-            if (retroChanged && typeof nym._saveNotificationHistory === 'function') {
-                nym._saveNotificationHistory();
+            if (retroChanged) {
+                nym._saveSeenNotificationKeys();
+                if (typeof nym._saveNotificationHistory === 'function') nym._saveNotificationHistory();
             }
         }
         if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
@@ -5791,6 +5833,7 @@ async function applyNostrSettingsAdditive(s) {
                 return null;
             };
             let changed = false;
+            let seenAdded = false;
             for (const n of s.notificationHistory) {
                 if (!n || typeof n.timestamp !== 'number') continue;
                 if (n.timestamp <= cutoff) continue;
@@ -5803,6 +5846,9 @@ async function applyNostrSettingsAdditive(s) {
                     if (!existing.eventId && (n.eventId || n.channelInfo?.eventId)) {
                         existing.eventId = n.eventId || n.channelInfo?.eventId;
                         changed = true;
+                    }
+                    if (existing.viewed) {
+                        seenAdded = nym._rememberNotificationSeen(existing, false) || seenAdded;
                     }
                     continue;
                 }
@@ -5818,7 +5864,7 @@ async function applyNostrSettingsAdditive(s) {
                 // unread status. Fall back to timestamp for legacy entries.
                 const observedAt = (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : n.timestamp;
                 const viewedFromLastRead = observedAt <= (nym.notificationLastReadTime || 0);
-                nym.notificationHistory.push({
+                const entry = {
                     title: n.title || '',
                     body: n.body || '',
                     channelInfo: n.channelInfo || null,
@@ -5826,11 +5872,16 @@ async function applyNostrSettingsAdditive(s) {
                     receivedAt: observedAt,
                     senderNym: n.senderNym || '',
                     senderPubkey: pk,
-                    eventId: n.eventId || n.channelInfo?.eventId || undefined,
-                    viewed: !!n.viewed || viewedFromLastRead
-                });
+                    eventId: n.eventId || n.channelInfo?.eventId || undefined
+                };
+                entry.viewed = !!n.viewed || viewedFromLastRead || nym._isNotificationSeen(entry);
+                if (entry.viewed) {
+                    seenAdded = nym._rememberNotificationSeen(entry, false) || seenAdded;
+                }
+                nym.notificationHistory.push(entry);
                 changed = true;
             }
+            if (seenAdded) nym._saveSeenNotificationKeys();
             if (changed) {
                 nym.notificationHistory = nym.notificationHistory
                     .filter(n => n && n.timestamp > cutoff)

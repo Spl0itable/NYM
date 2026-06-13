@@ -77,6 +77,7 @@ Object.assign(NYM.prototype, {
                     title: n.title,
                     body: typeof n.body === 'string' ? n.body.slice(0, 240) : '',
                     timestamp: n.timestamp,
+                    receivedAt: (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : undefined,
                     senderNym: n.senderNym,
                     senderPubkey: n.senderPubkey,
                     channelInfo: n.channelInfo || null,
@@ -511,11 +512,15 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Notification history → nymchat-notifications
+        // Notification history + seen keys → nymchat-notifications
         try {
             const notificationHistory = this._serialiseNotificationsForSync();
             const lastRead = this.notificationLastReadTime || 0;
-            if (notificationHistory.length > 0 || lastRead > 0) {
+            this._pruneSeenNotificationKeys();
+            const seenNotifications = (this.seenNotificationKeys && this.seenNotificationKeys.size > 0)
+                ? Object.fromEntries(this.seenNotificationKeys)
+                : null;
+            if (notificationHistory.length > 0 || lastRead > 0 || seenNotifications) {
                 // Drop the oldest 10% of notifications
                 const trimOldestNotifications = (p) => {
                     const arr = p.notificationHistory;
@@ -523,9 +528,19 @@ Object.assign(NYM.prototype, {
                     p.notificationHistory = arr.slice(Math.max(1, Math.ceil(arr.length * 0.1)));
                     return true;
                 };
+                // Drop the oldest 25% of seen keys
+                const trimOldestSeen = (p) => {
+                    const o = p.seenNotifications;
+                    const keys = o ? Object.keys(o) : [];
+                    if (keys.length <= 1) return false;
+                    keys.sort((a, b) => o[a] - o[b]);
+                    for (const k of keys.slice(0, Math.max(1, Math.ceil(keys.length * 0.25)))) delete o[k];
+                    return true;
+                };
+                const payload = { notificationHistory, notificationLastReadTime: lastRead };
+                if (seenNotifications) payload.seenNotifications = seenNotifications;
                 await this._publishCategoryWrap(
-                    { notificationHistory, notificationLastReadTime: lastRead },
-                    'nymchat-notifications', now, [trimOldestNotifications]);
+                    payload, 'nymchat-notifications', now, [trimOldestNotifications, trimOldestSeen]);
             }
         } catch (_) { }
 
@@ -1017,9 +1032,13 @@ Object.assign(NYM.prototype, {
             try { localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel)); } catch (_) { }
         }
 
+        // Migrate legacy sound values to their relabeled equivalents.
+        const savedSound = localStorage.getItem('nym_sound') || 'beep';
+        const sound = { icq: 'uhoh', msn: 'msnding' }[savedSound] || savedSound;
+
         return {
             theme: localStorage.getItem('nym_theme') || 'bitchat',
-            sound: localStorage.getItem('nym_sound') || 'beep',
+            sound: sound,
             autoscroll: localStorage.getItem('nym_autoscroll') !== 'false',
             showTimestamps: localStorage.getItem('nym_timestamps') !== 'false',
             sortByProximity: localStorage.getItem('nym_sort_proximity') === 'true',

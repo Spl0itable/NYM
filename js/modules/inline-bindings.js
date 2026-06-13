@@ -203,6 +203,7 @@ window.nymHapticTap = function (ms) {
         'closeSidebar':               function () { nym().closeSidebar(); },
         'openNotificationsModal':     function () { nym().openNotificationsModal(); },
         'closeNotificationsModal':    function () { nym().closeNotificationsModal(); },
+        'markAllNotificationsRead':   function () { nym().markAllNotificationsRead(); },
         'toggleSidebar':              function () { window.toggleSidebar(); },
         'openShop':                   function () { nym().openShop(); },
         'openVaultSettings':          function () { nym().openVaultSettings(); },

@@ -1683,8 +1683,23 @@
                         <label class="form-label">Notification Sound</label>
                         <select class="form-select" id="soundSelect">
                             <option value="beep">Classic Beep</option>
-                            <option value="icq">ICQ Uh-Oh</option>
-                            <option value="msn">MSN Alert</option>
+                            <option value="low">Low Tone</option>
+                            <option value="high">High Ping</option>
+                            <option value="uhoh">ICQ Uh-Oh</option>
+                            <option value="msnding">MSN Alert</option>
+                            <option value="nudge">MSN Nudge</option>
+                            <option value="nokia">Nokia SMS</option>
+                            <option value="nokiatune">Nokia Tune</option>
+                            <option value="dialup">Dial-Up Modem</option>
+                            <option value="coin">Mario Coin</option>
+                            <option value="oneup">Mario 1-Up</option>
+                            <option value="powerup">Mario Power-Up</option>
+                            <option value="secret">Zelda Secret</option>
+                            <option value="gameboy">Game Boy Boot</option>
+                            <option value="tetris">Tetris</option>
+                            <option value="pokeheal">Pok&eacute;mon Heal</option>
+                            <option value="chirp">Communicator Chirp</option>
+                            <option value="f1">F1 Radio</option>
                             <option value="none">Silent</option>
                         </select>
                     </div>
@@ -2193,6 +2208,9 @@
                     <input type="checkbox" id="notifyFriendsOnlyCheckbox" data-on-change="toggleNotifyFriendsOnly" class="nm-h-79">
                     Only notify for messages from friends
                 </label>
+            </div>
+            <div class="notifications-mark-read-row">
+                <button class="notifications-mark-read-btn nm-hidden" id="markAllNotificationsReadBtn" data-action="markAllNotificationsRead" type="button">Mark all as read</button>
             </div>
             <div class="notifications-modal-body" id="notificationsModalBody">
                 <div class="notifications-empty">No notifications in the last 24 hours</div>
