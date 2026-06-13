@@ -4536,6 +4536,7 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .incoming-call-btn {
     width: 58px;
     height: 58px;
+    flex-shrink: 0;
     border-radius: 50%;
     border: none;
     cursor: pointer;
@@ -4738,6 +4739,7 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .call-control-btn {
     width: 54px;
     height: 54px;
+    flex-shrink: 0;
     border-radius: 50%;
     border: 1px solid var(--border);
     background: var(--bg-tertiary);
