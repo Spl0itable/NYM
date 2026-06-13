@@ -406,6 +406,11 @@ Object.assign(NYM.prototype, {
         el.appendChild(header);
         el.appendChild(scroller);
 
+        const typing = document.createElement('div');
+        typing.className = 'typing-indicator cv-typing';
+        typing.innerHTML = '<div class="typing-indicator-avatars"></div><div class="typing-indicator-dots"><span></span><span></span><span></span></div><div class="typing-indicator-text"></div>';
+        el.appendChild(typing);
+
         const addBtn = this._cvStrip.querySelector('.cv-add-column');
         this._cvStrip.insertBefore(el, addBtn || null);
 
@@ -413,6 +418,9 @@ Object.assign(NYM.prototype, {
         col.headerEl = header;
         col.scrollerEl = scroller;
         col.listEl = list;
+        col.typingEl = typing;
+        col.typingAvatarsEl = typing.querySelector('.typing-indicator-avatars');
+        col.typingTextEl = typing.querySelector('.typing-indicator-text');
         col._atBottom = true;
 
         this._cvAttachColumnScroll(col);
@@ -524,6 +532,23 @@ Object.assign(NYM.prototype, {
             this._markVisibleGroupMessagesRead();
         } else if (col.type === 'channel' && typeof this.markVisibleChannelMessagesRead === 'function') {
             this.markVisibleChannelMessagesRead();
+        }
+    },
+
+    _cvTypingKey(col) {
+        if (col.type === 'group') return this.getGroupConversationKey(col.groupId);
+        if (col.type === 'pm') return this.getPMConversationKey(col.pubkey);
+        if (col.type === 'channel' && col.geohash) return `channel-${col.geohash}`;
+        return null;
+    },
+
+    _cvRenderTyping() {
+        const g = document.getElementById('typingIndicator');
+        if (g) g.classList.remove('active');
+        for (const col of this._cvColumns) {
+            if (col.typingEl && typeof this._renderTypingInto === 'function') {
+                this._renderTypingInto(col.typingEl, col.typingAvatarsEl, col.typingTextEl, this._cvTypingKey(col));
+            }
         }
     },
 

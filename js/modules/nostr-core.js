@@ -1361,19 +1361,24 @@ Object.assign(NYM.prototype, {
 
     // Render the typing indicator UI for the current conversation
     renderTypingIndicator() {
-        const el = document.getElementById('typingIndicator');
-        const avatarsEl = document.getElementById('typingIndicatorAvatars');
-        const textEl = document.getElementById('typingIndicatorText');
-        if (!el || !avatarsEl || !textEl) return;
+        if (this._cvActive && typeof this._cvRenderTyping === 'function') { this._cvRenderTyping(); return; }
+        this._renderTypingInto(
+            document.getElementById('typingIndicator'),
+            document.getElementById('typingIndicatorAvatars'),
+            document.getElementById('typingIndicatorText'),
+            this._activeTypingConvKey()
+        );
+    },
 
-        let convKey = null;
-        if (this.inPMMode && this.currentGroup) {
-            convKey = this.getGroupConversationKey(this.currentGroup);
-        } else if (this.inPMMode && this.currentPM) {
-            convKey = this.getPMConversationKey(this.currentPM);
-        } else if (!this.inPMMode && this.currentGeohash) {
-            convKey = `channel-${this.currentGeohash}`;
-        }
+    _activeTypingConvKey() {
+        if (this.inPMMode && this.currentGroup) return this.getGroupConversationKey(this.currentGroup);
+        if (this.inPMMode && this.currentPM) return this.getPMConversationKey(this.currentPM);
+        if (!this.inPMMode && this.currentGeohash) return `channel-${this.currentGeohash}`;
+        return null;
+    },
+
+    _renderTypingInto(el, avatarsEl, textEl, convKey) {
+        if (!el || !avatarsEl || !textEl) return;
 
         const convTypers = convKey ? this.typingUsers.get(convKey) : null;
 
