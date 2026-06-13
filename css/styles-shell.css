@@ -618,7 +618,6 @@ body.sidebar-reorder-mode .nav-title {
     height: 100dvh;
     background: var(--bg-tertiary);
     border-left: 1px solid var(--glass-border);
-    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
     z-index: 10100;
     padding: 0;
     overflow-y: auto;
@@ -631,6 +630,7 @@ body.sidebar-reorder-mode .nav-title {
 
 .context-menu.active {
     transform: translateX(0);
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
 }
 
 .context-menu-overlay {

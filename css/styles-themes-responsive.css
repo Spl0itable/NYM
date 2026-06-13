@@ -1044,8 +1044,11 @@ body.light-mode ::-webkit-scrollbar-thumb:hover {
 }
 
 body.light-mode .context-menu {
-    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12);
     border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .context-menu.active {
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12);
 }
 
 body.light-mode .context-menu-close {
