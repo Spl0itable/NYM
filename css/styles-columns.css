@@ -416,6 +416,11 @@ body.solid-ui .cv-column-header {
         border-right: none;
     }
 
+    body.columns-mode .cv-column.focused {
+        border-color: var(--glass-border);
+        box-shadow: var(--shadow-md);
+    }
+
     body.columns-mode .cv-add-column {
         flex: 0 0 100%;
         width: 100%;
