@@ -1263,11 +1263,6 @@ Object.assign(NYM.prototype, {
         let msgLongPressTimer = null;
         let msgLongPressFired = false;
 
-        // Stand down while a native file/camera picker is open or just closed
-        const isFilePickerBusy = () => window.__nymFileDialogActive
-            || window._nymPickerActive
-            || (window._nymPickerCloseTime && (Date.now() - window._nymPickerCloseTime) < 700);
-
         const showQuickReactPopup = (msgEl, e) => {
             msgLongPressFired = true;
             window._nymMediaClickSuppressUntil = Date.now() + 800;
@@ -1597,7 +1592,6 @@ Object.assign(NYM.prototype, {
         messagesEl.addEventListener('mousedown', (e) => {
             // Only trigger on primary (left) mouse button; ignore right/middle clicks
             if (e.button !== 0) return;
-            if (isFilePickerBusy()) return;
             if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
@@ -1610,7 +1604,6 @@ Object.assign(NYM.prototype, {
         });
 
         messagesEl.addEventListener('touchstart', (e) => {
-            if (isFilePickerBusy()) return;
             if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;

@@ -115,63 +115,82 @@ Object.assign(NYM.prototype, {
         // Store offer locally
         this.p2pFileOffers.set(offerId, fileOffer);
 
-        // Determine channel info and kind for the offer event
-        let tags = [
-            ['n', this.nym],
-            ['offer', JSON.stringify(fileOffer)]
-        ];
+        const content = `Sharing file through Nymchat: ${file.name} (${this.formatFileSize(file.size)})`;
+        const published = await this.publishFileOffer(fileOffer, content);
+        if (published) {
+            this.displaySystemMessage(`File "${file.name}" is now available for P2P download`);
+        }
+    },
 
-        let kind;
+    // Announce a file offer into the active conversation: public geohash
+    // channel (broadcast), 1:1 PM, or private group (encrypted gift wrap).
+    async publishFileOffer(fileOffer, content) {
+        if (this.inPMMode && this.currentGroup) {
+            await this.sendGroupMessage(content, this.currentGroup, { fileOffer });
+            return true;
+        }
+        if (this.inPMMode && this.currentPM) {
+            await this.sendPM(content, this.currentPM, { fileOffer });
+            return true;
+        }
+        if (!this.currentGeohash) {
+            this.displaySystemMessage('No channel selected for file sharing');
+            return false;
+        }
 
         const nowMs = Date.now();
         const now = Math.floor(nowMs / 1000);
-        tags.push(['ms', String(nowMs)]);
-
-        if (this.currentGeohash) {
-            const wire = this.channelWire(this.currentGeohash);
-            kind = wire.kind;
-            tags.push([wire.tag, this.currentGeohash]);
-        } else {
-            this.displaySystemMessage('No channel selected for file sharing');
-            return;
-        }
-
-        // Create and sign the file offer event
+        const wire = this.channelWire(this.currentGeohash);
         const event = {
-            kind: kind,
+            kind: wire.kind,
             created_at: now,
-            tags: tags,
-            content: `Sharing file through Nymchat: ${file.name} (${this.formatFileSize(file.size)})`,
+            tags: [
+                ['n', this.nym],
+                ['offer', JSON.stringify(fileOffer)],
+                ['ms', String(nowMs)],
+                [wire.tag, this.currentGeohash]
+            ],
+            content,
             pubkey: this.pubkey
         };
 
         const signedEvent = await this.signEvent(event);
-
-        // Create optimistic message for immediate display
-        const optimisticMessage = {
+        this.displayMessage({
             id: signedEvent.id,
             author: this.nym,
             pubkey: this.pubkey,
-            content: event.content,
-            created_at: event.created_at,
+            content,
+            created_at: now,
             _ms: nowMs,
             _seq: ++this._msgSeq,
-            timestamp: new Date(event.created_at * 1000),
+            timestamp: new Date(now * 1000),
             channel: this.currentChannel,
             geohash: this.currentGeohash || '',
             isOwn: true,
             isHistorical: false,
             isFileOffer: true,
-            fileOffer: fileOffer
-        };
-
-        // Display locally immediately
-        this.displayMessage(optimisticMessage);
-
-        // Broadcast to relays
+            fileOffer
+        });
         this.sendToRelay(['EVENT', signedEvent]);
+        return true;
+    },
 
-        this.displaySystemMessage(`File "${file.name}" is now available for P2P download`);
+    // Parse and register a file offer carried on a message's tags
+    parseFileOfferTag(tags, senderPubkey) {
+        const offerTag = (tags || []).find(t => Array.isArray(t) && t[0] === 'offer');
+        if (!offerTag) return null;
+        try {
+            const fileOffer = JSON.parse(offerTag[1]);
+            if (fileOffer && typeof fileOffer === 'object' && fileOffer.offerId) {
+                if (fileOffer.seederPubkey && fileOffer.seederPubkey !== senderPubkey) return null;
+                fileOffer.seederPubkey = senderPubkey;
+                this.p2pFileOffers.set(fileOffer.offerId, fileOffer);
+                return fileOffer;
+            }
+        } catch (e) {
+            console.error('Error parsing file offer:', e);
+        }
+        return null;
     },
 
     // Format file size for display
@@ -891,7 +910,7 @@ Object.assign(NYM.prototype, {
             return this.shareP2PFile(file);
         }
 
-        if (!this.currentGeohash) {
+        if (!this.currentGeohash && !(this.inPMMode && (this.currentPM || this.currentGroup))) {
             this.displaySystemMessage('No channel selected for file sharing');
             return;
         }
@@ -946,47 +965,9 @@ Object.assign(NYM.prototype, {
         // Store offer locally
         this.p2pFileOffers.set(offerId, fileOffer);
 
-        // Build tags for the Nostr event
-        const nowMs = Date.now();
-        const now = Math.floor(nowMs / 1000);
-        const wire = this.channelWire(this.currentGeohash);
-        const tags = [
-            ['n', this.nym],
-            ['offer', JSON.stringify(fileOffer)],
-            [wire.tag, this.currentGeohash],
-            ['ms', String(nowMs)]
-        ];
-
-        // Create and broadcast the file offer event
-        const event = {
-            kind: wire.kind,
-            created_at: now,
-            tags: tags,
-            content: `Sharing file via torrent: ${displayName} (${this.formatFileSize(displaySize)})`,
-            pubkey: this.pubkey
-        };
-
-        this.signEvent(event).then(signedEvent => {
-            const optimisticMessage = {
-                id: signedEvent.id,
-                author: this.nym,
-                pubkey: this.pubkey,
-                content: event.content,
-                created_at: event.created_at,
-                _ms: nowMs,
-                _seq: ++this._msgSeq,
-                timestamp: new Date(event.created_at * 1000),
-                channel: this.currentChannel,
-                geohash: this.currentGeohash || '',
-                isOwn: true,
-                isHistorical: false,
-                isFileOffer: true,
-                fileOffer: fileOffer
-            };
-
-            this.displayMessage(optimisticMessage);
-            this.sendToRelay(['EVENT', signedEvent]);
-            this.displaySystemMessage(`Seeding torrent: "${displayName}"`);
+        const content = `Sharing file via torrent: ${displayName} (${this.formatFileSize(displaySize)})`;
+        this.publishFileOffer(fileOffer, content).then(published => {
+            if (published) this.displaySystemMessage(`Seeding torrent: "${displayName}"`);
         });
     },
 

@@ -2227,29 +2227,11 @@ function onTransparencyChange(value) {
     nostrSettingsSave();
 }
 
-function nymSuppressLongPressForFileDialog() {
-    window.__nymFileDialogActive = true;
-    const clear = () => {
-        // Small delay so trailing touch events that leak through as the native
-        // sheet dismisses are still suppressed.
-        setTimeout(() => { window.__nymFileDialogActive = false; }, 400);
-        window.removeEventListener('focus', clear);
-        document.removeEventListener('visibilitychange', onVisible);
-    };
-    const onVisible = () => { if (document.visibilityState === 'visible') clear(); };
-    window.addEventListener('focus', clear, { once: true });
-    document.addEventListener('visibilitychange', onVisible);
-    // Safety net in case neither focus nor visibilitychange ever fires.
-    setTimeout(() => { window.__nymFileDialogActive = false; }, 10000);
-}
-
 function selectImage() {
-    nymSuppressLongPressForFileDialog();
     document.getElementById('fileInput').click();
 }
 
 function selectP2PFile() {
-    nymSuppressLongPressForFileDialog();
     document.getElementById('p2pFileInput').click();
 }
 
@@ -4215,7 +4197,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.71.495';
+const NYMCHAT_VERSION = 'v3.71.496';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 

@@ -1251,6 +1251,8 @@ Object.assign(NYM.prototype, {
             await this.fetchProfileDirect(senderPubkey);
         }
 
+        const groupFileOffer = this.parseFileOfferTag(rumor.tags, senderPubkey);
+
         const msg = {
             id: event.id,
             author: isOwn ? this.nym : senderName,
@@ -1271,6 +1273,8 @@ Object.assign(NYM.prototype, {
             isHistorical: this._isGiftWrapBacklog(),
             senderVerified,
             nymMessageId: nymMsgId,
+            isFileOffer: !!groupFileOffer,
+            fileOffer: groupFileOffer,
             deliveryStatus: isOwn ? 'sent' : undefined
         };
         this._recordMsgVerification(nymMsgId, senderVerified);
@@ -1652,7 +1656,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Send a message to a group via NIP-17 gift wraps (one per member).
-    async sendGroupMessage(content, groupId) {
+    async sendGroupMessage(content, groupId, options = {}) {
         if (!content || !content.trim()) return false;
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Group messages require a logged-in account');
@@ -1690,6 +1694,9 @@ Object.assign(NYM.prototype, {
             tags.push(...this.imetaTagsForContent(content));
         }
 
+        const fileOffer = options.fileOffer || null;
+        if (fileOffer) tags.push(['offer', JSON.stringify(fileOffer)]);
+
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
@@ -1714,6 +1721,8 @@ Object.assign(NYM.prototype, {
             eventKind: 1059,
             nymMessageId,
             senderVerified: true,
+            isFileOffer: !!fileOffer,
+            fileOffer,
             deliveryStatus: 'sent'
         };
 

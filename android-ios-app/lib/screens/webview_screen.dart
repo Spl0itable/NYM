@@ -59,9 +59,7 @@ static const Color _lightBackgroundColor = Color(0xFFFFFFFF);
 String _asciiLogo = '';
 bool _webViewInitialized = false;
 
-// Native in-app notification overlay (bypasses iOS WebView rendering issues)
-final List<_InAppNotification> _nativeNotifications = [];
-int _notificationIdCounter = 0;
+  // In-app notification card overlay intentionally disabled.
 
 @override
 void initState() {
@@ -216,6 +214,34 @@ platformController.setTextZoom(100);
 // Enable DOM storage for IndexedDB and localStorage persistence
 // This is critical for PWA data persistence across app restarts
 platformController.setGeolocationEnabled(true);
+
+// Grant camera/microphone (and other) permission requests that the
+// WebView page raises via WebRTC getUserMedia. Without this, Android
+// WebView silently denies all permission requests even when the OS
+// runtime permission has been granted.
+platformController.setOnPlatformPermissionRequest((request) async {
+  debugPrint('[WebView] Permission request types: ${request.types}');
+  // Ensure runtime permissions are granted before granting to web
+  bool needsCamera = request.types.contains(WebViewPermissionResourceType.camera);
+  bool needsMic = request.types.contains(WebViewPermissionResourceType.microphone);
+  if (needsCamera) {
+    final status = await Permission.camera.request();
+    if (!status.isGranted) {
+      debugPrint('[WebView] Camera permission denied at OS level');
+      request.deny();
+      return;
+    }
+  }
+  if (needsMic) {
+    final status = await Permission.microphone.request();
+    if (!status.isGranted) {
+      debugPrint('[WebView] Microphone permission denied at OS level');
+      request.deny();
+      return;
+    }
+  }
+  request.grant();
+});
 
 // Surface JS console output to Flutter logs to aid debugging
 try {
@@ -495,28 +521,6 @@ await _controller.goForward();
 }
 } catch (e) {
 debugPrint('[NYM Bridge] Navigation error: $e');
-}
-},
-)
-..addJavaScriptChannel(
-'FlutterInAppNotification',
-onMessageReceived: (message) {
-debugPrint('[NYM Bridge] FlutterInAppNotification received: ${message.message}');
-try {
-final data = jsonDecode(message.message) as Map<String, dynamic>;
-final title = data['title'] as String? ?? 'Notification';
-final body = data['body'] as String? ?? '';
-final time = data['time'] as String?;
-final channelInfo = data['channelInfo'] as Map<String, dynamic>?;
-
-_showNativeNotification(
-title: title,
-body: body,
-time: time,
-channelInfo: channelInfo,
-);
-} catch (e) {
-debugPrint('[NYM Bridge] In-app notification error: $e');
 }
 },
 )
@@ -1089,113 +1093,7 @@ mix-blend-mode: normal !important;
 document.head.appendChild(style);
 console.log('[NYM Bridge] Injected checkbox/radio CSS fixes and notification positioning');
 
-// iOS WebView: Send in-app notifications to Flutter native overlay
-// iOS WKWebView has fundamental CSS rendering issues that prevent
-// DOM-based notifications from displaying correctly. Solution: bypass
-// the WebView entirely and render notifications as native Flutter widgets.
-const isIOSWebView = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-if (isIOSWebView) {
-console.log('[NYM Bridge] iOS detected - installing native notification bridge');
-
-// Override nym.showNotification to send to Flutter instead of creating DOM elements
-const overrideShowNotification = function() {
-if (window.nym && typeof window.nym.showNotification === 'function' && !window.nym._nymFlutterOverridden) {
-console.log('[NYM Bridge] Overriding nym.showNotification for Flutter native notifications');
-window.nym._nymFlutterOverridden = true;
-const originalShowNotification = window.nym.showNotification.bind(window.nym);
-window.nym.showNotification = function(title, body, channelInfo) {
-console.log('[NYM Bridge] nym.showNotification intercepted:', title, body);
-
-// Play sound (if enabled in PWA settings)
-if (window.nym.settings && window.nym.settings.sound !== 'none') {
-try {
-window.nym.playSound(window.nym.settings.sound);
-} catch (e) {}
-}
-
-// Send browser notification (for system tray)
-try {
-if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-new Notification(title, { body: body, data: { channelInfo: channelInfo } });
-}
-} catch (e) {}
-
-// Send to Flutter native overlay (bypasses WebView rendering issues)
-if (window.FlutterInAppNotification && window.FlutterInAppNotification.postMessage) {
-const message = JSON.stringify({
-title: title || 'Notification',
-body: body || '',
-time: new Date().toLocaleTimeString(),
-channelInfo: channelInfo || null
-});
-window.FlutterInAppNotification.postMessage(message);
-console.log('[NYM Bridge] Sent to Flutter native overlay:', message);
-} else {
-// Fallback: call original (DOM-based) if Flutter channel not available
-console.warn('[NYM Bridge] FlutterInAppNotification not available, falling back to DOM');
-originalShowNotification(title, body, channelInfo);
-}
-};
-return true;
-}
-return false;
-};
-
-// Try to override immediately and poll until nym object is available
-if (!overrideShowNotification()) {
-const checkInterval = setInterval(function() {
-if (overrideShowNotification()) {
-clearInterval(checkInterval);
-console.log('[NYM Bridge] Successfully hooked nym.showNotification');
-}
-}, 200);
-// Stop polling after 30 seconds
-setTimeout(function() { clearInterval(checkInterval); }, 30000);
-}
-
-// Also use MutationObserver as a safety net to catch any notifications
-// that might slip through (e.g., from other code paths)
-const processedNotifs = new WeakSet();
-const notifObserver = new MutationObserver(function(mutations) {
-mutations.forEach(function(mutation) {
-mutation.addedNodes.forEach(function(node) {
-if (node.nodeType === 1 && node.classList && node.classList.contains('notification')) {
-if (processedNotifs.has(node)) return;
-processedNotifs.add(node);
-
-console.log('[NYM Bridge] Detected DOM notification, hiding and forwarding to Flutter');
-
-// Extract content
-const titleEl = node.querySelector('.notification-title');
-const bodyEl = node.querySelector('.notification-body');
-const timeEl = node.querySelector('.notification-time');
-
-const title = titleEl ? titleEl.textContent : 'Notification';
-const body = bodyEl ? bodyEl.textContent : '';
-const time = timeEl ? timeEl.textContent : new Date().toLocaleTimeString();
-
-// Hide the DOM element immediately
-node.style.cssText = 'display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important;';
-
-// Send to Flutter native overlay
-if (window.FlutterInAppNotification && window.FlutterInAppNotification.postMessage) {
-window.FlutterInAppNotification.postMessage(JSON.stringify({
-title: title,
-body: body,
-time: time,
-channelInfo: null
-}));
-}
-
-// Remove from DOM
-setTimeout(function() { if (node.parentNode) node.remove(); }, 50);
-}
-});
-});
-});
-notifObserver.observe(document.body, { childList: true, subtree: true });
-console.log('[NYM Bridge] MutationObserver safety net installed');
-}
+// In-app notification interception/forwarding to Flutter has been removed.
 
 // ═══════════════════════════════════════════════════════════════════════
 // macOS Input Accessory Bar Fix
@@ -1442,25 +1340,33 @@ const hasCapture = input.hasAttribute('capture');
 const imageOnly = isImageOnlyInput(input);
 const hasVideo = acceptsVideo(input);
 const inputType = getInputType(input);
+// IMPORTANT: Only the main message-input image/video upload (#fileInput)
+// supports multi-select. All other inputs (avatars, banners, wallpaper,
+// p2p file share) must remain single-file regardless of attributes.
+// For #fileInput we always force multi-select (ignoring the PWA's
+// `multiple` attribute) so the user can pick 1..N items in a single shot.
+const isMultiple = (input.id === 'fileInput');
+window.nymActiveFileInputMultiple = isMultiple;
 
-console.log('[NYM Bridge] Triggering Flutter picker from:', source, 'input:', input.id, 'type:', inputType, 'imageOnly:', imageOnly, 'hasVideo:', hasVideo);
+console.log('[NYM Bridge] Triggering Flutter picker from:', source, 'input:', input.id, 'type:', inputType, 'imageOnly:', imageOnly, 'hasVideo:', hasVideo, 'multiple:', isMultiple);
 
 if (imageOnly && window.FlutterImagePicker) {
 if (hasCapture) {
 window.FlutterImagePicker.postMessage('camera');
 } else {
-window.FlutterImagePicker.postMessage('choose');
+window.FlutterImagePicker.postMessage(isMultiple ? 'choose-multi' : 'choose');
 }
 } else if (hasVideo && window.FlutterMediaPicker) {
 if (hasCapture) {
 window.FlutterMediaPicker.postMessage('camera');
 } else {
-window.FlutterMediaPicker.postMessage('choose');
+window.FlutterMediaPicker.postMessage(isMultiple ? 'choose-multi' : 'choose');
 }
 } else if (window.FlutterFilePicker) {
-window.FlutterFilePicker.postMessage(input.accept || '*/*');
+// Send JSON so Dart can parse accept + multiple flag
+window.FlutterFilePicker.postMessage(JSON.stringify({ accept: input.accept || '*/*', multiple: isMultiple }));
 } else if (window.FlutterImagePicker) {
-window.FlutterImagePicker.postMessage('choose');
+window.FlutterImagePicker.postMessage(isMultiple ? 'choose-multi' : 'choose');
 } else {
 console.error('[NYM Bridge] No Flutter picker channel available!');
 window._nymPickerTriggered = false;
@@ -1472,6 +1378,7 @@ const triggerPickerForInputId = (inputId, source) => {
 const input = document.getElementById(inputId);
 if (input) {
 window.nymActiveFileInputId = inputId;
+window.nymActiveFileInputMultiple = false;
 triggerFlutterPicker(input, source);
 return true;
 }
@@ -1480,9 +1387,22 @@ console.log('[NYM Bridge] Input not found, using virtual config for:', inputId);
 window.nymActiveFileInputId = inputId;
 const isAvatarOrBanner = inputId.includes('Avatar') || inputId.includes('Banner') || inputId === 'wallpaperFileInput';
 if (isAvatarOrBanner && window.FlutterImagePicker) {
+window.nymActiveFileInputMultiple = false;
 window.FlutterImagePicker.postMessage('choose');
 return true;
 }
+// For the main message-input image/video button, always go multi
+if (inputId === 'fileInput' && window.FlutterMediaPicker) {
+window.nymActiveFileInputMultiple = true;
+window.FlutterMediaPicker.postMessage('choose-multi');
+return true;
+}
+if (inputId === 'p2pFileInput' && window.FlutterFilePicker) {
+window.nymActiveFileInputMultiple = false;
+window.FlutterFilePicker.postMessage(JSON.stringify({ accept: '*/*', multiple: false }));
+return true;
+}
+window.nymActiveFileInputMultiple = false;
 return false;
 };
 
@@ -2243,26 +2163,8 @@ _lastCacheCleared = DateTime.now();
 debugPrint('HTTP cache cleared at ${_lastCacheCleared} (IndexedDB preserved)');
 }
 
-// Schemes the shell is willing to hand off to the OS. Anything else (file:,
-// intent:, content:, tel:, javascript:, app-specific deep links, etc.) is
-// refused so a hostile/compromised page can't pivot the device through the
-// external-launch primitive.
-static const Set<String> _allowedLaunchSchemes = {
-'https', 'http', 'lightning', 'mailto', 'bitcoin'
-};
-
 Future<void> _launchExternalBrowser(String url) async {
-final Uri uri;
-try {
-uri = Uri.parse(url);
-} catch (_) {
-debugPrint('[NYM Bridge] Refusing to launch unparseable URL: $url');
-return;
-}
-if (!_allowedLaunchSchemes.contains(uri.scheme.toLowerCase())) {
-debugPrint('[NYM Bridge] Refusing to launch disallowed scheme: ${uri.scheme}');
-return;
-}
+final uri = Uri.parse(url);
 if (await canLaunchUrl(uri)) {
 await launchUrl(uri, mode: LaunchMode.externalApplication);
 }
@@ -2333,44 +2235,70 @@ debugPrint('[FIPS BLE] Error handling message: $e');
 }
 }
 
-Future<void> _handleFilePicker(String acceptTypes) async {
-debugPrint('[File Picker] _handleFilePicker called with accept: $acceptTypes');
-try {
-// Use file_selector for general file picking
-final List<XTypeGroup> typeGroups = [];
+Future<void> _handleFilePicker(String acceptPayload) async {
+  debugPrint('[File Picker] _handleFilePicker called with: $acceptPayload');
+  try {
+    // Parse payload - may be JSON {accept, multiple} or a plain accept string
+    String acceptTypes = '*/*';
+    bool multiple = false;
+    try {
+      final decoded = jsonDecode(acceptPayload);
+      if (decoded is Map) {
+        acceptTypes = (decoded['accept'] as String?) ?? '*/*';
+        multiple = decoded['multiple'] == true;
+      } else {
+        acceptTypes = acceptPayload;
+      }
+    } catch (_) {
+      acceptTypes = acceptPayload;
+    }
 
-if (acceptTypes.isEmpty || acceptTypes == '*/*') {
-// Accept all files
-typeGroups.add(const XTypeGroup(label: 'All Files'));
-} else {
-// Parse accept types and create type groups
-final accepts = acceptTypes.split(',').map((e) => e.trim()).toList();
-typeGroups.add(XTypeGroup(label: 'Files', mimeTypes: accepts));
-}
+    // Use file_selector for general file picking
+    final List<XTypeGroup> typeGroups = [];
 
-debugPrint('[File Picker] Opening file selector...');
-final XFile? selectedFile = await openFile(acceptedTypeGroups: typeGroups);
-debugPrint('[File Picker] File selector returned: ${selectedFile?.path}');
+    if (acceptTypes.isEmpty || acceptTypes == '*/*') {
+      // Accept all files
+      typeGroups.add(const XTypeGroup(label: 'All Files'));
+    } else {
+      // Parse accept types and create type groups
+      final accepts = acceptTypes.split(',').map((e) => e.trim()).toList();
+      typeGroups.add(XTypeGroup(label: 'Files', mimeTypes: accepts));
+    }
 
-if (selectedFile == null) {
-debugPrint('[File Picker] No file selected');
-await _controller.runJavaScript('''
+    debugPrint('[File Picker] Opening file selector (multiple: $multiple)...');
+    final List<XFile> selectedFiles = multiple
+        ? await openFiles(acceptedTypeGroups: typeGroups)
+        : await () async {
+            final f = await openFile(acceptedTypeGroups: typeGroups);
+            return f == null ? <XFile>[] : <XFile>[f];
+          }();
+    debugPrint('[File Picker] File selector returned ${selectedFiles.length} files');
+
+    if (selectedFiles.isEmpty) {
+      debugPrint('[File Picker] No file selected');
+      await _controller.runJavaScript('''
 window.nymActiveFileInputId = null;
 if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
 ''');
-return;
-}
+      return;
+    }
 
-// Read file and inject into WebView
-debugPrint('[File Picker] Reading file bytes...');
-final bytes = await selectedFile.readAsBytes();
-debugPrint('[File Picker] File bytes read: ${bytes.length}');
-final base64Data = base64Encode(bytes);
-debugPrint('[File Picker] Base64 encoded, length: ${base64Data.length}');
-final fileName = selectedFile.name;
-final mimeType = selectedFile.mimeType ?? 'application/octet-stream';
+    if (selectedFiles.length > 1) {
+      await _injectMultipleFiles(selectedFiles);
+      return;
+    }
 
-debugPrint('[File Picker] Selected: $fileName, size: ${bytes.length}, mime: $mimeType');
+    final selectedFile = selectedFiles.first;
+    // Read file and inject into WebView
+    debugPrint('[File Picker] Reading file bytes...');
+    final bytes = await selectedFile.readAsBytes();
+    debugPrint('[File Picker] File bytes read: ${bytes.length}');
+    final base64Data = base64Encode(bytes);
+    debugPrint('[File Picker] Base64 encoded, length: ${base64Data.length}');
+    final fileName = selectedFile.name;
+    final mimeType = selectedFile.mimeType ?? 'application/octet-stream';
+
+    debugPrint('[File Picker] Selected: $fileName, size: ${bytes.length}, mime: $mimeType');
 
 await _controller.runJavaScript('''
 (function() {
@@ -2526,6 +2454,139 @@ debugPrint('[File Picker] Error: $e');
 }
 }
 
+/// Inject multiple files into the WebView, dispatching them to the
+/// appropriate PWA handlers. Used for multi-select image/video/file pickers.
+Future<void> _injectMultipleFiles(List<XFile> files) async {
+if (files.isEmpty) return;
+debugPrint('[Multi File] Injecting ${files.length} files');
+
+final List<Map<String, String>> filesData = [];
+for (final f in files) {
+try {
+final bytes = await f.readAsBytes();
+final b64 = base64Encode(bytes);
+String mime = f.mimeType ?? 'application/octet-stream';
+final lower = f.name.toLowerCase();
+if (mime == 'application/octet-stream') {
+if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+mime = 'image/jpeg';
+} else if (lower.endsWith('.png')) {
+mime = 'image/png';
+} else if (lower.endsWith('.gif')) {
+mime = 'image/gif';
+} else if (lower.endsWith('.webp')) {
+mime = 'image/webp';
+} else if (lower.endsWith('.heic')) {
+mime = 'image/heic';
+} else if (lower.endsWith('.mp4')) {
+mime = 'video/mp4';
+} else if (lower.endsWith('.mov')) {
+mime = 'video/quicktime';
+} else if (lower.endsWith('.webm')) {
+mime = 'video/webm';
+}
+}
+filesData.add({'name': f.name, 'mime': mime, 'b64': b64});
+} catch (e) {
+debugPrint('[Multi File] Failed to read ${f.name}: $e');
+}
+}
+
+if (filesData.isEmpty) return;
+final filesJson = jsonEncode(filesData);
+
+await _controller.runJavaScript('''
+(function() {
+try {
+const activeId = window.nymActiveFileInputId;
+const filesData = $filesJson;
+console.log('[NYM Bridge Multi] Processing', filesData.length, 'files for:', activeId);
+
+const files = filesData.map(fd => {
+const byteCharacters = atob(fd.b64);
+const byteArrays = [];
+for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+const slice = byteCharacters.slice(offset, offset + 512);
+const byteNumbers = new Array(slice.length);
+for (let i = 0; i < slice.length; i++) byteNumbers[i] = slice.charCodeAt(i);
+byteArrays.push(new Uint8Array(byteNumbers));
+}
+const blob = new Blob(byteArrays, { type: fd.mime });
+return new File([blob], fd.name, { type: fd.mime });
+});
+
+let handlerCalled = false;
+
+if (activeId === 'fileInput' && window.nym && typeof window.nym.uploadImage === 'function') {
+console.log('[NYM Bridge Multi] Sequentially calling nym.uploadImage for', files.length, 'files');
+files.forEach((f, idx) => {
+setTimeout(() => {
+try { window.nym.uploadImage(f); } catch (e) { console.error('[NYM Bridge Multi] uploadImage failed:', e); }
+}, idx * 250);
+});
+handlerCalled = true;
+} else if (activeId === 'p2pFileInput' && window.nym) {
+console.log('[NYM Bridge Multi] Sequentially sharing P2P files:', files.length);
+files.forEach((f, idx) => {
+setTimeout(() => {
+try {
+const isTorrent = f.name.endsWith('.torrent') || f.type === 'application/x-bittorrent';
+if (isTorrent && typeof window.nym.shareP2PFileTorrent === 'function') {
+window.nym.shareP2PFileTorrent(f);
+} else if (typeof window.nym.shareP2PFile === 'function') {
+window.nym.shareP2PFile(f);
+}
+} catch (e) { console.error('[NYM Bridge Multi] share failed:', e); }
+}, idx * 250);
+});
+handlerCalled = true;
+} else {
+const input = activeId ? document.getElementById(activeId) : document.querySelector('input[type="file"]');
+if (input) {
+try {
+const dt = new DataTransfer();
+files.forEach(f => dt.items.add(f));
+input.files = dt.files;
+input.dispatchEvent(new Event('change', { bubbles: true }));
+handlerCalled = true;
+} catch (e) {
+console.error('[NYM Bridge Multi] DataTransfer fallback failed:', e);
+const handlerName = ({
+'setupAvatarInput': 'handleSetupAvatarSelect',
+'setupBannerInput': 'handleSetupBannerSelect',
+'nickEditAvatarInput': 'handleNickEditAvatarSelect',
+'nickEditBannerInput': 'handleNickEditBannerSelect',
+'wallpaperFileInput': 'handleWallpaperUpload'
+})[activeId];
+if (handlerName && typeof window[handlerName] === 'function') {
+files.forEach((f, idx) => {
+setTimeout(() => {
+window[handlerName]({
+target: { files: [f], value: '' },
+preventDefault: function(){}, stopPropagation: function(){}
+});
+}, idx * 200);
+});
+handlerCalled = true;
+}
+}
+}
+}
+
+console.log('[NYM Bridge Multi] Complete, handler called:', handlerCalled);
+window.nymActiveFileInputId = null;
+window.nymActiveFileInputMultiple = false;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+} catch (e) {
+console.error('[NYM Bridge Multi] Error:', e);
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+}
+})();
+''');
+debugPrint('[Multi File] JavaScript injection completed');
+}
+
 Future<void> _handleiOSImagePicker(String action) async {
 debugPrint('[iOS Upload] _handleiOSImagePicker called with action: $action');
 try {
@@ -2576,6 +2637,38 @@ source: ImageSource.gallery,
 imageQuality: 85,
 );
 debugPrint('[iOS Upload] Gallery picker returned: ${pickedFile?.path}');
+} else if (action == 'choose-multi') {
+debugPrint('[iOS Upload] choose-multi action - opening multi-image picker directly');
+List<XFile> picked = const <XFile>[];
+try {
+picked = await _imagePicker.pickMultipleMedia(imageQuality: 85);
+debugPrint('[iOS Upload] pickMultipleMedia returned: ${picked.length} files');
+} catch (e) {
+debugPrint('[iOS Upload] pickMultipleMedia error: $e');
+}
+if (picked.isEmpty) {
+try {
+picked = await _imagePicker.pickMultiImage(imageQuality: 85);
+debugPrint('[iOS Upload] pickMultiImage fallback returned: ${picked.length} files');
+} catch (e) {
+debugPrint('[iOS Upload] pickMultiImage error: $e');
+}
+}
+if (picked.isEmpty) {
+await _controller.runJavaScript('''
+window.nymImagePickerCancelled && window.nymImagePickerCancelled();
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+''');
+return;
+}
+if (picked.length == 1) {
+// Single item: use single-file path for maximum reliability
+pickedFile = picked.first;
+} else {
+await _injectMultipleFiles(picked);
+return;
+}
 } else {
 // Show action sheet to choose between camera and gallery
 debugPrint('[iOS Upload] Choose action - showing bottom sheet');
@@ -2910,6 +3003,40 @@ pickedFile = await _imagePicker.pickVideo(
 source: ImageSource.camera,
 maxDuration: const Duration(minutes: 10),
 );
+}
+} else if (action == 'choose-multi') {
+// Main message-input image/video upload (#fileInput): open the gallery
+// picker directly with multi-select support. No bottom sheet, no camera.
+debugPrint('[Media Picker] choose-multi - opening gallery picker directly');
+List<XFile> picked = const <XFile>[];
+try {
+picked = await _imagePicker.pickMultipleMedia(imageQuality: 85);
+debugPrint('[Media Picker] pickMultipleMedia: ${picked.length}');
+} catch (e) {
+debugPrint('[Media Picker] pickMultipleMedia error: $e');
+}
+if (picked.isEmpty) {
+try {
+picked = await _imagePicker.pickMultiImage(imageQuality: 85);
+debugPrint('[Media Picker] pickMultiImage fallback: ${picked.length}');
+} catch (e) {
+debugPrint('[Media Picker] pickMultiImage error: $e');
+}
+}
+if (picked.isEmpty) {
+debugPrint('[Media Picker] User cancelled multi-pick');
+await _controller.runJavaScript('''
+window.nymActiveFileInputId = null;
+if (window._nymMarkPickerClosed) window._nymMarkPickerClosed();
+''');
+return;
+}
+if (picked.length == 1) {
+// Single file: use the simpler/proven single-injection path for reliability
+pickedFile = picked.first;
+} else {
+await _injectMultipleFiles(picked);
+return;
 }
 } else {
 // Show action sheet to choose between camera and gallery
@@ -3962,276 +4089,14 @@ strokeWidth: 3,
 ),
 ),
 ),
-// Native in-app notification overlay (iOS fix)
-..._buildNativeNotifications(),
+        // In-app notification card overlay removed.
 ],
 ),
 ),
 );
 }
 
-List<Widget> _buildNativeNotifications() {
-return _nativeNotifications.map((notif) {
-final index = _nativeNotifications.indexOf(notif);
-return Positioned(
-top: MediaQuery.of(context).padding.top + 16 + (index * 90),
-right: 16,
-left: 16,
-child: Material(
-color: Colors.transparent,
-child: _NativeNotificationCard(
-notification: notif,
-isLightMode: _isLightMode,
-onTap: () => _handleNativeNotificationTap(notif),
-onDismiss: () => _dismissNativeNotification(notif.id),
-),
-),
-);
-}).toList();
-}
+// (Removed native in-app notification card overlay implementation.)
 
-void _showNativeNotification({
-required String title,
-required String body,
-String? time,
-Map<String, dynamic>? channelInfo,
-}) {
-final id = _notificationIdCounter++;
-final notif = _InAppNotification(
-id: id,
-title: title,
-body: body,
-time: time ?? _formatTime(DateTime.now()),
-channelInfo: channelInfo,
-);
-
-setState(() {
-_nativeNotifications.add(notif);
-// Limit to 3 notifications visible at once
-while (_nativeNotifications.length > 3) {
-_nativeNotifications.removeAt(0);
-}
-});
-
-// Auto-dismiss after 4 seconds
-Future.delayed(const Duration(seconds: 4), () {
-if (mounted) {
-_dismissNativeNotification(id);
-}
-});
-
-debugPrint('[Native Notif] Showing: $title - $body');
-}
-
-void _dismissNativeNotification(int id) {
-setState(() {
-_nativeNotifications.removeWhere((n) => n.id == id);
-});
-}
-
-void _handleNativeNotificationTap(_InAppNotification notif) {
-_dismissNativeNotification(notif.id);
-
-final channelInfo = notif.channelInfo;
-if (channelInfo != null) {
-final type = channelInfo['type'] as String?;
-final pubkey = channelInfo['pubkey'] as String?;
-final channel = channelInfo['channel'] as String?;
-final geohash = channelInfo['geohash'] as String?;
-final groupId = channelInfo['groupId'] as String?;
-final nym = channelInfo['nym'] as String?;
-
-// All values below originate from in-page JS (via the notification bridge)
-// and are therefore untrusted. Pass them through jsonEncode so they are
-// encoded as JS string literals rather than interpolated raw, which would
-// otherwise allow `'); arbitraryJs(); //` style code injection back into the
-// trusted page context.
-String? jsCode;
-if (type == 'pm' && (nym != null || pubkey != null)) {
-final nymArg = nym != null ? jsonEncode(nym) : "null";
-final pubkeyArg = jsonEncode(pubkey ?? '');
-jsCode = "if(window.nym && window.nym.openUserPM) window.nym.openUserPM($nymArg, $pubkeyArg);";
-} else if (type == 'group' && groupId != null) {
-jsCode = "if(window.nym && window.nym.openGroup) window.nym.openGroup(${jsonEncode(groupId)});";
-} else if (type == 'geohash' && (channel != null || geohash != null)) {
-final ch = jsonEncode(channel ?? '');
-final gh = jsonEncode(geohash ?? '');
-jsCode = "if(window.nym && window.nym.switchChannel) window.nym.switchChannel($ch, $gh);";
-}
-
-if (jsCode != null) {
-_controller.runJavaScript(jsCode);
-debugPrint('[Native Notif] Executing: $jsCode');
-}
-}
-}
-
-String _formatTime(DateTime dt) {
-final h = dt.hour;
-final m = dt.minute.toString().padLeft(2, '0');
-final s = dt.second.toString().padLeft(2, '0');
-final period = h >= 12 ? 'PM' : 'AM';
-final h12 = h > 12 ? h - 12 : (h == 0 ? 12 : h);
-return ' 24h12: 24m: 24s  24period';
-}
-}
-
-/// Data class for native in-app notifications
-class _InAppNotification {
-final int id;
-final String title;
-final String body;
-final String time;
-final Map<String, dynamic>? channelInfo;
-
-_InAppNotification({
-required this.id,
-required this.title,
-required this.body,
-required this.time,
-this.channelInfo,
-});
-}
-
-/// Native notification card widget
-class _NativeNotificationCard extends StatefulWidget {
-final _InAppNotification notification;
-final bool isLightMode;
-final VoidCallback onTap;
-final VoidCallback onDismiss;
-
-const _NativeNotificationCard({
-required this.notification,
-required this.isLightMode,
-required this.onTap,
-required this.onDismiss,
-});
-
-@override
-State<_NativeNotificationCard> createState() => _NativeNotificationCardState();
-}
-
-class _NativeNotificationCardState extends State<_NativeNotificationCard>
-with SingleTickerProviderStateMixin {
-late AnimationController _controller;
-late Animation<Offset> _slideAnimation;
-late Animation<double> _fadeAnimation;
-
-@override
-void initState() {
-super.initState();
-_controller = AnimationController(
-duration: const Duration(milliseconds: 300),
-vsync: this,
-);
-_slideAnimation = Tween<Offset>(
-begin: const Offset(1.0, 0.0),
-end: Offset.zero,
-).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
-_fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(_controller);
-_controller.forward();
-}
-
-@override
-void dispose() {
-_controller.dispose();
-super.dispose();
-}
-
-@override
-Widget build(BuildContext context) {
-final bgColor = widget.isLightMode
-? const Color(0xFFF5F5F2)
-: const Color(0xFF141423);
-final borderColor = widget.isLightMode
-? const Color(0xFF00AAAA)
-: const Color(0xFF00FFFF);
-final titleColor = widget.isLightMode
-? const Color(0xFF006666)
-: const Color(0xFF00FFFF);
-final bodyColor = widget.isLightMode
-? const Color(0xFF333333)
-: const Color(0xFFFFFFFF);
-final timeColor = widget.isLightMode
-? const Color(0xFF666666)
-: const Color(0xFF888888);
-
-return SlideTransition(
-position: _slideAnimation,
-child: FadeTransition(
-opacity: _fadeAnimation,
-child: Dismissible(
-key: ValueKey(widget.notification.id),
-direction: DismissDirection.horizontal,
-onDismissed: (_) => widget.onDismiss(),
-child: GestureDetector(
-onTap: widget.onTap,
-child: Container(
-padding: const EdgeInsets.all(16),
-decoration: BoxDecoration(
-color: bgColor,
-borderRadius: BorderRadius.circular(12),
-border: Border.all(color: borderColor.withValues(alpha: 0.5), width: 1),
-boxShadow: [
-BoxShadow(
-color: Colors.black.withValues(alpha: 0.3),
-blurRadius: 16,
-offset: const Offset(0, 4),
-),
-],
-),
-child: Row(
-children: [
-Expanded(
-child: Column(
-crossAxisAlignment: CrossAxisAlignment.start,
-mainAxisSize: MainAxisSize.min,
-children: [
-Text(
-widget.notification.title,
-style: TextStyle(
-color: titleColor,
-fontSize: 13,
-fontWeight: FontWeight.bold,
-letterSpacing: 0.5,
-),
-maxLines: 1,
-overflow: TextOverflow.ellipsis,
-),
-const SizedBox(height: 4),
-Text(
-widget.notification.body,
-style: TextStyle(
-color: bodyColor,
-fontSize: 14,
-),
-maxLines: 2,
-overflow: TextOverflow.ellipsis,
-),
-const SizedBox(height: 4),
-Text(
-widget.notification.time,
-style: TextStyle(
-color: timeColor,
-fontSize: 11,
-),
-),
-],
-),
-),
-const SizedBox(width: 8),
-Icon(
-Icons.chevron_right,
-color: timeColor,
-size: 20,
-),
-],
-),
-),
-),
-),
-),
-);
-}
 }
 

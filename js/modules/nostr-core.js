@@ -431,23 +431,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Check if this is a P2P file offer
-            const offerTag = event.tags.find(t => t[0] === 'offer');
-            let fileOffer = null;
-            if (offerTag) {
-                try {
-                    fileOffer = JSON.parse(offerTag[1]);
-                    if (fileOffer && typeof fileOffer === 'object' && fileOffer.offerId) {
-                        if (fileOffer.seederPubkey && fileOffer.seederPubkey !== event.pubkey) {
-                            fileOffer = null;
-                        } else {
-                            fileOffer.seederPubkey = event.pubkey;
-                            this.p2pFileOffers.set(fileOffer.offerId, fileOffer);
-                        }
-                    }
-                } catch (e) {
-                    console.error('Error parsing file offer:', e);
-                }
-            }
+            const fileOffer = this.parseFileOfferTag(event.tags, event.pubkey);
 
             // Fetch kind 0 profile for channel message senders we haven't seen
             if (event.pubkey !== this.pubkey) {

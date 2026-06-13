@@ -299,7 +299,6 @@ body.light-mode .verified-badge::before {
         flex-shrink: 0;
         overflow: hidden;
         touch-action: pan-x;
-        margin-right: 10px;
     }
 
     .input-container {

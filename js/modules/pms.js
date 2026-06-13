@@ -294,12 +294,14 @@ Object.assign(NYM.prototype, {
     },
 
     // Send PM using NIP-17 (GiftWrap 1059) and optional forward secrecy
-    async sendNIP17PM(content, recipientPubkey) {
+    async sendNIP17PM(content, recipientPubkey, options = {}) {
         const nowMs = Date.now();
         const now = Math.floor(nowMs / 1000);
 
         // Generate message ID for delivery receipts (Nymchat format)
         const nymMessageId = this._generateSharedEventId();
+
+        const fileOffer = options.fileOffer || null;
 
         const rumor = {
             kind: 14,
@@ -308,6 +310,7 @@ Object.assign(NYM.prototype, {
                 ['p', recipientPubkey],
                 ['x', nymMessageId],  // Nymchat message ID for delivery receipts
                 ['ms', String(nowMs)],  // Millisecond send time for sub-second ordering
+                ...(fileOffer ? [['offer', JSON.stringify(fileOffer)]] : []),
                 ...this.customEmojiTagsForContent(content),
                 ...(typeof this.imetaTagsForContent === 'function' ? this.imetaTagsForContent(content) : [])
             ],
@@ -395,6 +398,8 @@ Object.assign(NYM.prototype, {
                 bitchatMessageId,  // For tracking Bitchat delivery/read receipts
                 nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
                 senderVerified: true,
+                isFileOffer: !!fileOffer,
+                fileOffer,
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
             pmList.sort((a, b) => {
@@ -516,6 +521,8 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 nymMessageId,  // For tracking Nymchat delivery/read receipts
                 senderVerified: true,
+                isFileOffer: !!fileOffer,
+                fileOffer,
                 deliveryStatus: 'sent'  // sent -> delivered -> read
             });
             extPmList.sort((a, b) => {
@@ -1259,6 +1266,8 @@ Object.assign(NYM.prototype, {
             // Use nymMessageId already extracted above (during dedup check)
             const nymMsgId = nymMsgIdFromRumor;
 
+            const pmFileOffer = this.parseFileOfferTag(rumor.tags, senderPubkey);
+
             const msg = {
                 id: event.id,                                  // keep outer id for reactions/zaps
                 author: isOwn ? this.nym : senderName,
@@ -1276,6 +1285,8 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 isHistorical: this._isGiftWrapBacklog(),
                 senderVerified,
+                isFileOffer: !!pmFileOffer,
+                fileOffer: pmFileOffer,
                 thinking: botThinking || undefined,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId,  // For sending Nymchat read receipts
@@ -1514,7 +1525,7 @@ Object.assign(NYM.prototype, {
         return this.loadOlderPMMessages(conversationKey);
     },
 
-    async sendPM(content, recipientPubkey) {
+    async sendPM(content, recipientPubkey, options = {}) {
         try {
             // Bot ?commands are handled entirely on-device: they never need to
             // reach the worker or relays (and ?git can contain an access
@@ -1530,7 +1541,7 @@ Object.assign(NYM.prototype, {
             if (!this.connected) throw new Error('Not connected to relay');
             if (!content || !content.trim()) return false;
 
-            const wrapped = await this.sendNIP17PM(content, recipientPubkey);
+            const wrapped = await this.sendNIP17PM(content, recipientPubkey, options);
             this.recordOwnActivity();
             if (this.isVerifiedBot(recipientPubkey)) {
                 this._handleBotPM(content, typeof wrapped === 'string' ? wrapped : null);
