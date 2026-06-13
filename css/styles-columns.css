@@ -44,8 +44,10 @@ body.columns-mode:not(.chat-bubbles) .cv-list .channel-readers {
     flex-basis: auto;
 }
 
-body.columns-mode.chat-bubbles .message-group.group-self {
-    padding-right: 0px;
+@media (min-width: 769px) {
+    body.columns-mode.chat-bubbles .message-group.group-self {
+        padding-right: 0px;
+    }
 }
 
 .cv-only-setting {
@@ -109,6 +111,7 @@ body.columns-mode .msg-hover-buttons {
     max-width: 360px;
     height: 100%;
     min-height: 0;
+    position: relative;
     display: flex;
     flex-direction: column;
     background: var(--bg-secondary);
@@ -117,6 +120,35 @@ body.columns-mode .msg-hover-buttons {
     box-shadow: var(--shadow-md);
     overflow: hidden;
     transition: all var(--transition);
+}
+
+.cv-scroll-bottom {
+    display: none;
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    color: var(--primary);
+    cursor: pointer;
+    z-index: 5;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition);
+    box-shadow: var(--shadow-md);
+}
+
+.cv-scroll-bottom:hover {
+    background: rgb(from var(--primary) r g b / 0.15);
+    border-color: rgb(from var(--primary) r g b / 0.3);
+    transform: scale(1.1);
+}
+
+.cv-scroll-bottom.visible {
+    display: flex;
 }
 
 .cv-column.focused {
@@ -454,6 +486,7 @@ body.solid-ui .cv-column-header {
         scroll-snap-type: x mandatory;
         gap: 0;
         padding: 0;
+        touch-action: pan-y;
     }
 
     body.columns-mode .cv-column {

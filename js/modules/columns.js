@@ -128,15 +128,28 @@ Object.assign(NYM.prototype, {
             const dot = e.target.closest('.cv-pager-dot');
             if (!dot) return;
             if (dot.dataset.add) { this._cvOpenAddColumn(); return; }
-            this._cvScrollToIndex(parseInt(dot.dataset.idx, 10));
+            const idx = parseInt(dot.dataset.idx, 10);
+            this._cvScrollToIndex(idx);
+            const col = this._cvColumns[idx];
+            if (col) this._cvFocusColumn(col.id);
         });
 
         this._cvSetupPagerScrub(pager);
     },
 
     _cvSetupPagerScrub(pager) {
-        let timer = null, active = false, lastX = 0;
+        let timer = null, active = false, lastX = 0, startX = 0, swiping = false;
+        const SWIPE = 30;
         const clearTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
+        const cycle = (dir) => {
+            const cur = this._cvColumns.findIndex(c => c.id === this._cvFocusedId);
+            const base = cur < 0 ? 0 : cur;
+            const next = Math.max(0, Math.min(this._cvColumns.length - 1, base + dir));
+            if (next !== cur && this._cvColumns[next]) {
+                this._cvScrollToIndex(next);
+                this._cvFocusColumn(this._cvColumns[next].id);
+            }
+        };
         const dotAt = (x) => {
             let best = null, bestDist = Infinity;
             pager.querySelectorAll('.cv-pager-dot').forEach((d) => {
@@ -173,9 +186,10 @@ Object.assign(NYM.prototype, {
             pager.querySelectorAll('.cv-pager-dot.scrub').forEach(d => d.classList.remove('scrub'));
         };
         pager.addEventListener('touchstart', (e) => {
-            lastX = e.touches[0].clientX;
+            startX = lastX = e.touches[0].clientX;
             clearTimer();
             active = false;
+            swiping = false;
             timer = setTimeout(() => {
                 active = true;
                 if (window.nymHapticTap) window.nymHapticTap();
@@ -184,23 +198,32 @@ Object.assign(NYM.prototype, {
         }, { passive: true });
         pager.addEventListener('touchmove', (e) => {
             lastX = e.touches[0].clientX;
-            if (!active) return;
-            e.preventDefault();
-            showLabel(dotAt(lastX));
+            if (active) { e.preventDefault(); showLabel(dotAt(lastX)); return; }
+            if (!swiping && Math.abs(lastX - startX) > SWIPE) { swiping = true; clearTimer(); }
         }, { passive: false });
         pager.addEventListener('touchend', (e) => {
             clearTimer();
-            if (!active) return;
-            active = false;
-            const dot = dotAt(lastX);
-            hideLabel();
-            if (!dot) return;
-            e.preventDefault();
-            if (dot.dataset.add) { this._cvOpenAddColumn(); return; }
-            const col = this._cvColumns[parseInt(dot.dataset.idx, 10)];
-            if (col) { this._cvScrollToIndex(this._cvColumns.indexOf(col)); this._cvFocusColumn(col.id); }
-        });
-        pager.addEventListener('touchcancel', () => { clearTimer(); active = false; hideLabel(); });
+            if (active) {
+                active = false;
+                const dot = dotAt(lastX);
+                hideLabel();
+                if (dot) {
+                    e.preventDefault();
+                    if (dot.dataset.add) { this._cvOpenAddColumn(); }
+                    else {
+                        const col = this._cvColumns[parseInt(dot.dataset.idx, 10)];
+                        if (col) { this._cvScrollToIndex(this._cvColumns.indexOf(col)); this._cvFocusColumn(col.id); }
+                    }
+                }
+                return;
+            }
+            if (swiping) {
+                e.preventDefault();
+                cycle(lastX < startX ? 1 : -1);
+                swiping = false;
+            }
+        }, { passive: false });
+        pager.addEventListener('touchcancel', () => { clearTimer(); active = false; swiping = false; hideLabel(); });
     },
 
     _cvSeedIfNeeded() {
@@ -411,6 +434,13 @@ Object.assign(NYM.prototype, {
         typing.innerHTML = '<div class="typing-indicator-avatars"></div><div class="typing-indicator-dots"><span></span><span></span><span></span></div><div class="typing-indicator-text"></div>';
         el.appendChild(typing);
 
+        const scrollBtn = document.createElement('button');
+        scrollBtn.className = 'cv-scroll-bottom';
+        scrollBtn.title = 'Scroll to bottom';
+        scrollBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+        scrollBtn.addEventListener('click', (e) => { e.stopPropagation(); scroller.scrollTo({ top: 0, behavior: 'smooth' }); });
+        el.appendChild(scrollBtn);
+
         const addBtn = this._cvStrip.querySelector('.cv-add-column');
         this._cvStrip.insertBefore(el, addBtn || null);
 
@@ -421,6 +451,7 @@ Object.assign(NYM.prototype, {
         col.typingEl = typing;
         col.typingAvatarsEl = typing.querySelector('.typing-indicator-avatars');
         col.typingTextEl = typing.querySelector('.typing-indicator-text');
+        col.scrollBtn = scrollBtn;
         col._atBottom = true;
 
         this._cvAttachColumnScroll(col);
@@ -533,6 +564,7 @@ Object.assign(NYM.prototype, {
         } else if (col.type === 'channel' && typeof this.markVisibleChannelMessagesRead === 'function') {
             this.markVisibleChannelMessagesRead();
         }
+        this._cvUpdatePagerActive();
     },
 
     _cvTypingKey(col) {
@@ -581,6 +613,7 @@ Object.assign(NYM.prototype, {
             const sc = col.scrollerEl;
             const distanceFromBottom = Math.abs(sc.scrollTop);
             col._atBottom = distanceFromBottom < 120;
+            if (col.scrollBtn) col.scrollBtn.classList.toggle('visible', distanceFromBottom > 150);
             const distanceFromTop = (sc.scrollHeight - sc.clientHeight) - distanceFromBottom;
             if (distanceFromTop <= 5 && !col._loadingOlder) {
                 const isPM = col.type !== 'channel';
@@ -667,8 +700,9 @@ Object.assign(NYM.prototype, {
 
         const listEl = panel.querySelector('.cv-picker-list');
         const input = panel.querySelector('.cv-picker-input');
-        const close = () => { panel.remove(); if (addBtn) addBtn.style.display = ''; };
+        const close = () => { panel.remove(); if (addBtn) addBtn.style.display = ''; this._cvUpdatePagerActive(); };
         panel.querySelector('.cv-picker-close').addEventListener('click', close);
+        this._cvUpdatePagerActive();
 
         const rows = this._cvAvailableConversations();
         const renderRows = (filter) => {
@@ -755,11 +789,11 @@ Object.assign(NYM.prototype, {
 
     _cvUpdatePagerActive() {
         if (!this._cvPager) return;
-        const active = this._cvActiveIndex();
-        const onAdd = active >= this._cvColumns.length;
+        const pickerOpen = this._cvStrip && !!this._cvStrip.querySelector('.cv-picker');
+        const focusedIdx = this._cvColumns.findIndex(c => c.id === this._cvFocusedId);
         this._cvPager.querySelectorAll('.cv-pager-dot').forEach((d, i) => {
-            if (d.dataset.add) d.classList.toggle('active', onAdd);
-            else d.classList.toggle('active', i === active);
+            if (d.dataset.add) d.classList.toggle('active', pickerOpen);
+            else d.classList.toggle('active', !pickerOpen && i === focusedIdx);
         });
     },
 
