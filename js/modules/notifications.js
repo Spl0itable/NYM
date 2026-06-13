@@ -674,8 +674,9 @@ Object.assign(NYM.prototype, {
 
     // Each sound is a sequence of notes (f = frequency in Hz, d = duration in seconds,
     // optional f2 = glide target, gap = silence after the note, chord = simultaneous
-    // frequencies, g = gain override, noise = bandpass-filtered white noise at f with
-    // resonance q). The game jingles use square waves to match the original sound chips.
+    // frequencies, g = gain override, a = attack ramp time, noise = bandpass-filtered
+    // white noise at f with resonance q). The game jingles use square waves to match
+    // the original sound chips.
     NOTIFICATION_SOUNDS: {
         beep: { wave: 'sine', gain: 0.1, notes: [{ f: 800, d: 0.15 }] },
         low: { wave: 'sine', gain: 0.15, notes: [{ f: 600, d: 0.15 }] },
@@ -771,12 +772,15 @@ Object.assign(NYM.prototype, {
                 { f: 829.6, d: 0.23 }, { f: 1310.7, d: 0.9 }
             ]
         },
+        // Measured from a recording of the broadcast bumper: a 1044Hz crescendo
+        // swell, then 781/1174/985Hz beeps (no static, despite how it's heard).
         f1: {
-            wave: 'sine', gain: 0.12,
+            wave: 'sine', gain: 0.14,
             notes: [
-                { f: 1800, d: 0.15, gap: 0.05 },
-                { noise: true, f: 1500, q: 1.5, g: 0.2, d: 0.25, gap: 0.05 },
-                { f: 1800, d: 0.15 }
+                { f: 1044, d: 0.12, a: 0.11, g: 0.06 },
+                { f: 781, d: 0.09, h: 0.05, g: 0.14 },
+                { f: 1174, d: 0.09, h: 0.05, g: 0.12 },
+                { f: 985, d: 0.1, h: 0.06, g: 0.11 }
             ]
         },
         oneup: {
@@ -816,12 +820,21 @@ Object.assign(NYM.prototype, {
         for (const note of sound.notes) {
             const gainNode = audioContext.createGain();
             const gain = note.g || sound.gain;
-            gainNode.gain.setValueAtTime(gain, t);
-            if (note.d < 0.06) {
+            if (note.a) {
+                gainNode.gain.setValueAtTime(0.0001, t);
+                gainNode.gain.linearRampToValueAtTime(gain, t + note.a);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, t + note.d);
+            } else if (note.h) {
+                gainNode.gain.setValueAtTime(gain, t);
+                gainNode.gain.setValueAtTime(gain, t + note.h);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, t + note.d);
+            } else if (note.d < 0.06) {
                 // Too short for a decay envelope; hold and release to avoid clicks
+                gainNode.gain.setValueAtTime(gain, t);
                 gainNode.gain.setValueAtTime(gain, t + note.d - 0.01);
                 gainNode.gain.linearRampToValueAtTime(0.0001, t + note.d);
             } else {
+                gainNode.gain.setValueAtTime(gain, t);
                 gainNode.gain.exponentialRampToValueAtTime(0.001, t + note.d);
             }
             gainNode.connect(audioContext.destination);
