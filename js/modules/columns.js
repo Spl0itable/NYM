@@ -125,7 +125,16 @@ Object.assign(NYM.prototype, {
         }, { passive: true });
 
         pager.addEventListener('click', (e) => {
-            const dot = e.target.closest('.cv-pager-dot');
+            let dot = e.target.closest('.cv-pager-dot');
+            if (!dot) {
+                let best = null, bd = Infinity;
+                pager.querySelectorAll('.cv-pager-dot').forEach((d) => {
+                    const r = d.getBoundingClientRect();
+                    const dist = Math.abs((r.left + r.right) / 2 - e.clientX);
+                    if (dist < bd) { bd = dist; best = d; }
+                });
+                dot = best;
+            }
             if (!dot) return;
             if (dot.dataset.add) { this._cvOpenAddColumn(); return; }
             const idx = parseInt(dot.dataset.idx, 10);
@@ -811,7 +820,7 @@ Object.assign(NYM.prototype, {
         const col = this._cvColumns[idx];
         if (!col || !col.el) return;
         if (window.innerWidth <= 768) {
-            col.el.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
+            this._cvStrip.scrollTo({ left: idx * this._cvStrip.clientWidth, behavior: 'smooth' });
             return;
         }
         // Desktop: columns sit side by side, so only scroll when the target is

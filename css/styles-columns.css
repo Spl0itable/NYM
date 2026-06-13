@@ -486,7 +486,7 @@ body.solid-ui .cv-column-header {
         scroll-snap-type: x mandatory;
         gap: 0;
         padding: 0;
-        touch-action: pan-y;
+        overflow-x: hidden;
     }
 
     body.columns-mode .cv-column {
@@ -530,10 +530,13 @@ body.solid-ui .cv-column-header {
     }
 
     .cv-pager-dot {
+        box-sizing: content-box;
         width: 7px;
         height: 7px;
+        padding: 8px;
         border-radius: 50%;
         background: var(--text-dim);
+        background-clip: content-box;
         opacity: 0.4;
         cursor: pointer;
         transition: all var(--transition);
@@ -547,8 +550,8 @@ body.solid-ui .cv-column-header {
     }
 
     .cv-pager-dot.scrub {
-        transform: scale(1.6);
-        background: var(--primary);
+        transform: scale(1.9);
+        background: var(--text-bright);
         opacity: 1;
     }
 
