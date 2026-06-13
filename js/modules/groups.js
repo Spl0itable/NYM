@@ -2811,7 +2811,8 @@ Object.assign(NYM.prototype, {
         this.closeReadersModal();
         if (!readers || readers.size === 0) return;
 
-        const userItems = Array.from(readers.entries()).map(([pubkey, nym]) => {
+        const entries = Array.from(readers.entries());
+        const userItems = entries.map(([pubkey, nym]) => {
             const isYou = pubkey === this.pubkey;
             const baseNym = this.stripPubkeySuffix(nym);
             const suffix = this.getPubkeySuffix(pubkey);
@@ -2836,6 +2837,17 @@ Object.assign(NYM.prototype, {
         if (typeof this.ensureListProfiles === 'function') {
             this.ensureListProfiles(modal, Array.from(readers.keys()));
         }
+
+        // Click user row to open their context menu
+        modal.querySelectorAll('.readers-modal-user').forEach((el, i) => {
+            el.addEventListener('click', (e) => {
+                const [pubkey, nym] = entries[i];
+                this.closeReadersModal();
+                const baseNym = this.stripPubkeySuffix(nym);
+                const suffix = this.getPubkeySuffix(pubkey);
+                this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, false);
+            });
+        });
 
         // Position above/below the anchor — batch style writes
         const rect = anchorEl.getBoundingClientRect();

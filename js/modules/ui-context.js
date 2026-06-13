@@ -1122,7 +1122,8 @@ Object.assign(NYM.prototype, {
                 this.closeReactorsModal();
             }
             if (!e.target.closest('.readers-modal') &&
-                !e.target.closest('.group-readers')) {
+                !e.target.closest('.group-readers') &&
+                !e.target.closest('.channel-readers')) {
                 this.closeReadersModal();
             }
             if (!e.target.closest('.timestamp-popup') &&

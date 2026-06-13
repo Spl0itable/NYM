@@ -604,7 +604,9 @@ Object.assign(NYM.prototype, {
             const isYou = pubkey === this.pubkey;
             const baseNym = this.parseNymFromDisplay(nym);
             const suffix = this.getPubkeySuffix(pubkey);
+            const safePk = this._safePubkey(pubkey);
             return `<div class="reactors-modal-user" data-pubkey="${pubkey}">
+                <img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="readers-modal-avatar" data-avatar-pubkey="${safePk}" decoding="async" loading="lazy">
                 <span class="reactors-modal-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span></span>
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
             </div>`;
@@ -649,16 +651,14 @@ Object.assign(NYM.prototype, {
             modal.style.top = (rect.bottom + 6) + 'px';
         }
 
-        // Click user row to open PM
-        modal.querySelectorAll('.reactors-modal-user').forEach(el => {
+        // Click user row to open their context menu
+        modal.querySelectorAll('.reactors-modal-user').forEach((el, i) => {
             el.addEventListener('click', (e) => {
-                const pubkey = el.dataset.pubkey;
-                if (pubkey !== this.pubkey) {
-                    const user = this.users.get(pubkey);
-                    const baseNym = user ? this.parseNymFromDisplay(user.nym) : `nym`;
-                    this.openUserPM(baseNym, pubkey);
-                }
+                const [pubkey, nym] = shown[i];
                 this.closeReactorsModal();
+                const baseNym = this.parseNymFromDisplay(nym);
+                const suffix = this.getPubkeySuffix(pubkey);
+                this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, false);
             });
         });
     },
