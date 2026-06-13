@@ -1323,6 +1323,9 @@ Object.assign(NYM.prototype, {
                 this.recordOwnActivity();
             }
         } else {
+            // Column view: render into the group's open column even when it
+            // isn't the focused one.
+            if (this._cvActive && this._cvListForKey(groupConvKey)) this.displayMessage(msg);
             if (!isOwn && !senderBlocked) {
                 const ageMs = Date.now() - (tsSec * 1000);
                 const treatAsHistorical = msg.isHistorical || ageMs > 30000;

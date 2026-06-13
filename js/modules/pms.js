@@ -1355,6 +1355,9 @@ Object.assign(NYM.prototype, {
                     this.recordOwnActivity();
                 }
             } else {
+                // Column view: render into the conversation's open column even
+                // when it isn't the focused one.
+                if (this._cvActive && this._cvListForKey(conversationKey)) this.displayMessage(msg);
                 // Not viewing this conversation — leave the cached DOM in
                 // place. loadPMMessages does a partial-cache restore that
                 // appends the trailing new messages to the cached fragment,
@@ -3685,9 +3688,10 @@ Object.assign(NYM.prototype, {
             if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;
             if (!isOwn && this.isSpamMessage(msg.content)) return false;
             if (msg.conversationKey !== conversationKey) return false;
-            // For 1:1 PMs, restrict to the two participants. Group messages have
-            // multiple senders so skip this check for them.
-            if (!msg.isGroup && msg.pubkey !== this.pubkey && msg.pubkey !== this.currentPM) return false;
+            // For 1:1 PMs, restrict to the two participants. Derive the peer from
+            // the conversation key (not the focused conversation) so column view
+            // renders the right messages for every open PM column.
+            if (!msg.isGroup && msg.pubkey !== this.pubkey && this.getPMConversationKey(msg.pubkey) !== conversationKey) return false;
             return true;
         }).sort((a, b) => this._compareMessages(a, b));
     },

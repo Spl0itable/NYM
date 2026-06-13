@@ -38,7 +38,7 @@ Object.assign(NYM.prototype, {
         this._cvPrimaryId = firstChannel ? firstChannel.id : null;
         const first = this._cvColumns[0];
         if (first) this._cvFocusColumn(first.id);
-        this._cvRefreshPager();
+        this._cvRebuildHeaderDots();
     },
 
     _cvDisable() {
@@ -50,8 +50,8 @@ Object.assign(NYM.prototype, {
         // re-enable rebuilds the same columns from storage instead of reusing
         // stale objects whose DOM was removed with the strip.
         for (const c of (this._cvColumns || [])) { if (c._observer) c._observer.disconnect(); }
+        if (this._cvTabsOverlay) { this._cvTabsOverlay.remove(); this._cvTabsOverlay = null; }
         if (this._cvStrip) { this._cvStrip.remove(); this._cvStrip = null; }
-        if (this._cvPager) { this._cvPager.remove(); this._cvPager = null; }
         this._cvKeyToList && this._cvKeyToList.clear();
         this._cvColumns = [];
         this._cvSeeded = false;
@@ -90,12 +90,6 @@ Object.assign(NYM.prototype, {
         anchor.parentNode.insertBefore(strip, anchor.nextSibling);
         this._cvStrip = strip;
 
-        const pager = document.createElement('div');
-        pager.id = 'columnsPager';
-        pager.className = 'cv-pager';
-        strip.parentNode.insertBefore(pager, strip.nextSibling);
-        this._cvPager = pager;
-
         // Message swipe / double-click reply work inside every column via
         // delegation on the strip.
         this.setupSwipeToReply(strip);
@@ -108,6 +102,7 @@ Object.assign(NYM.prototype, {
             if (close && !close.classList.contains('cv-picker-close')) {
                 e.stopPropagation(); this.cvRequestRemoveColumn(close.dataset.colId); return;
             }
+            if (e.target.closest('.cv-col-dots')) { e.stopPropagation(); this._cvOpenTabsView(); return; }
             if (e.target.closest('.cv-add-column')) { this._cvOpenAddColumn(); return; }
             if (e.target.closest('.cv-picker')) return;
             const colEl = e.target.closest('.cv-column');
@@ -116,123 +111,6 @@ Object.assign(NYM.prototype, {
                 if (col) this._cvOpenConversation(this._cvDescForSave(col));
             }
         });
-
-        let pendingScroll = false;
-        strip.addEventListener('scroll', () => {
-            if (pendingScroll) return;
-            pendingScroll = true;
-            requestAnimationFrame(() => { pendingScroll = false; this._cvOnStripScroll(); });
-        }, { passive: true });
-
-        pager.addEventListener('click', (e) => {
-            let dot = e.target.closest('.cv-pager-dot');
-            if (!dot) {
-                let best = null, bd = Infinity;
-                pager.querySelectorAll('.cv-pager-dot').forEach((d) => {
-                    const r = d.getBoundingClientRect();
-                    const dist = Math.abs((r.left + r.right) / 2 - e.clientX);
-                    if (dist < bd) { bd = dist; best = d; }
-                });
-                dot = best;
-            }
-            if (!dot) return;
-            if (dot.dataset.add) { this._cvOpenAddColumn(); return; }
-            const idx = parseInt(dot.dataset.idx, 10);
-            this._cvScrollToIndex(idx);
-            const col = this._cvColumns[idx];
-            if (col) this._cvFocusColumn(col.id);
-        });
-
-        this._cvSetupPagerScrub(pager);
-    },
-
-    _cvSetupPagerScrub(pager) {
-        let timer = null, active = false, lastX = 0, startX = 0, swiping = false;
-        const SWIPE = 30;
-        const clearTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
-        const cycle = (dir) => {
-            const cur = this._cvColumns.findIndex(c => c.id === this._cvFocusedId);
-            const base = cur < 0 ? 0 : cur;
-            const next = Math.max(0, Math.min(this._cvColumns.length - 1, base + dir));
-            if (next !== cur && this._cvColumns[next]) {
-                this._cvScrollToIndex(next);
-                this._cvFocusColumn(this._cvColumns[next].id);
-            }
-        };
-        const dotAt = (x) => {
-            let best = null, bestDist = Infinity;
-            pager.querySelectorAll('.cv-pager-dot').forEach((d) => {
-                const r = d.getBoundingClientRect();
-                const dist = Math.abs((r.left + r.right) / 2 - x);
-                if (dist < bestDist) { bestDist = dist; best = d; }
-            });
-            return best;
-        };
-        const labelFor = (dot) => {
-            if (!dot) return '';
-            if (dot.dataset.add) return 'Add column';
-            const col = this._cvColumns[parseInt(dot.dataset.idx, 10)];
-            if (!col) return '';
-            return col.type === 'channel' ? '#' + (col.geohash || col.channel) : this._cvColTitle(col);
-        };
-        const showLabel = (dot) => {
-            if (!this._cvPagerLabel) {
-                this._cvPagerLabel = document.createElement('div');
-                this._cvPagerLabel.className = 'cv-pager-label';
-                document.body.appendChild(this._cvPagerLabel);
-            }
-            const lbl = this._cvPagerLabel;
-            lbl.textContent = labelFor(dot);
-            const pr = pager.getBoundingClientRect();
-            lbl.style.left = Math.max(8, Math.min(window.innerWidth - 8, lastX)) + 'px';
-            lbl.style.bottom = (window.innerHeight - pr.top + 8) + 'px';
-            lbl.classList.add('visible');
-            pager.querySelectorAll('.cv-pager-dot.scrub').forEach(d => d.classList.remove('scrub'));
-            if (dot) dot.classList.add('scrub');
-        };
-        const hideLabel = () => {
-            if (this._cvPagerLabel) this._cvPagerLabel.classList.remove('visible');
-            pager.querySelectorAll('.cv-pager-dot.scrub').forEach(d => d.classList.remove('scrub'));
-        };
-        pager.addEventListener('touchstart', (e) => {
-            startX = lastX = e.touches[0].clientX;
-            clearTimer();
-            active = false;
-            swiping = false;
-            timer = setTimeout(() => {
-                active = true;
-                if (window.nymHapticTap) window.nymHapticTap();
-                showLabel(dotAt(lastX));
-            }, 300);
-        }, { passive: true });
-        pager.addEventListener('touchmove', (e) => {
-            lastX = e.touches[0].clientX;
-            if (active) { e.preventDefault(); showLabel(dotAt(lastX)); return; }
-            if (!swiping && Math.abs(lastX - startX) > SWIPE) { swiping = true; clearTimer(); }
-        }, { passive: false });
-        pager.addEventListener('touchend', (e) => {
-            clearTimer();
-            if (active) {
-                active = false;
-                const dot = dotAt(lastX);
-                hideLabel();
-                if (dot) {
-                    e.preventDefault();
-                    if (dot.dataset.add) { this._cvOpenAddColumn(); }
-                    else {
-                        const col = this._cvColumns[parseInt(dot.dataset.idx, 10)];
-                        if (col) { this._cvScrollToIndex(this._cvColumns.indexOf(col)); this._cvFocusColumn(col.id); }
-                    }
-                }
-                return;
-            }
-            if (swiping) {
-                e.preventDefault();
-                cycle(lastX < startX ? 1 : -1);
-                swiping = false;
-            }
-        }, { passive: false });
-        pager.addEventListener('touchcancel', () => { clearTimer(); active = false; swiping = false; hideLabel(); });
     },
 
     _cvSeedIfNeeded() {
@@ -277,7 +155,7 @@ Object.assign(NYM.prototype, {
         if (desc.type === 'channel') this._cvSubscribeChannel(desc.channel, desc.geohash);
         this._cvBuildColumnEl(col);
         this._cvKeyToList.set(key, col.listEl);
-        if (render) { this._cvRenderColumn(col); this._cvRefreshPager(); }
+        if (render) { this._cvRenderColumn(col); this._cvRebuildHeaderDots(); }
         if (save) this._cvSaveLayout();
         if (focus) this._cvFocusColumn(col.id);
     },
@@ -317,7 +195,7 @@ Object.assign(NYM.prototype, {
             if (next) this._cvFocusColumn(next.id);
         }
         this._cvSaveLayout();
-        this._cvRefreshPager();
+        this._cvRebuildHeaderDots();
     },
 
     // Central entry point for opening a conversation in column view. Existing
@@ -327,6 +205,7 @@ Object.assign(NYM.prototype, {
     _cvOpenConversation(desc, opts = {}) {
         const key = this._cvColKey(desc);
         if (!key) return;
+        if (window.innerWidth <= 768 && typeof this.closeSidebar === 'function') this.closeSidebar();
         const existing = this._cvColumns.find(c => c.key === key);
         if (existing) {
             this._cvFocusColumn(existing.id);
@@ -387,7 +266,7 @@ Object.assign(NYM.prototype, {
         const addBtn = this._cvStrip.querySelector('.cv-add-column');
         for (const c of this._cvColumns) this._cvStrip.insertBefore(c.el, addBtn || null);
         this._cvSaveLayout();
-        this._cvRefreshPager();
+        this._cvRebuildHeaderDots();
         this._cvScrollToCol(moved);
     },
 
@@ -409,7 +288,7 @@ Object.assign(NYM.prototype, {
         this._cvPrimaryId = firstChannel ? firstChannel.id : null;
         const first = this._cvColumns[0];
         if (first) this._cvFocusColumn(first.id);
-        this._cvRefreshPager();
+        this._cvRebuildHeaderDots();
     },
 
     _cvBuildColumnEl(col) {
@@ -424,6 +303,7 @@ Object.assign(NYM.prototype, {
             `<span class="cv-drag-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
             `<span class="cv-col-icon">${this._cvColIcon(col)}</span>` +
             `<span class="cv-col-title">${this.escapeHtml(this._cvColTitle(col))}</span>` +
+            `<span class="cv-col-dots" title="Switch columns"></span>` +
             `<span class="cv-col-unread"></span>` +
             `<button class="cv-col-move cv-col-move-left" data-col-id="${col.id}" data-dir="left" title="Move left" aria-label="Move left"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="15 18 9 12 15 6"/></svg></button>` +
             `<button class="cv-col-move cv-col-move-right" data-col-id="${col.id}" data-dir="right" title="Move right" aria-label="Move right"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="9 18 15 12 9 6"/></svg></button>` +
@@ -567,13 +447,29 @@ Object.assign(NYM.prototype, {
         this.clearQuoteReply && this.clearQuoteReply();
         if (this.pendingEdit && this.cancelEditMessage) this.cancelEditMessage();
         this._cvSetComposeHeader(col);
+        this._cvUpdateSidebarActive(col);
         this._restoreDraftForContext && this._restoreDraftForContext();
         if (col.type === 'group' && typeof this._markVisibleGroupMessagesRead === 'function') {
             this._markVisibleGroupMessagesRead();
         } else if (col.type === 'channel' && typeof this.markVisibleChannelMessagesRead === 'function') {
             this.markVisibleChannelMessagesRead();
         }
-        this._cvUpdatePagerActive();
+    },
+
+    // Mirror the single-view sidebar active highlight onto the focused column.
+    _cvUpdateSidebarActive(col) {
+        const channelItems = document.querySelectorAll('.channel-item');
+        const pmItems = document.querySelectorAll('.pm-item');
+        if (col.type === 'channel') {
+            channelItems.forEach(i => i.classList.toggle('active', i.dataset.channel === col.channel && (i.dataset.geohash || '') === (col.geohash || '')));
+            pmItems.forEach(i => i.classList.remove('active'));
+        } else if (col.type === 'pm') {
+            channelItems.forEach(i => i.classList.remove('active'));
+            pmItems.forEach(i => i.classList.toggle('active', i.dataset.pubkey === col.pubkey));
+        } else {
+            channelItems.forEach(i => i.classList.remove('active'));
+            pmItems.forEach(i => i.classList.toggle('active', i.dataset.groupId === col.groupId));
+        }
     },
 
     _cvTypingKey(col) {
@@ -647,50 +543,72 @@ Object.assign(NYM.prototype, {
         }, { passive: true });
     },
 
+    // Desktop column reordering via a custom pointer drag
     _cvAttachDnd(col) {
-        const el = col.el, header = col.headerEl;
-        header.addEventListener('mousedown', () => { el.draggable = true; });
-        header.addEventListener('mouseup', () => { el.draggable = false; });
-        el.addEventListener('dragstart', (e) => {
-            this._cvDragId = col.id;
-            el.classList.add('cv-dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            try { e.dataTransfer.setData('text/plain', col.id); } catch (_) { }
-        });
-        el.addEventListener('dragend', () => {
-            el.draggable = false;
-            el.classList.remove('cv-dragging');
-            this._cvStrip.querySelectorAll('.cv-drag-over').forEach(c => c.classList.remove('cv-drag-over'));
-            this._cvDragId = null;
-        });
-        el.addEventListener('dragover', (e) => {
-            if (!this._cvDragId || this._cvDragId === col.id) return;
+        const header = col.headerEl;
+        header.addEventListener('mousedown', (e) => {
+            if (window.innerWidth <= 768 || e.button !== 0) return;
+            if (e.target.closest('.cv-col-close, .cv-col-move, .cv-col-dots')) return;
             e.preventDefault();
-            el.classList.add('cv-drag-over');
-        });
-        el.addEventListener('dragleave', () => el.classList.remove('cv-drag-over'));
-        el.addEventListener('drop', (e) => {
-            e.preventDefault();
-            el.classList.remove('cv-drag-over');
-            if (!this._cvDragId || this._cvDragId === col.id) return;
-            const rect = el.getBoundingClientRect();
-            const after = (e.clientX - rect.left) > rect.width / 2;
-            this._cvReorder(this._cvDragId, col.id, after);
+            this._cvStartColumnDrag(col, e.clientX, e.clientY);
         });
     },
 
-    _cvReorder(dragId, targetId, after) {
-        const from = this._cvColumns.findIndex(c => c.id === dragId);
-        if (from < 0) return;
-        const [moved] = this._cvColumns.splice(from, 1);
-        let to = this._cvColumns.findIndex(c => c.id === targetId);
-        if (to < 0) { this._cvColumns.splice(from, 0, moved); return; }
-        if (after) to += 1;
-        this._cvColumns.splice(to, 0, moved);
-        const addBtn = this._cvStrip.querySelector('.cv-add-column');
-        for (const c of this._cvColumns) this._cvStrip.insertBefore(c.el, addBtn || null);
-        this._cvSaveLayout();
-        this._cvRefreshPager();
+    _cvStartColumnDrag(col, startX, startY) {
+        const el = col.el;
+        const rect = el.getBoundingClientRect();
+        const grabX = startX - rect.left, grabY = Math.min(startY - rect.top, 40);
+        let dragging = false;
+        let ghost = null;
+
+        const onMove = (e) => {
+            if (!dragging) {
+                if (Math.abs(e.clientX - startX) < 5 && Math.abs(e.clientY - startY) < 5) return;
+                dragging = true;
+                el.classList.add('cv-dragging');
+                ghost = el.cloneNode(true);
+                ghost.classList.remove('cv-dragging');
+                ghost.classList.add('cv-drag-ghost');
+                const gl = ghost.querySelector('.cv-list');
+                if (gl && col.scrollerEl) {
+                    // Keep only the messages visible in the column at grab time so
+                    // the clone mirrors what you see without cloning the whole
+                    // scrollback.
+                    const scRect = col.scrollerEl.getBoundingClientRect();
+                    const ghostKids = Array.from(gl.children);
+                    Array.from(col.listEl.children).forEach((k, i) => {
+                        const r = k.getBoundingClientRect();
+                        if ((r.bottom <= scRect.top || r.top >= scRect.bottom) && ghostKids[i]) ghostKids[i].remove();
+                    });
+                }
+                ghost.style.width = rect.width + 'px';
+                ghost.style.height = rect.height + 'px';
+                document.body.appendChild(ghost);
+            }
+            ghost.style.left = (e.clientX - grabX) + 'px';
+            ghost.style.top = (e.clientY - grabY) + 'px';
+            const addBtn = this._cvStrip.querySelector('.cv-add-column');
+            const others = Array.from(this._cvStrip.querySelectorAll('.cv-column:not(.cv-dragging)'));
+            let target = null;
+            for (const c of others) {
+                const r = c.getBoundingClientRect();
+                if (e.clientX < r.left + r.width / 2) { target = c; break; }
+            }
+            this._cvStrip.insertBefore(el, target || addBtn || null);
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            if (ghost) ghost.remove();
+            if (!dragging) return;
+            el.classList.remove('cv-dragging');
+            const ids = Array.from(this._cvStrip.querySelectorAll('.cv-column')).map(c => c.dataset.colId);
+            this._cvColumns.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+            this._cvSaveLayout();
+            this._cvRebuildHeaderDots();
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
     },
 
     // Add-column picker (a column-shaped panel inside the strip)
@@ -709,9 +627,8 @@ Object.assign(NYM.prototype, {
 
         const listEl = panel.querySelector('.cv-picker-list');
         const input = panel.querySelector('.cv-picker-input');
-        const close = () => { panel.remove(); if (addBtn) addBtn.style.display = ''; this._cvUpdatePagerActive(); };
+        const close = () => { panel.remove(); if (addBtn) addBtn.style.display = ''; };
         panel.querySelector('.cv-picker-close').addEventListener('click', close);
-        this._cvUpdatePagerActive();
 
         const rows = this._cvAvailableConversations();
         const renderRows = (filter) => {
@@ -770,49 +687,121 @@ Object.assign(NYM.prototype, {
     },
 
     // Mobile pager (snap-scroll, one column per screen)
-    _cvRefreshPager() {
-        if (!this._cvPager) return;
+    // Position dots shown in each column header (mobile, in place of the title).
+    // Each column highlights its own slot so the visible column shows where it
+    // sits in the order; tapping the dots opens the tabs view.
+    _cvRebuildHeaderDots() {
         const n = this._cvColumns.length;
-        this._cvPager.innerHTML = '';
-        for (let i = 0; i < n; i++) {
-            const dot = document.createElement('span');
-            dot.className = 'cv-pager-dot';
-            dot.dataset.idx = i;
-            this._cvPager.appendChild(dot);
-        }
-        // Trailing "+" dot opens the add-column view.
-        const add = document.createElement('span');
-        add.className = 'cv-pager-dot cv-pager-add';
-        add.dataset.add = '1';
-        add.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
-        add.title = 'Add column';
-        this._cvPager.appendChild(add);
-        this._cvUpdatePagerActive();
-    },
-
-    _cvActiveIndex() {
-        if (!this._cvStrip || !this._cvColumns.length) return 0;
-        const w = this._cvStrip.clientWidth || 1;
-        return Math.round(this._cvStrip.scrollLeft / w);
-    },
-
-    _cvUpdatePagerActive() {
-        if (!this._cvPager) return;
-        const pickerOpen = this._cvStrip && !!this._cvStrip.querySelector('.cv-picker');
-        const focusedIdx = this._cvColumns.findIndex(c => c.id === this._cvFocusedId);
-        this._cvPager.querySelectorAll('.cv-pager-dot').forEach((d, i) => {
-            if (d.dataset.add) d.classList.toggle('active', pickerOpen);
-            else d.classList.toggle('active', !pickerOpen && i === focusedIdx);
+        this._cvColumns.forEach((col, idx) => {
+            const dotsEl = col.headerEl && col.headerEl.querySelector('.cv-col-dots');
+            if (!dotsEl) return;
+            let html = '';
+            for (let i = 0; i < n; i++) html += `<span class="cv-hdot${i === idx ? ' active' : ''}"></span>`;
+            dotsEl.innerHTML = html;
         });
     },
 
-    _cvOnStripScroll() {
-        this._cvUpdatePagerActive();
-        // On mobile, focusing the snapped column targets the shared input at it.
-        if (window.innerWidth <= 768) {
-            const col = this._cvColumns[this._cvActiveIndex()];
-            if (col && col.id !== this._cvFocusedId) this._cvFocusColumn(col.id);
-        }
+    // A browser-tabs-style sheet to switch columns and reorder them (mobile).
+    _cvOpenTabsView() {
+        if (this._cvTabsOverlay) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'cv-tabs-overlay';
+        overlay.innerHTML =
+            '<div class="cv-tabs-sheet">' +
+            '<div class="cv-tabs-head"><span>Columns</span>' +
+            '<button class="cv-tabs-close" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>' +
+            '<div class="cv-tabs-list"></div>' +
+            '<button class="cv-tabs-add">+ Add column</button>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        this._cvTabsOverlay = overlay;
+        const listEl = overlay.querySelector('.cv-tabs-list');
+        const close = () => { overlay.remove(); this._cvTabsOverlay = null; };
+
+        const buildRows = () => {
+            listEl.innerHTML = '';
+            this._cvColumns.forEach((col) => {
+                const row = document.createElement('div');
+                row.className = 'cv-tab' + (col.id === this._cvFocusedId ? ' active' : '');
+                row.dataset.colId = col.id;
+                row.innerHTML =
+                    `<span class="cv-tab-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
+                    `<span class="cv-tab-icon">${this._cvColIcon(col)}</span>` +
+                    `<span class="cv-tab-title">${this.escapeHtml(this._cvColTitle(col))}</span>` +
+                    `<button class="cv-tab-close" aria-label="Remove column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+                listEl.appendChild(row);
+            });
+        };
+        buildRows();
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay || e.target.closest('.cv-tabs-close')) { close(); return; }
+            if (e.target.closest('.cv-tabs-add')) { close(); this._cvOpenAddColumn(); return; }
+            if (e.target.closest('.cv-tab-handle')) return;
+            const rm = e.target.closest('.cv-tab-close');
+            if (rm) {
+                const row = rm.closest('.cv-tab');
+                if (row) { this.cvRequestRemoveColumn(row.dataset.colId); setTimeout(() => { if (this._cvTabsOverlay) buildRows(); }, 0); }
+                return;
+            }
+            const row = e.target.closest('.cv-tab');
+            if (row) {
+                const col = this._cvColumns.find(c => c.id === row.dataset.colId);
+                if (col) this._cvOpenConversation(this._cvDescForSave(col));
+                close();
+            }
+        });
+
+        this._cvSetupTabsDrag(listEl);
+    },
+
+    _cvSetupTabsDrag(listEl) {
+        let dragRow = null;
+        const onMove = (clientY) => {
+            const rows = Array.from(listEl.querySelectorAll('.cv-tab:not(.cv-dragging)'));
+            for (const r of rows) {
+                const rect = r.getBoundingClientRect();
+                if (clientY < rect.top + rect.height / 2) { listEl.insertBefore(dragRow, r); return; }
+            }
+            listEl.appendChild(dragRow);
+        };
+        const start = (handle) => {
+            dragRow = handle.closest('.cv-tab');
+            if (!dragRow) return false;
+            dragRow.classList.add('cv-dragging');
+            return true;
+        };
+        const end = () => {
+            if (!dragRow) return;
+            dragRow.classList.remove('cv-dragging');
+            dragRow = null;
+            const ids = Array.from(listEl.querySelectorAll('.cv-tab')).map(r => r.dataset.colId);
+            this._cvColumns.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+            const addBtn = this._cvStrip.querySelector('.cv-add-column');
+            for (const c of this._cvColumns) this._cvStrip.insertBefore(c.el, addBtn || null);
+            this._cvSaveLayout();
+            this._cvRebuildHeaderDots();
+        };
+        listEl.addEventListener('touchstart', (e) => {
+            const h = e.target.closest('.cv-tab-handle');
+            if (h && start(h)) e.preventDefault();
+        }, { passive: false });
+        listEl.addEventListener('touchmove', (e) => {
+            if (!dragRow) return;
+            e.preventDefault();
+            onMove(e.touches[0].clientY);
+        }, { passive: false });
+        listEl.addEventListener('touchend', () => end());
+        listEl.addEventListener('touchcancel', () => end());
+        listEl.addEventListener('mousedown', (e) => {
+            const h = e.target.closest('.cv-tab-handle');
+            if (!h || !start(h)) return;
+            e.preventDefault();
+            const mm = (ev) => onMove(ev.clientY);
+            const mu = () => { document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); end(); };
+            document.addEventListener('mousemove', mm);
+            document.addEventListener('mouseup', mu);
+        });
     },
 
     _cvScrollToIndex(idx) {
