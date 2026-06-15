@@ -211,7 +211,7 @@ Object.assign(NYM.prototype, {
     _cvOpenConversation(desc, opts = {}) {
         const key = this._cvColKey(desc);
         if (!key) return;
-        if (window.innerWidth <= 768 && typeof this.closeSidebar === 'function') this.closeSidebar();
+        if (window.innerWidth <= 1024 && typeof this.closeSidebar === 'function') this.closeSidebar();
         const existing = this._cvColumns.find(c => c.key === key);
         if (existing) {
             this._cvFocusColumn(existing.id);
@@ -275,7 +275,7 @@ Object.assign(NYM.prototype, {
         const iconEl = col.headerEl.querySelector('.cv-col-icon');
         const titleEl = col.headerEl.querySelector('.cv-col-title');
         if (iconEl) iconEl.innerHTML = this._cvColIcon(col);
-        if (titleEl) titleEl.textContent = this._cvColTitle(col);
+        if (titleEl) titleEl.innerHTML = this._cvColTitleHtml(col);
         col.listEl.innerHTML = '';
         this._cvRenderColumn(col);
         this._cvSaveLayout();
@@ -328,7 +328,7 @@ Object.assign(NYM.prototype, {
         header.innerHTML =
             `<span class="cv-drag-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
             `<span class="cv-col-icon">${this._cvColIcon(col)}</span>` +
-            `<span class="cv-col-title">${this.escapeHtml(this._cvColTitle(col))}</span>` +
+            `<span class="cv-col-title">${this._cvColTitleHtml(col)}</span>` +
             `<span class="cv-col-dots" title="Switch columns"></span>` +
             `<span class="cv-col-unread"></span>` +
             `<button class="cv-col-move cv-col-move-left" data-col-id="${col.id}" data-dir="left" title="Previous column" aria-label="Previous column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="15 18 9 12 15 6"/></svg></button>` +
@@ -418,6 +418,20 @@ Object.assign(NYM.prototype, {
             return (g && g.name) || 'Group chat';
         }
         return 'Column';
+    },
+
+    _cvColTitleHtml(col) {
+        const title = this.escapeHtml(this._cvColTitle(col));
+        if (col.type !== 'pm' || !col.pubkey) return title;
+        const pubkey = col.pubkey;
+        const suffix = this.getPubkeySuffix(pubkey);
+        const flairHtml = this.getFlairForUser(pubkey);
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            : this.isVerifiedBot(pubkey)
+                ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                : '';
+        return `${title}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}`;
     },
 
     _cvRenderColumn(col) {
@@ -772,21 +786,37 @@ Object.assign(NYM.prototype, {
         return overlay;
     },
 
+    // Reconcile rows against the current columns so reused rows keep their
+    // avatar <img> (no reload) while opening the sheet; only new columns build
+    // fresh icons and removed columns drop out.
     _cvBuildTabsRows() {
         const listEl = this._cvTabsOverlay && this._cvTabsOverlay.querySelector('.cv-tabs-list');
         if (!listEl) return;
-        listEl.innerHTML = '';
+        const existing = new Map();
+        listEl.querySelectorAll('.cv-tab').forEach(r => existing.set(r.dataset.colId, r));
+        let prev = null;
         this._cvColumns.forEach((col) => {
-            const row = document.createElement('div');
+            let row = existing.get(col.id);
+            if (row) {
+                existing.delete(col.id);
+            } else {
+                row = document.createElement('div');
+                row.dataset.colId = col.id;
+                row.innerHTML =
+                    `<span class="cv-tab-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
+                    `<span class="cv-tab-icon">${this._cvColIcon(col)}</span>` +
+                    `<span class="cv-tab-title"></span>` +
+                    `<button class="cv-tab-close" aria-label="Remove column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+            }
             row.className = 'cv-tab' + (col.id === this._cvFocusedId ? ' active' : '');
-            row.dataset.colId = col.id;
-            row.innerHTML =
-                `<span class="cv-tab-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
-                `<span class="cv-tab-icon">${this._cvColIcon(col)}</span>` +
-                `<span class="cv-tab-title">${this.escapeHtml(this._cvColTitle(col))}</span>` +
-                `<button class="cv-tab-close" aria-label="Remove column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
-            listEl.appendChild(row);
+            const titleEl = row.querySelector('.cv-tab-title');
+            const title = this._cvColTitleHtml(col);
+            if (titleEl && titleEl.innerHTML !== title) titleEl.innerHTML = title;
+            const ref = prev ? prev.nextSibling : listEl.firstChild;
+            if (row !== ref) listEl.insertBefore(row, ref);
+            prev = row;
         });
+        existing.forEach(r => r.remove());
     },
 
     _cvSetupTabsDrag(listEl) {

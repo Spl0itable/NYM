@@ -42,8 +42,8 @@
             {
                 title: 'Main Menu',
                 body: 'Get flair addon packs to change the styling of your messages and nickname. Edit settings such as changing the app\'s theme, manage blocked users and keywords, sorting geohash channels by proximity, and much more. Logout to terminate the current session and start fresh with a new identity.',
-                selector: (window.innerWidth > 768 ? '.header-actions' : '.sidebar-actions'),
-                onBefore: () => { if (window.innerWidth <= 768) return ensureSidebarOpenOnMobile(); }
+                selector: (window.innerWidth > 1024 ? '.header-actions' : '.sidebar-actions'),
+                onBefore: () => { if (window.innerWidth <= 1024) return ensureSidebarOpenOnMobile(); }
             },
             {
                 title: 'Channels',
@@ -95,7 +95,7 @@
     }
 
     function ensureSidebarOpenOnMobile() {
-        if (window.innerWidth > 768) return Promise.resolve();
+        if (window.innerWidth > 1024) return Promise.resolve();
 
         const sidebar = $('#sidebar');
         const overlay = $('#mobileOverlay');
@@ -134,7 +134,7 @@
 
     // Close the sidebar on mobile and wait for transition
     function ensureSidebarClosedOnMobile() {
-        if (window.innerWidth > 768) return Promise.resolve();
+        if (window.innerWidth > 1024) return Promise.resolve();
 
         const sidebar = $('#sidebar');
         const overlay = $('#mobileOverlay');
@@ -175,7 +175,7 @@
     }
 
     function restoreSidebarAfterTutorial() {
-        if (window.innerWidth <= 768) {
+        if (window.innerWidth <= 1024) {
             const sidebar = $('#sidebar');
             const overlay = $('#mobileOverlay');
             if (!sidebar) return;
@@ -4236,7 +4236,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.498';
+const NYMCHAT_VERSION = 'v3.72.499';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 

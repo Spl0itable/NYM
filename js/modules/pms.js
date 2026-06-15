@@ -2939,7 +2939,7 @@ Object.assign(NYM.prototype, {
 
         // Close the mobile sidebar as soon as the switch is committed so the
         // UI feels responsive even while messages load.
-        if (window.innerWidth <= 768) {
+        if (window.innerWidth <= 1024) {
             this.closeSidebar();
         }
 
@@ -3318,7 +3318,7 @@ Object.assign(NYM.prototype, {
             document.getElementById('pmRecipientInput').focus();
             this._showRecentlySeenSuggestions('');
         }, 80);
-        if (window.innerWidth <= 768) this.closeSidebar();
+        if (window.innerWidth <= 1024) this.closeSidebar();
     },
 
     // Open the recipient picker in "add members to an existing group" mode.

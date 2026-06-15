@@ -439,23 +439,46 @@ body.light-mode .verified-badge::before {
     }
 }
 
-/* Tablet: sidebar stays visible; use the sidebar menu for flair/settings/etc,
-   keep the notification bell in the header, and stack the input like mobile. */
 @media (min-width: 769px) and (max-width: 1024px) {
-    .header-actions {
-        display: flex;
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        height: 100vh;
+        height: 100dvh;
+        z-index: 9999;
+        transform: translateX(-100%);
+        width: 300px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        border-left: 1px solid var(--glass-border);
     }
 
-    .header-actions .icon-btn:not(.notifications-btn) {
-        display: none;
+    .sidebar-header {
+        border-bottom: 0px;
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+        box-shadow: 10px 0 40px rgba(0, 0, 0, 0.5);
     }
 
     .sidebar-actions {
         display: flex;
     }
 
-    .mobile-menu-toggle {
+    .header-actions {
         display: none;
+    }
+
+    .mobile-menu-toggle,
+    .mobile-notif-toggle {
+        display: flex;
+        top: 20px;
+    }
+
+    .chat-header {
+        padding-right: 108px;
     }
 
     .input-container {

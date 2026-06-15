@@ -3282,7 +3282,7 @@ Object.assign(NYM.prototype, {
         if (this.pendingEdit) this.cancelEditMessage();
 
         // Close the mobile sidebar as soon as the switch is committed.
-        if (window.innerWidth <= 768) {
+        if (window.innerWidth <= 1024) {
             this.closeSidebar();
         }
 

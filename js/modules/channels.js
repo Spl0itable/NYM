@@ -1032,7 +1032,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Close the mobile sidebar as soon as the switch is committed so the
         // UI feels responsive even while the channel loads. Anything that
         // throws later won't leave the sidebar stuck open.
-        if (window.innerWidth <= 768) {
+        if (window.innerWidth <= 1024) {
             this.closeSidebar();
         }
 
