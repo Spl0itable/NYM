@@ -511,15 +511,24 @@ body.solid-ui .cv-column-header {
         max-width: 100%;
         scroll-snap-align: start;
         border-radius: 0;
-        border-top: none;
-        border-left: none;
-        border-right: none;
+        border: none;
+        box-shadow: none;
         touch-action: pan-y;
     }
 
     body.columns-mode .cv-column.focused {
-        border-color: var(--glass-border);
-        box-shadow: var(--shadow-md);
+        border: none;
+        box-shadow: none;
+    }
+
+    body.columns-mode .cv-column-header {
+        cursor: default;
+    }
+
+    body.columns-mode .cv-col-dots,
+    body.columns-mode .cv-col-move,
+    body.columns-mode .cv-col-close {
+        touch-action: manipulation;
     }
 
     body.columns-mode .cv-add-column {
@@ -575,9 +584,13 @@ body.solid-ui .cv-column-header {
     inset: 0;
     z-index: 10000;
     background: rgba(0, 0, 0, 0.5);
-    display: flex;
+    display: none;
     align-items: flex-end;
     justify-content: center;
+}
+
+.cv-tabs-overlay.open {
+    display: flex;
 }
 
 .cv-tabs-sheet {

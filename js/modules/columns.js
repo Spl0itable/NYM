@@ -97,7 +97,13 @@ Object.assign(NYM.prototype, {
 
         strip.addEventListener('click', (e) => {
             const move = e.target.closest('.cv-col-move');
-            if (move) { e.stopPropagation(); this._cvMoveColumn(move.dataset.colId, move.dataset.dir === 'right' ? 1 : -1); return; }
+            if (move) {
+                e.stopPropagation();
+                const dir = move.dataset.dir === 'right' ? 1 : -1;
+                if (window.innerWidth <= 768) this._cvStepFocused(dir);
+                else this._cvMoveColumn(move.dataset.colId, dir);
+                return;
+            }
             const close = e.target.closest('.cv-col-close');
             if (close && !close.classList.contains('cv-picker-close')) {
                 e.stopPropagation(); this.cvRequestRemoveColumn(close.dataset.colId); return;
@@ -237,6 +243,26 @@ Object.assign(NYM.prototype, {
         if (idx >= 0) this._cvScrollToIndex(idx);
     },
 
+    // Focus and reveal an existing column.
+    _cvSwitchToColumn(id) {
+        const col = this._cvColumns.find(c => c.id === id);
+        if (!col) return;
+        this._cvFocusColumn(id);
+        this._cvScrollToCol(col);
+        if (!this._navigating && typeof this._pushNavigation === 'function') {
+            this._pushNavigation(this._cvNavEntry(this._cvDescForSave(col)));
+        }
+    },
+
+    // Step the visible column one slot left/right.
+    _cvStepFocused(dir) {
+        const idx = this._cvColumns.findIndex(c => c.id === this._cvFocusedId);
+        if (idx < 0) return;
+        const to = idx + dir;
+        if (to < 0 || to >= this._cvColumns.length) return;
+        this._cvSwitchToColumn(this._cvColumns[to].id);
+    },
+
     // Repurpose an existing column to show a different conversation in place.
     _cvNavigateColumn(col, desc) {
         this._cvKeyToList.delete(col.key);
@@ -305,8 +331,8 @@ Object.assign(NYM.prototype, {
             `<span class="cv-col-title">${this.escapeHtml(this._cvColTitle(col))}</span>` +
             `<span class="cv-col-dots" title="Switch columns"></span>` +
             `<span class="cv-col-unread"></span>` +
-            `<button class="cv-col-move cv-col-move-left" data-col-id="${col.id}" data-dir="left" title="Move left" aria-label="Move left"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="15 18 9 12 15 6"/></svg></button>` +
-            `<button class="cv-col-move cv-col-move-right" data-col-id="${col.id}" data-dir="right" title="Move right" aria-label="Move right"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="9 18 15 12 9 6"/></svg></button>` +
+            `<button class="cv-col-move cv-col-move-left" data-col-id="${col.id}" data-dir="left" title="Previous column" aria-label="Previous column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="15 18 9 12 15 6"/></svg></button>` +
+            `<button class="cv-col-move cv-col-move-right" data-col-id="${col.id}" data-dir="right" title="Next column" aria-label="Next column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="9 18 15 12 9 6"/></svg></button>` +
             `<button class="cv-col-close" data-col-id="${col.id}" title="Remove column" aria-label="Remove column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
 
         const scroller = document.createElement('div');
@@ -701,9 +727,18 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // A browser-tabs-style sheet to switch columns and reorder them (mobile).
+    // Built once and reused; opening refreshes rows and toggles visibility.
     _cvOpenTabsView() {
-        if (this._cvTabsOverlay) return;
+        const overlay = this._cvTabsOverlay || this._cvBuildTabsView();
+        this._cvBuildTabsRows();
+        overlay.classList.add('open');
+    },
+
+    _cvCloseTabsView() {
+        if (this._cvTabsOverlay) this._cvTabsOverlay.classList.remove('open');
+    },
+
+    _cvBuildTabsView() {
         const overlay = document.createElement('div');
         overlay.className = 'cv-tabs-overlay';
         overlay.innerHTML =
@@ -715,44 +750,43 @@ Object.assign(NYM.prototype, {
             '</div>';
         document.body.appendChild(overlay);
         this._cvTabsOverlay = overlay;
-        const listEl = overlay.querySelector('.cv-tabs-list');
-        const close = () => { overlay.remove(); this._cvTabsOverlay = null; };
-
-        const buildRows = () => {
-            listEl.innerHTML = '';
-            this._cvColumns.forEach((col) => {
-                const row = document.createElement('div');
-                row.className = 'cv-tab' + (col.id === this._cvFocusedId ? ' active' : '');
-                row.dataset.colId = col.id;
-                row.innerHTML =
-                    `<span class="cv-tab-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
-                    `<span class="cv-tab-icon">${this._cvColIcon(col)}</span>` +
-                    `<span class="cv-tab-title">${this.escapeHtml(this._cvColTitle(col))}</span>` +
-                    `<button class="cv-tab-close" aria-label="Remove column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
-                listEl.appendChild(row);
-            });
-        };
-        buildRows();
 
         overlay.addEventListener('click', (e) => {
-            if (e.target === overlay || e.target.closest('.cv-tabs-close')) { close(); return; }
-            if (e.target.closest('.cv-tabs-add')) { close(); this._cvOpenAddColumn(); return; }
+            if (e.target === overlay || e.target.closest('.cv-tabs-close')) { this._cvCloseTabsView(); return; }
+            if (e.target.closest('.cv-tabs-add')) { this._cvCloseTabsView(); this._cvOpenAddColumn(); return; }
             if (e.target.closest('.cv-tab-handle')) return;
             const rm = e.target.closest('.cv-tab-close');
             if (rm) {
                 const row = rm.closest('.cv-tab');
-                if (row) { this.cvRequestRemoveColumn(row.dataset.colId); setTimeout(() => { if (this._cvTabsOverlay) buildRows(); }, 0); }
+                if (row) { this.cvRequestRemoveColumn(row.dataset.colId); setTimeout(() => { if (this._cvTabsOverlay && this._cvTabsOverlay.classList.contains('open')) this._cvBuildTabsRows(); }, 0); }
                 return;
             }
             const row = e.target.closest('.cv-tab');
             if (row) {
-                const col = this._cvColumns.find(c => c.id === row.dataset.colId);
-                if (col) this._cvOpenConversation(this._cvDescForSave(col));
-                close();
+                this._cvCloseTabsView();
+                this._cvSwitchToColumn(row.dataset.colId);
             }
         });
 
-        this._cvSetupTabsDrag(listEl);
+        this._cvSetupTabsDrag(overlay.querySelector('.cv-tabs-list'));
+        return overlay;
+    },
+
+    _cvBuildTabsRows() {
+        const listEl = this._cvTabsOverlay && this._cvTabsOverlay.querySelector('.cv-tabs-list');
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        this._cvColumns.forEach((col) => {
+            const row = document.createElement('div');
+            row.className = 'cv-tab' + (col.id === this._cvFocusedId ? ' active' : '');
+            row.dataset.colId = col.id;
+            row.innerHTML =
+                `<span class="cv-tab-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
+                `<span class="cv-tab-icon">${this._cvColIcon(col)}</span>` +
+                `<span class="cv-tab-title">${this.escapeHtml(this._cvColTitle(col))}</span>` +
+                `<button class="cv-tab-close" aria-label="Remove column"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+            listEl.appendChild(row);
+        });
     },
 
     _cvSetupTabsDrag(listEl) {
@@ -809,7 +843,7 @@ Object.assign(NYM.prototype, {
         const col = this._cvColumns[idx];
         if (!col || !col.el) return;
         if (window.innerWidth <= 768) {
-            this._cvStrip.scrollTo({ left: idx * this._cvStrip.clientWidth, behavior: 'smooth' });
+            this._cvStrip.scrollLeft = idx * this._cvStrip.clientWidth;
             return;
         }
         // Desktop: columns sit side by side, so only scroll when the target is
