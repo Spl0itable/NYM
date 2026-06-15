@@ -426,12 +426,13 @@ Object.assign(NYM.prototype, {
         const pubkey = col.pubkey;
         const suffix = this.getPubkeySuffix(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
+        const friendBadge = this.getFriendBadgeHtml(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
             ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
             : this.isVerifiedBot(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
-        return `${title}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}`;
+        return `${title}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
     },
 
     _cvRenderColumn(col) {
