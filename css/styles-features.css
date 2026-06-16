@@ -1480,10 +1480,13 @@ body:not(.chat-bubbles) .message.supporter-style {
 .friend-badge {
     display: inline-flex;
     align-items: center;
+    vertical-align: middle;
     color: #4fc3f7;
 }
 
 .friend-badge svg {
+    width: 16px;
+    height: 16px;
     fill: #4fc3f7;
     stroke: #4fc3f7;
 }
