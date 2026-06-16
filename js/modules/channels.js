@@ -1173,6 +1173,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
+            this._clearSidebarSkel('channelList');
             const item = document.createElement('div');
             item.className = 'channel-item list-item';
             item.dataset.channel = channel;

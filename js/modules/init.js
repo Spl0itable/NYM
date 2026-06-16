@@ -11,6 +11,24 @@ Object.assign(NYM.prototype, {
         return id;
     },
 
+    _clearSidebarSkel(listId) {
+        const list = document.getElementById(listId);
+        if (!list) return;
+        list.querySelectorAll(':scope > .sidebar-skeleton').forEach(el => el.remove());
+    },
+
+    _clearNymIdentitySkel() {
+        const el = document.querySelector('.nym-identity.is-loading');
+        if (el) el.classList.remove('is-loading');
+    },
+
+    _clearAllSidebarSkel() {
+        this._clearSidebarSkel('channelList');
+        this._clearSidebarSkel('pmList');
+        this._clearSidebarSkel('userListContent');
+        this._clearNymIdentitySkel();
+    },
+
     _scheduleIdle(fn, timeout = 1000) {
         if (typeof window.requestIdleCallback === 'function') {
             return window.requestIdleCallback(fn, { timeout });
@@ -82,6 +100,9 @@ Object.assign(NYM.prototype, {
 
             // Visibility change detection
             this.setupVisibilityMonitoring();
+
+            // Drop any sidebar shimmer that never got cleared by real content.
+            this._sidebarSkelTimer = setTimeout(() => this._clearAllSidebarSkel(), 8000);
 
         } catch (error) {
             this.showNotification('Error', 'Failed to initialize: ' + error.message);

@@ -422,11 +422,13 @@
 </pre>
                 <div class="nym-display" data-action="editNick">
                     <div class="nym-label">Your Nym (click to edit)</div>
-                    <div class="nym-identity">
+                    <div class="nym-identity is-loading">
                         <img id="sidebarAvatar" class="avatar nm-h-14"
                             src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' fill='%23222'/%3E%3C/svg%3E" alt=""
                             decoding="async" width="32" height="32">
                         <div class="nym-value" id="currentNym">pseudonymous</div>
+                        <span class="nym-sk-avatar" aria-hidden="true"></span>
+                        <span class="nym-sk-name" aria-hidden="true"></span>
                     </div>
                 </div>
                 <div class="status-indicator nm-pointer" data-action="openRelayStats" title="View network stats">
@@ -498,6 +500,10 @@
                             <span class="unread-badge nm-hidden">0</span>
                         </div>
                     </div>
+                    <div class="sidebar-skeleton ssk-channel ssk-w3" aria-hidden="true"><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-channel ssk-w1" aria-hidden="true"><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-channel ssk-w4" aria-hidden="true"><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-channel ssk-w2" aria-hidden="true"><span class="sk-bar"></span></div>
                 </div>
             </div>
 
@@ -533,7 +539,11 @@
                         data-on-keyup="filterPMs">
                     <span class="search-clear" data-action="clearSearch" data-search-target="pmSearch">✕</span>
                 </div>
-                <div class="pm-list" id="pmList"></div>
+                <div class="pm-list" id="pmList">
+                    <div class="sidebar-skeleton ssk-pm ssk-w2" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-pm ssk-w3" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-pm ssk-w1" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                </div>
             </div>
 
             <div class="user-list" id="userList" data-section="nyms">
@@ -562,7 +572,13 @@
                         data-on-keyup="filterUsers">
                     <span class="search-clear" data-action="clearSearch" data-search-target="userSearch">✕</span>
                 </div>
-                <div id="userListContent"></div>
+                <div id="userListContent">
+                    <div class="sidebar-skeleton ssk-nym ssk-w3" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-nym ssk-w1" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-nym ssk-w4" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-nym ssk-w2" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                    <div class="sidebar-skeleton ssk-nym ssk-w3" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
+                </div>
             </div>
         </aside>
 

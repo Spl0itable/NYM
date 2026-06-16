@@ -556,6 +556,11 @@
                 if (typeof this.sortChannelsByActivity === 'function') {
                     this.sortChannelsByActivity();
                 }
+
+                if (typeof this._clearSidebarSkel === 'function') {
+                    this._clearSidebarSkel('channelList');
+                    this._clearSidebarSkel('pmList');
+                }
             } catch (_) { }
         },
 

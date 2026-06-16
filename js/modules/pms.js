@@ -2793,6 +2793,7 @@ Object.assign(NYM.prototype, {
     },
 
     insertPMInOrder(newItem, pmList) {
+        this._clearSidebarSkel('pmList');
         const newTime = parseInt(newItem.dataset.lastMessageTime);
         const existingItems = Array.from(pmList.querySelectorAll('.pm-item'));
         const viewMoreBtn = pmList.querySelector('.view-more-btn');

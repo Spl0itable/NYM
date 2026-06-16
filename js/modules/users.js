@@ -279,6 +279,7 @@ Object.assign(NYM.prototype, {
     updateSidebarAvatar() {
         const el = document.getElementById('sidebarAvatar');
         if (el && this.pubkey) {
+            if (typeof this._clearNymIdentitySkel === 'function') this._clearNymIdentitySkel();
             const pubkey = this.pubkey;
             el.setAttribute('data-avatar-pubkey', pubkey);
             const src = this.getAvatarUrl(pubkey);
@@ -1455,6 +1456,10 @@ Object.assign(NYM.prototype, {
     },
 
     _renderUserListItems(container, displayUsers, themeBitchat) {
+        // Hold the boot shimmer until real nyms arrive; the container wipe below
+        // drops it once we have users to render.
+        if (displayUsers.length === 0 && container.querySelector('.sidebar-skeleton')) return;
+
         const existing = new Map();
         const itemEls = container.querySelectorAll('.user-item[data-pubkey]');
         for (let i = 0; i < itemEls.length; i++) {
