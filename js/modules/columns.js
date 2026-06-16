@@ -68,6 +68,7 @@ Object.assign(NYM.prototype, {
         // stale objects whose DOM was removed with the strip.
         for (const c of (this._cvColumns || [])) { if (c._observer) c._observer.disconnect(); }
         if (this._cvTabsOverlay) { this._cvTabsOverlay.remove(); this._cvTabsOverlay = null; }
+        if (this._cvPager) { this._cvPager.remove(); this._cvPager = null; }
         if (this._cvStrip) { this._cvStrip.remove(); this._cvStrip = null; }
         this._cvKeyToList && this._cvKeyToList.clear();
         this._cvColumns = [];
@@ -114,6 +115,15 @@ Object.assign(NYM.prototype, {
             strip.appendChild(addBtn);
         }
         this._cvStrip = strip;
+
+        if (!this._cvPager) {
+            const pager = document.createElement('div');
+            pager.className = 'cv-pager';
+            pager.title = 'Switch columns';
+            pager.addEventListener('click', () => this._cvOpenTabsView());
+            strip.parentNode.insertBefore(pager, strip);
+            this._cvPager = pager;
+        }
 
         // Message swipe / double-click reply work inside every column via
         // delegation on the strip.
@@ -498,6 +508,7 @@ Object.assign(NYM.prototype, {
         if (!col) return;
         this._cvFocusedId = id;
         for (const c of this._cvColumns) c.el && c.el.classList.toggle('focused', c.id === id);
+        this._cvRebuildPager();
 
         this._saveCurrentDraft && this._saveCurrentDraft();
         if (col.type === 'channel') {
@@ -765,6 +776,20 @@ Object.assign(NYM.prototype, {
             for (let i = 0; i < n; i++) html += `<span class="cv-hdot${i === idx ? ' active' : ''}"></span>`;
             dotsEl.innerHTML = html;
         });
+        this._cvRebuildPager();
+    },
+
+    // Desktop pager (centered, above the strip); the whole cluster opens the
+    // tabs view. Hidden when a single column makes it pointless.
+    _cvRebuildPager() {
+        const pager = this._cvPager;
+        if (!pager) return;
+        const n = this._cvColumns.length;
+        if (n <= 1) { pager.classList.remove('show'); pager.innerHTML = ''; return; }
+        let html = '';
+        for (const col of this._cvColumns) html += `<span class="cv-pdot${col.id === this._cvFocusedId ? ' active' : ''}"></span>`;
+        pager.innerHTML = html;
+        pager.classList.add('show');
     },
 
     // Built once and reused; opening refreshes rows and toggles visibility.

@@ -580,6 +580,40 @@ body.solid-ui .cv-column-header {
     opacity: 1;
 }
 
+.cv-pager {
+    display: none;
+    flex: 0 0 auto;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 8px 0;
+    cursor: pointer;
+}
+
+@media (min-width: 769px) {
+    body.columns-mode .cv-pager.show {
+        display: flex;
+    }
+}
+
+.cv-pdot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    opacity: 0.4;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.cv-pager:hover .cv-pdot {
+    opacity: 0.7;
+}
+
+.cv-pdot.active {
+    background: var(--primary);
+    opacity: 1;
+}
+
 .cv-tabs-overlay {
     position: fixed;
     inset: 0;
@@ -592,6 +626,17 @@ body.solid-ui .cv-column-header {
 
 .cv-tabs-overlay.open {
     display: flex;
+}
+
+@media (min-width: 769px) {
+    .cv-tabs-overlay {
+        align-items: center;
+    }
+
+    .cv-tabs-sheet {
+        max-height: 70vh;
+        border-radius: var(--radius-lg);
+    }
 }
 
 .cv-tabs-sheet {
