@@ -1,12 +1,18 @@
-// Show setup modal on first load when no login method is stored
+// Decide before first paint whether to show the setup modal, so the
+// logged-out app doesn't briefly flash before the modal appears.
 (function () {
+    var needsSetup;
     try {
-        var loggedIn = localStorage.getItem('nym_nostr_login_method') !== null
-            || localStorage.getItem('nym_auto_ephemeral') === 'true';
-        if (!loggedIn) {
-            document.getElementById('setupModal').classList.add('active');
-        }
+        needsSetup = localStorage.getItem('nym_nostr_login_method') === null
+            && localStorage.getItem('nym_auto_ephemeral') !== 'true';
     } catch (e) {
-        document.getElementById('setupModal').classList.add('active');
+        needsSetup = true;
     }
+    if (!needsSetup) return;
+    document.documentElement.classList.add('nym-needs-setup');
+    document.addEventListener('DOMContentLoaded', function () {
+        var modal = document.getElementById('setupModal');
+        if (modal) modal.classList.add('active');
+        document.documentElement.classList.remove('nym-needs-setup');
+    });
 })();

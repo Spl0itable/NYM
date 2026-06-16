@@ -2,6 +2,10 @@
     display: flex;
 }
 
+html.nym-needs-setup #setupModal {
+    display: flex;
+}
+
 #nostrLoginModal {
     z-index: 10002;
 }
