@@ -543,10 +543,12 @@ Object.assign(NYM.prototype, {
                     }
                     return;
                 }
-                if (typeof this._markChannelRead === 'function' && message.created_at) {
-                    this._markChannelRead(storageKey, message.created_at);
-                }
-                if (!document.hidden && !message.isOwn && !message.isHistorical && message.geohash &&
+                const seen = this._cvMarkColumnRead(storageKey);
+                if (!seen) {
+                    if (!message.isOwn && !exists && !message.isHistorical) {
+                        this.updateUnreadCount(storageKey);
+                    }
+                } else if (!message.isOwn && !message.isHistorical && message.geohash &&
                     message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
                     typeof this.sendChannelReadReceipt === 'function') {
                     this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);

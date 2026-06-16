@@ -526,6 +526,9 @@ Object.assign(NYM.prototype, {
                     if (typeof this._markVisibleGroupMessagesRead === 'function') {
                         this._markVisibleGroupMessagesRead();
                     }
+                    if (typeof this._cvMarkVisibleColumnsRead === 'function') {
+                        this._cvMarkVisibleColumnsRead();
+                    }
 
                     this.backfillFromD1OnReconnect();
                 }, delay);
@@ -574,6 +577,9 @@ Object.assign(NYM.prototype, {
                 }
                 if (typeof this._markVisibleGroupMessagesRead === 'function') {
                     this._markVisibleGroupMessagesRead();
+                }
+                if (typeof this._cvMarkVisibleColumnsRead === 'function') {
+                    this._cvMarkVisibleColumnsRead();
                 }
 
                 this.backfillFromD1OnReconnect();

@@ -1357,7 +1357,8 @@ Object.assign(NYM.prototype, {
             } else {
                 // Column view: render into the conversation's open column even
                 // when it isn't the focused one.
-                if (this._cvActive && this._cvListForKey(conversationKey)) this.displayMessage(msg);
+                const cvShown = this._cvActive && this._cvListForKey(conversationKey);
+                if (cvShown) this.displayMessage(msg);
                 // Not viewing this conversation — leave the cached DOM in
                 // place. loadPMMessages does a partial-cache restore that
                 // appends the trailing new messages to the cached fragment,
@@ -1373,7 +1374,7 @@ Object.assign(NYM.prototype, {
                         id: conversationKey,
                         eventId: event.id
                     };
-                    this.updateUnreadCount(conversationKey);
+                    if (!(cvShown && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey);
                     if (!pmSenderBlocked) {
                         if (!treatAsHistorical) {
                             this.showNotification(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);

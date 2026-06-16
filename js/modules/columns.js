@@ -15,6 +15,31 @@ Object.assign(NYM.prototype, {
         return this._cvKeyToList.get(key) || null;
     },
 
+    _cvColumnForKey(key) {
+        if (!key || !this._cvColumns) return null;
+        return this._cvColumns.find(c => c.key === key) || null;
+    },
+
+    // True when a column for this conversation is on-screen and pinned to the
+    // newest message; clears its unread badge so column view tracks reads the
+    // same way single view does on switch.
+    _cvMarkColumnRead(key) {
+        const col = this._cvColumnForKey(key);
+        if (!this._cvActive || !col || !col.listEl) return false;
+        if (document.hidden || col._atBottom === false) return false;
+        if (this.unreadCounts && (this.unreadCounts.get(key) || 0) > 0) {
+            if (typeof this.clearUnreadCount === 'function') this.clearUnreadCount(key);
+        } else if (typeof this._markChannelRead === 'function') {
+            this._markChannelRead(key);
+        }
+        return true;
+    },
+
+    _cvMarkVisibleColumnsRead() {
+        if (!this._cvActive) return;
+        for (const col of this._cvColumns) this._cvMarkColumnRead(col.key);
+    },
+
     applyChatViewMode(mode) {
         if (mode === 'columns') this._cvEnable();
         else this._cvDisable();
@@ -475,6 +500,8 @@ Object.assign(NYM.prototype, {
         const isPM = col.type !== 'channel';
         this.renderMessagesWithVirtualScroll(col.listEl, col.key, false, isPM);
         if (col.scrollerEl) col.scrollerEl.scrollTop = 0;
+        col._atBottom = true;
+        this._cvMarkColumnRead(col.key);
     },
 
     _cvRenderAll() {
@@ -526,6 +553,7 @@ Object.assign(NYM.prototype, {
         this._cvSetComposeHeader(col);
         this._cvUpdateSidebarActive(col);
         this._restoreDraftForContext && this._restoreDraftForContext();
+        this._cvMarkColumnRead(col.key);
         if (col.type === 'group' && typeof this._markVisibleGroupMessagesRead === 'function') {
             this._markVisibleGroupMessagesRead();
         } else if (col.type === 'channel' && typeof this.markVisibleChannelMessagesRead === 'function') {
@@ -594,7 +622,9 @@ Object.assign(NYM.prototype, {
         const handler = () => {
             const sc = col.scrollerEl;
             const distanceFromBottom = Math.abs(sc.scrollTop);
+            const wasBottom = col._atBottom;
             col._atBottom = distanceFromBottom < 120;
+            if (col._atBottom && !wasBottom) this._cvMarkColumnRead(col.key);
             if (col.scrollBtn) col.scrollBtn.classList.toggle('visible', distanceFromBottom > 150);
             const distanceFromTop = (sc.scrollHeight - sc.clientHeight) - distanceFromBottom;
             if (distanceFromTop <= 5 && !col._loadingOlder) {

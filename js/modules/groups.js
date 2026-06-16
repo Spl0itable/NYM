@@ -1325,11 +1325,12 @@ Object.assign(NYM.prototype, {
         } else {
             // Column view: render into the group's open column even when it
             // isn't the focused one.
-            if (this._cvActive && this._cvListForKey(groupConvKey)) this.displayMessage(msg);
+            const cvShown = this._cvActive && this._cvListForKey(groupConvKey);
+            if (cvShown) this.displayMessage(msg);
             if (!isOwn && !senderBlocked) {
                 const ageMs = Date.now() - (tsSec * 1000);
                 const treatAsHistorical = msg.isHistorical || ageMs > 30000;
-                this.updateUnreadCount(groupConvKey);
+                if (!(cvShown && this._cvMarkColumnRead(groupConvKey))) this.updateUnreadCount(groupConvKey);
                 const isInviteRumor = msgType === 'group-invite';
                 const shouldNotifyGroup = !isInviteRumor && (!this.groupNotifyMentionsOnly || this.isMentioned(messageContent));
                 if (shouldNotifyGroup) {
