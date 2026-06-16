@@ -836,7 +836,7 @@ Object.assign(NYM.prototype, {
                 const offer = message.fileOffer;
                 const fileCategory = this.getFileTypeCategory(offer.name, offer.type);
                 const isOwnOffer = message.isOwn;
-                const isUnseeded = this.p2pUnseededOffers.has(offer.offerId) || (isOwnOffer && !this.p2pPendingFiles.has(offer.offerId) && message.isHistorical);
+                const isUnseeded = this.p2pUnseededOffers.has(offer.offerId) || (isOwnOffer && !this.p2pPendingFiles.has(offer.offerId) && !this.torrentSeeds.has(offer.offerId));
                 const isTorrent = !!offer.magnetURI;
 
                 let statusHtml;

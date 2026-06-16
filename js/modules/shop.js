@@ -523,7 +523,7 @@ Object.assign(NYM.prototype, {
     _shopItemOwnedHtml(item, allowGift) {
         return `
         <div class="shop-item-price">
-            <span class="shop-price-amount">Owned</span>
+            <span class="shop-price-amount">⚡ ${item.price} sats</span>
             ${allowGift ? `<button class="shop-buy-btn shop-gift-btn" data-action="promptGiftShopItem" data-item-id="${item.id}">GIFT</button>` : ''}
         </div>`;
     },
