@@ -3016,6 +3016,9 @@ Object.assign(NYM.prototype, {
             // Messages exist but DOM is empty — fall through to re-render
         }
 
+        // Cancel any loading shimmer from the conversation we're leaving.
+        this._clearMessageSkeleton(container);
+
         // Cache current channel/PM DOM before switching
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = conversationKey;
@@ -3034,14 +3037,21 @@ Object.assign(NYM.prototype, {
 
         if (filteredMessages.length === 0) {
             container.innerHTML = '';
-            this.displaySystemMessage('Start of private message');
-            if (this.isVerifiedBot(this.currentPM)) {
-                // A ?clear-ed chat is empty but not new — don't re-welcome.
-                if (!skipBotWelcome && !this._getBotPmClearedAt()) {
-                    this._displayBotWelcomeMessage();
+            const isBot = this.isVerifiedBot(this.currentPM);
+            const renderEmpty = () => {
+                this.displaySystemMessage('Start of private message');
+                if (isBot) {
+                    // A ?clear-ed chat is empty but not new — don't re-welcome.
+                    if (!skipBotWelcome && !this._getBotPmClearedAt()) {
+                        this._displayBotWelcomeMessage();
+                    }
+                    this._checkBotCredits(false);
                 }
-                this._checkBotCredits(false);
-            }
+            };
+            // Bots greet immediately — no shimmer in front of the welcome.
+            // Other empty chats shimmer first, then settle into the header.
+            if (isBot) renderEmpty();
+            else this._showMessageSkeleton(container, renderEmpty);
             return;
         }
 

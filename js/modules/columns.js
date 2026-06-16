@@ -20,11 +20,23 @@ Object.assign(NYM.prototype, {
         else this._cvDisable();
     },
 
+    // Fill the static placeholder column frames
+    _renderColumnSkeletons() {
+        const strip = document.getElementById('columnsStrip');
+        if (!strip || this._cvActive) return;
+        if (typeof this._buildMessageSkeleton !== 'function') return;
+        strip.querySelectorAll('.cv-skeleton-col .cv-list').forEach(list => {
+            if (!list.querySelector('.msg-skeleton')) list.appendChild(this._buildMessageSkeleton());
+        });
+    },
+
     _cvEnable() {
         if (this._cvActive) { this._cvSeedIfNeeded(); return; }
         this._cvColumns = this._cvColumns || [];
         this._cvKeyToList = this._cvKeyToList || new Map();
         this._cvBuildStrip();
+        // Replace any boot placeholder columns with the real ones.
+        if (this._cvStrip) this._cvStrip.querySelectorAll('.cv-skeleton-col').forEach(el => el.remove());
         document.body.classList.add('columns-mode');
         this._cvActive = true;
         // Clear the (now hidden) single-view container so its stale message
@@ -42,10 +54,15 @@ Object.assign(NYM.prototype, {
     },
 
     _cvDisable() {
+        // Always clear the layout class — theme-init may have applied it at boot
+        // to avoid a flash, even before columns were ever activated.
+        document.body.classList.remove('columns-mode');
+        // Drop boot placeholder columns if we never activated real ones.
+        const strip0 = document.getElementById('columnsStrip');
+        if (strip0) strip0.querySelectorAll('.cv-skeleton-col').forEach(el => el.remove());
         if (!this._cvActive) return;
         const focused = this._cvColumns.find(c => c.id === this._cvFocusedId) || this._cvColumns[0];
         this._cvActive = false;
-        document.body.classList.remove('columns-mode');
         // Tear down in-memory column state (but keep the saved layout) so a later
         // re-enable rebuilds the same columns from storage instead of reusing
         // stale objects whose DOM was removed with the strip.
@@ -79,15 +96,23 @@ Object.assign(NYM.prototype, {
         const anchor = document.getElementById('messagesScroller');
         if (!anchor || this._cvStrip) return;
 
-        const strip = document.createElement('div');
-        strip.id = 'columnsStrip';
-        strip.className = 'cv-strip';
-        const addBtn = document.createElement('button');
-        addBtn.className = 'cv-add-column';
-        addBtn.type = 'button';
-        addBtn.textContent = '+ Add column';
-        strip.appendChild(addBtn);
-        anchor.parentNode.insertBefore(strip, anchor.nextSibling);
+        // Reuse the skeleton strip shipped in the HTML (present at first paint so
+        // the column frame doesn't flash in); fall back to creating one after a
+        // disable/enable cycle removed it.
+        let strip = document.getElementById('columnsStrip');
+        if (!strip) {
+            strip = document.createElement('div');
+            strip.id = 'columnsStrip';
+            strip.className = 'cv-strip';
+            anchor.parentNode.insertBefore(strip, anchor.nextSibling);
+        }
+        if (!strip.querySelector('.cv-add-column')) {
+            const addBtn = document.createElement('button');
+            addBtn.className = 'cv-add-column';
+            addBtn.type = 'button';
+            addBtn.textContent = '+ Add column';
+            strip.appendChild(addBtn);
+        }
         this._cvStrip = strip;
 
         // Message swipe / double-click reply work inside every column via

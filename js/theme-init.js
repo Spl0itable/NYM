@@ -9,4 +9,9 @@
     }
     // Hide ASCII art logos in NymchatApp shell to prevent flash
     if (/NymchatApp\//i.test(navigator.userAgent)) document.body.classList.add('nymchat-app');
+    // Apply the columns layout up front so a column-view user doesn't see the
+    // single chat view flash before columns activate after connection.
+    if (localStorage.getItem('nym_chat_view_mode') === 'columns') {
+        document.body.classList.add('columns-mode');
+    }
 })();

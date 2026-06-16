@@ -599,6 +599,11 @@ Object.assign(NYM.prototype, {
         // column view mode, otherwise the single shared container)
         const container = _cvContainer || document.getElementById('messagesContainer');
 
+        // A real message is landing — drop any loading shimmer or settled
+        // "no messages" note. Bulk renders already cleared the container, so
+        // only the incremental path needs this.
+        if (!this._bulkAppending && (container._skelTimer || container._emptyNote)) this._clearMessageSkeleton(container);
+
         // Clamp timestamp to now so messages never appear in the future
         const now = new Date();
         const displayTimestamp = message.timestamp > now ? now : message.timestamp;
@@ -3064,6 +3069,9 @@ Object.assign(NYM.prototype, {
             this._renderAbortKey = null;
         }
 
+        // Cancel any loading shimmer from the conversation we're leaving.
+        this._clearMessageSkeleton(container);
+
         // Cache current container DOM before switching
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = storageKey;
@@ -3083,7 +3091,9 @@ Object.assign(NYM.prototype, {
         container.innerHTML = '';
 
         if (filteredMessages.length === 0) {
-            this.displaySystemMessage(`Joined ${displayName}`);
+            // Shimmer first; if nothing loads, settle into a note that clears
+            // itself the moment a message does arrive.
+            this._showMessageSkeleton(container, () => this._appendEmptyNote(container, `No recent messages in ${displayName}`));
             this.renderChannelPolls();
             return;
         }
@@ -3195,6 +3205,108 @@ Object.assign(NYM.prototype, {
         }).sort((a, b) => this._compareMessages(a, b));
     },
 
+    _buildMessageSkeleton() {
+        const bubble = document.body.classList.contains('chat-bubbles');
+        const vh = window.innerHeight || 800;
+        const count = Math.min(50, Math.max(8, Math.ceil(vh / (bubble ? 56 : 40)) + 3));
+        const sk = document.createElement('div');
+        sk.className = 'msg-skeleton';
+        sk.setAttribute('aria-hidden', 'true');
+        sk.innerHTML = bubble ? this._bubbleSkeletonHtml(count) : this._ircSkeletonHtml(count);
+        return sk;
+    },
+
+    // IRC rows: [time] author + one or more content lines, reusing the real
+    // message/time/author/content classes so layout matches exactly.
+    _ircSkeletonHtml(count) {
+        const pattern = [
+            [2, ['skl-3']], [1, ['skl-4', 'skl-2']], [3, ['skl-2']],
+            [2, ['skl-3', 'skl-3', 'skl-1']], [1, ['skl-2']], [2, ['skl-4']],
+            [3, ['skl-1']], [1, ['skl-3', 'skl-2']], [2, ['skl-2']],
+            [2, ['skl-4', 'skl-3']], [1, ['skl-1']], [3, ['skl-3']],
+            [2, ['skl-2', 'skl-1']], [1, ['skl-4']]
+        ];
+        let html = '';
+        for (let i = 0; i < count; i++) {
+            const [a, lines] = pattern[i % pattern.length];
+            html += `<div class="message"><span class="message-time"><span class="sk-bar sk-time"></span></span>` +
+                `<span class="message-author"><span class="sk-bar sk-author ska-${a}"></span></span>` +
+                `<span class="message-content">${lines.map(w => `<span class="sk-line ${w}"></span>`).join('')}</span></div>`;
+        }
+        return html;
+    },
+
+    // Grouped bubbles with avatars, alternating incoming/self, varied sizes —
+    // first line of each bubble drives its width, later lines step down.
+    _bubbleSkeletonHtml(count) {
+        const pattern = [
+            { self: false, bubbles: [[3, 3], [1, 1]] },
+            { self: true, bubbles: [[2, 2]] },
+            { self: false, bubbles: [[1, 1]] },
+            { self: true, bubbles: [[1, 1], [3, 2], [1, 1]] },
+            { self: false, bubbles: [[4, 4]] },
+            { self: true, bubbles: [[2, 1]] },
+            { self: false, bubbles: [[3, 2], [1, 1]] },
+            { self: true, bubbles: [[3, 3]] },
+            { self: false, bubbles: [[2, 1]] }
+        ];
+        let html = '';
+        for (let i = 0; i < count; i++) {
+            const g = pattern[i % pattern.length];
+            const avatar = g.self ? '' : `<div class="message-group-avatar"><div class="sk-avatar"></div></div>`;
+            const stack = g.bubbles.map(([base, n], idx) => {
+                let lines = '';
+                for (let j = 0; j < n; j++) {
+                    lines += `<span class="sk-line skb-${Math.max(1, base - j)}"></span>`;
+                }
+                const grouped = idx > 0 ? ' bubble-grouped' : '';
+                return `<div class="message${g.self ? ' self' : ''}${grouped}"><div class="message-content">${lines}</div></div>`;
+            }).join('');
+            html += `<div class="message-group${g.self ? ' group-self' : ''}">${avatar}<div class="message-group-stack">${stack}</div></div>`;
+        }
+        return html;
+    },
+
+    // Show a shimmer placeholder while a conversation loads. settleFn runs once
+    // after a grace period if no real message arrived (e.g. to render an empty
+    // "no messages" note); an incoming message clears everything sooner.
+    _showMessageSkeleton(container, settleFn) {
+        if (!container) return;
+        if (container.querySelector('.message[data-message-id]')) return;
+        this._clearMessageSkeleton(container);
+        container.appendChild(this._buildMessageSkeleton());
+        container._skelTimer = setTimeout(() => {
+            container._skelTimer = null;
+            const hadReal = !!container.querySelector('.message[data-message-id]');
+            const sk = container.querySelector(':scope > .msg-skeleton');
+            if (sk) sk.remove();
+            if (!hadReal && typeof settleFn === 'function') {
+                try { settleFn(); } catch (_) { }
+            }
+        }, this._msgSkeletonSettleMs || 3000);
+    },
+
+    _clearMessageSkeleton(container) {
+        if (!container) return;
+        if (container._skelTimer) { clearTimeout(container._skelTimer); container._skelTimer = null; }
+        const sk = container.querySelector(':scope > .msg-skeleton');
+        if (sk) sk.remove();
+        if (container._emptyNote) { container._emptyNote.remove(); container._emptyNote = null; }
+    },
+
+    // Centered empty-state note rendered after the shimmer settles with nothing
+    // to show; tracked so displayMessage can drop it when a message arrives.
+    _appendEmptyNote(container, text) {
+        if (!container) return;
+        if (container.querySelector('.message[data-message-id]')) return;
+        if (container._emptyNote) container._emptyNote.remove();
+        const note = document.createElement('div');
+        note.className = 'msg-empty-note';
+        note.textContent = text;
+        container.appendChild(note);
+        container._emptyNote = note;
+    },
+
     // Render all messages for a channel or PM conversation
     // isPM: if true, uses pmMessages with conversationKey instead of messages with storageKey
     renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
@@ -3208,6 +3320,9 @@ Object.assign(NYM.prototype, {
         container.innerHTML = '';
 
         if (messages.length === 0) {
+            // Columns render through here while still empty; shimmer, then settle
+            // into a note that a real message removes.
+            this._showMessageSkeleton(container, () => this._appendEmptyNote(container, 'No recent messages'));
             return;
         }
 

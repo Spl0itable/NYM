@@ -57,6 +57,12 @@ Object.assign(NYM.prototype, {
             if (typeof this._hydrateUnreadCounts === 'function') this._hydrateUnreadCounts();
             applyMessageLayout(this.settings.chatLayout);
 
+            // Column view: paint placeholder columns now so the strip isn't blank
+            // until the real columns activate after connection.
+            if (localStorage.getItem('nym_chat_view_mode') === 'columns' && typeof this._renderColumnSkeletons === 'function') {
+                this._renderColumnSkeletons();
+            }
+
             // Hydrate channel/PM/profile/reaction caches from IndexedDB
             try {
                 await Promise.race([
