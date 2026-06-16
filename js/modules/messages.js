@@ -3047,9 +3047,16 @@ Object.assign(NYM.prototype, {
         const container = document.getElementById('messagesContainer');
         const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
 
-        // Check if we're loading the same channel
+        // Skip reload if already viewing this channel, but force a re-render if
+        // the DOM is empty while we have stored messages (e.g. the channel was
+        // opened before the IndexedDB cache finished hydrating).
         if (container.dataset.lastChannel === storageKey) {
-            return;
+            const storedCount = this.getFilteredMessages(storageKey).length;
+            const domCount = container.querySelectorAll('.message[data-message-id]').length;
+            if (storedCount === 0 || domCount > 0) {
+                return;
+            }
+            // Messages exist but DOM is empty — fall through to re-render
         }
 
         // Cancel any in-progress batched render for the previous channel
@@ -3350,6 +3357,52 @@ Object.assign(NYM.prototype, {
         }
         this._recomputeAllBubbleGrouping(container);
         return true;
+    },
+
+    // Re-render whatever conversation is on screen once the IndexedDB cache has
+    // hydrated. The active view may have opened (empty, or with only the first
+    // few D1/relay messages) before hydration populated this.messages, so paint
+    // the full cached history now instead of leaving it stranded in memory.
+    _refreshActiveViewsAfterHydration() {
+        try {
+            const container = document.getElementById('messagesContainer');
+
+            if (this._cvActive && Array.isArray(this._cvColumns)) {
+                for (const col of this._cvColumns) {
+                    if (!col || !col.listEl) continue;
+                    const isPM = col.type !== 'channel';
+                    const stored = (isPM ? this.pmMessages.get(col.key) : this.messages.get(col.key)) || [];
+                    const domCount = col.listEl.querySelectorAll('.message[data-message-id]').length;
+                    if (stored.length > domCount) this._cvRenderColumn(col);
+                }
+                return;
+            }
+
+            if (!container) return;
+
+            if (this.inPMMode) {
+                const key = this.currentGroup
+                    ? this.getGroupConversationKey(this.currentGroup)
+                    : (this.currentPM ? this.getPMConversationKey(this.currentPM) : null);
+                if (!key) return;
+                const stored = (this.pmMessages.get(key) || []).length;
+                const domCount = container.querySelectorAll('.message[data-message-id]').length;
+                if (stored > domCount) {
+                    container.dataset.lastChannel = '';
+                    this.channelDOMCache.delete(key);
+                    this.loadPMMessages(key);
+                }
+            } else if (this.currentChannel || this.currentGeohash) {
+                const key = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+                const stored = this.getFilteredMessages(key).length;
+                const domCount = container.querySelectorAll('.message[data-message-id]').length;
+                if (stored > domCount) {
+                    container.dataset.lastChannel = '';
+                    this.channelDOMCache.delete(key);
+                    this.loadChannelMessages(this.currentChannel || `#${this.currentGeohash}`);
+                }
+            }
+        } catch (_) { }
     },
 
     refreshMessages() {

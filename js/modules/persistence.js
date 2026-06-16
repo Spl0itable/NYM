@@ -505,6 +505,12 @@
                 // Cache failure is non-fatal — we'll just refetch from relays.
             }
 
+            // The active view may have opened before hydration finished (the
+            // 1500ms boot race), leaving cached history unrendered. Paint it now.
+            if (typeof this._refreshActiveViewsAfterHydration === 'function') {
+                this._refreshActiveViewsAfterHydration();
+            }
+
             this._trimAllStores().catch(() => { });
         },
 
