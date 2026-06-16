@@ -558,7 +558,6 @@ body.solid-ui .cv-column-header {
         flex: 1;
         align-self: stretch;
         align-items: center;
-        justify-content: center;
         min-width: 0;
         overflow: hidden;
         cursor: pointer;

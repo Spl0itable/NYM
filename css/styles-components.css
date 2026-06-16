@@ -1381,8 +1381,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     margin-left: 4px;
     margin-right: 2px;
     position: relative;
@@ -1406,7 +1406,7 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     color: #fff;
     line-height: 1;
