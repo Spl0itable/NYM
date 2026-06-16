@@ -1972,7 +1972,7 @@ div.message-input .custom-emoji {
     .msg-skeleton .sk-avatar::after { animation: none; }
 }
 
-.msg-skeleton .sk-line { height: 9px; margin: 5px 0; }
+.msg-skeleton .sk-line { height: 9px; margin: 5px 0; max-width: 100%; }
 .msg-skeleton .sk-time { height: 10px; width: 34px; }
 .msg-skeleton .sk-author { height: 10px; }
 .msg-skeleton .sk-avatar { width: 32px; height: 32px; border-radius: 50%; }
@@ -1991,6 +1991,9 @@ div.message-input .custom-emoji {
 .msg-skeleton .message,
 .msg-skeleton .message-group { pointer-events: none; }
 body.chat-bubbles .msg-skeleton .message-content { min-width: 0; }
+body.chat-bubbles .msg-skeleton .message-group-avatar { position: static; bottom: auto; }
+body.chat-bubbles .msg-skeleton .message { padding-bottom: 0; }
+body.chat-bubbles .msg-skeleton .message-group-stack .message:last-child { margin-bottom: 0; }
 
 .msg-empty-note {
     margin: auto;
