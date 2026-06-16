@@ -204,10 +204,8 @@ body.light-mode .verified-badge::before {
         display: flex;
     }
 
-    .mobile-menu-toggle,
-    .mobile-notif-toggle {
+    .mobile-header-actions {
         display: flex;
-        top: 20px;
     }
 
     .main-content {
@@ -295,7 +293,6 @@ body.light-mode .verified-badge::before {
     .chat-header {
         padding: 15px 10px;
         padding-top: 12px;
-        padding-right: 108px;
         flex-shrink: 0;
         overflow: hidden;
         touch-action: pan-x;
@@ -471,14 +468,8 @@ body.light-mode .verified-badge::before {
         display: none;
     }
 
-    .mobile-menu-toggle,
-    .mobile-notif-toggle {
+    .mobile-header-actions {
         display: flex;
-        top: 20px;
-    }
-
-    .chat-header {
-        padding-right: 108px;
     }
 
     .input-container {

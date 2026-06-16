@@ -673,12 +673,18 @@
     border-color: rgba(255, 255, 255, 0.2);
 }
 
+.mobile-header-actions {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-left: 12px;
+    flex-shrink: 0;
+}
+
 .mobile-menu-toggle,
 .mobile-notif-toggle {
-    display: none;
-    position: fixed;
-    top: 12px;
-    z-index: 10000;
+    display: flex;
+    position: relative;
     background: rgba(20, 20, 35, 0.8);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-sm);
@@ -687,21 +693,13 @@
     height: 40px;
     padding: 0;
     cursor: pointer;
-    font-size: 20px;
     transition: all var(--transition);
     align-items: center;
     justify-content: center;
 }
 
-.mobile-menu-toggle {
-    right: 12px;
-}
-
-.mobile-notif-toggle {
-    right: 58px;
-}
-
-.mobile-notif-toggle svg {
+.mobile-notif-toggle svg,
+.mobile-menu-toggle svg {
     display: block;
 }
 
