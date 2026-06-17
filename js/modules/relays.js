@@ -1096,7 +1096,7 @@ Object.assign(NYM.prototype, {
                         });
                     }
 
-                    if (!this.settings.lowDataMode) {
+                    if (!this.settings.lowDataMode && !this.settings.groupChatPMOnlyMode) {
                         setTimeout(() => {
                             this.discoverRelaysViaNip66().then(() => {
                                 if (this._isAnyPoolOpen()) this._poolSendRelayConfig();
@@ -1248,7 +1248,7 @@ Object.assign(NYM.prototype, {
             });
 
             // GEO relays
-            if (!this.settings.lowDataMode) {
+            if (!this.settings.lowDataMode && !this.settings.groupChatPMOnlyMode) {
                 (this._geoRelaysReady || Promise.resolve()).then(() => {
                     // Connect GEO relays (second priority after defaults)
                     const geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
@@ -1267,7 +1267,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Discover additional relays via NIP-66 and connect to them
-            if (!this.settings.lowDataMode) {
+            if (!this.settings.lowDataMode && !this.settings.groupChatPMOnlyMode) {
                 setTimeout(() => {
                     this.discoverRelaysViaNip66().then(() => {
                         const relaysToConnect = [...this.allRelayUrls]
@@ -1731,6 +1731,10 @@ Object.assign(NYM.prototype, {
 
     // Shard relays into role-based worker groups, splitting large groups into chunks
     _shardRelaysByRole(allRelays, geoRelayUrls, dmRelays) {
+        if (this.settings && this.settings.groupChatPMOnlyMode) {
+            allRelays = this.defaultRelays;
+            geoRelayUrls = [];
+        }
         const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com', 'wss://nostr-server-production.up.railway.app']);
         const permanent = this._permanentBlacklist || new Set();
         const isValid = (url) => !blocked.has(url) && !permanent.has(url);
@@ -3275,6 +3279,7 @@ Object.assign(NYM.prototype, {
     // data mode. Cached in localStorage between sessions.
     async discoverRelaysViaNip66({ force = false } = {}) {
         if (this.settings && this.settings.lowDataMode) return;
+        if (this.settings && this.settings.groupChatPMOnlyMode) return;
         if (this._nip66Running) return;
 
         const now = Date.now();
@@ -3477,6 +3482,7 @@ Object.assign(NYM.prototype, {
     async retryDiscoveredRelays() {
         // Low data mode: discovered relays are not used — skip entirely
         if (this.settings && this.settings.lowDataMode) return;
+        if (this.settings && this.settings.groupChatPMOnlyMode) return;
 
         // Pool mode: just update the pool config with any new discovered relays
         if (this.useRelayProxy) {

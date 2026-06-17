@@ -20,12 +20,13 @@ Object.assign(NYM.prototype, {
         return this._cvColumns.find(c => c.key === key) || null;
     },
 
-    // True when a column for this conversation is on-screen and pinned to the
-    // newest message; clears its unread badge so column view tracks reads the
-    // same way single view does on switch.
+    // True when the conversation's column is the selected (focused) one, in view
+    // and pinned to the newest message; only then do we clear its unread badge so
+    // unopened/unfocused columns keep their sidebar and notification counts.
     _cvMarkColumnRead(key) {
         const col = this._cvColumnForKey(key);
         if (!this._cvActive || !col || !col.listEl) return false;
+        if (this._cvFocusedId !== col.id) return false;
         if (document.hidden || col._atBottom === false) return false;
         if (this.unreadCounts && (this.unreadCounts.get(key) || 0) > 0) {
             if (typeof this.clearUnreadCount === 'function') this.clearUnreadCount(key);
@@ -190,7 +191,8 @@ Object.assign(NYM.prototype, {
     },
 
     _cvSeedDefaults() {
-        const descs = [{ type: 'channel', channel: 'nymchat', geohash: 'nymchat' }];
+        const pmOnly = this.settings && this.settings.groupChatPMOnlyMode;
+        const descs = pmOnly ? [] : [{ type: 'channel', channel: 'nymchat', geohash: 'nymchat' }];
         const pm = this._cvMostRecent(this.pmConversations);
         if (pm) descs.push({ type: 'pm', pubkey: pm.key, nym: pm.val.nym });
         const grp = this._cvMostRecent(this.groupConversations);
@@ -212,6 +214,7 @@ Object.assign(NYM.prototype, {
 
     cvAddColumn(desc, opts = {}) {
         const { render = true, save = true, focus = true } = opts;
+        if (this.settings && this.settings.groupChatPMOnlyMode && desc && desc.type === 'channel') return;
         const key = this._cvColKey(desc);
         if (!key) return;
         const existing = this._cvColumns.find(c => c.key === key);
@@ -765,7 +768,7 @@ Object.assign(NYM.prototype, {
     _cvAvailableConversations() {
         const open = new Set(this._cvColumns.map(c => c.key));
         const out = [];
-        if (this.channels) {
+        if (this.channels && !(this.settings && this.settings.groupChatPMOnlyMode)) {
             for (const [, ch] of this.channels) {
                 const desc = { type: 'channel', channel: ch.channel, geohash: ch.geohash || '' };
                 if (open.has(this._cvColKey(desc))) continue;

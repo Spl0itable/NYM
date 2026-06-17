@@ -3794,6 +3794,45 @@ Object.assign(NYM.prototype, {
     },
 
     applyGroupChatPMOnlyMode(enabled) {
+        // Restrict relay connections to the default list (drop geo + discovered)
+        if (enabled) {
+            if (typeof this.stopGeoRelayKeepAlive === 'function') this.stopGeoRelayKeepAlive();
+            if (this.useRelayProxy) {
+                if (this._isAnyPoolOpen()) this._poolSendRelayConfig();
+            } else {
+                const keepRelays = new Set(this.defaultRelays);
+                for (const [url, relay] of this.relayPool) {
+                    if (!keepRelays.has(url) && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        relay.ws.close();
+                        this.relayPool.delete(url);
+                    }
+                }
+                this.currentGeoRelays.clear();
+                this.geoRelayConnections.clear();
+                this.updateConnectionStatus();
+            }
+        } else {
+            if (this.useRelayProxy) {
+                if (this._isAnyPoolOpen()) this._poolSendRelayConfig();
+            } else if (!this.settings.lowDataMode) {
+                this.geoRelays.forEach((relay, index) => {
+                    const relayUrl = relay.url;
+                    if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
+                        setTimeout(() => {
+                            this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
+                                const r = this.relayPool.get(relayUrl);
+                                if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
+                                    this.subscribeToSingleRelay(relayUrl);
+                                    this.updateConnectionStatus();
+                                }
+                            });
+                        }, index * 50);
+                    }
+                });
+                this.discoverRelaysViaNip66().then(() => this.retryDiscoveredRelays());
+            }
+        }
+
         // Hide or show the channels section in the sidebar
         const channelsSection = document.querySelector('#channelList')?.closest('.nav-section');
         if (channelsSection) {
@@ -3801,6 +3840,12 @@ Object.assign(NYM.prototype, {
         }
 
         if (enabled) {
+            // Drop any public-channel columns from the columns view
+            if (this._cvActive && Array.isArray(this._cvColumns)) {
+                for (const col of [...this._cvColumns]) {
+                    if (col.type === 'channel') this.cvRemoveColumn(col.id);
+                }
+            }
             // Navigate to the latest PM/group chat, or show empty state
             this.navigateToLatestPMOrGroup();
         } else {
