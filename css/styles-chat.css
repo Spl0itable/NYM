@@ -1421,7 +1421,7 @@ body.chat-bubbles .read-more-btn {
     padding: 8px 12px;
     margin-bottom: 8px;
     background: var(--bg-tertiary);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
     border: 1px solid var(--glass-border);
     box-shadow: var(--shadow-lg);
     animation: quoteSlideIn 0.2s ease-out;
@@ -1505,7 +1505,7 @@ body.chat-bubbles .read-more-btn {
     padding: 8px 12px;
     margin-bottom: 8px;
     background: var(--bg-tertiary);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
     border: 1px solid var(--glass-border);
     box-shadow: var(--shadow-lg);
     animation: quoteSlideIn 0.2s ease-out;
