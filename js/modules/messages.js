@@ -1470,14 +1470,25 @@ Object.assign(NYM.prototype, {
                 .replace(/&amp;/g, '&');
             const hl = window.NymHighlight;
             const normLang = hl ? hl.normalize(lang) : null;
-            const codeHtml = hl && normLang
-                ? hl.highlight(rawCode, normLang)
-                : trimmedCode;
+            // Highlighting is regex-heavy, so offload it to the highlight worker
+            let codeHtml = trimmedCode;
+            let hlAttr = '';
+            if (hl && normLang) {
+                const key = normLang + '\x00' + rawCode;
+                const cached = this._hlCache && this._hlCache.get(key);
+                if (cached !== undefined && cached !== null) {
+                    codeHtml = cached;
+                } else {
+                    const id = this._queueHighlight(rawCode, normLang, key);
+                    if (id === null) codeHtml = hl.highlight(rawCode, normLang); // no worker: do it inline
+                    else hlAttr = ` data-hl-id="${id}"`;
+                }
+            }
             const langClass = normLang ? ` class="language-${normLang}"` : '';
             const langLabel = normLang ? `<span class="code-lang-label">${normLang}</span>` : '';
             const encodedRaw = btoa(unescape(encodeURIComponent(rawCode)));
             const idx = codePlaceholders.length;
-            codePlaceholders.push(`<div class="code-block-wrapper">${langLabel}<pre><code${langClass}>${codeHtml}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" data-action="codeBlockCopy">Copy</button></div>`);
+            codePlaceholders.push(`<div class="code-block-wrapper">${langLabel}<pre><code${langClass}${hlAttr}>${codeHtml}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" data-action="codeBlockCopy">Copy</button></div>`);
             return `\uFDD0${idx}\uFDD1`;
         };
         formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
@@ -3815,6 +3826,93 @@ Object.assign(NYM.prototype, {
         if (!key) return undefined;
         this._ensureMsgVerifyLoaded();
         return this._msgVerifyStatus.get(key);
+    },
+
+    // Off-main-thread syntax highlighting
+    _getHighlightWorker() {
+        if (this._hlWorkerFailed) return null;
+        if (this._hlWorker) return this._hlWorker;
+        if (typeof Worker !== 'function') { this._hlWorkerFailed = true; return null; }
+        try {
+            const w = new Worker('/js/highlight-worker.js');
+            w.onmessage = (e) => this._onHighlightResult(e.data || {});
+            w.onerror = () => this._dropHighlightWorker();
+            w.onmessageerror = () => this._dropHighlightWorker();
+            this._hlWorker = w;
+            this._hlSeq = 0;
+            this._hlPostSeq = 0;
+            this._hlCache = new Map();      // key -> highlighted html
+            this._hlKeyIds = new Map();     // key -> Set(domId) awaiting swap
+            this._hlInflight = new Set();   // keys currently posted to the worker
+            this._hlPosts = new Map();      // postSeq -> key
+            return w;
+        } catch (_) { this._hlWorkerFailed = true; return null; }
+    },
+
+    // Queues a code block for worker highlighting. Returns a DOM id to stamp on
+    // the <code> element, or null when no worker is available (caller highlights
+    // inline). Identical blocks already in flight piggyback on the one request.
+    _queueHighlight(rawCode, normLang, key) {
+        const w = this._getHighlightWorker();
+        if (!w) return null;
+        const id = ++this._hlSeq;
+        let ids = this._hlKeyIds.get(key);
+        if (!ids) { ids = new Set(); this._hlKeyIds.set(key, ids); }
+        ids.add(id);
+        if (!this._hlInflight.has(key)) {
+            const seq = ++this._hlPostSeq;
+            this._hlPosts.set(seq, key);
+            this._hlInflight.add(key);
+            try {
+                w.postMessage({ seq, code: rawCode, lang: normLang });
+            } catch (_) {
+                this._hlPosts.delete(seq);
+                this._hlInflight.delete(key);
+                this._hlKeyIds.delete(key);
+                this._dropHighlightWorker();
+                return null;
+            }
+        }
+        return id;
+    },
+
+    _onHighlightResult(d) {
+        const key = this._hlPosts && this._hlPosts.get(d.seq);
+        if (key === undefined) return;
+        this._hlPosts.delete(d.seq);
+        this._hlInflight.delete(key);
+        const ids = this._hlKeyIds.get(key);
+        this._hlKeyIds.delete(key);
+        if (d.html == null) return; // worker couldn't highlight; leave plain text
+        this._hlCacheSet(key, d.html);
+        if (!ids) return;
+        for (const id of ids) {
+            const nodes = document.querySelectorAll('code[data-hl-id="' + id + '"]');
+            for (const n of nodes) {
+                n.innerHTML = d.html;
+                n.removeAttribute('data-hl-id');
+            }
+        }
+    },
+
+    _hlCacheSet(key, html) {
+        this._hlCache.set(key, html);
+        if (this._hlCache.size > 400) {
+            let drop = this._hlCache.size - 300;
+            for (const k of this._hlCache.keys()) {
+                if (drop-- <= 0) break;
+                this._hlCache.delete(k);
+            }
+        }
+    },
+
+    _dropHighlightWorker() {
+        this._hlWorkerFailed = true;
+        try { if (this._hlWorker) this._hlWorker.terminate(); } catch (_) { }
+        this._hlWorker = null;
+        if (this._hlKeyIds) this._hlKeyIds.clear();
+        if (this._hlInflight) this._hlInflight.clear();
+        if (this._hlPosts) this._hlPosts.clear();
     },
 
 });

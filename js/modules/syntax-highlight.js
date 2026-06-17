@@ -190,5 +190,7 @@
         return highlightGeneric(code, l);
     }
 
-    window.NymHighlight = { highlight: highlight, normalize: normalizeLang };
+    // Attach to whichever global is available so the same code runs both on the
+    // main thread (window) and inside the highlight Web Worker (self).
+    (typeof self !== 'undefined' ? self : window).NymHighlight = { highlight: highlight, normalize: normalizeLang };
 })();

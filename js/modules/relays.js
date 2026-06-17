@@ -3936,53 +3936,72 @@ Object.assign(NYM.prototype, {
         return ok === true;
     },
 
+    // Lazily spins up a pool of verify workers
     _getVerifyWorker() {
         if (this._verifyWorkerFailed) return null;
-        if (this._verifyWorker) return this._verifyWorker;
+        if (this._verifyPool) return this._verifyPool.length ? this._verifyPool : null;
         if (typeof Worker !== 'function') {
             this._verifyWorkerFailed = true;
             return null;
         }
-        try {
-            const w = new Worker('/js/verify-worker.js');
-            this._verifyWorkerSeq = 0;
-            this._verifyWorkerPending = new Map();
+        this._verifyWorkerSeq = 0;
+        this._verifyWorkerPending = new Map();
+        this._verifyPool = [];
+        const n = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, 4));
+        for (let i = 0; i < n; i++) {
+            let w;
+            try { w = new Worker('/js/verify-worker.js'); }
+            catch (_) { continue; }
+            const rec = { w, busy: 0 };
             w.onmessage = (e) => {
                 const d = e.data || {};
-                const resolve = this._verifyWorkerPending.get(d.seq);
-                if (resolve) {
+                const p = this._verifyWorkerPending.get(d.seq);
+                if (p) {
                     this._verifyWorkerPending.delete(d.seq);
-                    resolve(d.ok === true);
+                    rec.busy--;
+                    p.resolve(d.ok === true);
                 }
             };
-            // On worker failure, resolve pending checks with null so callers
-            // fall back to sync verification
-            w.onerror = () => {
-                this._verifyWorkerFailed = true;
-                this._verifyWorker = null;
-                const pend = this._verifyWorkerPending;
-                this._verifyWorkerPending = new Map();
-                try { w.terminate(); } catch (_) { }
-                for (const resolve of pend.values()) resolve(null);
-            };
-            this._verifyWorker = w;
-            return w;
-        } catch (_) {
-            this._verifyWorkerFailed = true;
-            return null;
+            // On worker failure, drop just that worker and resolve its in-flight
+            // checks with null so callers fall back to sync verification.
+            w.onerror = () => this._dropVerifyWorker(rec);
+            w.onmessageerror = () => this._dropVerifyWorker(rec);
+            this._verifyPool.push(rec);
         }
+        if (!this._verifyPool.length) { this._verifyWorkerFailed = true; return null; }
+        return this._verifyPool;
+    },
+
+    _dropVerifyWorker(rec) {
+        const pool = this._verifyPool;
+        if (pool) {
+            const i = pool.indexOf(rec);
+            if (i >= 0) pool.splice(i, 1);
+        }
+        for (const [seq, p] of this._verifyWorkerPending) {
+            if (p.rec !== rec) continue;
+            this._verifyWorkerPending.delete(seq);
+            p.resolve(null);
+        }
+        try { rec.w.terminate(); } catch (_) { }
+        if (pool && !pool.length) this._verifyWorkerFailed = true;
     },
 
     _workerVerify(event) {
         return new Promise((resolve) => {
-            const w = this._getVerifyWorker();
-            if (!w) { resolve(null); return; }
+            const pool = this._getVerifyWorker();
+            if (!pool || !pool.length) { resolve(null); return; }
+            // Route to the least-busy worker to spread the burst evenly.
+            let rec = pool[0];
+            for (const r of pool) if (r.busy < rec.busy) rec = r;
             const seq = ++this._verifyWorkerSeq;
-            this._verifyWorkerPending.set(seq, resolve);
+            this._verifyWorkerPending.set(seq, { resolve, rec });
+            rec.busy++;
             try {
-                w.postMessage({ seq, event });
+                rec.w.postMessage({ seq, event });
             } catch (_) {
                 this._verifyWorkerPending.delete(seq);
+                rec.busy--;
                 resolve(null);
             }
         });
