@@ -1466,7 +1466,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Circuit">
                     price: 5000,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.16 1.66 21.69 21.69"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Crown">
@@ -1484,7 +1484,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Crown">
                     type: 'nickname-flair',
                     tier: 'legendary',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.16 1.16 21.69 21.69"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Diamond">
@@ -1501,7 +1501,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Diamond">
                     price: 1666,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.46 1.21 21.08 21.08"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Skull">
@@ -1520,7 +1520,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Skull">
                     price: 2500,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0.55 -0.45 22.89 22.89"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Star">
@@ -1535,7 +1535,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Star">
                     price: 2100,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.05 -0.05 24.1 24.1"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Lightning">
@@ -1550,7 +1550,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Lightning">
                     price: 1111,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2.36 3.36 19.28 19.28"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Heart">
@@ -1572,7 +1572,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Heart">
                     type: 'nickname-flair',
                     tier: 'legendary',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2.36 2.36 19.28 19.28"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Mask">
@@ -1591,7 +1591,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Mask">
                     price: 2300,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0.86 0.61 22.29 22.29"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Rocket">
@@ -1609,7 +1609,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Rocket">
                     price: 1900,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.4 1.2 21.2 21.2"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Shield">
@@ -1625,7 +1625,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Shield">
                     price: 1200,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2.96 1.46 18.07 18.07"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Flame">
@@ -1641,7 +1641,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Flame">
                     price: 1400,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0.55 0.55 22.89 22.89"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Snowflake">
@@ -1661,7 +1661,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Snowflake">
                     price: 1600,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2.56 2.38 19.06 19.06"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Moon">
@@ -1677,7 +1677,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Moon">
                     price: 1500,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.05 -0.05 24.1 24.1"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Sun">
@@ -1693,7 +1693,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Sun">
                     price: 900,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="3.57 4.57 16.87 16.87"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Leaf">
@@ -1709,7 +1709,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Leaf">
                     price: 1100,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2.66 2.41 18.67 18.67"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Music">
@@ -1727,7 +1727,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Music">
                     price: 1800,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.05 -0.05 24.1 24.1"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="All-Seeing Eye">
@@ -1744,7 +1744,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="All-Seeing Eye">
                     price: 1000,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.76 1.26 20.48 20.48"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Anchor">
@@ -1762,7 +1762,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Anchor">
                     price: 3300,
                     type: 'nickname-flair',
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.16 1.16 21.69 21.69"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Ruby">
@@ -1960,7 +1960,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Hologram Bubble">
                     tier: 'legendary',
                     maxSupply: 100,
                     icon: `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.05 -0.3 24.1 24.1"
 width="1em" height="1em" fill="none" stroke="currentColor"
 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
 vector-effect="non-scaling-stroke" role="img" aria-label="Genesis">
