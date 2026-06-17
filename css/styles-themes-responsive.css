@@ -1065,7 +1065,8 @@ body.light-mode .gif-search-input {
 }
 
 body.light-mode .quote-preview {
-    background: rgba(0, 0, 0, 0.03);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+    border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .quote-preview-close:hover {
@@ -1074,7 +1075,8 @@ body.light-mode .quote-preview-close:hover {
 }
 
 body.light-mode .edit-preview {
-    background: rgba(0, 0, 0, 0.03);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+    border-color: rgba(0, 0, 0, 0.08);
 }
 
 body.light-mode .search-input:focus,

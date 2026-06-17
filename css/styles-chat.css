@@ -1410,15 +1410,20 @@ body.chat-bubbles .read-more-btn {
 }
 
 .quote-preview {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    z-index: 10;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    margin-bottom: 6px;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    margin-bottom: 8px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
     border: 1px solid var(--glass-border);
-    border-bottom: none;
+    box-shadow: var(--shadow-lg);
     animation: quoteSlideIn 0.2s ease-out;
 }
 
@@ -1489,15 +1494,20 @@ body.chat-bubbles .read-more-btn {
 }
 
 .edit-preview {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    z-index: 10;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    margin-bottom: 6px;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    margin-bottom: 8px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
     border: 1px solid var(--glass-border);
-    border-bottom: none;
+    box-shadow: var(--shadow-lg);
     animation: quoteSlideIn 0.2s ease-out;
 }
 

@@ -718,7 +718,7 @@ html.nym-needs-setup #setupModal {
 .autocomplete-dropdown,
 .emoji-autocomplete {
     position: absolute;
-    bottom: 100%;
+    bottom: calc(100% + var(--ac-offset, 0px));
     left: 0;
     right: 0;
     background: var(--bg-tertiary);
@@ -848,7 +848,7 @@ html.nym-needs-setup #setupModal {
 
 .command-palette {
     position: absolute;
-    bottom: 100%;
+    bottom: calc(100% + var(--ac-offset, 0px));
     left: 0;
     right: 0;
     background: rgba(20, 20, 35, 0.9);
