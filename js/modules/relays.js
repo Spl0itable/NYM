@@ -1900,6 +1900,23 @@ Object.assign(NYM.prototype, {
                 }
             }
         }
+
+        // Backstop for the default relay list
+        const DEFAULT_MISSING_MS = 90000;
+        const connectedSet = new Set(this.poolConnectedRelays || []);
+        if (!this._defaultRelayMissingSince) this._defaultRelayMissingSince = new Map();
+        let forceResend = false;
+        for (const url of (this.defaultRelays || [])) {
+            if (connectedSet.has(url)) { this._defaultRelayMissingSince.delete(url); continue; }
+            const first = this._defaultRelayMissingSince.get(url) || now;
+            this._defaultRelayMissingSince.set(url, first);
+            if (now - first > DEFAULT_MISSING_MS) forceResend = true;
+        }
+        if (forceResend) {
+            this._defaultRelayMissingSince.clear();
+            for (const p of this.poolSockets) p.relays = null;
+            this._poolSendRelayConfigNow();
+        }
     },
 
     _startPoolShardHealthCheck() {
@@ -2437,7 +2454,6 @@ Object.assign(NYM.prototype, {
         const filters = [];
         if (!this.settings.groupChatPMOnlyMode) {
             filters.push({ kinds: [20000], since: since24h });
-            filters.push({ kinds: [23333], since: since24h });
         }
         return filters;
     },
@@ -2658,6 +2674,10 @@ Object.assign(NYM.prototype, {
             if (current) channels.add(current);
             if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => channels.add(k));
             channels.forEach(name => this.channelRestoreFromD1(name).catch(() => { }));
+        }
+
+        if (typeof this._emojiRestoreFromD1 === 'function') {
+            this._emojiRestoreFromD1().catch(() => { });
         }
     },
 

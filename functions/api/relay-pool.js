@@ -109,6 +109,12 @@ export async function onRequest(context) {
   const ARCHIVE_SEEN_HOST = 'https://nymchat-archive.invalid';
   const ARCHIVE_SEEN_TTL = 600;
 
+  // NIP-30 emoji lists (kind 30030 packs, 10030 user lists)
+  const EMOJI_EVENT_MAX = 64 * 1024;
+  const emojiBuf = new Map();     // coord -> { coord, kind, pubkey, d, created_at, json }
+  let emojiSchemaReady = false;
+  const isArchivableEmojiKind = (k) => k === 30030 || k === 10030;
+
   function archiveSeenCache() {
     try { return (typeof caches !== 'undefined' && caches.default) ? caches.default : null; }
     catch { return null; }
@@ -154,6 +160,7 @@ export async function onRequest(context) {
       if (serverOpen && server.readyState === 1) {
         server.send(JSON.stringify(['POOL:PING', Date.now()]));
         runArchive(flushArchive());
+        runArchive(flushEmojiArchive());
       } else {
         clearInterval(keepaliveTimer);
         keepaliveTimer = null;
@@ -663,6 +670,69 @@ export async function onRequest(context) {
     }
   }
 
+  function bufferEmoji(coord, kind, pubkey, dTag, createdAt, objJson) {
+    if (!coord || !objJson || objJson.length > EMOJI_EVENT_MAX) return;
+    const existing = emojiBuf.get(coord);
+    if (existing && existing.created_at >= createdAt) return;
+    emojiBuf.set(coord, { coord, kind, pubkey, d: dTag || null, created_at: createdAt || 0, json: objJson });
+    if (emojiBuf.size >= 200) runArchive(flushEmojiArchive());
+  }
+
+  function emojiCoord(kind, pubkey, dTag) {
+    if (!pubkey) return null;
+    return kind + ':' + pubkey + ':' + (kind === 30030 ? (dTag || '') : '');
+  }
+
+  function archiveInboundEmoji(raw, kind) {
+    if (!archiveEnabled) return;
+    const pubkey = extractEventStringField(raw, 'pubkey');
+    const coord = emojiCoord(kind, pubkey, extractTagValue(raw, 'd'));
+    if (!coord) return;
+    const objJson = extractEventObjectJson(raw);
+    if (!objJson) return;
+    bufferEmoji(coord, kind, pubkey, extractTagValue(raw, 'd'), extractEventCreatedAt(raw), objJson);
+  }
+
+  function archiveOutgoingEmoji(ev) {
+    if (!archiveEnabled || !ev || !isArchivableEmojiKind(ev.kind) || typeof ev.pubkey !== 'string') return;
+    const tags = Array.isArray(ev.tags) ? ev.tags : [];
+    const dTag = (() => { const t = tags.find((x) => Array.isArray(x) && x[0] === 'd'); return t ? t[1] : null; })();
+    const coord = emojiCoord(ev.kind, ev.pubkey, dTag);
+    if (!coord) return;
+    bufferEmoji(coord, ev.kind, ev.pubkey, dTag, typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
+  }
+
+  async function ensureEmojiSchema() {
+    if (emojiSchemaReady) return;
+    await CHANNELS_DB.prepare(
+      'CREATE TABLE IF NOT EXISTS emoji_packs (coord TEXT PRIMARY KEY, kind INTEGER NOT NULL, ' +
+      'pubkey TEXT NOT NULL, d TEXT, created_at INTEGER NOT NULL, json TEXT NOT NULL, stored_at INTEGER NOT NULL)'
+    ).run();
+    emojiSchemaReady = true;
+  }
+
+  // Newest-wins upsert keyed by replaceable-event coordinate, gated on a valid
+  // id hash + schnorr signature so forged emoji lists can't be persisted.
+  async function flushEmojiArchive() {
+    if (!archiveEnabled || emojiBuf.size === 0) return;
+    const rows = Array.from(emojiBuf.values()).filter((r) => archiveEventValid(r.json));
+    emojiBuf.clear();
+    if (rows.length === 0) return;
+    try { await ensureEmojiSchema(); } catch { return; }
+    const stmt = CHANNELS_DB.prepare(
+      'INSERT INTO emoji_packs (coord, kind, pubkey, d, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(coord) DO UPDATE SET kind = excluded.kind, d = excluded.d, created_at = excluded.created_at, ' +
+      'json = excluded.json, stored_at = excluded.stored_at WHERE emoji_packs.created_at < excluded.created_at'
+    );
+    const now = Date.now();
+    for (let i = 0; i < rows.length; i += ARCHIVE_BATCH) {
+      const chunk = rows.slice(i, i + ARCHIVE_BATCH).map(
+        (r) => stmt.bind(r.coord, r.kind, r.pubkey, r.d, r.created_at, r.json, now)
+      );
+      try { await CHANNELS_DB.batch(chunk); } catch { /* best-effort */ }
+    }
+  }
+
   // Mirror of the client-side _looksLikeRandomToken heuristic.
   // Recognises nanoid-style spam strings like "IBLm9lyTuP", "AJvgLLPASR".
   function looksLikeRandomToken(token) {
@@ -1056,6 +1126,7 @@ export async function onRequest(context) {
           try { ws.close(); } catch { /* noop */ }
           upstreams.delete(relayUrl);
           releaseSlot();
+          if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
           schedulePoolStatus();
         }
       }, 8000);
@@ -1101,6 +1172,7 @@ export async function onRequest(context) {
           if (archiveEnabled) {
             const archiveKind = extractEventKind(raw);
             if (isArchivableChannelKind(archiveKind)) archiveInboundEvent(raw, archiveKind, eventId);
+            else if (isArchivableEmojiKind(archiveKind)) archiveInboundEmoji(raw, archiveKind);
           }
           const relayTail = ',"' + relayUrl + '"]';
           if (childToParent.size > 0) {
@@ -1270,6 +1342,7 @@ export async function onRequest(context) {
           scheduleReconnect(relayUrl, type);
         } else {
           trackRelayFailure(relayUrl);
+          if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
         }
       });
 
@@ -1282,6 +1355,7 @@ export async function onRequest(context) {
         info.status = 'failed';
         trackRelayFailure(relayUrl);
         upstreams.delete(relayUrl);
+        if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
         schedulePoolStatus();
       });
     } catch {
@@ -1290,6 +1364,7 @@ export async function onRequest(context) {
       trackRelayFailure(relayUrl);
       upstreams.delete(relayUrl);
       releaseSlot();
+      if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
       schedulePoolStatus();
     }
   }
@@ -1374,7 +1449,7 @@ export async function onRequest(context) {
             }
           } else if (msgType === 'EVENT') {
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
-            if (archiveEnabled) archiveOutgoingEvent(msg[1]);
+            if (archiveEnabled) { archiveOutgoingEvent(msg[1]); archiveOutgoingEmoji(msg[1]); }
             sendToUpstreams(rawMsg, (url) => {
               if (!relayAllowedForKind(url, evtKind)) return false;
               if (evtKind < 0) return true;
@@ -1520,6 +1595,10 @@ export async function onRequest(context) {
     if (archiveEnabled && archiveBuf.size > 0) {
       const finalFlush = flushArchive().catch(() => { });
       if (context && context.waitUntil) { try { context.waitUntil(finalFlush); } catch { /* noop */ } }
+    }
+    if (archiveEnabled && emojiBuf.size > 0) {
+      const finalEmojiFlush = flushEmojiArchive().catch(() => { });
+      if (context && context.waitUntil) { try { context.waitUntil(finalEmojiFlush); } catch { /* noop */ } }
     }
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
     connectionQueue = [];

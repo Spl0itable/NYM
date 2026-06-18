@@ -194,6 +194,33 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Hydrate the deduped custom-emoji set from the D1 archive
+    async _emojiRestoreFromD1() {
+        if (!this._getApiHost || !this._getApiHost()) return;
+        if (typeof this._storageApiStream !== 'function') return;
+        const now = Date.now();
+        if (this._emojiD1FetchedAt && now - this._emojiD1FetchedAt < 600000) return;
+        this._emojiD1FetchedAt = now;
+        const events = [];
+        try {
+            const resp = await this._storageApiStream('emoji-get', {}, false);
+            await this._readNdjsonStream(resp, (ev) => events.push(ev));
+        } catch (_) {
+            this._emojiD1FetchedAt = 0;
+            return;
+        }
+        let sliceStart = Date.now();
+        for (let i = 0; i < events.length; i++) {
+            if (await this._verifyRelayEventAsync(events[i])) {
+                try { await this.handleEvent(events[i]); } catch (_) { }
+            }
+            if (Date.now() - sliceStart > 16 && i + 1 < events.length && typeof this._yieldToIdle === 'function') {
+                await this._yieldToIdle();
+                sliceStart = Date.now();
+            }
+        }
+    },
+
     // Ingest NIP-30 "emoji" tags from any incoming event
     ingestEmojiTags(tags) {
         if (!Array.isArray(tags)) return;

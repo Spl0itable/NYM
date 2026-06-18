@@ -984,6 +984,52 @@ async function handleChannelAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
+var EMOJI_READ_TTL = 300;
+
+// Sserve the deduped NIP-30 emoji set (kind 30030 packs)
+async function handleEmojiAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  };
+  if (!hasD1(env.DB_CHANNELS)) return json({ error: "Emoji storage is not configured (missing DB_CHANNELS binding)." }, 503);
+
+  if (body.action === "emoji-get") {
+    var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS };
+    var userPk = (typeof body.pubkey === "string" && /^[0-9a-f]{64}$/i.test(body.pubkey)) ? body.pubkey.toLowerCase() : null;
+
+    var packsBody = await readCacheGetRaw("/emoji-packs");
+    if (packsBody === null) {
+      var packRows = [];
+      try {
+        packRows = (await replica(env.DB_CHANNELS).prepare(
+          "SELECT json FROM emoji_packs WHERE kind = 30030 ORDER BY created_at DESC LIMIT 500"
+        ).all()).results || [];
+      } catch (e) { packRows = []; }
+      packsBody = packRows.map(function (r) { return r.json; }).join("\n");
+      if (packsBody) packsBody += "\n";
+      readCachePutRaw(context, "/emoji-packs", packsBody, "application/x-ndjson", EMOJI_READ_TTL);
+    }
+
+    var userLine = "";
+    if (userPk) {
+      try {
+        var urow = await replica(env.DB_CHANNELS).prepare(
+          "SELECT json FROM emoji_packs WHERE coord = ?"
+        ).bind("10030:" + userPk + ":").first();
+        if (urow && urow.json) userLine = urow.json + "\n";
+      } catch (e) { userLine = ""; }
+    }
+
+    return new Response((packsBody || "") + userLine, { status: 200, headers: ndjsonHeaders });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
 function zapIsValidReceipt(ev) {
   try {
     if (!ev || typeof ev !== "object") return false;
@@ -1165,6 +1211,17 @@ async function routeStorageAction(context, body) {
   if (body && typeof body.action === "string" && body.action.indexOf("channel-") === 0) {
     try {
       return await handleChannelAction(context, body);
+    } catch (e) {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("emoji-") === 0) {
+    try {
+      return await handleEmojiAction(context, body);
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
