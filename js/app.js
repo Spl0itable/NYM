@@ -538,16 +538,6 @@ class NYM {
         this.relayList = [];
         this.maxRelaysForReq = 1000;
         this.relayTimeout = 2000;
-        this.nip66MaxNewRelays = 1000;
-        this.monitorRelays = [
-            'wss://relay.nostr.watch',
-            'wss://history.nostr.watch',
-            'wss://relaypag.es'
-        ];
-        this.relayDiscoveryInterval = 24 * 3600 * 1000;
-        this._nip66Running = false;
-        this._nip66Done = false;
-        this._nip66LastRun = 0;
         this.eventDeduplication = new Map();
         this._shardLastSeenAt = new Map();
         this._reconnectingShards = new Set();
@@ -4236,7 +4226,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.503';
+const NYMCHAT_VERSION = 'v3.72.504';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 

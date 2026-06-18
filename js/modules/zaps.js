@@ -580,7 +580,6 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) throw new Error('Bot API unavailable');
-            const auth = await this._signBotAuth('create-invoice');
             const isPro = this._botCreditTier === 'pro';
             const credits = this._botCreditsForSatsTier(amount);
             const giftNym = this.currentZapTarget.giftRecipientNym;
@@ -592,17 +591,12 @@ Object.assign(NYM.prototype, {
                 : `Nymbot ${isPro ? 'Pro ' : ''}credits — ${creditWord}`;
             let zapRequest = null;
             try { zapRequest = await this.createZapRequest(amount, purchaseComment); } catch (e) { }
-            const reqBody = { action: 'create-invoice', pubkey: this.pubkey, auth, amountSats: amount, zapRequest, comment: purchaseComment };
-            if (isPro) reqBody.tier = 'pro';
+            const reqExtra = { amountSats: amount, zapRequest, comment: purchaseComment };
+            if (isPro) reqExtra.tier = 'pro';
             const giftPk = this.currentZapTarget.giftRecipientPubkey;
-            if (giftPk && giftPk !== this.pubkey) reqBody.recipientPubkey = giftPk;
-            const resp = await fetch(`https://${apiHost}/api/bot`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(reqBody)
-            });
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok || !data || data.error || !data.pr) {
+            if (giftPk && giftPk !== this.pubkey) reqExtra.recipientPubkey = giftPk;
+            const { data } = await this._botMoneyRequest('create-invoice', reqExtra);
+            if (!data || data.error || !data.pr) {
                 throw new Error((data && data.error) || 'Failed to generate invoice');
             }
             const invoice = { pr: data.pr, verify: data.verify, serverVerify: !!data.serverVerify, amount, invoiceId: data.invoiceId };
@@ -694,13 +688,7 @@ Object.assign(NYM.prototype, {
     async _checkBotInvoicePaid(invoiceId) {
         const apiHost = this._getApiHost();
         if (!apiHost) return false;
-        const auth = await this._signBotAuth('check-invoice');
-        const resp = await fetch(`https://${apiHost}/api/bot`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'check-invoice', pubkey: this.pubkey, auth, invoiceId })
-        });
-        const data = await resp.json().catch(() => ({}));
+        const { data } = await this._botMoneyRequest('check-invoice', { invoiceId });
         return !!(data && data.paid);
     },
 
@@ -750,21 +738,16 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return false;
-            const auth = await this._signBotAuth('claim-credits');
-            const reqBody = { action: 'claim-credits', pubkey: this.pubkey, auth, invoiceId };
-            if (receipt) reqBody.receipt = receipt;
-            if (this.nym) reqBody.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
+            const reqExtra = { invoiceId };
+            if (receipt) reqExtra.receipt = receipt;
+            if (this.nym) reqExtra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
             let data = null, status = 0;
             for (let attempt = 0; attempt < 5; attempt++) {
-                const resp = await fetch(`https://${apiHost}/api/bot`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(reqBody)
-                });
-                status = resp.status;
-                data = await resp.json().catch(() => ({}));
-                if (resp.ok && data && !data.error) break;
-                if (resp.status === 402) { await new Promise(r => setTimeout(r, 2000)); continue; }
+                const res = await this._botMoneyRequest('claim-credits', reqExtra);
+                status = res.status;
+                data = res.data || {};
+                if (status >= 200 && status < 300 && data && !data.error) break;
+                if (status === 402) { await new Promise(r => setTimeout(r, 2000)); continue; }
                 break;
             }
             if (data && typeof data.credited === 'number') {

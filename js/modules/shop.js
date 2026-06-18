@@ -2,10 +2,156 @@
 
 Object.assign(NYM.prototype, {
 
-    // POST an action to the storage worker. Signs a NIP-27235 auth event.
+    _apiWsUrl() {
+        const host = this._getApiHost();
+        return host ? `wss://${host}/api` : null;
+    },
+
+    // One persistent, authenticated WebSocket carries every D1 storage op so the
+    // client doesn't open an HTTP request (and sign an auth event) per fetch/put.
+    _ensureApiSocket() {
+        const s = this._apiSock;
+        if (s && s.ws && s.ws.readyState === WebSocket.OPEN && s.authed) return Promise.resolve(s);
+        if (this._apiSockPromise) return this._apiSockPromise;
+
+        // After a failure, skip the socket (straight to HTTP) for a cooldown so a
+        // broken endpoint doesn't add a connect-timeout delay to every call.
+        if (this._apiSockFailedUntil && Date.now() < this._apiSockFailedUntil) {
+            return Promise.reject(new Error('api socket cooling down'));
+        }
+
+        const url = this._apiWsUrl();
+        if (!url || !this.pubkey) return Promise.reject(new Error('api socket unavailable'));
+
+        this._apiSockPromise = (async () => {
+            const auth = await this._signBotAuth('api-ws', 'WS');
+            return await new Promise((resolve, reject) => {
+                let ws;
+                try { ws = new WebSocket(url); } catch (e) { this._apiSockPromise = null; return reject(e); }
+                const sock = { ws, authed: false, pending: new Map(), nextId: 1 };
+                let settled = false;
+                const fail = (err) => {
+                    for (const [, p] of sock.pending) { try { p.reject(err); } catch (_) { } }
+                    sock.pending.clear();
+                    if (this._apiSock === sock) this._apiSock = null;
+                    // Cool down only on connect/auth failures, not a clean post-auth drop.
+                    if (!sock.authed) this._apiSockFailedUntil = Date.now() + 30000;
+                    if (!settled) { settled = true; this._apiSockPromise = null; reject(err); }
+                };
+                const timer = setTimeout(() => { try { ws.close(); } catch (_) { } fail(new Error('api socket timeout')); }, 12000);
+
+                ws.onopen = () => {
+                    try { ws.send(JSON.stringify(['AUTH', auth])); }
+                    catch (e) { clearTimeout(timer); fail(e); }
+                };
+                ws.onmessage = (event) => {
+                    let msg;
+                    try { msg = JSON.parse(event.data); } catch (_) { return; }
+                    if (!Array.isArray(msg)) return;
+                    const t = msg[0];
+                    if (t === 'AUTH_OK') {
+                        clearTimeout(timer);
+                        sock.authed = true;
+                        this._apiSock = sock;
+                        this._apiSockPromise = null;
+                        this._apiSockFailedUntil = 0;
+                        settled = true;
+                        resolve(sock);
+                        return;
+                    }
+                    if (t === 'AUTH_ERR') {
+                        clearTimeout(timer);
+                        try { ws.close(); } catch (_) { }
+                        fail(new Error(msg[1] || 'Authentication failed'));
+                        return;
+                    }
+                    const p = sock.pending.get(msg[1]);
+                    if (!p) return;
+                    if (t === 'RES') {
+                        sock.pending.delete(msg[1]);
+                        const status = msg[2], data = msg[3] || {};
+                        if (p.raw) {
+                            p.resolve({ status, data });
+                        } else if (status >= 400 || (data && data.error)) {
+                            try { p.reject(new Error((data && data.error) || `Request failed (${status})`)); } catch (_) { }
+                        } else {
+                            p.resolve(data);
+                        }
+                    } else if (t === 'ITEM') {
+                        if (p.items) p.items.push(msg[2]);
+                    } else if (t === 'END') {
+                        sock.pending.delete(msg[1]);
+                        const hdrs = msg[3] || {};
+                        p.resolve({
+                            _wsItems: p.items || [],
+                            headers: { get: (n) => { const v = hdrs[String(n).toLowerCase()]; return v === undefined ? null : v; } }
+                        });
+                    }
+                };
+                ws.onclose = () => { clearTimeout(timer); fail(new Error('api socket closed')); };
+                ws.onerror = () => { clearTimeout(timer); fail(new Error('api socket error')); };
+            });
+        })();
+        return this._apiSockPromise;
+    },
+
+    // opts.stream collects ndjson items; opts.raw resolves { status, data }
+    // instead of rejecting on an error status (callers that branch on status).
+    _apiSocketSend(action, extra, opts) {
+        opts = opts || {};
+        const sock = this._apiSock;
+        if (!sock || !sock.ws || sock.ws.readyState !== WebSocket.OPEN || !sock.authed) {
+            return Promise.reject(new Error('api socket not ready'));
+        }
+        const id = sock.nextId++;
+        return new Promise((resolve, reject) => {
+            const p = { resolve, reject };
+            if (opts.stream) p.items = [];
+            if (opts.raw) p.raw = true;
+            const timer = setTimeout(() => {
+                if (sock.pending.delete(id)) reject(new Error('api request timeout'));
+            }, opts.timeout || 45000);
+            p.resolve = (v) => { clearTimeout(timer); resolve(v); };
+            p.reject = (e) => { clearTimeout(timer); reject(e); };
+            sock.pending.set(id, p);
+            try { sock.ws.send(JSON.stringify(['REQ', id, action, extra || {}])); }
+            catch (e) { sock.pending.delete(id); p.reject(e); }
+        });
+    },
+
+    // Bot/Ledger money op over the socket (WS-first), falling back to a signed
+    // HTTP POST to /api/bot. Returns { status, data } so callers can branch.
+    async _botMoneyRequest(action, extra, opts) {
+        const apiHost = this._getApiHost();
+        if (!apiHost) return { status: 0, data: {} };
+        if (this.pubkey) {
+            try {
+                await this._ensureApiSocket();
+                return await this._apiSocketSend(action, extra, { raw: true, timeout: opts && opts.timeout });
+            } catch (_) { /* fall back to HTTP */ }
+        }
+        const auth = await this._signBotAuth(action);
+        const body = Object.assign({ action, pubkey: this.pubkey, auth }, extra || {});
+        const resp = await fetch(`https://${apiHost}/api/bot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await resp.json().catch(() => ({}));
+        return { status: resp.status, data: data || {} };
+    },
+
+    // Run a storage action over the socket when logged in, falling back to a
+    // one-off HTTP POST (signed per request) if the socket is unavailable.
     async _storageApiRequest(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
+        if (this.pubkey) {
+            try {
+                await this._ensureApiSocket();
+                return await this._apiSocketSend(action, extra);
+            } catch (_) { /* fall back to HTTP */ }
+        }
         const body = Object.assign({ action }, extra || {});
         if (withAuth) {
             if (!this.pubkey) throw new Error('Login required.');
@@ -28,9 +174,17 @@ Object.assign(NYM.prototype, {
         return this._storageApiRequest(action, extra, withAuth);
     },
 
+    // Returns either a fetch Response (HTTP fallback) or a { _wsItems } object;
+    // both are consumed by _readNdjsonStream.
     async _storageApiStream(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
+        if (this.pubkey) {
+            try {
+                await this._ensureApiSocket();
+                return await this._apiSocketSend(action, extra, { stream: true });
+            } catch (_) { /* fall back to HTTP */ }
+        }
         const body = Object.assign({ action }, extra || {});
         if (withAuth) {
             if (!this.pubkey) throw new Error('Login required.');
@@ -52,6 +206,10 @@ Object.assign(NYM.prototype, {
     },
 
     async _readNdjsonStream(resp, onItem) {
+        if (resp && resp._wsItems) {
+            for (const it of resp._wsItems) { try { onItem(it); } catch (_) { } }
+            return;
+        }
         if (!resp || !resp.body) return;
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();

@@ -1638,12 +1638,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return;
-            const auth = await this._signBotAuth('clear-history');
-            await fetch(`https://${apiHost}/api/bot`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'clear-history', pubkey: this.pubkey, auth })
-            });
+            await this._botMoneyRequest('clear-history', {});
         } catch { /* best effort */ }
     },
 
@@ -1919,14 +1914,8 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return;
-            const auth = await this._signBotAuth('transfer-credits');
-            const resp = await fetch(`https://${apiHost}/api/bot`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'transfer-credits', pubkey: this.pubkey, auth, targetPubkey })
-            });
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok || !data || data.error) {
+            const { status, data } = await this._botMoneyRequest('transfer-credits', { targetPubkey });
+            if (status >= 400 || !data || data.error) {
                 this.displaySystemMessage('Transfer failed: ' + ((data && data.error) || 'request failed'));
                 return;
             }
@@ -2411,17 +2400,16 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) { this._setBotTyping(false); return; }
-            const auth = await this._signBotAuth('pm');
             const isFresh = /^\s*!\s*\S/.test(content);
             const proModel = this._getBotProModel();
             // Send only the current message's wrap ID; the worker maintains the
             // ordered thread server-side. fresh (!) tells it to skip history.
-            const reqBody = { action: 'pm', pubkey: this.pubkey, auth, eventId: wrapId, fresh: isFresh };
+            const reqExtra = { eventId: wrapId, fresh: isFresh };
             if (proModel) {
-                reqBody.proModel = proModel.key;
+                reqExtra.proModel = proModel.key;
                 const git = this._getGitConfig();
                 if (git && git.token && git.repo) {
-                    reqBody.git = {
+                    reqExtra.git = {
                         provider: git.provider || 'github',
                         host: git.host || '',
                         token: git.token,
@@ -2431,12 +2419,8 @@ Object.assign(NYM.prototype, {
                     };
                 }
             }
-            const resp = await fetch(`https://${apiHost}/api/bot`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(reqBody)
-            });
-            const data = await resp.json().catch(() => ({}));
+            // Replies (especially Pro models with repo tool calls) can run long.
+            const { status, data } = await this._botMoneyRequest('pm', reqExtra, { timeout: 180000 });
             this._setBotTyping(false);
             this._markBotPMReceipts('read');
             if (data && data.noCredits) {
@@ -2452,7 +2436,7 @@ Object.assign(NYM.prototype, {
                 this.showBotCreditsModal(null, data.pro ? 'pro' : 'standard');
                 return;
             }
-            if (!resp.ok || !data || data.error) {
+            if (status >= 400 || !data || data.error) {
                 this.displaySystemMessage('Nymbot: ' + ((data && data.error) || 'request failed'));
                 return;
             }
@@ -2495,14 +2479,8 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return null;
-            const auth = await this._signBotAuth('balance');
-            const resp = await fetch(`https://${apiHost}/api/bot`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'balance', pubkey: this.pubkey, auth })
-            });
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok || !data || data.error) {
+            const { status, data } = await this._botMoneyRequest('balance', {});
+            if (status >= 400 || !data || data.error) {
                 if (display) this.displaySystemMessage('Nymbot: ' + ((data && data.error) || 'could not check balance'));
                 return null;
             }
@@ -3794,7 +3772,7 @@ Object.assign(NYM.prototype, {
     },
 
     applyGroupChatPMOnlyMode(enabled) {
-        // Restrict relay connections to the default list (drop geo + discovered)
+        // Restrict relay connections to the default list (drop geo)
         if (enabled) {
             if (typeof this.stopGeoRelayKeepAlive === 'function') this.stopGeoRelayKeepAlive();
             if (this.useRelayProxy) {
@@ -3829,7 +3807,6 @@ Object.assign(NYM.prototype, {
                         }, index * 50);
                     }
                 });
-                this.discoverRelaysViaNip66().then(() => this.retryDiscoveredRelays());
             }
         }
 

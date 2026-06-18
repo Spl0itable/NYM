@@ -149,7 +149,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.72.503";
+var NYMCHAT_VERSION = "3.72.504";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -1232,15 +1232,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) {
     return json({ error: "Invalid pubkey" }, 400);
   }
-  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body })) {
-    return json({ error: "Authentication failed" }, 401);
-  }
-  var WRITE_ACTIONS = {
-    "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1, "clear-history": 1
-  };
-  if (WRITE_ACTIONS[body.action]) {
-    var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
-    if (!rp.ok) return json({ error: rp.error }, rp.status);
+  // Over the /api WebSocket the socket is authenticated once and its pubkey
+  // pinned to context._wsAuthedPubkey, so per-request signatures/replay nonces
+  // are skipped; the Ledger DO still enforces money invariants server-side.
+  var wsAuthed = context._wsAuthedPubkey && context._wsAuthedPubkey === userPubkey;
+  if (!wsAuthed) {
+    if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body })) {
+      return json({ error: "Authentication failed" }, 401);
+    }
+    var WRITE_ACTIONS = {
+      "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1, "clear-history": 1
+    };
+    if (WRITE_ACTIONS[body.action]) {
+      var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
+      if (!rp.ok) return json({ error: rp.error }, rp.status);
+    }
   }
 
   if (body.action === "balance") {
@@ -2268,7 +2274,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.72.503 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.72.504 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3112,7 +3118,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.72.503")
+  // Prefix match (e.g. "3.61" matches "3.72.504")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3167,7 +3173,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.72.503", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.72.504", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
@@ -4061,7 +4067,8 @@ async function handleWho(geohash, channelMessages, activeUsers) {
 }
 
 export {
-  onRequest
+  onRequest,
+  handleBotPMAction
 };
 /*! Bundled license information:
 

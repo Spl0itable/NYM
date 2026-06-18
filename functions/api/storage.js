@@ -183,6 +183,14 @@ async function botGenerateInvoice(env, sats, zapRequest, comment) {
   };
 }
 
+// Private-action auth gate. Over the /api WebSocket the connection is
+// authenticated once and its pubkey is pinned to context._wsAuthedPubkey, so
+// per-request signatures are skipped. The HTTP path verifies each request.
+function clientAuthOk(context, body, userPubkey) {
+  if (context && context._wsAuthedPubkey) return context._wsAuthedPubkey === userPubkey;
+  return clientAuthOk(context, body, userPubkey);
+}
+
 async function handleShopAction(context, body, botPrivkey, botPubkey) {
   var env = context.env;
   var json = function (obj, status) {
@@ -259,11 +267,14 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) {
+  if (!clientAuthOk(context, body, userPubkey)) {
     return json({ error: "Authentication failed" }, 401);
   }
+  // The replay nonce protects per-request HTTP auth. Over the WebSocket the
+  // connection is authenticated once, so there is no per-request nonce; the
+  // Ledger Durable Object enforces double-spend safety server-side instead.
   var SHOP_MONEY_ACTIONS = { "shop-buy-invoice": 1, "shop-claim": 1, "shop-transfer": 1, "shop-redeem": 1 };
-  if (SHOP_MONEY_ACTIONS[body.action]) {
+  if (!context._wsAuthedPubkey && SHOP_MONEY_ACTIONS[body.action]) {
     var rp = await ledgerCall(env, { op: "replay", id: body.auth && body.auth.id, ttl: 130 });
     if (rp && rp._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
     if (!rp || !rp.fresh) return json({ error: "This authorization was already used. Please retry." }, 401);
@@ -500,7 +511,7 @@ async function handleSettingsAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "settings-get") {
     var categories = {};
@@ -631,7 +642,7 @@ async function handleProfileAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "profile-set") {
     var ev = body.event;
@@ -747,7 +758,7 @@ async function handlePmAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
 
   // Upload one or more gift wraps addressed to the authenticated user. The
   // primary key (pubkey, id) makes re-uploads free no-ops via INSERT OR IGNORE.
@@ -1089,7 +1100,7 @@ async function handleZapAction(context, body) {
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
   userPubkey = userPubkey.toLowerCase();
-  if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action })) return json({ error: "Authentication failed" }, 401);
+  if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "zap-put") {
     var events = Array.isArray(body.events) ? body.events.slice(0, 100)
@@ -1115,32 +1126,9 @@ async function handleZapAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
-async function onRequest(context) {
-  const { request } = context;
-
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CLIENT_CORS_HEADERS });
-  }
-  if (request.method !== "POST") {
-    return new Response(JSON.stringify({ error: "POST required" }), {
-      status: 405, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
-    });
-  }
-  if (!isNymchatClient(request)) {
-    return new Response(JSON.stringify({ error: "Forbidden" }), {
-      status: 403, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
-    });
-  }
-
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-      status: 400, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
-    });
-  }
-
+// Dispatch a parsed body to the matching action handler. Shared by the HTTP
+// endpoint and the /api WebSocket worker (which sets context._wsAuthedPubkey).
+async function routeStorageAction(context, body) {
   if (body && typeof body.action === "string" && body.action.indexOf("settings-") === 0) {
     try {
       return await handleSettingsAction(context, body);
@@ -1217,6 +1205,36 @@ async function onRequest(context) {
   });
 }
 
+async function onRequest(context) {
+  const { request } = context;
+
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CLIENT_CORS_HEADERS });
+  }
+  if (request.method !== "POST") {
+    return new Response(JSON.stringify({ error: "POST required" }), {
+      status: 405, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  }
+  if (!isNymchatClient(request)) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  }
+
+  return await routeStorageAction(context, body);
+}
+
 export {
-  onRequest
+  onRequest,
+  routeStorageAction
 };

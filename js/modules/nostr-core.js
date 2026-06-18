@@ -1608,7 +1608,6 @@ Object.assign(NYM.prototype, {
         try {
             const signed = await this.signEvent(event);
             this.sendToRelay(["EVENT", signed]);
-            if (wire.isGeohash) this.ensureGeoRelayDelivery(signed, geohash);
         } catch (_) { }
     },
 

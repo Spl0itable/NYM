@@ -5,12 +5,13 @@
 // Client connects to: wss://<host>/api/relay-pool
 //
 // Protocol (client → proxy):
-//   ["RELAYS", { relays: [...], dmRelays: [...] }]
+//   ["RELAYS", { critical: [...], geo: [...], dmRelays: [...] }] - relay set tagged by role
 //   ["EVENT", eventObj]          - fans out to all connected relays
 //   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
 //   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
 //   ["REQ", subId, ...filters]   - fans out to all relays
 //   ["CLOSE", subId]             - fans out to all relays
+//   ["ROLE", role, <inner msg>]  - routes REQ/CLOSE only to relays tagged with that role
 //   ["KIND_BLACKLIST", { "wss://relay": [kind, ...], ... }] - skip relay for REQs whose kinds are all in its set
 //
 // Protocol (proxy → client):
@@ -89,6 +90,8 @@ export async function onRequest(context) {
   const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
   const relayLatency = new Map();    // relayUrl -> latency ms
   let dmRelays = [];
+  const relayRole = new Map();       // relayUrl -> 'critical' | 'geo'
+  const subRole = new Map();         // subId -> 'critical' | 'geo' | 'all'
   const kindBlacklist = new Map();
   const closedKindRetries = new Map();   // relayUrl+'\n'+parentSubId -> resend count
   let serverOpen = true;
@@ -185,9 +188,15 @@ export async function onRequest(context) {
   // Map<relayUrl, Array<geoMsg string>>
   const pendingGeoEvents = new Map();
 
-  // Connection batching state (used in cleanup)
+  // Bounded connection establishment. Cloudflare allows only 6 connections to
+  // be establishing (waiting for headers) at once; with the whole relay set on
+  // one socket we must not fire every WebSocket synchronously or queued ones
+  // would hit their connect timeout before they even start.
   let connectionTimer = null;
   let connectionQueue = [];
+  const MAX_CONCURRENT_CONNECTS = 6;
+  let inFlightConnects = 0;
+  const pendingConnect = new Set();
 
   // Throttle pool status updates
   let statusTimer = null;
@@ -896,10 +905,25 @@ export async function onRequest(context) {
     return false;
   }
 
-  // Connect to a relay immediately (no staggering)
+  // Enqueue a connection, capping concurrent establishment to MAX_CONCURRENT_CONNECTS.
   function queueConnection(relayUrl, type) {
-    if (upstreams.has(relayUrl)) return;
-    connectUpstream(relayUrl, type);
+    if (upstreams.has(relayUrl) || pendingConnect.has(relayUrl)) return;
+    pendingConnect.add(relayUrl);
+    connectionQueue.push({ relayUrl, type });
+    pumpConnectQueue();
+  }
+
+  function pumpConnectQueue() {
+    while (inFlightConnects < MAX_CONCURRENT_CONNECTS && connectionQueue.length > 0) {
+      const { relayUrl, type } = connectionQueue.shift();
+      pendingConnect.delete(relayUrl);
+      if (upstreams.has(relayUrl)) continue;
+      if (!validateRelayUrl(relayUrl)) continue;
+      if (relayUrl === 'wss://relay.nosflare.com') continue;
+      if (shouldSkipRelay(relayUrl)) continue;
+      inFlightConnects++;
+      connectUpstream(relayUrl, type);
+    }
   }
 
   // The app relay and the client's curated default relays (sent as dmRelays)
@@ -961,6 +985,8 @@ export async function onRequest(context) {
 
   function sendSubscriptionToRelay(relayUrl, ws, parentSubId) {
     if (WRITE_ONLY_RELAYS.has(relayUrl)) return;
+    const role = subRole.get(parentSubId);
+    if (role && role !== 'all' && relayRole.get(relayUrl) !== role) return;
     const blocked = kindBlacklist.get(relayUrl);
     const children = splitChildren.get(parentSubId);
     let anySent = false;
@@ -994,11 +1020,18 @@ export async function onRequest(context) {
     }
   }
 
+  // Caller (pumpConnectQueue) has already incremented inFlightConnects and
+  // validated the relay; this releases that establishment slot exactly once.
   function connectUpstream(relayUrl, type) {
-    if (upstreams.has(relayUrl)) return;
-    if (!validateRelayUrl(relayUrl)) return;
-    if (relayUrl === 'wss://relay.nosflare.com') return;
-    if (shouldSkipRelay(relayUrl)) return;
+    let slotReleased = false;
+    const releaseSlot = () => {
+      if (slotReleased) return;
+      slotReleased = true;
+      inFlightConnects--;
+      pumpConnectQueue();
+    };
+
+    if (upstreams.has(relayUrl)) { releaseSlot(); return; }
 
     const info = { ws: null, type, status: 'connecting', eventCount: 0, handled: false };
     upstreams.set(relayUrl, info);
@@ -1022,12 +1055,14 @@ export async function onRequest(context) {
           trackRelayFailure(relayUrl);
           try { ws.close(); } catch { /* noop */ }
           upstreams.delete(relayUrl);
+          releaseSlot();
           schedulePoolStatus();
         }
       }, 8000);
 
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
+        releaseSlot();
         info.status = 'connected';
         clearRelayFailure(relayUrl);
         reconnectAttempts.delete(relayUrl);
@@ -1213,6 +1248,7 @@ export async function onRequest(context) {
 
       ws.addEventListener('close', () => {
         clearTimeout(timeout);
+        releaseSlot();
         if (info.handled) return;
         info.handled = true;
 
@@ -1239,6 +1275,7 @@ export async function onRequest(context) {
 
       ws.addEventListener('error', () => {
         clearTimeout(timeout);
+        releaseSlot();
         if (info.handled) return;
         info.handled = true;
 
@@ -1252,8 +1289,16 @@ export async function onRequest(context) {
       info.status = 'failed';
       trackRelayFailure(relayUrl);
       upstreams.delete(relayUrl);
+      releaseSlot();
       schedulePoolStatus();
     }
+  }
+
+  // Only geohash channel messages (kind 20000) may be published to geo relays.
+  // Every other kind is confined to the default relays + the write-only relay.
+  function relayAllowedForKind(url, evtKind) {
+    if (evtKind === 20000) return true;
+    return relayRole.get(url) !== 'geo';
   }
 
   function sendToUpstreams(data, filter) {
@@ -1277,8 +1322,18 @@ export async function onRequest(context) {
   // Handle messages from client
   server.addEventListener('message', (event) => {
     try {
-      const msg = JSON.parse(event.data);
+      let msg = JSON.parse(event.data);
       if (!Array.isArray(msg)) return;
+
+      // Role-scoped envelope: ["ROLE", role, <inner message...>] routes the
+      // inner message only to relays tagged with that role.
+      let routedRole = null;
+      if (msg[0] === 'ROLE') {
+        routedRole = msg[1];
+        msg = msg.slice(2);
+        if (!Array.isArray(msg) || msg.length === 0) return;
+      }
+      const rawMsg = routedRole ? JSON.stringify(msg) : event.data;
 
       const msgType = msg[0];
 
@@ -1288,7 +1343,14 @@ export async function onRequest(context) {
 
             dmRelays = config.dmRelays || [];
 
-            const requestedRelays = config.relays || [];
+            const criticalRelays = config.critical || config.relays || [];
+            const geoRelays = config.geo || [];
+
+            relayRole.clear();
+            for (const url of criticalRelays) relayRole.set(url, 'critical');
+            for (const url of geoRelays) if (!relayRole.has(url)) relayRole.set(url, 'geo');
+
+            const requestedRelays = [...relayRole.keys()];
 
             const newRelaySet = new Set(requestedRelays);
             for (const [url, info] of upstreams) {
@@ -1313,7 +1375,8 @@ export async function onRequest(context) {
           } else if (msgType === 'EVENT') {
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
             if (archiveEnabled) archiveOutgoingEvent(msg[1]);
-            sendToUpstreams(event.data, (url) => {
+            sendToUpstreams(rawMsg, (url) => {
+              if (!relayAllowedForKind(url, evtKind)) return false;
               if (evtKind < 0) return true;
               const blocked = kindBlacklist.get(url);
               return !(blocked && blocked.has(evtKind));
@@ -1339,26 +1402,31 @@ export async function onRequest(context) {
             });
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
+              if (!relayAllowedForKind(url, evtKind)) return;
               if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
               }
             });
-            for (const url of geoUrls) {
-              if (sentGeo.has(url)) continue;
-              if (isBlockedFor(url)) continue;
-              const info = upstreams.get(url);
-              if (info && info.status === 'connecting') {
-                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
-                pendingGeoEvents.get(url).push(geoMsg);
-              } else if (!info && validateRelayUrl(url)) {
-                queueConnection(url, 'read');
-                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
-                pendingGeoEvents.get(url).push(geoMsg);
+            // Only geohash channel messages may reach (or spin up) geo relays.
+            if (evtKind === 20000) {
+              for (const url of geoUrls) {
+                if (sentGeo.has(url)) continue;
+                if (isBlockedFor(url)) continue;
+                const info = upstreams.get(url);
+                if (info && info.status === 'connecting') {
+                  if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
+                  pendingGeoEvents.get(url).push(geoMsg);
+                } else if (!info && validateRelayUrl(url)) {
+                  queueConnection(url, 'read');
+                  if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
+                  pendingGeoEvents.get(url).push(geoMsg);
+                }
               }
             }
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
               if (sentGeo.has(url)) return;
+              if (!relayAllowedForKind(url, evtKind)) return;
               if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(geoMsg); } catch { /* noop */ }
               }
@@ -1385,15 +1453,19 @@ export async function onRequest(context) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
             });
+            // DMs are never kind 20000, so confine the remainder to non-geo relays.
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
-              if (!dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+              if (dmSet.has(url)) return;
+              if (!relayAllowedForKind(url, evtKind)) return;
+              if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
             });
           } else if (msgType === 'REQ') {
             const subId = msg[1];
-            activeSubscriptions.set(subId, event.data);
+            activeSubscriptions.set(subId, rawMsg);
+            subRole.set(subId, routedRole || 'all');
             subRelays.set(subId, new Set());
 
             const children = buildChildrenForParent(subId, msg);
@@ -1429,9 +1501,10 @@ export async function onRequest(context) {
               for (const child of children) childToParent.delete(child.childSubId);
               splitChildren.delete(subId);
             } else if (targets && targets.size > 0) {
-              sendToUpstreams(event.data, (url) => targets.has(url));
+              sendToUpstreams(rawMsg, (url) => targets.has(url));
             }
             activeSubscriptions.delete(subId);
+            subRole.delete(subId);
             subRelays.delete(subId);
             seenEOSE.delete(subId);
           }
@@ -1450,6 +1523,8 @@ export async function onRequest(context) {
     }
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
     connectionQueue = [];
+    pendingConnect.clear();
+    inFlightConnects = 0;
     for (const [, timerId] of reconnectTimers) clearTimeout(timerId);
     reconnectTimers.clear();
     pendingReconnect.clear();
@@ -1462,6 +1537,8 @@ export async function onRequest(context) {
     upstreams.clear();
     splitChildren.clear();
     childToParent.clear();
+    relayRole.clear();
+    subRole.clear();
   }
 
   server.addEventListener('close', cleanupAll);
