@@ -671,7 +671,7 @@ Object.assign(NYM.prototype, {
         return `
         <div class="shop-item-price">
             <span class="shop-price-amount">⚡ ${item.price} sats</span>
-            <button class="shop-buy-btn" data-action="purchaseItem" data-item-id="${item.id}">GET</button>
+            <button class="shop-buy-btn" data-action="purchaseItem" data-item-id="${item.id}">BUY</button>
             <button class="shop-buy-btn shop-gift-btn" data-action="promptGiftShopItem" data-item-id="${item.id}">GIFT</button>
         </div>`;
     },

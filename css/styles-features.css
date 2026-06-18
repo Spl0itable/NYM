@@ -16,12 +16,15 @@
 }
 
 .shop-header {
-    background: rgb(from var(--primary) r g b / 0.03);
     padding: 24px;
     border-bottom: 1px solid var(--glass-border);
     display: flex;
     justify-content: space-between;
     align-items: center;
+}
+
+.shop-title .nm-h-16 {
+    color: var(--text-dim);
 }
 
 .shop-title {
