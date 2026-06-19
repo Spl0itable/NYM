@@ -492,7 +492,7 @@ class NYM {
         this.poolReady = false;
         this._poolReconnecting = false;
         this._poolReconnectRetries = 0;
-        this.RELAYS_PER_WORKER = 25;
+        this.RELAYS_PER_WORKER = 50;
         this.blacklistedRelays = new Set();
         this.relayStats = {
             eventsPerRelay: new Map(),
@@ -4226,7 +4226,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.506';
+const NYMCHAT_VERSION = 'v3.72.507';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -5651,6 +5651,7 @@ function startOnboardingWhenHydrated() {
 
 async function nostrSettingsSave() {
     if (nym && nym._applyingRemoteSettings) return;
+    if (nym && nym._restoreFromD1Depth > 0) return;
     // For ephemeral users, delegate to the instance method which handles all modes
     if (!isNostrLoggedIn()) {
         if (nym && typeof nym.saveSyncedSettings === 'function') {
@@ -5682,6 +5683,11 @@ async function settingsLoad() {
 }
 
 function nostrSettingsLoad() {
+    // In relay-proxy mode the D1 database is the source of truth for settings,
+    // so we don't subscribe to nym-sync wraps over relays — only do so in
+    // direct connection mode.
+    if (nym && nym.useRelayProxy) return;
+
     const pubkey = isNostrLoggedIn()
         ? localStorage.getItem('nym_nostr_login_pubkey')
         : (nym && nym.pubkey);
@@ -5700,33 +5706,6 @@ function nostrSettingsLoad() {
     // Buffer settings events during the initial REQ
     nym._settingsLoadBuffer = nym._settingsLoadBuffer || new Map();
     nym._settingsLoadBuffer.set(subId, { newestSettings: null, newestTs: 0 });
-
-    // Pool mode: send REQ through the multiplexed pool workers
-    if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
-        const handler = (evt) => {
-            try {
-                const msg = JSON.parse(evt.data);
-                if (msg[0] === 'EVENT' && msg[1] === subId && msg[2]) {
-                    nym.handleGiftWrapDM(msg[2], { settingsLoadSubId: subId }).catch(() => { });
-                }
-                if (msg[0] === 'EOSE' && msg[1] === subId) {
-                    nym._poolRemoveMessageListener(handler);
-                    try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
-                    nym._flushSettingsLoadBuffer(subId);
-                }
-            } catch (_) { }
-        };
-        nym._poolAddMessageListener(handler);
-        nym._poolSend(['REQ', subId, filter]);
-
-        // Cleanup after 10s
-        setTimeout(() => {
-            nym._poolRemoveMessageListener(handler);
-            try { nym._poolSend(['CLOSE', subId]); } catch (_) { }
-            nym._flushSettingsLoadBuffer(subId);
-        }, 10000);
-        return;
-    }
 
     // Direct relay mode: try to load from any connected relay
     nym.relayPool.forEach((relay, url) => {
@@ -7394,14 +7373,37 @@ function renderRelayStats() {
     const elLat = document.getElementById('rsLatency');
     const elEvt = document.getElementById('rsEventsTotal');
     const elData = document.getElementById('rsDataTransfer');
+    const elDataOut = document.getElementById('rsDataOut');
 
     if (elConn) elConn.textContent = connected;
     if (elLat) elLat.textContent = avgLat !== null ? avgLat + 'ms' : '--';
     if (elEvt) elEvt.textContent = s.totalEvents > 9999 ? (s.totalEvents / 1000).toFixed(1) + 'k' : s.totalEvents;
     if (elData) elData.textContent = formatBytes(s.bytesReceived);
+    if (elDataOut) elDataOut.textContent = formatBytes(s.bytesSent || 0);
 
     // Draw throughput graph
     drawThroughputGraph(s.throughputHistory);
+
+    // Shard fan-in summary (how many shard workers, relays connected each)
+    const listEl = document.getElementById('rsRelayList');
+    if (listEl && listEl.parentNode) {
+        let shardLine = document.getElementById('rsShardLine');
+        if (!shardLine) {
+            shardLine = document.createElement('div');
+            shardLine.id = 'rsShardLine';
+            shardLine.className = 'rs-shard-line';
+            listEl.parentNode.insertBefore(shardLine, listEl);
+        }
+        const si = Array.isArray(s.shardInfo) ? s.shardInfo : [];
+        if (si.length) {
+            const totalConn = si.reduce((a, sh) => a + (sh[2] || 0), 0);
+            shardLine.style.display = '';
+            shardLine.textContent = `${si.length} shard(s) · ${totalConn} relays connected · ` +
+                si.map(sh => `${sh[2]}/${sh[3]}${sh[1] && sh[1] !== 'connected' ? '(' + sh[1] + ')' : ''}`).join('  ');
+        } else {
+            shardLine.style.display = 'none';
+        }
+    }
 
     // Relay list
     renderRelayList(pool, s);
@@ -7489,6 +7491,54 @@ function hexToRgba(hex, alpha) {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+let _rsExpandedRelay = null;
+
+function rsRenderRelayDetail(row, url, stats) {
+    let detail = row.querySelector('.relay-stats-detail');
+    if (_rsExpandedRelay !== url) { if (detail) detail.remove(); return; }
+    if (!detail) {
+        detail = document.createElement('div');
+        detail.className = 'relay-stats-detail';
+        row.appendChild(detail);
+    }
+    if (url === '__api__') {
+        const perAction = stats.apiActionStats;
+        if (!perAction || perAction.size === 0) {
+            detail.innerHTML = '<div class="rs-kind-row nm-app-5">No app data recorded yet.</div>';
+            return;
+        }
+        const labels = {
+            'channel-get': 'Channel history', 'channel-activity': 'Channel activity',
+            'channel-active': 'Active channels', 'channel-delete': 'Channel cleanup',
+            'pm-get': 'Direct messages', 'pm-put': 'Message backup',
+            'pm-deposit': 'Message delivery', 'pm-delete': 'Message cleanup',
+            'profile-get': 'Profiles', 'profile-set': 'Profile updates',
+            'emoji-get': 'Emoji', 'settings-get': 'Settings', 'settings-set': 'Settings sync',
+            'auth': 'Sign-in', 'other': 'Other'
+        };
+        // Fall back to a title-cased name so no raw hyphenated action ever shows.
+        const labelFor = (a) => labels[a] || String(a).replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const rows = [...perAction.entries()]
+            .map(([action, s]) => ({ label: labelFor(action), count: s.count, bytes: (s.bytesSent || 0) + (s.bytesReceived || 0) }))
+            .sort((a, b) => b.bytes - a.bytes);
+        detail.innerHTML = rows.map(r =>
+            `<div class="rs-kind-row"><span>${nym.escapeHtml(r.label)}</span><span>${r.count}×</span><span>${formatBytes(r.bytes)}</span></div>`
+        ).join('');
+        return;
+    }
+    const perKind = stats.kindStatsPerRelay && stats.kindStatsPerRelay.get(url);
+    if (!perKind || perKind.size === 0) {
+        detail.innerHTML = '<div class="rs-kind-row nm-app-5">No events recorded from this relay yet.</div>';
+        return;
+    }
+    const rows = [...perKind.entries()]
+        .map(([kind, s]) => ({ kind, count: s.count, bytes: s.bytes }))
+        .sort((a, b) => b.bytes - a.bytes);
+    detail.innerHTML = rows.map(r =>
+        `<div class="rs-kind-row"><span>kind ${r.kind}</span><span>${r.count} evt</span><span>${formatBytes(r.bytes)}</span></div>`
+    ).join('');
+}
+
 function renderRelayList(pool, stats) {
     const listEl = document.getElementById('rsRelayList');
     if (!listEl) return;
@@ -7532,49 +7582,86 @@ function renderRelayList(pool, stats) {
         return b.events - a.events;
     });
 
-    if (entries.length === 0) {
+    const apiHasData = typeof nym !== 'undefined' && nym.relayStats &&
+        ((nym.relayStats.apiBytesReceived || 0) + (nym.relayStats.apiBytesSent || 0)) > 0;
+
+    if (entries.length === 0 && !apiHasData) {
         listEl.innerHTML = '<div class="nm-app-5">No relays connected</div>';
         return;
     }
 
+    // Two sections: App data (the /api backend) and Relay data.
+    const ordered = [];
+    if (apiHasData) {
+        const apiOpen = !!(nym._apiSock && nym._apiSock.ws && nym._apiSock.ws.readyState === WebSocket.OPEN);
+        ordered.push({ url: '__apihdr__', isHeader: true, label: 'App data' });
+        ordered.push({
+            url: '__api__', isApi: true, open: apiOpen, latency: null, events: 0,
+            bytesSent: nym.relayStats.apiBytesSent || 0,
+            bytesReceived: nym.relayStats.apiBytesReceived || 0
+        });
+    }
+    if (entries.length) {
+        ordered.push({ url: '__relayhdr__', isHeader: true, label: 'Relay data' });
+        for (const e of entries) ordered.push(e);
+    }
+
     const existing = new Map();
-    listEl.querySelectorAll('.relay-stats-row').forEach(row => {
+    listEl.querySelectorAll('.relay-stats-row, .relay-stats-section-title').forEach(row => {
         const url = row.dataset.rsUrl;
         if (url) existing.set(url, row);
     });
 
     const seen = new Set();
     let prevRow = null;
-    entries.forEach(e => {
+    const place = (row) => {
+        if (prevRow) {
+            if (prevRow.nextElementSibling !== row) prevRow.parentNode.insertBefore(row, prevRow.nextElementSibling);
+        } else if (listEl.firstElementChild !== row) {
+            listEl.insertBefore(row, listEl.firstElementChild);
+        }
+        if (!row.parentNode) listEl.appendChild(row);
+        prevRow = row;
+    };
+    ordered.forEach(e => {
         seen.add(e.url);
         let row = existing.get(e.url);
-        const shortUrl = e.url.replace('wss://', '').replace('ws://', '');
+        if (e.isHeader) {
+            if (!row) {
+                row = document.createElement('div');
+                row.className = 'relay-stats-section-title';
+                row.dataset.rsUrl = e.url;
+            }
+            if (row.textContent !== e.label) row.textContent = e.label;
+            place(row);
+            return;
+        }
+        const shortUrl = e.isApi ? 'app backend' : e.url.replace('wss://', '').replace('ws://', '');
+        const metric = e.isApi ? `${formatBytes(e.bytesReceived)} ↓` : `${e.events} evt`;
         if (!row) {
             row = document.createElement('div');
             row.className = 'relay-stats-row';
             row.dataset.rsUrl = e.url;
             row.innerHTML =
                 `<span class="relay-stats-dot ${e.open ? 'open' : 'closed'}"></span>` +
-                `<span class="relay-stats-url" title="${nym.escapeHtml(e.url)}">${nym.escapeHtml(shortUrl)}</span>` +
+                `<span class="relay-stats-url" title="${nym.escapeHtml(e.isApi ? 'App backend (D1 storage, profiles, messages)' : e.url)}">${nym.escapeHtml(shortUrl)}</span>` +
                 `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
-                `<span class="relay-stats-events">${e.events} evt</span>`;
+                `<span class="relay-stats-events">${metric}</span>`;
+            row.addEventListener('click', () => {
+                const url = row.dataset.rsUrl;
+                _rsExpandedRelay = (_rsExpandedRelay === url) ? null : url;
+                renderRelayStats();
+            });
         } else {
             const dot = row.querySelector('.relay-stats-dot');
             if (dot) dot.className = `relay-stats-dot ${e.open ? 'open' : 'closed'}`;
             const evtEl = row.querySelector('.relay-stats-events');
-            if (evtEl) evtEl.textContent = e.events + ' evt';
+            if (evtEl) evtEl.textContent = metric;
             const latEl = row.querySelector('.relay-stats-latency');
             if (latEl) latEl.textContent = e.latency !== null ? e.latency + 'ms' : '--';
         }
-        // Move into the correct sort position
-        if (prevRow) {
-            if (prevRow.nextElementSibling !== row) {
-                prevRow.parentNode.insertBefore(row, prevRow.nextElementSibling);
-            }
-        } else if (listEl.firstElementChild !== row) {
-            listEl.insertBefore(row, listEl.firstElementChild);
-        }
-        prevRow = row;
+        rsRenderRelayDetail(row, e.url, stats);
+        place(row);
     });
 
     existing.forEach((row, url) => { if (!seen.has(url)) row.remove(); });

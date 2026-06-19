@@ -1492,7 +1492,7 @@ body.light-mode .relay-stats-row {
 
 @media (max-width: 480px) {
     .relay-stats-cards {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(3, 1fr);
     }
 
     .relay-stats-content {

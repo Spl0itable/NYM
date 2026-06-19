@@ -83,8 +83,6 @@ export async function onRequest(context) {
   const upstreams = new Map();       // relayUrl -> { ws, type, status, eventCount, handled }
   const activeSubscriptions = new Map(); // subId -> raw JSON string of the REQ message
   const subRelays = new Map();       // subId -> Set<relayUrl> the REQ was sent to
-  const splitChildren = new Map();   // parentSubId -> [{ childSubId, rawChild, filter }, ...]
-  const childToParent = new Map();   // childSubId -> parentSubId
   const seenEvents = new Map();      // eventId -> 1 (string-based dedup, no JSON.parse)
   const seenOKs = new Set();         // eventId (only forward first OK per event)
   const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
@@ -92,11 +90,13 @@ export async function onRequest(context) {
   let dmRelays = [];
   const relayRole = new Map();       // relayUrl -> 'critical' | 'geo'
   const subRole = new Map();         // subId -> 'critical' | 'geo' | 'all'
+  const splitChildren = new Map();   // parentSubId -> [{ childSubId, rawChild, filters }, ...]
+  const childToParent = new Map();   // childSubId -> parentSubId
   const kindBlacklist = new Map();
   const closedKindRetries = new Map();   // relayUrl+'\n'+parentSubId -> resend count
   let serverOpen = true;
 
-  // Dedup housekeeping — increased capacity for high relay counts
+  // Dedup housekeeping
   const DEDUP_MAX = 50000;
   let dedupCounter = 0;
 
@@ -106,23 +106,12 @@ export async function onRequest(context) {
   const ARCHIVE_FLUSH_MAX = 400;
   const ARCHIVE_BATCH = 100;
   const archiveBuf = new Map();   // eventId -> { id, channel, kind, pubkey, created_at, json }
-  const ARCHIVE_SEEN_HOST = 'https://nymchat-archive.invalid';
-  const ARCHIVE_SEEN_TTL = 600;
 
   // NIP-30 emoji lists (kind 30030 packs, 10030 user lists)
   const EMOJI_EVENT_MAX = 64 * 1024;
   const emojiBuf = new Map();     // coord -> { coord, kind, pubkey, d, created_at, json }
   let emojiSchemaReady = false;
   const isArchivableEmojiKind = (k) => k === 30030 || k === 10030;
-
-  function archiveSeenCache() {
-    try { return (typeof caches !== 'undefined' && caches.default) ? caches.default : null; }
-    catch { return null; }
-  }
-
-  function archiveSeenRequest(id) {
-    return new Request(ARCHIVE_SEEN_HOST + '/' + id, { method: 'GET' });
-  }
 
   function trimDedup() {
     if (++dedupCounter < 500) return;
@@ -228,22 +217,18 @@ export async function onRequest(context) {
   function sendPoolStatus() {
     const connected = [];
     const latency = {};
-    const events = {};
     upstreams.forEach((info, url) => {
-      if (info.status === 'connected') {
-        connected.push(url);
-        events[url] = info.eventCount;
-      }
+      if (info.status === 'connected') connected.push(url);
     });
-    // Only include latency for connected relays
+    // Only include latency for connected relays. Per-relay event counts are
+    // omitted — the client tracks its own post-dedup counts.
     relayLatency.forEach((ms, url) => {
       if (connected.includes(url)) latency[url] = ms;
     });
     sendToClient(JSON.stringify(['POOL:STATUS', {
       connected,
       count: connected.length,
-      latency,
-      events
+      latency
     }]));
   }
 
@@ -337,32 +322,21 @@ export async function onRequest(context) {
     } catch { return null; }
   }
 
-  const MAX_CHILDREN_PER_PARENT = 10;
+  // Upstream relays reject REQs with more than ~10 filters ("too many filters").
+  // Split an over-sized REQ into child subscriptions of <= MAX_FILTERS_PER_REQ
+  // filters each so no single upstream REQ trips that limit.
+  const MAX_FILTERS_PER_REQ = 10;
 
   function buildChildrenForParent(parentSubId, msg) {
     if (!Array.isArray(msg)) return null;
-    const filterCount = msg.length - 2;
-    if (filterCount <= 1) return null;
+    const filters = msg.slice(2);
+    if (filters.length <= MAX_FILTERS_PER_REQ) return null;
     const children = [];
-    if (filterCount <= MAX_CHILDREN_PER_PARENT) {
-      for (let i = 2; i < msg.length; i++) {
-        const childSubId = `${parentSubId}~c${i - 2}`;
-        const rawChild = JSON.stringify(['REQ', childSubId, msg[i]]);
-        children.push({ childSubId, rawChild, filters: [msg[i]] });
-      }
-    } else {
-      const singleCount = MAX_CHILDREN_PER_PARENT - 1;
-      for (let i = 0; i < singleCount; i++) {
-        const f = msg[2 + i];
-        const childSubId = `${parentSubId}~c${i}`;
-        const rawChild = JSON.stringify(['REQ', childSubId, f]);
-        children.push({ childSubId, rawChild, filters: [f] });
-      }
-      const bundle = [];
-      for (let i = 2 + singleCount; i < msg.length; i++) bundle.push(msg[i]);
-      const lastSubId = `${parentSubId}~c${singleCount}`;
-      const rawLast = JSON.stringify(['REQ', lastSubId, ...bundle]);
-      children.push({ childSubId: lastSubId, rawChild: rawLast, filters: bundle });
+    for (let i = 0; i < filters.length; i += MAX_FILTERS_PER_REQ) {
+      const chunk = filters.slice(i, i + MAX_FILTERS_PER_REQ);
+      const childSubId = `${parentSubId}~c${i / MAX_FILTERS_PER_REQ}`;
+      const rawChild = JSON.stringify(['REQ', childSubId, ...chunk]);
+      children.push({ childSubId, rawChild, filters: chunk });
     }
     return children;
   }
@@ -568,10 +542,10 @@ export async function onRequest(context) {
     return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
   }
 
-  const isArchivableChannelKind = (k) => k === 20000 || k === 23333 || k === 7;
+  const isArchivableChannelKind = (k) => k === 20000 || k === 23333 || k === 7 || k === 30078;
 
   // Channel name for an event: 'g' for geohash (20000), 'd' for named (23333),
-  // either for reactions (7).
+  // either for reactions (7) and polls (30078).
   function channelFromTags(getTag, kind) {
     if (kind === 20000) return getTag('g');
     if (kind === 23333) return getTag('d');
@@ -592,11 +566,45 @@ export async function onRequest(context) {
   // Inbound event from a relay (string frame).
   function archiveInboundEvent(raw, kind, eventId) {
     if (!archiveEnabled || !eventId) return;
+    // kind 30078 is shared by presence/settings/etc; only archive polls/votes
+    // (channel-scoped via g/d) and vouch lists (d = nym-vouches).
+    if (kind === 30078) {
+      const t = extractTagValue(raw, 't');
+      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches') return;
+    }
     const channel = sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind));
     if (!channel) return;
     const objJson = extractEventObjectJson(raw);
     if (!objJson) return;
     bufferArchive(channel, eventId, kind, extractEventStringField(raw, 'pubkey'), extractEventCreatedAt(raw), objJson);
+  }
+
+  // A NIP-09 deletion (kind 5) removes the referenced events from the channel
+  // archive so they don't resurface in D1 backfill. Verified, and scoped to the
+  // deleter's own events.
+  function deleteArchivedFromDeletion(raw) {
+    if (!archiveEnabled) return;
+    const objJson = extractEventObjectJson(raw);
+    if (objJson) runArchive(applyArchiveDeletion(objJson));
+  }
+
+  async function applyArchiveDeletion(objJson) {
+    try {
+      const ev = JSON.parse(objJson);
+      if (!ev || ev.kind !== 5 || typeof ev.id !== 'string' || typeof ev.sig !== 'string'
+        || typeof ev.pubkey !== 'string' || !Array.isArray(ev.tags)) return;
+      if (getEventHash(ev) !== ev.id || !schnorr.verify(ev.sig, ev.id, ev.pubkey)) return;
+      const targets = ev.tags
+        .filter((t) => Array.isArray(t) && t[0] === 'e' && typeof t[1] === 'string')
+        .map((t) => t[1].toLowerCase())
+        .filter((t) => /^[0-9a-f]{64}$/.test(t))
+        .slice(0, 100);
+      if (!targets.length) return;
+      const ph = targets.map(() => '?').join(',');
+      await CHANNELS_DB.prepare(
+        'DELETE FROM events WHERE pubkey = ? AND id IN (' + ph + ')'
+      ).bind(ev.pubkey, ...targets).run();
+    } catch { /* best-effort */ }
   }
 
   // Outbound event the client is publishing — archived immediately so sends
@@ -605,15 +613,20 @@ export async function onRequest(context) {
     if (!archiveEnabled || !ev || typeof ev.id !== 'string' || !isArchivableChannelKind(ev.kind)) return;
     const tags = Array.isArray(ev.tags) ? ev.tags : [];
     const getTag = (n) => { const t = tags.find((x) => Array.isArray(x) && x[0] === n); return t ? t[1] : null; };
+    // kind 30078 is shared by presence/settings/etc; only archive polls and vouch lists.
+    if (ev.kind === 30078) {
+      const t = getTag('t');
+      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches') return;
+    }
     const channel = sanitizeChannelKey(channelFromTags(getTag, ev.kind));
     if (!channel) return;
     bufferArchive(channel, ev.id, ev.kind, typeof ev.pubkey === 'string' ? ev.pubkey : null,
       typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
   }
 
-  // Only archive cryptographically valid events: the id must match the event
-  // hash and the schnorr signature must verify, so forged channel events can't
-  // be persisted. Parsed once per unique event, in the background flush path.
+  // Verify id hash + schnorr signature before persisting so forged events can't
+  // be archived to D1. Bounded work: runs once per unique event in the
+  // background flush, not on the forward hot path (which stays parse-free).
   function archiveEventValid(jsonStr) {
     try {
       const ev = JSON.parse(jsonStr);
@@ -631,42 +644,18 @@ export async function onRequest(context) {
     const rows = Array.from(archiveBuf.values());
     archiveBuf.clear();
 
-    // Per-colo dedup: skip events another connection in this colo already
-    // archived. Fail-open — a miss still inserts, and the id PK guards races.
-    const cache = archiveSeenCache();
-    let pending = rows;
-    if (cache) {
-      try {
-        const hits = await Promise.all(rows.map(
-          (r) => cache.match(archiveSeenRequest(r.id)).then((h) => !!h).catch(() => false)
-        ));
-        pending = rows.filter((_, i) => !hits[i]);
-      } catch { pending = rows; }
-    }
-    if (pending.length === 0) return;
-
+    // INSERT OR IGNORE dedupes on the id PK; no Cache layer needed.
     const stmt = CHANNELS_DB.prepare(
       'INSERT OR IGNORE INTO events (id, channel, kind, pubkey, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     const now = Date.now();
-    const inserted = [];
-    for (let i = 0; i < pending.length; i += ARCHIVE_BATCH) {
-      const slice = pending.slice(i, i + ARCHIVE_BATCH).filter((r) => archiveEventValid(r.json));
+    for (let i = 0; i < rows.length; i += ARCHIVE_BATCH) {
+      const slice = rows.slice(i, i + ARCHIVE_BATCH).filter((r) => archiveEventValid(r.json));
       if (slice.length === 0) continue;
       const chunk = slice.map(
         (r) => stmt.bind(r.id, r.channel, r.kind, r.pubkey, r.created_at, r.json, now)
       );
-      try { await CHANNELS_DB.batch(chunk); for (const r of slice) inserted.push(r); } catch { /* best-effort */ }
-    }
-
-    if (cache && inserted.length) {
-      const headers = new Headers();
-      headers.set('Cache-Control', 'public, max-age=' + ARCHIVE_SEEN_TTL);
-      try {
-        await Promise.all(inserted.map(
-          (r) => cache.put(archiveSeenRequest(r.id), new Response('1', { headers })).catch(() => {})
-        ));
-      } catch { /* best-effort */ }
+      try { await CHANNELS_DB.batch(chunk); } catch { /* best-effort */ }
     }
   }
 
@@ -711,8 +700,7 @@ export async function onRequest(context) {
     emojiSchemaReady = true;
   }
 
-  // Newest-wins upsert keyed by replaceable-event coordinate, gated on a valid
-  // id hash + schnorr signature so forged emoji lists can't be persisted.
+  // Newest-wins upsert keyed by replaceable-event coordinate.
   async function flushEmojiArchive() {
     if (!archiveEnabled || emojiBuf.size === 0) return;
     const rows = Array.from(emojiBuf.values()).filter((r) => archiveEventValid(r.json));
@@ -1058,8 +1046,8 @@ export async function onRequest(context) {
     const role = subRole.get(parentSubId);
     if (role && role !== 'all' && relayRole.get(relayUrl) !== role) return;
     const blocked = kindBlacklist.get(relayUrl);
-    const children = splitChildren.get(parentSubId);
     let anySent = false;
+    const children = splitChildren.get(parentSubId);
     if (children) {
       for (const child of children) {
         const payload = buildChildPayload(child, blocked);
@@ -1088,6 +1076,29 @@ export async function onRequest(context) {
     for (const subId of activeSubscriptions.keys()) {
       sendSubscriptionToRelay(relayUrl, ws, subId);
     }
+  }
+
+  // Fan a new subscription out to relays in small batches instead of blasting
+  // all ~150 at once, which destabilizes the relays and the client socket.
+  function staggerSubscribe(subId) {
+    const targets = [];
+    upstreams.forEach((info, url) => {
+      if (info.status === 'connected' && info.ws && info.ws.readyState === 1) targets.push(url);
+    });
+    let i = 0;
+    const BATCH = 20, DELAY = 60;
+    const pump = () => {
+      if (!serverOpen || !activeSubscriptions.has(subId)) return;
+      const end = Math.min(i + BATCH, targets.length);
+      for (; i < end; i++) {
+        const info = upstreams.get(targets[i]);
+        if (info && info.status === 'connected' && info.ws && info.ws.readyState === 1) {
+          sendSubscriptionToRelay(targets[i], info.ws, subId);
+        }
+      }
+      if (i < targets.length) setTimeout(pump, DELAY);
+    };
+    pump();
   }
 
   // Caller (pumpConnectQueue) has already incremented inFlightConnects and
@@ -1168,25 +1179,20 @@ export async function onRequest(context) {
             droppedSpamCount++;
             return;
           }
+          const evKind = extractEventKind(raw);
+          // Drop settings wraps off the relay stream (loaded from D1).
+          if (evKind === 1059) {
+            const kTag = extractTagValue(raw, 'k');
+            const dTag = kTag === 'nym-sync' ? null : extractTagValue(raw, 'd');
+            if (kTag === 'nym-sync' || (dTag && dTag.startsWith('nymchat-'))) return;
+          }
           info.eventCount++;
           if (archiveEnabled) {
-            const archiveKind = extractEventKind(raw);
-            if (isArchivableChannelKind(archiveKind)) archiveInboundEvent(raw, archiveKind, eventId);
-            else if (isArchivableEmojiKind(archiveKind)) archiveInboundEmoji(raw, archiveKind);
+            if (isArchivableChannelKind(evKind)) archiveInboundEvent(raw, evKind, eventId);
+            else if (isArchivableEmojiKind(evKind)) archiveInboundEmoji(raw, evKind);
+            else if (evKind === 5) deleteArchivedFromDeletion(raw);
           }
           const relayTail = ',"' + relayUrl + '"]';
-          if (childToParent.size > 0) {
-            const subEnd = raw.indexOf('"', 10);
-            if (subEnd !== -1) {
-              const childSubId = raw.substring(10, subEnd);
-              const parent = childToParent.get(childSubId);
-              if (parent && parent !== childSubId) {
-                const body = raw.substring(subEnd, raw.length - 1);
-                sendToClient('["EVENT","' + parent + body + relayTail);
-                return;
-              }
-            }
-          }
           sendToClient(raw.slice(0, -1) + relayTail);
 
         // OK: ["OK","eventId",bool,"msg"]
@@ -1369,13 +1375,6 @@ export async function onRequest(context) {
     }
   }
 
-  // Only geohash channel messages (kind 20000) may be published to geo relays.
-  // Every other kind is confined to the default relays + the write-only relay.
-  function relayAllowedForKind(url, evtKind) {
-    if (evtKind === 20000) return true;
-    return relayRole.get(url) !== 'geo';
-  }
-
   function sendToUpstreams(data, filter) {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
     WRITE_ONLY_RELAYS.forEach((url) => {
@@ -1451,7 +1450,6 @@ export async function onRequest(context) {
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
             if (archiveEnabled) { archiveOutgoingEvent(msg[1]); archiveOutgoingEmoji(msg[1]); }
             sendToUpstreams(rawMsg, (url) => {
-              if (!relayAllowedForKind(url, evtKind)) return false;
               if (evtKind < 0) return true;
               const blocked = kindBlacklist.get(url);
               return !(blocked && blocked.has(evtKind));
@@ -1477,31 +1475,25 @@ export async function onRequest(context) {
             });
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
-              if (!relayAllowedForKind(url, evtKind)) return;
               if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
               }
             });
-            // Only geohash channel messages may reach (or spin up) geo relays.
-            if (evtKind === 20000) {
-              for (const url of geoUrls) {
-                if (sentGeo.has(url)) continue;
-                if (isBlockedFor(url)) continue;
-                const info = upstreams.get(url);
-                if (info && info.status === 'connecting') {
-                  if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
-                  pendingGeoEvents.get(url).push(geoMsg);
-                } else if (!info && validateRelayUrl(url)) {
-                  queueConnection(url, 'read');
-                  if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
-                  pendingGeoEvents.get(url).push(geoMsg);
-                }
+            // Buffer for target relays this worker is still connecting to. New
+            // connections are driven by the RELAYS config (which shards relays),
+            // so a worker never reaches outside its assigned set here.
+            for (const url of geoUrls) {
+              if (sentGeo.has(url)) continue;
+              if (isBlockedFor(url)) continue;
+              const info = upstreams.get(url);
+              if (info && info.status === 'connecting') {
+                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
+                pendingGeoEvents.get(url).push(geoMsg);
               }
             }
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
               if (sentGeo.has(url)) return;
-              if (!relayAllowedForKind(url, evtKind)) return;
               if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(geoMsg); } catch { /* noop */ }
               }
@@ -1528,11 +1520,9 @@ export async function onRequest(context) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
             });
-            // DMs are never kind 20000, so confine the remainder to non-geo relays.
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
               if (dmSet.has(url)) return;
-              if (!relayAllowedForKind(url, evtKind)) return;
               if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
                 try { info.ws.send(dmMsg); } catch { /* noop */ }
               }
@@ -1542,17 +1532,12 @@ export async function onRequest(context) {
             activeSubscriptions.set(subId, rawMsg);
             subRole.set(subId, routedRole || 'all');
             subRelays.set(subId, new Set());
-
             const children = buildChildrenForParent(subId, msg);
             if (children) {
               splitChildren.set(subId, children);
               for (const child of children) childToParent.set(child.childSubId, subId);
             }
-
-            upstreams.forEach((info, url) => {
-              if (info.status !== 'connected' || !info.ws || info.ws.readyState !== 1) return;
-              sendSubscriptionToRelay(url, info.ws, subId);
-            });
+            staggerSubscribe(subId);
           } else if (msgType === 'KIND_BLACKLIST') {
             const config = msg[1];
             if (!config || typeof config !== 'object') return;
@@ -1614,10 +1599,10 @@ export async function onRequest(context) {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });
     upstreams.clear();
-    splitChildren.clear();
-    childToParent.clear();
     relayRole.clear();
     subRole.clear();
+    splitChildren.clear();
+    childToParent.clear();
   }
 
   server.addEventListener('close', cleanupAll);

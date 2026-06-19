@@ -14,11 +14,15 @@ Object.assign(NYM.prototype, {
             }
         }
         if (ids.length === 0) return;
-        const subId = 'zap-bf-' + Math.random().toString(36).slice(2, 9);
-        try {
-            this.sendToRelay(["REQ", subId, { kinds: [9735], "#e": ids, limit: 500 }]);
-            setTimeout(() => { try { this.sendToRelay(["CLOSE", subId]); } catch (_) { } }, 10000);
-        } catch (_) { }
+        // Zaps are archived to D1, so restore from there. Only hit relays for a
+        // backfill when D1 is unavailable.
+        if (!this._getApiHost || !this._getApiHost()) {
+            const subId = 'zap-bf-' + Math.random().toString(36).slice(2, 9);
+            try {
+                this.sendToRelay(["REQ", subId, { kinds: [9735], "#e": ids, limit: 500 }]);
+                setTimeout(() => { try { this.sendToRelay(["CLOSE", subId]); } catch (_) { } }, 10000);
+            } catch (_) { }
+        }
         this._backfillZapReceiptsFromD1(ids, this.inPMMode ? 'pm' : 'channel');
     },
 
@@ -37,8 +41,6 @@ Object.assign(NYM.prototype, {
     _archiveZapReceipt(event, eTag, descriptionTag) {
         if (!event || event.kind !== 9735 || typeof event.id !== 'string') return;
         if (!this.pubkey || !this._getApiHost || !this._getApiHost()) return;
-        const targetId = eTag && eTag[1];
-        if (!targetId || !this._isNostrHex64(targetId)) return;
         let scope = null;
         if (descriptionTag && descriptionTag[1]) {
             try {
@@ -47,11 +49,18 @@ Object.assign(NYM.prototype, {
                 if (kTag) {
                     if (kTag[1] === '20000' || kTag[1] === '23333') scope = 'channel';
                     else if (kTag[1] === '1059') scope = 'pm';
+                    else if (kTag[1] === '0') scope = 'profile';
                     // Ignore parse errors
                 }
             } catch (_) { }
         }
         if (!scope) return;
+        // channel/pm zaps key on the zapped event id; profile zaps have no e tag
+        // (the server keys them on the recipient pubkey instead).
+        if (scope !== 'profile') {
+            const targetId = eTag && eTag[1];
+            if (!targetId || !this._isNostrHex64(targetId)) return;
+        }
         if (!this._zapArchivedIds) this._zapArchivedIds = new Set();
         if (this._zapArchivedIds.has(event.id)) return;
         this._zapArchivedIds.add(event.id);
@@ -1150,7 +1159,9 @@ Object.assign(NYM.prototype, {
         const boltTag = event.tags.find(t => t[0] === 'bolt11');
         const descriptionTag = event.tags.find(t => t[0] === 'description');
 
-        if (eTag && boltTag) this._archiveZapReceipt(event, eTag, descriptionTag);
+        // Archive channel/pm zaps (keyed on e tag) and profile zaps (no e tag,
+        // keyed on the recipient pubkey) so D1 backfill can serve them.
+        if (boltTag) this._archiveZapReceipt(event, eTag, descriptionTag);
 
         // Nymbot credit purchase (no LUD-21 verify): match the receipt to the
         // pending invoice by bolt11. This is a profile zap, so it has no e tag.

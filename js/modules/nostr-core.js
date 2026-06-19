@@ -1795,6 +1795,7 @@ Object.assign(NYM.prototype, {
             if (found && found.size) missing = pubkeys.filter(pk => !found.has(pk));
         } catch (_) { }
         if (missing.length === 0) return;
+        if (this._getApiHost && this._getApiHost()) return;
 
         const run = () => {
             const subId = 'batch-profile-' + Math.random().toString(36).slice(2);
@@ -2181,7 +2182,7 @@ Object.assign(NYM.prototype, {
         this.updateMessageInDOM(domId, newContent);
     },
 
-    processBatchedProfileFetch() {
+    async processBatchedProfileFetch() {
         if (this.profileFetchQueue.length === 0) return;
 
         // Get unique pubkeys and their resolvers
@@ -2196,6 +2197,31 @@ Object.assign(NYM.prototype, {
             }
             pubkeyMap.get(pubkey).push(resolve);
         });
+
+        // D1-first: serve profiles we already have and only relay-fetch the rest.
+        try {
+            const fromD1 = await this._fetchProfilesFromD1(Array.from(pubkeyMap.keys()));
+            for (const pk of fromD1) {
+                const list = pubkeyMap.get(pk);
+                if (list) { list.forEach(r => r()); pubkeyMap.delete(pk); }
+            }
+        } catch (_) { }
+        // Bitchat users carry their nickname in the message `n` tag and have no
+        // kind 0 profile, so don't relay-fetch them.
+        if (this.bitchatUsers) {
+            for (const pk of [...pubkeyMap.keys()]) {
+                if (this.bitchatUsers.has(pk)) {
+                    const list = pubkeyMap.get(pk);
+                    if (list) { list.forEach(r => r()); pubkeyMap.delete(pk); }
+                }
+            }
+        }
+        if (pubkeyMap.size === 0) return;
+
+        if (this._getApiHost && this._getApiHost()) {
+            pubkeyMap.forEach(list => list.forEach(r => r()));
+            return;
+        }
 
         const pubkeys = Array.from(pubkeyMap.keys());
         const resolvers = pubkeyMap;
@@ -2643,10 +2669,56 @@ Object.assign(NYM.prototype, {
         try { list = JSON.parse(event.content || '[]'); }
         catch (_) { return; }
         if (!Array.isArray(list)) return;
+        let added = false;
         for (const pk of list) {
             if (typeof pk !== 'string' || !/^[0-9a-f]{64}$/i.test(pk)) continue;
             if (pk === this.pubkey) continue;
+            if (!this.nymchatPubkeys.has(pk)) added = true;
             this._markNymchatPubkey(pk);
+        }
+        // Newly trusted pubkeys mean new vouch authors to fetch — expand the web
+        // of trust one hop via a heavily debounced resubscribe (converges, then
+        // goes quiet once no new pubkeys appear).
+        if (added) this._scheduleVouchExpansion();
+    },
+
+    _scheduleVouchExpansion() {
+        if (this._vouchExpansionTimer) return;
+        this._vouchExpansionTimer = setTimeout(() => {
+            this._vouchExpansionTimer = null;
+            if (typeof this._scheduleCriticalResubscribe === 'function') {
+                this._scheduleCriticalResubscribe();
+            }
+        }, 15000);
+    },
+
+    // Rebuild the web of trust from D1 (vouch lists are archived under the
+    // 'nym-vouches' pseudo-channel) instead of re-fetching every trusted peer's
+    // vouch list from relays. Signatures are verified and the graph is expanded
+    // iteratively so a vouch from a newly-trusted author is applied once they're
+    // rooted.
+    async _fetchVouchesFromD1() {
+        if (!this._getApiHost || !this._getApiHost()) return;
+        if (typeof this._storageApiStream !== 'function') return;
+        const events = [];
+        try {
+            const resp = await this._storageApiStream('channel-get', { channel: 'nym-vouches' }, false);
+            await this._readNdjsonStream(resp, (ev) => { if (ev && ev.kind === 30078) events.push(ev); });
+        } catch (_) { return; }
+        if (events.length === 0) return;
+        const valid = [];
+        for (const ev of events) {
+            if (await this._verifyRelayEventAsync(ev)) valid.push(ev);
+        }
+        let changed = true;
+        let guard = 0;
+        while (changed && guard++ < 20) {
+            const before = this.nymchatPubkeys ? this.nymchatPubkeys.size : 0;
+            for (const ev of valid) {
+                try { this.handleVouchEvent(ev); } catch (_) { }
+            }
+            const after = this.nymchatPubkeys ? this.nymchatPubkeys.size : 0;
+            changed = after !== before;
         }
     },
 

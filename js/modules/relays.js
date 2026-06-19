@@ -1342,7 +1342,6 @@ Object.assign(NYM.prototype, {
         const since24h = Math.floor(Date.now() / 1000) - 86400;
         const isGeo = this._isGeoOrDiscoveredRelay(relayUrl);
 
-        // Geo relays only get channel-message kinds (20000, 23333)
         if (isGeo) {
             const subId = Math.random().toString(36).substring(2);
             if (!relay.subscriptions) relay.subscriptions = new Set();
@@ -1683,19 +1682,19 @@ Object.assign(NYM.prototype, {
         return `wss://${host}/api/relay-pool`;
     },
 
-    // Returns true if any pool socket is open (including the direct app relay)
+    // Returns true if any pool socket is open
     _isAnyPoolOpen() {
         return this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.OPEN);
     },
 
-    // Returns true if any *worker* socket is open
     _isAnyWorkerPoolOpen() {
-        return this.poolSockets.some(p => !p.direct && p.ws && p.ws.readyState === WebSocket.OPEN);
+        return this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.OPEN);
     },
 
-    // Build the single relay-pool coordinator shard. The worker connects to
-    // every relay and dedupes globally; relays are tagged by role so it can
-    // apply the heavier critical filters only where they belong.
+    // Shard relays into role-keyed worker groups with STABLE ids, so a shard's
+    // membership stays fixed as geo/discovered relays load in asynchronously.
+    // (Positional pool-N ids reshuffled membership on every list change, which
+    // made the health check tear sockets down as zombies.)
     _shardRelaysByRole(allRelays, geoRelayUrls, dmRelays) {
         if (this.settings && this.settings.groupChatPMOnlyMode) {
             allRelays = this.defaultRelays;
@@ -1705,21 +1704,63 @@ Object.assign(NYM.prototype, {
         const permanent = this._permanentBlacklist || new Set();
         const isValid = (url) => typeof url === 'string' && url.startsWith('wss://') && !blocked.has(url) && !permanent.has(url);
 
-        const geo = [...new Set(geoRelayUrls || [])].filter(isValid);
-        const geoSet = new Set(geo);
-        const critical = [...new Set([...(allRelays || []), ...this.defaultRelays, ...(dmRelays || [])])]
-            .filter(url => isValid(url) && !geoSet.has(url));
-        const dm = [...new Set(dmRelays || [])].filter(isValid);
+        const geoSet = new Set((geoRelayUrls || []).filter(isValid));
+        const appRelay = this.appRelay;
+        const appValid = appRelay && isValid(appRelay);
 
-        return [{
-            id: 'pool-0',
-            role: 'all',
-            relays: [...critical, ...geo],
-            dmRelays: dm,
-            roleConfig: { critical, geo, dmRelays: dm }
-        }];
+        // Critical = default relays (+ DM relays), excluding the app relay
+        const critical = [...new Set([...this.defaultRelays, ...(dmRelays || [])])]
+            .filter(url => isValid(url) && url !== appRelay);
+
+        const reservedSet = new Set(critical);
+        if (appValid) reservedSet.add(appRelay);
+
+        // Geo = CSV relays not already reserved
+        const geo = [...geoSet].filter(url => !reservedSet.has(url));
+
+        // Discovered = anything in allRelays not already reserved or geo
+        const geoForDiscovered = new Set(geo);
+        const claimedCanon = new Set([...reservedSet, ...geoForDiscovered].map(u => this._canonicalRelayUrl(u)));
+        const seenDiscoveredCanon = new Set();
+        const discovered = [...new Set(allRelays || [])].filter(url => {
+            if (!isValid(url) || reservedSet.has(url) || geoForDiscovered.has(url)) return false;
+            const canon = this._canonicalRelayUrl(url);
+            if (claimedCanon.has(canon) || seenDiscoveredCanon.has(canon)) return false;
+            seenDiscoveredCanon.add(canon);
+            return true;
+        });
+
+        const chunkArray = (arr, size) => {
+            const chunks = [];
+            for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+            return chunks;
+        };
+
+        const size = this.RELAYS_PER_WORKER || 50;
+        const shards = [];
+
+        // Dedicated app relay shard, so the default relays always have a live
+        // socket to wss://relay.nymchat.app via the proxy.
+        if (appValid) {
+            shards.push({ id: 'app-0', role: 'critical', relays: [appRelay], dmRelays: [appRelay] });
+        }
+
+        const criticalDmRelays = (dmRelays || []).filter(url => isValid(url) && url !== appRelay);
+        chunkArray(critical, size).forEach((chunk, i) => {
+            shards.push({ id: `critical-${i}`, role: 'critical', relays: chunk, dmRelays: i === 0 ? criticalDmRelays : [] });
+        });
+
+        chunkArray(geo, size).forEach((chunk, i) => {
+            shards.push({ id: `geo-${i}`, role: 'geo', relays: chunk, dmRelays: [] });
+        });
+
+        chunkArray(discovered, size).forEach((chunk, i) => {
+            shards.push({ id: `discovered-${i}`, role: 'discovered', relays: chunk, dmRelays: [] });
+        });
+
+        if (shards.length === 0) shards.push({ id: 'critical-0', role: 'critical', relays: [], dmRelays: [] });
+        return shards;
     },
-
     // Add a message listener to all open pool sockets
     _poolAddMessageListener(handler) {
         for (const p of this.poolSockets) {
@@ -1900,23 +1941,6 @@ Object.assign(NYM.prototype, {
                 }
             }
         }
-
-        // Backstop for the default relay list
-        const DEFAULT_MISSING_MS = 90000;
-        const connectedSet = new Set(this.poolConnectedRelays || []);
-        if (!this._defaultRelayMissingSince) this._defaultRelayMissingSince = new Map();
-        let forceResend = false;
-        for (const url of (this.defaultRelays || [])) {
-            if (connectedSet.has(url)) { this._defaultRelayMissingSince.delete(url); continue; }
-            const first = this._defaultRelayMissingSince.get(url) || now;
-            this._defaultRelayMissingSince.set(url, first);
-            if (now - first > DEFAULT_MISSING_MS) forceResend = true;
-        }
-        if (forceResend) {
-            this._defaultRelayMissingSince.clear();
-            for (const p of this.poolSockets) p.relays = null;
-            this._poolSendRelayConfigNow();
-        }
     },
 
     _startPoolShardHealthCheck() {
@@ -1974,18 +1998,8 @@ Object.assign(NYM.prototype, {
             return Promise.reject(new Error('No relay shards to connect'));
         }
 
-        // Gate pool readiness on a worker shard, not the direct app relay
-        const directShards = shards.filter(s => s.direct);
-        const workerShards = shards.filter(s => !s.direct);
-        const gatedShards = workerShards.length > 0 ? workerShards : shards;
-        const [firstShard, ...restShards] = gatedShards;
-        const parallelShards = workerShards.length > 0 ? directShards : [];
-
-        for (const shard of parallelShards) {
-            this._connectSinglePoolWorker(shard)
-                .then(() => this._poolSubscribeOnWorker(shard.id))
-                .catch(() => this._reconnectPoolShard(shard));
-        }
+        // Gate pool readiness on the first shard
+        const [firstShard, ...restShards] = shards;
 
         return new Promise((resolve, reject) => {
             this._connectSinglePoolWorker(firstShard).then(() => {
@@ -2060,11 +2074,9 @@ Object.assign(NYM.prototype, {
                 clearTimeout(timeout);
                 wasOpen = true;
 
-                const rc = shard.roleConfig || { critical: shard.relays || [], geo: [], dmRelays: shard.dmRelays || [] };
                 ws.send(JSON.stringify(['RELAYS', {
-                    critical: rc.critical,
-                    geo: rc.geo,
-                    dmRelays: rc.dmRelays
+                    relays: shard.relays || [],
+                    dmRelays: shard.dmRelays || []
                 }]));
 
                 if (this._relayUnsupportedKinds && this._relayUnsupportedKinds.size > 0) {
@@ -2107,6 +2119,11 @@ Object.assign(NYM.prototype, {
                         return;
                     }
 
+                    if (msgType === 'POOL:SHARDS') {
+                        this.relayStats.shardInfo = Array.isArray(msg[1]) ? msg[1] : [];
+                        return;
+                    }
+
                     if (msgType === 'POOL:STATUS') {
                         const status = msg[1];
                         poolEntry.connectedRelays = status.connected || [];
@@ -2128,6 +2145,12 @@ Object.assign(NYM.prototype, {
                         const evt = msg[2];
                         if (evt && typeof evt.created_at === 'number' && evt.created_at > 0) {
                             this._updateShardLastSeen(poolEntry.id, evt.created_at);
+                            if (typeof evt.kind === 'number') {
+                                if (!this._poolKindNewest) this._poolKindNewest = new Map();
+                                if (evt.created_at > (this._poolKindNewest.get(evt.kind) || 0)) {
+                                    this._poolKindNewest.set(evt.kind, evt.created_at);
+                                }
+                            }
                         }
                         this.handleRelayMessage(msg, 'relay-pool');
                     } else {
@@ -2183,6 +2206,7 @@ Object.assign(NYM.prototype, {
             };
         });
     },
+
 
 
     // Merge POOL:STATUS from all workers into unified state
@@ -2390,7 +2414,6 @@ Object.assign(NYM.prototype, {
         }
         const msg = JSON.stringify(['KIND_BLACKLIST', payload]);
         for (const p of this.poolSockets) {
-            if (p.direct) continue;
             this._safeWsSend(p.ws, msg, { critical: true });
         }
     },
@@ -2406,19 +2429,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Role-scoped send: the worker routes the wrapped message only to relays
-    // tagged with this role (e.g. heavy critical filters skip geo relays).
+    // All relays now share one subscription set, so role scoping is a no-op —
+    // kept as a thin alias so existing callers don't need rewiring.
     _poolSendToRole(role, data) {
-        if (Array.isArray(data) && data[0] === 'REQ') {
-            data = this._normalizeReqPayload(data);
-        }
-        const inner = Array.isArray(data) ? data : [data];
-        const msg = JSON.stringify(['ROLE', role, ...inner]);
-        const verb = inner[0];
-        const critical = verb === 'EVENT' || verb === 'DM_EVENT' || verb === 'GEO_EVENT' || verb === 'CLOSE' || verb === 'REQ';
-        for (const p of this.poolSockets) {
-            this._safeWsSend(p.ws, msg, { critical });
-        }
+        this._poolSend(data);
     },
 
     // Single coordinator socket serves every role, so a (re)connected pool
@@ -2426,7 +2440,16 @@ Object.assign(NYM.prototype, {
     _poolSubscribeOnWorker(shardId) {
         const p = this.poolSockets.find(w => w.id === shardId);
         if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
-        this._poolSubscribe();
+        // Re-subscribe only this socket, reusing the live sub ids, so one shard
+        // recycle doesn't re-REQ the whole pool.
+        if (!this._lastPoolSubId || !this._lastPoolFilters) {
+            this._poolSubscribe();
+            return;
+        }
+        this._safeWsSend(p.ws, JSON.stringify(this._normalizeReqPayload(["REQ", this._lastPoolSubId, ...this._lastPoolFilters])), { critical: true });
+        if (this._lastEphemeralSubId && this._lastEphemeralFilter) {
+            this._safeWsSend(p.ws, JSON.stringify(this._normalizeReqPayload(["REQ", this._lastEphemeralSubId, this._lastEphemeralFilter])), { critical: true });
+        }
     },
 
     _getShardSinceFloor(shardId) {
@@ -2450,75 +2473,94 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Geo relays now get the same subscription set as the default relays.
     _buildGeoFilters(since24h) {
-        const filters = [];
-        if (!this.settings.groupChatPMOnlyMode) {
-            filters.push({ kinds: [20000], since: since24h });
-        }
-        return filters;
+        return this._buildCriticalFilters(since24h);
     },
 
-    _buildCriticalFilters(since24h) {
+    _buildCriticalFilters(since24h, channelSince) {
         const filters = [];
         const nowSec = Math.floor(Date.now() / 1000);
         const channelMode = !this.settings.groupChatPMOnlyMode;
+        const d1Available = !!(this._getApiHost && this._getApiHost());
+        const chSince = d1Available ? nowSec : ((typeof channelSince === 'number') ? channelSince : since24h);
+        const lim = (n) => d1Available ? 1 : n;
 
-        // Critical real-time filters — proxy splits these into individual subs (one per filter)
         if (this.pubkey) {
-            filters.push({ kinds: [1059], "#p": [this.pubkey], limit: 500 });
+            filters.push({ kinds: [1059], "#p": [this.pubkey], limit: d1Available ? 1 : 500 });
         }
         if (channelMode) {
-            filters.push({ kinds: [20000], since: since24h });
-            filters.push({ kinds: [23333], since: since24h });
-        }
-        if (this.pubkey) {
-            filters.push({ kinds: [7], "#p": [this.pubkey], "#k": ["20000", "23333"], limit: 100 });
-        }
-        if (channelMode) {
-            filters.push({ kinds: [7], "#k": ["20000", "23333"], since: since24h, limit: 100 });
-        }
-        filters.push({ kinds: [7], "#k": ["1059"], limit: 100 });
-        if (channelMode) {
-            filters.push({ kinds: [5], "#k": ["20000", "23333", "1059"], since: since24h, limit: 100 });
+            filters.push({ kinds: [20000], since: chSince });
+            filters.push({ kinds: [23333], since: chSince });
         }
         if (this.pubkey) {
-            filters.push({
-                kinds: [9735],
-                "#p": [this.pubkey],
-                "#k": ["20000", "23333", "1059", "0"],
-                since: since24h,
-                limit: 200
-            });
+            const f = { kinds: [7], "#p": [this.pubkey], "#k": ["20000", "23333"], limit: lim(100) };
+            if (d1Available) f.since = nowSec;
+            filters.push(f);
         }
         if (channelMode) {
-            filters.push({ kinds: [9735], "#k": ["20000", "23333"], since: since24h, limit: 100 });
+            filters.push({ kinds: [7], "#k": ["20000", "23333"], since: chSince, limit: lim(100) });
         }
-        filters.push({ kinds: [9735], "#k": ["1059"], since: since24h, limit: 100 });
+        {
+            const f = { kinds: [7], "#k": ["1059"], limit: lim(100) };
+            if (d1Available) f.since = nowSec;
+            filters.push(f);
+        }
+        if (channelMode) {
+            filters.push({ kinds: [5], "#k": ["20000", "23333", "1059"], since: d1Available ? nowSec : since24h, limit: lim(100) });
+        }
+        if (this.pubkey) {
+            filters.push({ kinds: [9735], "#p": [this.pubkey], "#k": ["20000", "23333", "1059", "0"], since: chSince, limit: lim(200) });
+        }
+        if (channelMode) {
+            filters.push({ kinds: [9735], "#k": ["20000", "23333"], since: chSince, limit: lim(100) });
+        }
+        filters.push({ kinds: [9735], "#k": ["1059"], since: chSince, limit: lim(100) });
 
-        // Less critical — anything past position 9 is bundled into a single sub upstream
         if (this.pubkey) {
-            filters.push({ kinds: [25051], "#p": [this.pubkey], since: nowSec - 120, limit: 50 });
+            filters.push({ kinds: [25051], "#p": [this.pubkey], since: nowSec - 120, limit: lim(50) });
         }
-        filters.push({ kinds: [30078], "#t": ["nym-presence"], limit: 100 });
+        {
+            const f = { kinds: [30078], "#t": ["nym-presence"], limit: lim(100) };
+            if (d1Available) f.since = nowSec;
+            filters.push(f);
+        }
         if (channelMode) {
-            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: since24h, limit: 100 });
+            filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: chSince, limit: lim(100) });
         }
-        filters.push({ kinds: [30078], "#t": ["nym-vouches"], limit: 1000 });
-        filters.push({ kinds: [30030], limit: 300 });
+        if (d1Available) {
+            filters.push({ kinds: [30078], "#t": ["nym-vouches"], since: nowSec, limit: 1 });
+        } else {
+            const vouchAuthors = this.nymchatPubkeys
+                ? [...this.nymchatPubkeys].filter(pk => this._isNostrHex64(pk)).slice(0, 500)
+                : [];
+            if (vouchAuthors.length > 0) {
+                filters.push({ kinds: [30078], "#t": ["nym-vouches"], authors: vouchAuthors, limit: vouchAuthors.length });
+            }
+        }
+        {
+            const f = { kinds: [30030], limit: d1Available ? 1 : 300 };
+            if (d1Available) f.since = nowSec;
+            filters.push(f);
+        }
         if (this.pubkey) {
-            filters.push({ kinds: [25052], since: nowSec - 86400, limit: 100 });
+            filters.push({ kinds: [25052], since: d1Available ? nowSec : nowSec - 86400, limit: lim(100) });
             filters.push({ kinds: [10030], authors: [this.pubkey], limit: 1 });
         }
-        const profileAuthors = this.pmConversations
-            ? Array.from(this.pmConversations.keys()).filter(pk => typeof pk === 'string' && pk.length === 64)
-            : [];
-        // Keep a live kind 0 subscription on our own pubkey so profile edits made
-        // in another Nostr client arrive in real time and get mirrored to D1.
-        if (this.pubkey && !profileAuthors.includes(this.pubkey)) {
-            profileAuthors.push(this.pubkey);
-        }
-        if (profileAuthors.length > 0) {
-            filters.push({ kinds: [0], authors: profileAuthors });
+        if (d1Available) {
+            if (this.pubkey) {
+                filters.push({ kinds: [0], authors: [this.pubkey], since: nowSec, limit: 1 });
+            }
+        } else {
+            const profileAuthors = this.pmConversations
+                ? Array.from(this.pmConversations.keys()).filter(pk => typeof pk === 'string' && pk.length === 64)
+                : [];
+            if (this.pubkey && !profileAuthors.includes(this.pubkey)) {
+                profileAuthors.push(this.pubkey);
+            }
+            if (profileAuthors.length > 0) {
+                filters.push({ kinds: [0], authors: profileAuthors });
+            }
         }
 
         return filters;
@@ -2528,29 +2570,51 @@ Object.assign(NYM.prototype, {
         return typeof s === 'string' && s.length === 64 && /^[0-9a-f]{64}$/i.test(s);
     },
 
+    // On reconnect, raise each broad filter's since to its oldest per-kind
+    // watermark so we fetch only the gap. Author/recipient-scoped filters and
+    // gift wraps (backdated created_at) are left untouched.
+    _applyReconnectSince(filters) {
+        if (!this._poolKindNewest || this._poolKindNewest.size === 0) return;
+        const GAP = 120;
+        for (const f of filters) {
+            if (!f || !Array.isArray(f.kinds) || f.kinds.length === 0) continue;
+            if (f.authors || f['#p']) continue;
+            if (f.kinds.includes(1059)) continue;
+            let oldest = Infinity;
+            for (const k of f.kinds) {
+                const w = this._poolKindNewest.get(k);
+                if (typeof w !== 'number') { oldest = -Infinity; break; }
+                if (w < oldest) oldest = w;
+            }
+            if (!isFinite(oldest)) continue;
+            const floor = oldest - GAP;
+            if (typeof f.since !== 'number' || f.since < floor) f.since = floor;
+        }
+    },
+
     _poolSubscribe() {
         if (!this._isAnyPoolOpen()) return;
 
-        // Close previous subscriptions to avoid duplicate event streams
-        if (this._lastCriticalSubId) {
-            this._poolSendToRole('critical', ["CLOSE", this._lastCriticalSubId]);
+        // One subscription set for every relay (default + geo share it now).
+        if (this._lastPoolSubId) {
+            this._poolSend(["CLOSE", this._lastPoolSubId]);
         }
-        if (this._lastGeoSubId) {
-            this._poolSendToRole('geo', ["CLOSE", this._lastGeoSubId]);
-        }
-        const since24h = Math.floor(Date.now() / 1000) - 86400;
-
-        // Critical shards (default + DM relays): full subscription set
-        const criticalSubId = Math.random().toString(36).substring(2);
-        this._lastCriticalSubId = criticalSubId;
-        const criticalFilters = this._buildCriticalFilters(since24h);
-        this._poolSendToRole('critical', ["REQ", criticalSubId, ...criticalFilters]);
-
-        // Geo relays: channel-message kinds (20000, 23333)
-        const geoSubId = Math.random().toString(36).substring(2);
-        this._lastGeoSubId = geoSubId;
-        const geoFilters = this._buildGeoFilters(since24h);
-        this._poolSendToRole('geo', ["REQ", geoSubId, ...geoFilters]);
+        const nowSec = Math.floor(Date.now() / 1000);
+        const isReconnect = this._poolHasSubscribed;
+        this._poolHasSubscribed = true;
+        const subId = Math.random().toString(36).substring(2);
+        this._lastPoolSubId = subId;
+        // Proxy archives channel events to D1, so when D1 backfill is available
+        // we only ask relays for a recent real-time window and let D1 supply the
+        // history instead of re-pulling 24h on every (re)connect. Fall back to
+        // the 24h window if D1 is unreachable.
+        const since24h = nowSec - 86400;
+        const d1Available = !!(this._getApiHost && this._getApiHost());
+        const channelSince = d1Available ? nowSec - 300 : since24h;
+        const filters = this._buildCriticalFilters(since24h, channelSince);
+        if (isReconnect) this._applyReconnectSince(filters);
+        this._lastPoolFilters = filters;
+        this._poolSend(["REQ", subId, ...filters]);
 
         // Subscribe to ephemeral pubkeys as independent REQs (metadata separation)
         this._refreshEphemeralSubscriptions();
@@ -2566,7 +2630,19 @@ Object.assign(NYM.prototype, {
             ? 0
             : (this.lastPMSyncTime > 0 ? Math.max(0, this.lastPMSyncTime - 300) : 0);
 
-        const filter = { kinds: [1059], '#p': ephPks, limit: 500 * ephPks.length };
+        if (this._getApiHost && this._getApiHost() && typeof this._storageApiStream === 'function') {
+            try {
+                const extra = { pubkeys: ephPks.slice(0, 200) };
+                if (since > 0) extra.since = since;
+                const resp = await this._storageApiStream('pm-get', extra, false);
+                await this._readNdjsonStream(resp, (ev) => {
+                    try { Promise.resolve(this.handleGiftWrapDM(ev, {})).catch(() => { }); } catch (_) { }
+                });
+            } catch (_) { }
+            return;
+        }
+
+        const filter = { kinds: [1059], '#p': ephPks, limit: Math.min(ephPks.length * 20, 1000) };
         if (since > 0) filter.since = since;
         const subId = Math.random().toString(36).substring(2);
         this._registerBackfillSub(subId);
@@ -2608,10 +2684,17 @@ Object.assign(NYM.prototype, {
             const ephPks = this._getAllSelfEphemeralPubkeys();
             if (!ephPks.length) return;
 
-            const since = Math.floor(Date.now() / 1000) - 604800;
             const subId = Math.random().toString(36).substring(2);
             this._ephemeralSubIds.push(subId);
-            const filter = { kinds: [1059], "#p": ephPks, since, limit: 200 * ephPks.length };
+            const filter = { kinds: [1059], "#p": ephPks };
+            if (this._getApiHost && this._getApiHost()) {
+                filter.limit = 1;
+            } else {
+                filter.since = Math.floor(Date.now() / 1000) - 604800;
+                filter.limit = 200 * ephPks.length;
+            }
+            this._lastEphemeralSubId = subId;
+            this._lastEphemeralFilter = filter;
 
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 this._poolSendToRole('critical', ['REQ', subId, filter]);
@@ -2639,21 +2722,18 @@ Object.assign(NYM.prototype, {
         if (this._lastResubscribeAt && now - this._lastResubscribeAt < 15000) return;
         this._lastResubscribeAt = now;
 
-        // Clear stale channel tracking — old subscription IDs are invalid after reconnect
+        // Channel messages flow through the global 20000/23333 subscription and
+        // history is restored from D1, so we no longer fire per-channel targeted
+        // REQs on reconnect. Clear stale tracking so a later channel open
+        // re-subscribes cleanly.
         this.channelLoadedFromRelays.clear();
         this.channelSubscriptions.clear();
         if (this._channelTypingSubs) this._channelTypingSubs.clear();
 
-        // Re-subscribe to current channel immediately
-        if (this.currentChannel) {
-            this.subscribeToChannelTargeted(this.currentChannel, 'geohash');
-        }
-
-        // Re-load joined channels and common geohashes with a small delay
-        // to avoid overwhelming relays right after reconnection
-        setTimeout(() => {
-            this.loadJoinedChannelsFromRelays();
-        }, 1000);
+        // Re-open only the typing sub (24420/24421) for the current channel —
+        // those kinds aren't in the global subscription.
+        const current = this.currentChannel || this.currentGeohash;
+        if (current) this._ensureChannelTypingSub(current, 'geohash');
 
         this.backfillFromD1OnReconnect();
     },
@@ -2668,16 +2748,28 @@ Object.assign(NYM.prototype, {
             this.pmRestoreFromD1().catch(() => { });
         }
 
-        if (typeof this.channelRestoreFromD1 === 'function') {
+        if (typeof this.channelRestoreManyFromD1 === 'function') {
             const channels = new Set();
             const current = this.currentGeohash || this.currentChannel;
             if (current) channels.add(current);
             if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => channels.add(k));
-            channels.forEach(name => this.channelRestoreFromD1(name).catch(() => { }));
+            if (channels.size) this.channelRestoreManyFromD1([...channels]).catch(() => { });
         }
 
         if (typeof this._emojiRestoreFromD1 === 'function') {
             this._emojiRestoreFromD1().catch(() => { });
+        }
+
+        // Profile zaps to us are keyed on our pubkey, not a message id, so pull
+        // them explicitly from D1 since the relay window for #p zaps is tight.
+        if (this.pubkey && typeof this._backfillZapReceiptsFromD1 === 'function') {
+            this._backfillZapReceiptsFromD1([this.pubkey], 'profile').catch(() => { });
+        }
+
+        // Web of trust: rebuild from D1 vouch lists instead of REQ-ing every
+        // trusted peer's vouch list from relays.
+        if (typeof this._fetchVouchesFromD1 === 'function') {
+            this._fetchVouchesFromD1().catch(() => { });
         }
     },
 
@@ -2707,11 +2799,12 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const shard = this._shardRelaysByRole(
+        const shards = this._shardRelaysByRole(
             [...this.allRelayUrls],
             geoRelayUrls,
             this.defaultRelays
-        )[0];
+        );
+        const shardById = new Map(shards.map(s => [s.id, s]));
 
         const arraysEqual = (a, b) => {
             if (!a || !b) return a === b;
@@ -2721,16 +2814,25 @@ Object.assign(NYM.prototype, {
             return true;
         };
 
-        const rc = shard.roleConfig;
-        const payload = JSON.stringify(['RELAYS', { critical: rc.critical, geo: rc.geo, dmRelays: rc.dmRelays }]);
-
+        // Each socket owns one shard; send it only its own relay set. Sockets
+        // whose shard no longer exists (e.g. the relay set shrank) are closed.
         for (const p of this.poolSockets) {
+            const shard = shardById.get(p.id);
+            if (!shard) {
+                p._closing = true;
+                try { if (p.ws) p.ws.close(); } catch (_) { }
+                continue;
+            }
             if (!p.ws || p.ws.readyState !== WebSocket.OPEN) continue;
             if (arraysEqual(p.relays, shard.relays)) continue;
             p.relays = shard.relays;
             p.dmRelays = shard.dmRelays || [];
-            this._safeWsSend(p.ws, payload, { critical: true });
+            this._safeWsSend(p.ws, JSON.stringify(['RELAYS', { relays: shard.relays, dmRelays: shard.dmRelays || [] }]), { critical: true });
         }
+        this.poolSockets = this.poolSockets.filter(p => shardById.has(p.id));
+
+        // Pick up any newly-expected shards that have no socket yet.
+        this._ensureAllShardsConnected();
     },
 
     _isUnsafeRelayUrl(url) {
@@ -3491,6 +3593,19 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    // Per-relay, per-kind tally (count + bytes) so the network stats modal can
+    // show what each relay is actually sending and where data is going.
+    _trackRelayKindData(relayUrl, kind, bytes) {
+        if (typeof relayUrl !== 'string' || !relayUrl.startsWith('wss://')) relayUrl = 'relay-pool';
+        if (!this.relayStats.kindStatsPerRelay) this.relayStats.kindStatsPerRelay = new Map();
+        let perKind = this.relayStats.kindStatsPerRelay.get(relayUrl);
+        if (!perKind) { perKind = new Map(); this.relayStats.kindStatsPerRelay.set(relayUrl, perKind); }
+        let s = perKind.get(kind);
+        if (!s) { s = { count: 0, bytes: 0 }; perKind.set(kind, s); }
+        s.count++;
+        s.bytes += bytes || 0;
+    },
+
     // FIFO gate: EVENTs verify in the worker; everything dispatches in arrival
     // order so EOSE/OK never overtake the events that preceded them
     handleRelayMessage(msg, relayUrl) {
@@ -3560,6 +3675,11 @@ Object.assign(NYM.prototype, {
                     if (attributedRelay) {
                         const cur = this.relayStats.eventsPerRelay.get(attributedRelay) || 0;
                         this.relayStats.eventsPerRelay.set(attributedRelay, cur + 1);
+                        // Track the per-kind breakdown from the same post-dedup
+                        // event so the expanded view sums to the collapsed count.
+                        if (typeof event.kind === 'number') {
+                            this._trackRelayKindData(attributedRelay, event.kind, JSON.stringify(event).length);
+                        }
                     }
 
                     if (this.eventDeduplication.size > 10000) {
@@ -3961,7 +4081,11 @@ Object.assign(NYM.prototype, {
             if (opts && opts.critical) this._queueSocketSend(ws, msg);
             return false;
         }
-        try { ws.send(msg); return true; }
+        try {
+            ws.send(msg);
+            if (this.relayStats) this.relayStats.bytesSent = (this.relayStats.bytesSent || 0) + (typeof msg === 'string' ? msg.length : 0);
+            return true;
+        }
         catch (_) { return false; }
     },
 

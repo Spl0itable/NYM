@@ -227,14 +227,14 @@ Object.assign(NYM.prototype, {
         let resolveCatchup;
         this._dmCatchupReady = new Promise(r => { resolveCatchup = r; });
 
-        if (this.pubkey && this.lastPMSyncTime) {
+        const d1Available = !!(this._getApiHost && this._getApiHost());
+        if (this.pubkey && this.lastPMSyncTime && !d1Available) {
             const since = Math.max(
-                this.lastPMSyncTime - 300, // 5-min buffer before last known event
-                Math.floor(Date.now() / 1000) - 604800 // at most 7 days back
+                this.lastPMSyncTime - 300,
+                Math.floor(Date.now() / 1000) - 604800
             );
             const mkSubId = () => Math.random().toString(36).substring(2);
 
-            // Real pubkey catch-up — fires immediately
             const realFilter = { kinds: [1059], '#p': [this.pubkey], since, limit: 200 };
             const realSubId = mkSubId();
             this._registerBackfillSub(realSubId);
@@ -249,7 +249,6 @@ Object.assign(NYM.prototype, {
                 });
             }
 
-            // Ephemeral pubkey catch-up — single batched REQ with all keys
             const ephPks = this._getAllSelfEphemeralPubkeys();
             if (ephPks.length) {
                 const subId = mkSubId();
@@ -363,6 +362,7 @@ Object.assign(NYM.prototype, {
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
                 this._recordGiftWrapId(nymMessageId, nymWrapped.id);
+                this._depositPMEvent(nymWrapped);
 
                 if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(nymWrapped.id, 1059); }, 600000);
@@ -464,6 +464,7 @@ Object.assign(NYM.prototype, {
 
             const sentWrappedEvents = [['EVENT', wrapped]];
             this.sendDMToRelays(['EVENT', wrapped]);
+            this._depositPMEvent(wrapped);
 
             // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
@@ -1443,6 +1444,46 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Deposit a recipient-addressed gift wrap into the recipient's D1 inbox so
+    // they can restore it even if they were offline when we sent it.
+    _depositPMEvent(event) {
+        if (!event || typeof event.id !== 'string') return;
+        if (!this._pmArchiveAllowed()) return;
+        const pTag = (event.tags || []).find(t =>
+            Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string');
+        if (!pTag || pTag[1] === this.pubkey) return;
+        if (!this._pmDepositedIds) this._pmDepositedIds = new Set();
+        if (this._pmDepositedIds.has(event.id)) return;
+        this._pmDepositedIds.add(event.id);
+        if (this._pmDepositedIds.size > 6000) {
+            this._pmDepositedIds = new Set(Array.from(this._pmDepositedIds).slice(-4000));
+        }
+        if (!this._pmDepositQueue) this._pmDepositQueue = [];
+        this._pmDepositQueue.push(event);
+        if (this._pmDepositQueue.length > 300) this._pmDepositQueue.shift();
+        if (this._pmDepositFlushTimer) return;
+        this._pmDepositFlushTimer = setTimeout(() => {
+            this._pmDepositFlushTimer = null;
+            this._flushPMDeposit();
+        }, 4000);
+    },
+
+    async _flushPMDeposit() {
+        if (!this._pmDepositQueue || this._pmDepositQueue.length === 0) return;
+        const batch = this._pmDepositQueue.splice(0, 100);
+        try {
+            await this._storageApiRequest('pm-deposit', { events: batch });
+        } catch (_) {
+            // Best-effort: drop on failure rather than risk an upload loop.
+        }
+        if (this._pmDepositQueue.length > 0 && !this._pmDepositFlushTimer) {
+            this._pmDepositFlushTimer = setTimeout(() => {
+                this._pmDepositFlushTimer = null;
+                this._flushPMDeposit();
+            }, 4000);
+        }
+    },
+
     _yieldToIdle() {
         return new Promise(resolve => {
             if (typeof requestIdleCallback === 'function') {
@@ -1499,17 +1540,23 @@ Object.assign(NYM.prototype, {
             }
         }
         if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
-        const CHUNK = 10;
-        for (let i = 0; i < events.length; i += CHUNK) {
-            const end = Math.min(i + CHUNK, events.length);
-            for (let k = i; k < end; k++) {
-                const ev = events[k];
-                if (!ev || typeof ev.id !== 'string') continue;
-                if (this._pmArchivedIds.has(ev.id)) continue;
-                this._pmArchivedIds.add(ev.id);
-                try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
+        // Suppress the settings save the replay would otherwise trigger.
+        this._restoreFromD1Depth = (this._restoreFromD1Depth || 0) + 1;
+        try {
+            const CHUNK = 10;
+            for (let i = 0; i < events.length; i += CHUNK) {
+                const end = Math.min(i + CHUNK, events.length);
+                for (let k = i; k < end; k++) {
+                    const ev = events[k];
+                    if (!ev || typeof ev.id !== 'string') continue;
+                    if (this._pmArchivedIds.has(ev.id)) continue;
+                    this._pmArchivedIds.add(ev.id);
+                    try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
+                }
+                if (end < events.length) await this._yieldToIdle();
             }
-            if (end < events.length) await this._yieldToIdle();
+        } finally {
+            this._restoreFromD1Depth = Math.max(0, (this._restoreFromD1Depth || 1) - 1);
         }
         this._pmD1Loading = false;
         return events.length > 0;
@@ -3131,6 +3178,7 @@ Object.assign(NYM.prototype, {
                     const nymWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', nymWrapped]);
                     this._recordGiftWrapId(nymMessageId, nymWrapped.id);
+                    this._depositPMEvent(nymWrapped);
                 }
 
                 if (recipientPubkey !== this.pubkey) {
@@ -3156,6 +3204,7 @@ Object.assign(NYM.prototype, {
                 if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                 const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
                 this.sendDMToRelays(['EVENT', wrapped]);
+                this._depositPMEvent(wrapped);
 
                 // Self-wrap so our own edit is retrievable from relays after reload
                 if (recipientPubkey !== this.pubkey) {

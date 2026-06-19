@@ -188,7 +188,7 @@ async function botGenerateInvoice(env, sats, zapRequest, comment) {
 // per-request signatures are skipped. The HTTP path verifies each request.
 function clientAuthOk(context, body, userPubkey) {
   if (context && context._wsAuthedPubkey) return context._wsAuthedPubkey === userPubkey;
-  return clientAuthOk(context, body, userPubkey);
+  return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action });
 }
 
 async function handleShopAction(context, body, botPrivkey, botPubkey) {
@@ -745,6 +745,15 @@ function pmIsValidWrapForUser(ev, pubkey) {
   } catch (e) { return false; }
 }
 
+// The recipient pubkey a gift wrap is addressed to (its `p` tag).
+function pmWrapRecipient(ev) {
+  if (!ev || !Array.isArray(ev.tags)) return null;
+  var p = ev.tags.find(function (t) {
+    return Array.isArray(t) && t[0] === "p" && typeof t[1] === "string" && /^[0-9a-f]{64}$/i.test(t[1]);
+  });
+  return p ? p[1].toLowerCase() : null;
+}
+
 async function handlePmAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -754,6 +763,47 @@ async function handlePmAction(context, body) {
     });
   };
   if (!hasD1(env.DB_PM)) return json({ error: "PM storage is not configured (missing DB_PM binding)." }, 503);
+
+  // Public inbox read by pubkey list (e.g. our own ephemeral identities). Gift
+  // wraps are already public-by-recipient on relays and the payloads stay
+  // encrypted, so this exposes nothing new and needs no auth.
+  if (body.action === "pm-get" && Array.isArray(body.pubkeys)) {
+    var inboxPks = [];
+    var seenInbox = {};
+    for (var ipi = 0; ipi < body.pubkeys.length && inboxPks.length < 200; ipi++) {
+      var ipk = body.pubkeys[ipi];
+      if (typeof ipk === "string" && /^[0-9a-f]{64}$/i.test(ipk)) {
+        var lipk = ipk.toLowerCase();
+        if (!seenInbox[lipk]) { seenInbox[lipk] = 1; inboxPks.push(lipk); }
+      }
+    }
+    var inboxSince = Number(body.since) || 0;
+    var inboxLimit = Number(body.limit);
+    if (!Number.isFinite(inboxLimit) || inboxLimit <= 0) inboxLimit = 1000;
+    if (inboxLimit > 1000) inboxLimit = 1000;
+    var inboxRows = [];
+    if (inboxPks.length) {
+      try {
+        var inboxPh = inboxPks.map(function () { return "?"; }).join(",");
+        inboxRows = (await replica(env.DB_PM).prepare(
+          "SELECT event FROM pm WHERE pubkey IN (" + inboxPh + ") AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
+        ).bind(...inboxPks, inboxSince, inboxLimit).all()).results || [];
+      } catch (e) { inboxRows = []; }
+    }
+    var inboxEnc = new TextEncoder();
+    var inboxStream = new ReadableStream({
+      start(controller) {
+        for (var ij = 0; ij < inboxRows.length; ij++) {
+          controller.enqueue(inboxEnc.encode(inboxRows[ij].event + "\n"));
+        }
+        try { controller.close(); } catch (_) { }
+      }
+    });
+    return new Response(inboxStream, {
+      status: 200,
+      headers: { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS }
+    });
+  }
 
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
@@ -780,6 +830,33 @@ async function handlePmAction(context, body) {
       res.forEach(function (r) { added += (r.meta && r.meta.changes) || 0; });
     }
     return json({ ok: true, added: added });
+  }
+
+  // Store-and-forward inbox: deposit a recipient-addressed gift wrap so the
+  // recipient can restore it even if they were offline when it was sent. Keyed
+  // by the wrap's `p`-tag recipient, not the authenticated sender. The wrap is
+  // validated (kind 1059, signature, addressed to that recipient) and the
+  // authenticated sender gates anonymous spam.
+  if (body.action === "pm-deposit") {
+    var depEvents = Array.isArray(body.events) ? body.events.slice(0, 100)
+      : (body.event ? [body.event] : []);
+    var depNow = Date.now();
+    var depStmt = env.DB_PM.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
+    var depBatch = [];
+    for (var di = 0; di < depEvents.length; di++) {
+      var dev = depEvents[di];
+      var recipient = pmWrapRecipient(dev);
+      if (!recipient || recipient === userPubkey) continue;
+      if (JSON.stringify(dev).length > PM_EVENT_MAX) continue;
+      if (!pmIsValidWrapForUser(dev, recipient)) continue;
+      depBatch.push(depStmt.bind(recipient, dev.id, dev.created_at || 0, JSON.stringify(dev), depNow));
+    }
+    var depAdded = 0;
+    if (depBatch.length) {
+      var depRes = await env.DB_PM.batch(depBatch);
+      depRes.forEach(function (r) { depAdded += (r.meta && r.meta.changes) || 0; });
+    }
+    return json({ ok: true, added: depAdded });
   }
 
   if (body.action === "pm-get") {
@@ -852,23 +929,36 @@ async function handleChannelAction(context, body) {
   // Public read: hydrate a channel's recent history. No auth (channels are
   // public); the worker's origin gate already limits this to Nymchat clients.
   if (body.action === "channel-get") {
-    var name = archiveSanitizeChannel(body.channel);
-    if (!name) return json({ error: "Invalid channel." }, 400);
+    var reqChannels = [];
+    if (Array.isArray(body.channels)) {
+      var seenC = {};
+      for (var ci = 0; ci < body.channels.length && reqChannels.length < 50; ci++) {
+        var cn = archiveSanitizeChannel(body.channels[ci]);
+        if (cn && !seenC[cn]) { seenC[cn] = 1; reqChannels.push(cn); }
+      }
+    } else {
+      var single = archiveSanitizeChannel(body.channel);
+      if (single) reqChannels.push(single);
+    }
+    if (!reqChannels.length) return json({ error: "Invalid channel." }, 400);
+    var isSingle = reqChannels.length === 1;
     var minTsSec = Math.floor((Date.now() - CHANNEL_TTL_MS) / 1000);
     var since = Number(body.since) || 0;
     var floorSec = since > minTsSec ? since : minTsSec;
     var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS };
-    if (!since) {
-      var cachedBody = await readCacheGetRaw("/channel/" + name);
+    // Per-channel read cache only for the single, no-since case.
+    if (isSingle && !since) {
+      var cachedBody = await readCacheGetRaw("/channel/" + reqChannels[0]);
       if (cachedBody !== null) {
         return new Response(cachedBody, { status: 200, headers: ndjsonHeaders });
       }
     }
     var rows = [];
     try {
+      var cph = reqChannels.map(function () { return "?"; }).join(",");
       rows = (await replica(env.DB_CHANNELS).prepare(
-        "SELECT id, kind, json FROM events WHERE channel = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500"
-      ).bind(name, floorSec).all()).results || [];
+        "SELECT id, kind, json FROM events WHERE channel IN (" + cph + ") AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
+      ).bind(...reqChannels, floorSec, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
     var zapRows = [];
     if (rows.length) {
@@ -885,7 +975,7 @@ async function handleChannelAction(context, body) {
       }
     }
     var encoder = new TextEncoder();
-    var cacheBuf = !since ? [] : null;
+    var cacheBuf = (isSingle && !since) ? [] : null;
     var stream = new ReadableStream({
       start(controller) {
         for (var i = 0; i < rows.length; i++) {
@@ -900,7 +990,7 @@ async function handleChannelAction(context, body) {
         }
         try { controller.close(); } catch (_) { }
         if (cacheBuf) {
-          readCachePutRaw(context, "/channel/" + name, cacheBuf.join(""), "application/x-ndjson", CHANNEL_READ_TTL);
+          readCachePutRaw(context, "/channel/" + reqChannels[0], cacheBuf.join(""), "application/x-ndjson", CHANNEL_READ_TTL);
         }
       }
     });
@@ -948,6 +1038,34 @@ async function handleChannelAction(context, body) {
       });
     }
     return json({ activity: activity });
+  }
+
+  // Public read: discover recently-active geohash channels (kind 20000) so the
+  // explorer can plot channels the client has never opened. Returns 24 hourly
+  // buckets per channel, same shape as channel-activity.
+  if (body.action === "channel-active") {
+    var cachedActive = await readCacheGet("/channel-active");
+    if (cachedActive && cachedActive.activity && typeof cachedActive.activity === "object") {
+      return json({ activity: cachedActive.activity });
+    }
+    var nowSecD = Math.floor(Date.now() / 1000);
+    var minTsD = nowSecD - 24 * 3600;
+    var activeOut = {};
+    try {
+      var rsD = await replica(env.DB_CHANNELS).prepare(
+        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c " +
+        "FROM events WHERE kind = 20000 AND created_at >= ? GROUP BY channel, age LIMIT 12000"
+      ).bind(nowSecD, minTsD).all();
+      (rsD.results || []).forEach(function (r) {
+        var ageH = r.age;
+        if (ageH < 0 || ageH >= 24) return;
+        var b = activeOut[r.channel];
+        if (!b) { b = new Array(24).fill(0); activeOut[r.channel] = b; }
+        b[ageH] = r.c || 0;
+      });
+    } catch (e) { }
+    readCachePut(context, "/channel-active", { activity: activeOut }, CHANNEL_READ_TTL);
+    return json({ activity: activeOut });
   }
 
   // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
@@ -1072,13 +1190,22 @@ function zapScopeFromDescription(ev) {
   if (!k || typeof k[1] !== "string") return null;
   if (k[1] === "20000" || k[1] === "23333") return "channel";
   if (k[1] === "1059") return "pm";
+  if (k[1] === "0") return "profile";
   return null;
+}
+
+// Profile zaps carry no e tag; they key on the recipient (p tag) pubkey.
+function zapRecipientPubkey(ev) {
+  var p = (ev.tags || []).find(function (t) {
+    return Array.isArray(t) && t[0] === "p" && typeof t[1] === "string" && /^[0-9a-f]{64}$/i.test(t[1]);
+  });
+  return p ? p[1].toLowerCase() : null;
 }
 
 function zapClassify(ev) {
   var scope = zapScopeFromDescription(ev);
   if (!scope) return null;
-  var targetId = zapTargetId(ev);
+  var targetId = scope === "profile" ? zapRecipientPubkey(ev) : zapTargetId(ev);
   if (!targetId) return null;
   return { scope: scope, targetId: targetId };
 }
@@ -1160,7 +1287,9 @@ async function handleZapAction(context, body) {
       if (JSON.stringify(ev).length > ZAP_EVENT_MAX) continue;
       var info = zapClassify(ev);
       if (!info) continue;
-      if (info.scope === "channel") chan.push({ ev: ev, targetId: info.targetId });
+      // Channel and profile zaps live in the channels DB (profile zaps keyed by
+      // recipient pubkey); PM zaps in the PM DB.
+      if (info.scope === "channel" || info.scope === "profile") chan.push({ ev: ev, targetId: info.targetId });
       else if (info.scope === "pm") pm.push({ ev: ev, targetId: info.targetId });
     }
     var added = 0;

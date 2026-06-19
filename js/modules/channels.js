@@ -142,18 +142,23 @@ Object.assign(NYM.prototype, {
             if (channel.startsWith('#')) add(channel.substring(1));
         });
         const list = [...names];
-        if (list.length === 0) return;
 
         try {
-            const data = await this._storageApiRequest('channel-activity', { channels: list }, false);
-            const activity = data && data.activity;
-            if (!activity || typeof activity !== 'object') return;
             if (!this._geohashD1Activity) this._geohashD1Activity = new Map();
-            for (const [name, buckets] of Object.entries(activity)) {
-                if (Array.isArray(buckets)) {
-                    this._geohashD1Activity.set(String(name).toLowerCase(), buckets);
+            const merge = (activity) => {
+                if (!activity || typeof activity !== 'object') return;
+                for (const [name, buckets] of Object.entries(activity)) {
+                    if (Array.isArray(buckets) && this.isValidGeohash(name)) {
+                        this._geohashD1Activity.set(String(name).toLowerCase(), buckets);
+                    }
                 }
-            }
+            };
+            const [discovered, known] = await Promise.all([
+                this._storageApiRequest('channel-active', {}, false).catch(() => null),
+                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
+            ]);
+            merge(discovered && discovered.activity);
+            merge(known && known.activity);
             // Refresh the explorer view if it's open.
             if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
                 this.geohashMap.updatePoints();
@@ -946,15 +951,32 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // net correctly. Throttled per channel.
     async channelRestoreFromD1(channelName) {
         if (!channelName) return;
+        return this.channelRestoreManyFromD1([channelName]);
+    },
+
+    // Batch several channels' archived events into one channel-get instead of a
+    // request per channel. Per-channel throttle is preserved.
+    async channelRestoreManyFromD1(channelNames) {
+        if (!Array.isArray(channelNames) || channelNames.length === 0) return;
         if (!this._getApiHost || !this._getApiHost()) return;
-        const name = String(channelName).toLowerCase();
         if (!this._channelD1FetchedAt) this._channelD1FetchedAt = new Map();
-        const last = this._channelD1FetchedAt.get(name) || 0;
-        if (Date.now() - last < 60000) return;
-        this._channelD1FetchedAt.set(name, Date.now());
+        const now = Date.now();
+        const names = [];
+        const seen = new Set();
+        for (const cn of channelNames) {
+            if (!cn) continue;
+            const name = String(cn).toLowerCase();
+            if (seen.has(name)) continue;
+            if ((this._channelD1FetchedAt.get(name) || 0) > now - 60000) continue;
+            seen.add(name);
+            this._channelD1FetchedAt.set(name, now);
+            names.push(name);
+            if (names.length >= 50) break;
+        }
+        if (names.length === 0) return;
         const events = [];
         try {
-            const resp = await this._storageApiStream('channel-get', { channel: name }, false);
+            const resp = await this._storageApiStream('channel-get', { channels: names }, false);
             await this._readNdjsonStream(resp, (ev) => events.push(ev));
         } catch (_) {
             return;

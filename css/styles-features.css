@@ -3819,15 +3819,15 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 
 .relay-stats-cards {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
     margin-bottom: 16px;
     padding: 0 4px;
 }
 
 .relay-stat-card {
     text-align: center;
-    padding: 12px 6px;
+    padding: 8px 3px;
     border-radius: var(--radius-sm);
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
@@ -3835,7 +3835,7 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 
 .relay-stat-value {
     font-family: var(--font-mono);
-    font-size: 18px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--primary);
     line-height: 1.2;
@@ -3846,11 +3846,11 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 
 .relay-stat-label {
     font-family: var(--font-sans);
-    font-size: 10px;
+    font-size: 9px;
     color: var(--text-dim);
     margin-top: 4px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.4px;
 }
 
 .relay-stats-section {
@@ -3893,12 +3893,46 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .relay-stats-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    cursor: pointer;
     padding: 8px 12px;
     gap: 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     font-family: var(--font-sans);
     font-size: 12px;
     transition: background var(--transition);
+}
+
+.relay-stats-detail {
+    flex-basis: 100%;
+    margin-top: 6px;
+    padding-left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.rs-kind-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+}
+
+.rs-kind-row > span:nth-child(2),
+.rs-kind-row > span:nth-child(3) {
+    text-align: right;
+}
+
+.rs-shard-line {
+    padding: 6px 12px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    word-break: break-word;
 }
 
 .relay-stats-row:last-child {

@@ -19,7 +19,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
         'swipeReactEmoji', 'notificationsEnabled', 'groupNotifyMentionsOnly', 'notifyFriendsOnly',
         'syncMLSHistory', 'seenCalls'],
     channels: ['pinnedChannels', 'userJoinedChannels', 'sortByProximity', 'pinnedLandingChannel',
-        'hideNonPinned', 'channelLastRead', 'closedPMs', 'leftGroups', 'closedPMTimes',
+        'hideNonPinned', 'closedPMs', 'leftGroups', 'closedPMTimes',
         'leftGroupTimes'],
     data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt']
 };
@@ -147,7 +147,6 @@ Object.assign(NYM.prototype, {
             leftGroups: Array.from(this.leftGroups || []),
             closedPMTimes: this.closedPMTimes ? Object.fromEntries(this.closedPMTimes) : {},
             leftGroupTimes: this.leftGroupTimes ? Object.fromEntries(this.leftGroupTimes) : {},
-            channelLastRead: this.channelLastRead ? Object.fromEntries(this.channelLastRead) : {},
             acceptPMs: this.settings.acceptPMs || 'enabled',
             acceptCalls: this.settings.acceptCalls || 'enabled',
             seenCalls: this._seenCallsForSync(),
@@ -218,6 +217,7 @@ Object.assign(NYM.prototype, {
     // group messages) into a single Nostr publish.  Delay defaults to 5 seconds.
     _debouncedNostrSettingsSave(delayMs = 5000) {
         if (this._applyingRemoteSettings) return;
+        if (this._restoreFromD1Depth > 0) return;
         if (this._settingsSaveTimer) clearTimeout(this._settingsSaveTimer);
         this._settingsSaveTimer = setTimeout(() => {
             this._settingsSaveTimer = null;
@@ -350,7 +350,12 @@ Object.assign(NYM.prototype, {
     // Publish one data category as its own self-addressed gift wrap
     async _publishCategoryWrap(payload, dTag, createdAt, trimFns) {
         const RUMOR_OVERHEAD = 256;
-        const MAX_RUMOR_BYTES = Math.floor((65535 - 512) / 1.7);
+        // The payload is encrypted twice (seal kind 13 -> gift wrap kind 1059)
+        // and base64 expands it ~1.9x across both stages. Bound the inner rumor
+        // so the final wrapped event stays under common ~64KiB relay caps.
+        const MAX_WRAPPED_BYTES = 60000;
+        const EXPANSION = 1.95;
+        const MAX_RUMOR_BYTES = Math.floor(MAX_WRAPPED_BYTES / EXPANSION);
         const encoder = new TextEncoder();
         const rumorByteSize = (p) => {
             const json = JSON.stringify(p);
@@ -372,6 +377,15 @@ Object.assign(NYM.prototype, {
             console.warn(`[NostrSync] ${dTag} exceeds NIP-44 plaintext limit after trimming; skipping publish`);
             return;
         }
+
+        // Skip republishing a wrap whose (post-trim) payload is byte-identical to
+        // the last one we sent for this d-tag. Without this, every settings save
+        // re-wraps and re-broadcasts unchanged groups/history/keys/notification
+        // state as fresh 1059 gift wraps, flooding relays with nym-sync events.
+        if (!this._publishedSectionJson) this._publishedSectionJson = {};
+        const finalJson = JSON.stringify(payload);
+        if (this._publishedSectionJson[dTag] === finalJson) return;
+        this._publishedSectionJson[dTag] = finalJson;
 
         await this._publishWrappedNostrEvent(payload, dTag, createdAt);
     },
@@ -548,24 +562,43 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
 
         const sections = this._splitSettingsBySection(settingsData);
-        if (!this._publishedSectionJson) this._publishedSectionJson = {};
         for (const [section, payload] of Object.entries(sections)) {
             const dTag = `nymchat-settings-${section}`;
-            const json = JSON.stringify(payload);
-            if (this._publishedSectionJson[dTag] === json) continue;
-            this._publishedSectionJson[dTag] = json;
-            await this._publishCategoryWrap(payload, dTag, now);
+            const trimFns = section === 'channels' ? [this._trimChannelsReadState] : null;
+            await this._publishCategoryWrap(payload, dTag, now, trimFns);
         }
     },
 
-    // Wrap an arbitrary settings payload as a NIP-59 self-addressed gift wrap
-    // (kind 1059 outer, kind 30078 inner) with the given d-tag.
+    // Drop the oldest entries from the channels section's auto-growing read-state
+    // maps so the payload fits under the NIP-44 limit instead of being skipped.
+    _trimChannelsReadState(p) {
+        for (const key of ['closedPMTimes', 'leftGroupTimes', 'closedPMs', 'leftGroups']) {
+            const m = p[key];
+            if (m && typeof m === 'object' && !Array.isArray(m)) {
+                const entries = Object.entries(m);
+                if (entries.length > 30) {
+                    entries.sort((a, b) => (Number(a[1]) || 0) - (Number(b[1]) || 0));
+                    const drop = Math.max(1, Math.floor(entries.length * 0.25));
+                    for (let i = 0; i < drop; i++) delete m[entries[i][0]];
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
+
+    _sendWrappedIfFits(wrapped, dTag) {
+        if (JSON.stringify(['EVENT', wrapped]).length > 65000) {
+            console.warn(`[NostrSync] ${dTag} wrapped event too large for relays; skipping publish`);
+            return;
+        }
+        this.sendDMToRelays(['EVENT', wrapped]);
+    },
+
+    // Persist to D1 and publish a NIP-59 nym-sync gift wrap to relays.
     async _publishWrappedNostrEvent(payload, dTag, createdAt) {
         const NT = window.NostrTools;
         const now = createdAt || Math.floor(Date.now() / 1000);
-
-        // Primary persistence: encrypted blob in D1. The Nostr gift wrap below
-        // is kept as a fallback copy that loads only when D1 can't be read.
         this._saveSettingsBlobToD1(dTag, JSON.stringify(payload));
 
         const rumor = {
@@ -577,8 +610,6 @@ Object.assign(NYM.prototype, {
         };
         rumor.id = NT.getEventHash(rumor);
 
-        // NIP-44 caps each encryption stage at 65535 plaintext bytes. Skip
-        // rather than throw if the rumor or its sealed form exceeds the cap.
         const enc = new TextEncoder();
         const rumorJson = JSON.stringify(rumor);
         if (enc.encode(rumorJson).length > 65535) {
@@ -586,9 +617,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // 'k' marker lets the Nostr fallback REQ match every settings gift wrap
-        // with one filter; the d-tag is digested so it can't be correlated
-        // across accounts (the real d-tag rides encrypted in the inner rumor).
         const outerTags = [['p', this.pubkey], ['d', await this._syncOuterDTag(dTag)], ['k', 'nym-sync']];
 
         if (this.privkey) {
@@ -596,7 +624,6 @@ Object.assign(NYM.prototype, {
             const sealContent = NT.nip44.encrypt(rumorJson, ckSeal);
             const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
             const seal = NT.finalizeEvent(sealUnsigned, this.privkey);
-
             const sealJson = JSON.stringify(seal);
             if (enc.encode(sealJson).length > 65535) {
                 console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
@@ -605,12 +632,9 @@ Object.assign(NYM.prototype, {
             const ephSk = NT.generateSecretKey();
             const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
             const wrapContent = NT.nip44.encrypt(sealJson, ckWrap);
-            const wrapUnsigned = {
-                kind: 1059, content: wrapContent, created_at: this.randomNow(),
-                tags: outerTags
-            };
+            const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: outerTags };
             const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
-            this.sendDMToRelays(['EVENT', wrapped]);
+            this._sendWrappedIfFits(wrapped, dTag);
             return;
         }
 
@@ -625,7 +649,6 @@ Object.assign(NYM.prototype, {
         const seal = useExt
             ? await window.nostr.signEvent(sealUnsigned)
             : await _nip46SignEvent(sealUnsigned);
-
         const sealJson = JSON.stringify(seal);
         if (enc.encode(sealJson).length > 65535) {
             console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
@@ -634,12 +657,9 @@ Object.assign(NYM.prototype, {
         const ephSk = NT.generateSecretKey();
         const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
         const wrapContent = NT.nip44.encrypt(sealJson, ckWrap);
-        const wrapUnsigned = {
-            kind: 1059, content: wrapContent, created_at: this.randomNow(),
-            tags: outerTags
-        };
+        const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: outerTags };
         const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
-        this.sendDMToRelays(['EVENT', wrapped]);
+        this._sendWrappedIfFits(wrapped, dTag);
     },
 
     // Encrypt a settings payload to the user themselves (NIP-44) using whichever

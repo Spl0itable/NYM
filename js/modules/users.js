@@ -1818,6 +1818,11 @@ Object.assign(NYM.prototype, {
     async fetchMetadataForBlockedUsers(pubkeys) {
         if (pubkeys.length === 0) return;
 
+        if (this._getApiHost && this._getApiHost()) {
+            try { if (typeof this._fetchProfilesFromD1 === 'function') await this._fetchProfilesFromD1(pubkeys); } catch (_) { }
+            return;
+        }
+
         return new Promise((resolve) => {
             const subId = "blocked-meta-" + Math.random().toString(36).substring(7);
             let receivedCount = 0;

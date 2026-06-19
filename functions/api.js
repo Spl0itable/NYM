@@ -131,5 +131,15 @@ export async function onRequest(context) {
     }
   });
 
+  // Hold the invocation open for the socket's lifetime; an idle WS worker with
+  // no pending task is otherwise reaped and reported as "hung".
+  let endLifetime;
+  const lifetime = new Promise((resolve) => { endLifetime = resolve; });
+  const closeLifetime = () => { try { endLifetime(); } catch { /* noop */ } };
+  server.addEventListener('close', closeLifetime);
+  server.addEventListener('error', closeLifetime);
+  setTimeout(closeLifetime, 280000);
+  waitUntil(lifetime);
+
   return new Response(null, { status: 101, webSocket: client });
 }

@@ -10,8 +10,9 @@ Object.assign(NYM.prototype, {
     // One persistent, authenticated WebSocket carries every D1 storage op so the
     // client doesn't open an HTTP request (and sign an auth event) per fetch/put.
     _ensureApiSocket() {
+        const needAuth = !!this.pubkey;
         const s = this._apiSock;
-        if (s && s.ws && s.ws.readyState === WebSocket.OPEN && s.authed) return Promise.resolve(s);
+        if (s && s.ws && s.ws.readyState === WebSocket.OPEN && (s.authed || !needAuth)) return Promise.resolve(s);
         if (this._apiSockPromise) return this._apiSockPromise;
 
         // After a failure, skip the socket (straight to HTTP) for a cooldown so a
@@ -21,42 +22,55 @@ Object.assign(NYM.prototype, {
         }
 
         const url = this._apiWsUrl();
-        if (!url || !this.pubkey) return Promise.reject(new Error('api socket unavailable'));
+        if (!url) return Promise.reject(new Error('api socket unavailable'));
 
         this._apiSockPromise = (async () => {
-            const auth = await this._signBotAuth('api-ws', 'WS');
+            // Logged-in: authenticate the socket. Logged-out: open an
+            // unauthenticated socket usable for public reads (channel/profile).
+            const auth = needAuth ? await this._signBotAuth('api-ws', 'WS') : null;
+            try { if (this._apiSock && this._apiSock.ws) this._apiSock.ws.close(); } catch (_) { }
+            this._apiSock = null;
             return await new Promise((resolve, reject) => {
                 let ws;
                 try { ws = new WebSocket(url); } catch (e) { this._apiSockPromise = null; return reject(e); }
-                const sock = { ws, authed: false, pending: new Map(), nextId: 1 };
+                const sock = { ws, authed: false, ready: false, pending: new Map(), nextId: 1 };
                 let settled = false;
                 const fail = (err) => {
                     for (const [, p] of sock.pending) { try { p.reject(err); } catch (_) { } }
                     sock.pending.clear();
                     if (this._apiSock === sock) this._apiSock = null;
-                    // Cool down only on connect/auth failures, not a clean post-auth drop.
-                    if (!sock.authed) this._apiSockFailedUntil = Date.now() + 30000;
+                    // Cool down only on connect/auth failures, not a clean post-ready drop.
+                    // Keep it short so transient worker churn doesn't pin reads to HTTP.
+                    if (!sock.ready) this._apiSockFailedUntil = Date.now() + 5000;
                     if (!settled) { settled = true; this._apiSockPromise = null; reject(err); }
                 };
                 const timer = setTimeout(() => { try { ws.close(); } catch (_) { } fail(new Error('api socket timeout')); }, 12000);
+                const markReady = () => {
+                    clearTimeout(timer);
+                    sock.ready = true;
+                    this._apiSock = sock;
+                    this._apiSockPromise = null;
+                    this._apiSockFailedUntil = 0;
+                    settled = true;
+                    resolve(sock);
+                };
 
                 ws.onopen = () => {
-                    try { ws.send(JSON.stringify(['AUTH', auth])); }
+                    if (!auth) { markReady(); return; }
+                    try { const f = JSON.stringify(['AUTH', auth]); this._trackApiData('auth', f.length, 0); ws.send(f); }
                     catch (e) { clearTimeout(timer); fail(e); }
                 };
                 ws.onmessage = (event) => {
+                    const recvLen = typeof event.data === 'string' ? event.data.length : (event.data && event.data.byteLength) || 0;
                     let msg;
-                    try { msg = JSON.parse(event.data); } catch (_) { return; }
-                    if (!Array.isArray(msg)) return;
+                    try { msg = JSON.parse(event.data); } catch (_) { this._trackApiData('other', 0, recvLen); return; }
+                    if (!Array.isArray(msg)) { this._trackApiData('other', 0, recvLen); return; }
                     const t = msg[0];
+                    if (t === 'AUTH_OK' || t === 'AUTH_ERR') this._trackApiData('auth', 0, recvLen);
+                    else { const pa = sock.pending.get(msg[1]); this._trackApiData(pa ? pa.action : 'other', 0, recvLen); }
                     if (t === 'AUTH_OK') {
-                        clearTimeout(timer);
                         sock.authed = true;
-                        this._apiSock = sock;
-                        this._apiSockPromise = null;
-                        this._apiSockFailedUntil = 0;
-                        settled = true;
-                        resolve(sock);
+                        markReady();
                         return;
                     }
                     if (t === 'AUTH_ERR') {
@@ -95,17 +109,32 @@ Object.assign(NYM.prototype, {
         return this._apiSockPromise;
     },
 
+    // Tally /api websocket traffic per action for the network stats.
+    _trackApiData(action, sent, recv) {
+        if (!this.relayStats) return;
+        if (!this.relayStats.apiActionStats) this.relayStats.apiActionStats = new Map();
+        this.relayStats.apiBytesSent = (this.relayStats.apiBytesSent || 0) + (sent || 0);
+        this.relayStats.apiBytesReceived = (this.relayStats.apiBytesReceived || 0) + (recv || 0);
+        this.relayStats.bytesReceived = (this.relayStats.bytesReceived || 0) + (recv || 0);
+        this.relayStats.bytesSent = (this.relayStats.bytesSent || 0) + (sent || 0);
+        let s = this.relayStats.apiActionStats.get(action);
+        if (!s) { s = { count: 0, bytesSent: 0, bytesReceived: 0 }; this.relayStats.apiActionStats.set(action, s); }
+        if (sent) s.count++;
+        s.bytesSent += sent || 0;
+        s.bytesReceived += recv || 0;
+    },
+
     // opts.stream collects ndjson items; opts.raw resolves { status, data }
     // instead of rejecting on an error status (callers that branch on status).
     _apiSocketSend(action, extra, opts) {
         opts = opts || {};
         const sock = this._apiSock;
-        if (!sock || !sock.ws || sock.ws.readyState !== WebSocket.OPEN || !sock.authed) {
+        if (!sock || !sock.ws || sock.ws.readyState !== WebSocket.OPEN) {
             return Promise.reject(new Error('api socket not ready'));
         }
         const id = sock.nextId++;
         return new Promise((resolve, reject) => {
-            const p = { resolve, reject };
+            const p = { resolve, reject, action };
             if (opts.stream) p.items = [];
             if (opts.raw) p.raw = true;
             const timer = setTimeout(() => {
@@ -114,7 +143,9 @@ Object.assign(NYM.prototype, {
             p.resolve = (v) => { clearTimeout(timer); resolve(v); };
             p.reject = (e) => { clearTimeout(timer); reject(e); };
             sock.pending.set(id, p);
-            try { sock.ws.send(JSON.stringify(['REQ', id, action, extra || {}])); }
+            const frame = JSON.stringify(['REQ', id, action, extra || {}]);
+            this._trackApiData(action, frame.length, 0);
+            try { sock.ws.send(frame); }
             catch (e) { sock.pending.delete(id); p.reject(e); }
         });
     },
@@ -146,7 +177,8 @@ Object.assign(NYM.prototype, {
     async _storageApiRequest(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
-        if (this.pubkey) {
+        // Public reads (withAuth === false) ride the api socket even logged out.
+        if (this.pubkey || !withAuth) {
             try {
                 await this._ensureApiSocket();
                 return await this._apiSocketSend(action, extra);
@@ -179,7 +211,8 @@ Object.assign(NYM.prototype, {
     async _storageApiStream(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
-        if (this.pubkey) {
+        // Public reads (withAuth === false) ride the api socket even logged out.
+        if (this.pubkey || !withAuth) {
             try {
                 await this._ensureApiSocket();
                 return await this._apiSocketSend(action, extra, { stream: true });
