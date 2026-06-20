@@ -44,7 +44,9 @@ import {
   botThreadDelete,
   invoiceGet,
   invoiceHas,
-  invoicePut
+  invoicePut,
+  hasD1,
+  replica
 } from "./_d1.js";
 import {
   getPublicKey,
@@ -149,7 +151,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.72.511";
+var NYMCHAT_VERSION = "3.72.512";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -1725,16 +1727,16 @@ async function onRequest(context) {
         response = await handleChangelog(args || "");
         break;
       case "top":
-        response = await handleTop(channelMessages);
+        response = await handleTop(channelMessages, context);
         break;
       case "last":
-        response = await handleLast(args || "", channelMessages);
+        response = await handleLast(args || "", channelMessages, context);
         break;
       case "seen":
-        response = await handleSeen(args || "", channelMessages);
+        response = await handleSeen(args || "", channelMessages, context);
         break;
       case "who":
-        response = await handleWho(geohash || "", channelMessages, activeUsers);
+        response = await handleWho(geohash || "", channelMessages, activeUsers, context);
         break;
       case "guess":
         response = handleGuess(args || "", conversation);
@@ -2274,7 +2276,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.72.511 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.72.512 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3118,7 +3120,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.72.511")
+  // Prefix match (e.g. "3.61" matches "3.72.512")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3173,7 +3175,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.72.511", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.72.512", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
@@ -3803,6 +3805,52 @@ function timeAgo(unixTs) {
   return Math.floor(seconds / 86400) + "d ago";
 }
 
+// D1 archive is the authoritative source for channel commands; relays are only
+// a fallback. Returns raw nostr events (newest first) or null when unavailable.
+async function fetchChannelEventsFromD1(context, kinds, since, limit, channel) {
+  try {
+    var env = context && context.env;
+    if (!env || !hasD1(env.DB_CHANNELS)) return null;
+    var where = ["kind IN (" + kinds.map(function () { return "?"; }).join(",") + ")", "created_at >= ?"];
+    var binds = kinds.slice();
+    binds.push(since);
+    if (channel) { where.push("channel = ?"); binds.push(String(channel).toLowerCase()); }
+    binds.push(limit || 1000);
+    var rows = (await replica(env.DB_CHANNELS).prepare(
+      "SELECT json FROM events WHERE " + where.join(" AND ") + " ORDER BY created_at DESC LIMIT ?"
+    ).bind(...binds).all()).results || [];
+    var events = [];
+    for (var i = 0; i < rows.length; i++) {
+      try { var e = JSON.parse(rows[i].json); if (e) events.push(e); } catch (_) { }
+    }
+    return events.length ? events : null;
+  } catch (e) { return null; }
+}
+
+function dropSpamFirstMessages(events) {
+  var counts = {};
+  for (var i = 0; i < events.length; i++) {
+    var pk = events[i].pubkey;
+    if (pk) counts[pk] = (counts[pk] || 0) + 1;
+  }
+  return events.filter(function (e) { return e.pubkey && counts[e.pubkey] >= 2; });
+}
+
+// Normalize raw events into the {channel, nym, content, timestamp, pubkey} shape
+// the channel-command handlers consume from the client's channelMessages.
+function eventsToChannelMsgs(events) {
+  return events.map(function (evt) {
+    return {
+      channel: extractGeohash(evt),
+      nym: extractNym(evt) || "nym",
+      content: evt.content || "",
+      timestamp: evt.created_at,
+      pubkey: evt.pubkey || "",
+      isBot: false
+    };
+  });
+}
+
 // Relay-backed Commands
 function isHumanMessage(evt) {
   // Must have content
@@ -3818,10 +3866,13 @@ function isHumanMessage(evt) {
   return true;
 }
 
-async function handleTop(channelMessages) {
+async function handleTop(channelMessages, context) {
   var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
   var messages = [];
-  // Use in-memory channel messages from the client if available
+  // Prefer the D1 archive (full, spam-filtered) over the client's partial view.
+  var d1 = await fetchChannelEventsFromD1(context, [20000, 23333], since, 2000, null);
+  if (d1) channelMessages = eventsToChannelMsgs(dropSpamFirstMessages(d1.filter(isHumanMessage)));
+  // Use in-memory channel messages (D1-derived or client-sent, already gated)
   if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
     messages = channelMessages.filter(function(m) {
       if (m.isBot) return false;
@@ -3832,7 +3883,7 @@ async function handleTop(channelMessages) {
   // Fallback to relay fetch if no in-memory data
   if (messages.length === 0) {
     var events = await fetchRecentEvents({ kinds: [20000, 23333], since: since, limit: 500 }, 6000);
-    events = events.filter(isHumanMessage);
+    events = dropSpamFirstMessages(events.filter(isHumanMessage));
     messages = events.map(function(evt) {
       return { channel: extractGeohash(evt), timestamp: evt.created_at };
     });
@@ -3864,11 +3915,14 @@ async function handleTop(channelMessages) {
   return lines.join("\n");
 }
 
-async function handleLast(args, channelMessages) {
+async function handleLast(args, channelMessages, context) {
   var count = Math.min(Math.max(parseInt(args) || 10, 1), 25);
   var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
   var messages = [];
-  // Use in-memory channel messages from the client if available
+  // Prefer the D1 archive (full, spam-filtered) over the client's partial view.
+  var d1 = await fetchChannelEventsFromD1(context, [20000, 23333], since, 2000, null);
+  if (d1) channelMessages = eventsToChannelMsgs(dropSpamFirstMessages(d1.filter(isHumanMessage)));
+  // Use in-memory channel messages (D1-derived or client-sent, already gated)
   if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
     messages = channelMessages.filter(function(m) {
       if (m.isBot) return false;
@@ -3879,7 +3933,7 @@ async function handleLast(args, channelMessages) {
   // Fallback to relay fetch if no in-memory data
   if (messages.length === 0) {
     var events = await fetchRecentEvents({ kinds: [20000, 23333], since: since, limit: 200 }, 6000);
-    events = events.filter(isHumanMessage);
+    events = dropSpamFirstMessages(events.filter(isHumanMessage));
     messages = events.map(function(evt) {
       return {
         channel: extractGeohash(evt),
@@ -3907,10 +3961,14 @@ async function handleLast(args, channelMessages) {
   return lines.join("\n");
 }
 
-async function handleSeen(nickname, channelMessages) {
+async function handleSeen(nickname, channelMessages, context) {
   if (!nickname.trim()) {
     return "Usage: ?seen <nickname|@mention|pubkey>";
   }
+  var seenSince = Math.floor(Date.now() / 1000) - 86400; // last 24h
+  // Prefer the D1 archive (full, spam-filtered) over the client's partial view.
+  var d1Seen = await fetchChannelEventsFromD1(context, [20000, 23333], seenSince, 3000, null);
+  if (d1Seen) channelMessages = eventsToChannelMsgs(dropSpamFirstMessages(d1Seen.filter(isHumanMessage)));
   // Strip leading @ for mention support
   var raw = nickname.trim().replace(/^@/, "");
   // Detect if the arg is a pubkey (64-char hex or npub bech32)
@@ -3958,7 +4016,7 @@ async function handleSeen(nickname, channelMessages) {
       filter.authors = [targetPubkey];
     }
     var events = await fetchRecentEvents(filter, 6000);
-    events = events.filter(isHumanMessage);
+    events = dropSpamFirstMessages(events.filter(isHumanMessage));
     for (var j = 0; j < events.length; j++) {
       var nym = extractNym(events[j]);
       var eventPubkey = (events[j].pubkey || "").toLowerCase();
@@ -3991,13 +4049,16 @@ async function handleSeen(nickname, channelMessages) {
   return lines.join("\n");
 }
 
-async function handleWho(geohash, channelMessages, activeUsers) {
+async function handleWho(geohash, channelMessages, activeUsers, context) {
   if (!geohash) {
     return "Could not determine your current channel.";
   }
   var since = Math.floor(Date.now() / 1000) - 600; // last 10 minutes
   var nymsByPubkey = {};
   var channelKey = "#" + geohash;
+  // Prefer the D1 archive (full, spam-filtered) over the client's partial view.
+  var d1Who = await fetchChannelEventsFromD1(context, isGeohashName(geohash) ? [20000] : [23333], since, 500, geohash);
+  if (d1Who) channelMessages = eventsToChannelMsgs(dropSpamFirstMessages(d1Who.filter(isHumanMessage)));
   // Use in-memory channel messages and active users from the client if available
   if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
     for (var i = 0; i < channelMessages.length; i++) {
@@ -4024,7 +4085,7 @@ async function handleWho(geohash, channelMessages, activeUsers) {
       ? { kinds: [20000], since: since, limit: 500, "#g": [geohash] }
       : { kinds: [23333], since: since, limit: 500, "#d": [geohash] };
     var events = await fetchRecentEvents(filter, 6000);
-    events = events.filter(isHumanMessage);
+    events = dropSpamFirstMessages(events.filter(isHumanMessage));
     if (events.length === 0) {
       return "No active users in #" + geohash + " in the last 10 minutes.";
     }

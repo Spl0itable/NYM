@@ -117,7 +117,7 @@ Object.assign(NYM.prototype, {
             }
             // Collect messages from all referenced channels
             for (const chanKey of referencedChannels) {
-                const msgs = this.messages.get(chanKey) || [];
+                const msgs = (this.messages.get(chanKey) || []).filter(m => !m._spamGated);
                 const mapped = msgs.slice(-msgLimit).map(m => ({
                     nym: m.author || 'nym',
                     pubkey: m.pubkey || '',
@@ -167,7 +167,7 @@ Object.assign(NYM.prototype, {
         if (inMemoryCommands.includes(command.toLowerCase())) {
             channelMessages = [];
             for (const [chanKey, msgs] of this.messages) {
-                const mapped = msgs.map(m => ({
+                const mapped = msgs.filter(m => !m._spamGated).map(m => ({
                     nym: m.author || 'nym',
                     pubkey: m.pubkey || '',
                     content: (m.content || '').slice(0, 300),

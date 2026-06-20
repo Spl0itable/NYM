@@ -146,7 +146,9 @@ Object.assign(NYM.prototype, {
         try {
             if (!this._geohashD1Activity) this._geohashD1Activity = new Map();
             if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
-            const merge = (data) => {
+            // Apply each response as soon as it lands rather than waiting for both,
+            // so the sidebar and explorer update progressively.
+            const apply = (data) => {
                 if (!data || typeof data !== 'object') return;
                 const activity = data.activity;
                 if (activity && typeof activity === 'object') {
@@ -157,23 +159,16 @@ Object.assign(NYM.prototype, {
                     }
                 }
                 this._mergeD1Last(data.last);
+                this._populateSidebarFromD1Activity();
+                this._seedUnreadFromD1Activity();
+                if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
+                    this.geohashMap.updatePoints();
+                }
             };
-            const [discovered, known] = await Promise.all([
-                this._storageApiRequest('channel-active', {}, false).catch(() => null),
-                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
-            ]);
-            merge(discovered);
-            merge(known);
-            // Surface discovered channels in the sidebar (proxy pool has no relay
-            // backfill), ordered by their latest D1 activity.
-            this._populateSidebarFromD1Activity();
-            // Seed sidebar unread badges for joined channels we couldn't restore
-            // into the message cache, now that fresh activity buckets are in.
-            this._seedUnreadFromD1Activity();
-            // Refresh the explorer view if it's open.
-            if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
-                this.geohashMap.updatePoints();
-            }
+            await Promise.all([
+                this._storageApiRequest('channel-active', {}, false).then(apply).catch(() => { }),
+                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).then(apply).catch(() => { }) : null
+            ].filter(Boolean));
         } catch (_) {
             // Best-effort; the explorer still works from locally stored messages.
             this._geohashActivityFetchedAt = 0;
@@ -298,7 +293,8 @@ Object.assign(NYM.prototype, {
         try {
             if (!this._namedChannelActivity) this._namedChannelActivity = new Map();
             if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
-            const merge = (data) => {
+            // Apply each response as soon as it lands rather than waiting for both.
+            const apply = (data) => {
                 if (!data || typeof data !== 'object') return;
                 const activity = data.activity;
                 if (activity && typeof activity === 'object') {
@@ -309,15 +305,13 @@ Object.assign(NYM.prototype, {
                     }
                 }
                 this._mergeD1Last(data.last);
+                this._populateSidebarFromD1Activity();
+                this._seedUnreadFromD1Activity();
             };
-            const [discovered, known] = await Promise.all([
-                this._storageApiRequest('channel-active-named', {}, false).catch(() => null),
-                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
-            ]);
-            merge(discovered);
-            merge(known);
-            this._populateSidebarFromD1Activity();
-            this._seedUnreadFromD1Activity();
+            await Promise.all([
+                this._storageApiRequest('channel-active-named', {}, false).then(apply).catch(() => { }),
+                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).then(apply).catch(() => { }) : null
+            ].filter(Boolean));
         } catch (_) {
             this._namedActivityFetchedAt = 0;
         }
@@ -1108,9 +1102,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return this.channelRestoreManyFromD1([channelName], opts);
     },
 
-    // Batch several channels' archived events into one channel-get instead of a
-    // request per channel. Per-channel throttle is preserved unless force is set
-    // (e.g. the user explicitly opened the channel).
+    // Batch several channels' archived events into one channel-get
     async channelRestoreManyFromD1(channelNames, opts = {}) {
         if (!Array.isArray(channelNames) || channelNames.length === 0) return;
         if (!this._getApiHost || !this._getApiHost()) return;
@@ -1130,37 +1122,66 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (names.length >= 50) break;
         }
         if (names.length === 0) return;
-        const events = [];
+        let resp;
         try {
-            const resp = await this._storageApiStream('channel-get', { channels: names }, false);
-            await this._readNdjsonStream(resp, (ev) => events.push(ev));
+            resp = await this._storageApiStream('channel-get', { channels: names }, false);
         } catch (_) {
             return;
         }
-        events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-        // Offload this batch's formatting to the worker pool; ingest emoji/imeta
-        // tags first so the formatter snapshot is complete.
-        if (typeof this._preformatBatch === 'function') {
-            for (const ev of events) {
-                if (typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(ev.tags);
-                if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(ev.tags);
+
+        let applied = false;
+        const applyBatch = async (batch) => {
+            if (!batch.length) return;
+            // Warm the formatter cache for this batch before rendering.
+            if (typeof this._preformatBatch === 'function') {
+                for (const ev of batch) {
+                    if (typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(ev.tags);
+                    if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(ev.tags);
+                }
+                try { await this._preformatBatch(batch.map(ev => ev && ev.content)); } catch (_) { }
             }
-            try { await this._preformatBatch(events.map(ev => ev && ev.content)); } catch (_) { }
-        }
-        let sliceStart = Date.now();
-        for (let i = 0; i < events.length; i++) {
-            if (await this._verifyRelayEventAsync(events[i])) {
-                try { await this.handleEvent(events[i]); } catch (_) { }
+            for (const ev of batch) {
+                if (await this._verifyRelayEventAsync(ev)) {
+                    try { await this.handleEvent(ev); applied = true; } catch (_) { }
+                }
             }
-            if (Date.now() - sliceStart > 16 && i + 1 < events.length && typeof this._yieldToIdle === 'function') {
-                await this._yieldToIdle();
-                sliceStart = Date.now();
+            // Let the browser paint this batch before the next one.
+            if (typeof this._yieldToIdle === 'function') await this._yieldToIdle();
+        };
+
+        const FLUSH = 30;
+        let batch = [];
+        try {
+            if (resp && resp._wsItems) {
+                for (const ev of resp._wsItems) {
+                    batch.push(ev);
+                    if (batch.length >= FLUSH) { const b = batch; batch = []; await applyBatch(b); }
+                }
+            } else if (resp && resp.body) {
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buf = '';
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, { stream: true });
+                    let nl;
+                    while ((nl = buf.indexOf('\n')) >= 0) {
+                        const line = buf.slice(0, nl);
+                        buf = buf.slice(nl + 1);
+                        if (line) { try { batch.push(JSON.parse(line)); } catch (_) { } }
+                    }
+                    if (batch.length >= FLUSH) { const b = batch; batch = []; await applyBatch(b); }
+                }
+                buf += decoder.decode();
+                if (buf) { try { batch.push(JSON.parse(buf)); } catch (_) { } }
             }
-        }
+            await applyBatch(batch);
+        } catch (_) { }
+
         // If the active channel was waiting on this restore (its view settled to
-        // an empty note before the archive arrived), paint it now that the store
-        // has messages.
-        if (events.length) this._repaintActiveChannelIfEmpty(names);
+        // an empty note before the archive arrived), paint it now.
+        if (applied) this._repaintActiveChannelIfEmpty(names);
     },
 
     // Force a re-render of the active channel when its container is empty but the

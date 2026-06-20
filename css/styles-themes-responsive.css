@@ -218,6 +218,15 @@ body.light-mode .verified-badge::before {
         overflow: hidden;
     }
 
+    html.keyboard-open .container,
+    html.keyboard-open #wallpaperLayer {
+        transform: translateZ(0) translateY(var(--kb-shift, 0px));
+    }
+
+    html.keyboard-open body::before {
+        transform: translateZ(0) translateY(var(--kb-shift, 0px));
+    }
+
     .input-container {
         position: relative;
         bottom: auto;

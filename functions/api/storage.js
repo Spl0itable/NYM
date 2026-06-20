@@ -727,6 +727,39 @@ function archiveSanitizeChannel(name) {
   return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, "").slice(0, 80);
 }
 
+async function spamAwareActivityRows(db, innerWhere, binds, limit) {
+  var lim = limit ? (" LIMIT " + limit) : "";
+  var spamSql = "SELECT channel, age, COUNT(*) AS c, MAX(mx) AS mx FROM (" +
+    "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, created_at AS mx, " +
+    "COUNT(*) OVER (PARTITION BY pubkey) AS pk FROM events WHERE " + innerWhere + ") " +
+    "WHERE pk >= 2 GROUP BY channel, age" + lim;
+  try {
+    return (await db.prepare(spamSql).bind(...binds).all()).results || [];
+  } catch (e) {
+    var plainSql = "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, " +
+      "COUNT(*) AS c, MAX(created_at) AS mx FROM events WHERE " + innerWhere +
+      " GROUP BY channel, age" + lim;
+    try {
+      return (await db.prepare(plainSql).bind(...binds).all()).results || [];
+    } catch (e2) { return []; }
+  }
+}
+
+// Fold spamAwareActivityRows into { activity: {channel:[24 buckets]}, last: {channel:ts} }.
+function buildActivityResult(rows) {
+  var activity = {};
+  var last = {};
+  (rows || []).forEach(function (r) {
+    if (r.mx && r.mx > (last[r.channel] || 0)) last[r.channel] = r.mx;
+    var ageH = r.age;
+    if (ageH < 0 || ageH >= 24) return;
+    var b = activity[r.channel];
+    if (!b) { b = new Array(24).fill(0); activity[r.channel] = b; }
+    b[ageH] = r.c || 0;
+  });
+  return { activity: activity, last: last };
+}
+
 // A gift wrap is storable for a user only if it is a kind 1059/1060 event that
 // is cryptographically valid and addressed to that user via a `p` tag.
 function pmIsValidWrapForUser(ev, pubkey) {
@@ -1022,25 +1055,18 @@ async function handleChannelAction(context, body) {
       } else misses.push(anm);
     }));
     if (misses.length) {
-      var buckets = {};
-      var lastMiss = {};
-      misses.forEach(function (anm) { buckets[anm] = new Array(24).fill(0); });
-      try {
-        var ph3 = misses.map(function () { return "?"; }).join(",");
-        var rsA = await replica(env.DB_CHANNELS).prepare(
-          "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
-          "FROM events WHERE channel IN (" + ph3 + ") AND created_at >= ? GROUP BY channel, age"
-        ).bind(nowSecA, ...misses, minTsA).all();
-        (rsA.results || []).forEach(function (r) {
-          if (r.mx && r.mx > (lastMiss[r.channel] || 0)) lastMiss[r.channel] = r.mx;
-          var ageH = r.age;
-          if (ageH >= 0 && ageH < 24 && buckets[r.channel]) buckets[r.channel][ageH] = r.c || 0;
-        });
-      } catch (e) { }
+      var ph3 = misses.map(function () { return "?"; }).join(",");
+      // Only channel messages (20000 geohash, 23333 named) count toward activity;
+      // reactions, polls, votes and other kinds are excluded.
+      var innerWhereA = "channel IN (" + ph3 + ") AND kind IN (20000, 23333) AND created_at >= ?";
+      var rowsA = await spamAwareActivityRows(replica(env.DB_CHANNELS), innerWhereA, [nowSecA].concat(misses, [minTsA]), 0);
+      var builtA = buildActivityResult(rowsA);
       misses.forEach(function (anm) {
-        activity[anm] = buckets[anm];
-        if (lastMiss[anm]) lastA[anm] = lastMiss[anm];
-        readCachePut(context, "/channel-activity/" + anm, { b: buckets[anm], l: lastMiss[anm] || 0 }, CHANNEL_READ_TTL);
+        var b = builtA.activity[anm] || new Array(24).fill(0);
+        var l = builtA.last[anm] || 0;
+        activity[anm] = b;
+        if (l) lastA[anm] = l;
+        readCachePut(context, "/channel-activity/" + anm, { b: b, l: l }, CHANNEL_READ_TTL);
       });
     }
     return json({ activity: activity, last: lastA });
@@ -1056,24 +1082,10 @@ async function handleChannelAction(context, body) {
     }
     var nowSecD = Math.floor(Date.now() / 1000);
     var minTsD = nowSecD - 24 * 3600;
-    var activeOut = {};
-    var lastOut = {};
-    try {
-      var rsD = await replica(env.DB_CHANNELS).prepare(
-        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
-        "FROM events WHERE kind = 20000 AND created_at >= ? GROUP BY channel, age LIMIT 12000"
-      ).bind(nowSecD, minTsD).all();
-      (rsD.results || []).forEach(function (r) {
-        if (r.mx && r.mx > (lastOut[r.channel] || 0)) lastOut[r.channel] = r.mx;
-        var ageH = r.age;
-        if (ageH < 0 || ageH >= 24) return;
-        var b = activeOut[r.channel];
-        if (!b) { b = new Array(24).fill(0); activeOut[r.channel] = b; }
-        b[ageH] = r.c || 0;
-      });
-    } catch (e) { }
-    readCachePut(context, "/channel-active", { activity: activeOut, last: lastOut }, CHANNEL_READ_TTL);
-    return json({ activity: activeOut, last: lastOut });
+    var rowsD = await spamAwareActivityRows(replica(env.DB_CHANNELS), "kind = 20000 AND created_at >= ?", [nowSecD, minTsD], 12000);
+    var builtD = buildActivityResult(rowsD);
+    readCachePut(context, "/channel-active", { activity: builtD.activity, last: builtD.last }, CHANNEL_READ_TTL);
+    return json({ activity: builtD.activity, last: builtD.last });
   }
 
   // Public read: discover recently-active named channels (kind 23333) so the
@@ -1086,24 +1098,10 @@ async function handleChannelAction(context, body) {
     }
     var nowSecN = Math.floor(Date.now() / 1000);
     var minTsN = nowSecN - 24 * 3600;
-    var activeOutN = {};
-    var lastOutN = {};
-    try {
-      var rsN = await replica(env.DB_CHANNELS).prepare(
-        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
-        "FROM events WHERE kind = 23333 AND created_at >= ? GROUP BY channel, age LIMIT 12000"
-      ).bind(nowSecN, minTsN).all();
-      (rsN.results || []).forEach(function (r) {
-        if (r.mx && r.mx > (lastOutN[r.channel] || 0)) lastOutN[r.channel] = r.mx;
-        var ageH = r.age;
-        if (ageH < 0 || ageH >= 24) return;
-        var b = activeOutN[r.channel];
-        if (!b) { b = new Array(24).fill(0); activeOutN[r.channel] = b; }
-        b[ageH] = r.c || 0;
-      });
-    } catch (e) { }
-    readCachePut(context, "/channel-active-named", { activity: activeOutN, last: lastOutN }, CHANNEL_READ_TTL);
-    return json({ activity: activeOutN, last: lastOutN });
+    var rowsN = await spamAwareActivityRows(replica(env.DB_CHANNELS), "kind = 23333 AND created_at >= ?", [nowSecN, minTsN], 12000);
+    var builtN = buildActivityResult(rowsN);
+    readCachePut(context, "/channel-active-named", { activity: builtN.activity, last: builtN.last }, CHANNEL_READ_TTL);
+    return json({ activity: builtN.activity, last: builtN.last });
   }
 
   // NIP-09 deletion: the signed kind 5 event IS the authorization. We only

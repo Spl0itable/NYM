@@ -616,18 +616,21 @@ window.nymHapticTap = function (ms) {
     });
 })();
 
-// Track the on-screen keyboard via visualViewport so the chat input can stay
-// above it. On Android the native shell already resizes the viewport (inset
-// ~0); on iOS WKWebView the layout viewport does not shrink, so this exposes
-// the gap as --keyboard-inset for CSS to consume.
+// Keep the chat header, wallpaper and input aligned
 (function () {
     var vv = window.visualViewport;
     if (!vv) return;
+    var root = document.documentElement;
     var raf = 0;
     function update() {
         raf = 0;
-        var inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-        document.documentElement.style.setProperty('--keyboard-inset', inset + 'px');
+        var inset = Math.max(0, Math.round(window.innerHeight - vv.height));
+        var shift = Math.max(0, Math.round(vv.offsetTop));
+        root.style.setProperty('--keyboard-inset', inset + 'px');
+        root.style.setProperty('--kb-shift', shift + 'px');
+        // Only engage the pinning transform while a keyboard is actually open so
+        // we never create a containing block / compositing layer at rest.
+        root.classList.toggle('keyboard-open', inset > 0 || shift > 0);
     }
     function schedule() { if (!raf) raf = requestAnimationFrame(update); }
     vv.addEventListener('resize', schedule);
