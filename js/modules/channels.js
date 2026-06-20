@@ -145,20 +145,25 @@ Object.assign(NYM.prototype, {
 
         try {
             if (!this._geohashD1Activity) this._geohashD1Activity = new Map();
-            const merge = (activity) => {
-                if (!activity || typeof activity !== 'object') return;
-                for (const [name, buckets] of Object.entries(activity)) {
-                    if (Array.isArray(buckets) && this.isValidGeohash(name)) {
-                        this._geohashD1Activity.set(String(name).toLowerCase(), buckets);
+            if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
+            const merge = (data) => {
+                if (!data || typeof data !== 'object') return;
+                const activity = data.activity;
+                if (activity && typeof activity === 'object') {
+                    for (const [name, buckets] of Object.entries(activity)) {
+                        if (Array.isArray(buckets) && this.isValidGeohash(name)) {
+                            this._geohashD1Activity.set(String(name).toLowerCase(), buckets);
+                        }
                     }
                 }
+                this._mergeD1Last(data.last);
             };
             const [discovered, known] = await Promise.all([
                 this._storageApiRequest('channel-active', {}, false).catch(() => null),
                 list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
             ]);
-            merge(discovered && discovered.activity);
-            merge(known && known.activity);
+            merge(discovered);
+            merge(known);
             // Surface discovered channels in the sidebar (proxy pool has no relay
             // backfill), ordered by their latest D1 activity.
             this._populateSidebarFromD1Activity();
@@ -175,8 +180,24 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Approximate last-activity (ms) from hourly D1 buckets (index 0 = current hour)
-    _d1BucketsLastActivityMs(buckets) {
+    // Merge a { channel: lastCreatedAtSec } map from D1 into _d1ChannelLast.
+    _mergeD1Last(last) {
+        if (!last || typeof last !== 'object') return;
+        if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
+        for (const [name, ts] of Object.entries(last)) {
+            const sec = Number(ts) || 0;
+            if (sec <= 0) continue;
+            const k = String(name).toLowerCase();
+            if (sec > (this._d1ChannelLast.get(k) || 0)) this._d1ChannelLast.set(k, sec);
+        }
+    },
+
+    // Precise last-activity (ms) for a channel from D1, falling back to an
+    // hourly-bucket approximation (index 0 = current hour) when no exact
+    // timestamp is available.
+    _d1ChannelLastActivityMs(name, buckets) {
+        const exact = this._d1ChannelLast && this._d1ChannelLast.get(String(name).toLowerCase());
+        if (exact) return exact * 1000;
         if (!Array.isArray(buckets)) return 0;
         const now = Math.floor(Date.now() / 1000);
         for (let h = 0; h < buckets.length && h < 24; h++) {
@@ -195,7 +216,7 @@ Object.assign(NYM.prototype, {
         const consider = (name, buckets) => {
             const nm = String(name).toLowerCase();
             if (!nm || !/^[\p{L}\p{N}]+$/u.test(nm)) return;
-            const ts = this._d1BucketsLastActivityMs(buckets);
+            const ts = this._d1ChannelLastActivityMs(nm, buckets);
             const key = '#' + nm;
             if (this.channels.has(nm)) {
                 if (ts > (this.channelLastActivity.get(key) || 0)) {
@@ -222,13 +243,11 @@ Object.assign(NYM.prototype, {
         const haveNamed = namedAct && namedAct.size > 0;
         if ((!haveGeo && !haveNamed) || !this.channels) return;
         if (!this.channelLastRead) this.channelLastRead = new Map();
+        if (!this._d1Unread) this._d1Unread = new Map();
         const now = Math.floor(Date.now() / 1000);
         let changed = false;
         const seedKey = (unreadKey, buckets) => {
             if (!Array.isArray(buckets)) return;
-            // Cache-derived counts are authoritative — never override them.
-            const cached = this.messages && this.messages.get(unreadKey);
-            if (Array.isArray(cached) && cached.length > 0) return;
             const lastRead = this.channelLastRead.get(unreadKey) || 0;
             // Buckets are hourly, index 0 = current hour. Sum the hours that fall
             // after lastRead (whole channel when never read).
@@ -237,7 +256,9 @@ Object.assign(NYM.prototype, {
                 : 24;
             let count = 0;
             for (let h = 0; h < span; h++) count += (buckets[h] || 0);
-            if (count <= 0) return;
+            // D1 is the archive of record: keep it as a floor so a stale or
+            // already-read local cache can't drop the badge below real activity.
+            this._d1Unread.set(unreadKey, count);
             if (count > (this.unreadCounts.get(unreadKey) || 0)) {
                 this.unreadCounts.set(unreadKey, count);
                 this._renderUnreadBadge(unreadKey, count);
@@ -276,20 +297,25 @@ Object.assign(NYM.prototype, {
         const list = [...names];
         try {
             if (!this._namedChannelActivity) this._namedChannelActivity = new Map();
-            const merge = (activity) => {
-                if (!activity || typeof activity !== 'object') return;
-                for (const [name, buckets] of Object.entries(activity)) {
-                    if (Array.isArray(buckets) && !this.isValidGeohash(name)) {
-                        this._namedChannelActivity.set(String(name).toLowerCase(), buckets);
+            if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
+            const merge = (data) => {
+                if (!data || typeof data !== 'object') return;
+                const activity = data.activity;
+                if (activity && typeof activity === 'object') {
+                    for (const [name, buckets] of Object.entries(activity)) {
+                        if (Array.isArray(buckets) && !this.isValidGeohash(name)) {
+                            this._namedChannelActivity.set(String(name).toLowerCase(), buckets);
+                        }
                     }
                 }
+                this._mergeD1Last(data.last);
             };
             const [discovered, known] = await Promise.all([
                 this._storageApiRequest('channel-active-named', {}, false).catch(() => null),
                 list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
             ]);
-            merge(discovered && discovered.activity);
-            merge(known && known.activity);
+            merge(discovered);
+            merge(known);
             this._populateSidebarFromD1Activity();
             this._seedUnreadFromD1Activity();
         } catch (_) {
@@ -1077,17 +1103,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Replay a channel's archived events (messages, reactions, edits) through
     // handleEvent, which dedupes. Oldest-first so edits and reaction add/remove
     // net correctly. Throttled per channel.
-    async channelRestoreFromD1(channelName) {
+    async channelRestoreFromD1(channelName, opts = {}) {
         if (!channelName) return;
-        return this.channelRestoreManyFromD1([channelName]);
+        return this.channelRestoreManyFromD1([channelName], opts);
     },
 
     // Batch several channels' archived events into one channel-get instead of a
-    // request per channel. Per-channel throttle is preserved.
-    async channelRestoreManyFromD1(channelNames) {
+    // request per channel. Per-channel throttle is preserved unless force is set
+    // (e.g. the user explicitly opened the channel).
+    async channelRestoreManyFromD1(channelNames, opts = {}) {
         if (!Array.isArray(channelNames) || channelNames.length === 0) return;
         if (!this._getApiHost || !this._getApiHost()) return;
         if (!this._channelD1FetchedAt) this._channelD1FetchedAt = new Map();
+        const force = !!opts.force;
         const now = Date.now();
         const names = [];
         const seen = new Set();
@@ -1095,7 +1123,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (!cn) continue;
             const name = String(cn).toLowerCase();
             if (seen.has(name)) continue;
-            if ((this._channelD1FetchedAt.get(name) || 0) > now - 60000) continue;
+            if (!force && (this._channelD1FetchedAt.get(name) || 0) > now - 60000) continue;
             seen.add(name);
             this._channelD1FetchedAt.set(name, now);
             names.push(name);
@@ -1129,6 +1157,27 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 sliceStart = Date.now();
             }
         }
+        // If the active channel was waiting on this restore (its view settled to
+        // an empty note before the archive arrived), paint it now that the store
+        // has messages.
+        if (events.length) this._repaintActiveChannelIfEmpty(names);
+    },
+
+    // Force a re-render of the active channel when its container is empty but the
+    // message store has been populated (e.g. by a D1 restore landing late).
+    _repaintActiveChannelIfEmpty(names) {
+        if (this.inPMMode || this._cvActive) return;
+        const activeKey = this.currentGeohash || this.currentChannel;
+        if (!activeKey || !names.includes(String(activeKey).toLowerCase())) return;
+        const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+        if (!this.getFilteredMessages(storageKey).length) return;
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+        if (container.querySelectorAll('.message[data-message-id]').length > 0) return;
+        if (typeof this._clearMessageSkeleton === 'function') this._clearMessageSkeleton(container);
+        container.dataset.lastChannel = '';
+        this.channelDOMCache.delete(storageKey);
+        this.loadChannelMessages(this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel);
     },
 
     switchChannel(channel, geohash = '') {
@@ -1183,7 +1232,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // feeds the same event handler as the relays, so the two merge and sort
         // by created_at + the millisecond 'ms' tag.
         if (typeof this.channelRestoreFromD1 === 'function') {
-            this.channelRestoreFromD1(geohash || channel);
+            this.channelRestoreFromD1(geohash || channel, { force: true });
         }
         this.clearQuoteReply();
         if (this.pendingEdit) this.cancelEditMessage();
@@ -1616,7 +1665,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     updateUnreadCount(channel) {
-        const count = this._recomputeUnreadCount(channel);
+        let count = this._recomputeUnreadCount(channel);
+        // Don't let a partial local cache drop the badge below the D1 archive.
+        if (this._d1Unread) count = Math.max(count, this._d1Unread.get(channel) || 0);
         this.unreadCounts.set(channel, count);
         this._persistUnreadCounts();
         this._renderUnreadBadge(channel, count);
@@ -1824,6 +1875,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         this.channelLastRead.set(channel, lastTs);
         this.unreadCounts.set(channel, 0);
+        // Drop the D1 archive floor — it was relative to the old lastRead and
+        // would otherwise resurrect the badge on the next recompute.
+        if (this._d1Unread) this._d1Unread.delete(channel);
         this._persistUnreadCounts(true);
         if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
         this._renderUnreadBadge(channel, 0);
@@ -1938,6 +1992,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.messages) for (const k of this.messages.keys()) keys.add(k);
         if (this.pmMessages) for (const k of this.pmMessages.keys()) keys.add(k);
         if (this.unreadCounts) for (const k of this.unreadCounts.keys()) keys.add(k);
+        const d1Floor = this._d1Unread || new Map();
         for (const k of keys) {
             if (!k) continue;
             const store = (k.startsWith('pm-') || k.startsWith('group-')) ? this.pmMessages : this.messages;
@@ -1945,12 +2000,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             let count;
             if (Array.isArray(cached) && cached.length > 0) {
                 count = this._recomputeUnreadCount(k);
-                if (count > 0) this.unreadCounts.set(k, count);
-                else this.unreadCounts.delete(k);
             } else {
                 // No cached messages to derive from — keep the persisted count
                 count = this.unreadCounts.get(k) || 0;
             }
+            // Never drop below the D1 archive count (cache may be stale/partial).
+            count = Math.max(count, d1Floor.get(k) || 0);
+            if (count > 0) this.unreadCounts.set(k, count);
+            else this.unreadCounts.delete(k);
             this._renderUnreadBadge(k, count);
         }
         this._persistUnreadCounts(true);

@@ -1009,35 +1009,41 @@ async function handleChannelAction(context, body) {
       wanted.push(anm);
     }
     var activity = {};
-    if (wanted.length === 0) return json({ activity: activity });
+    var lastA = {};
+    if (wanted.length === 0) return json({ activity: activity, last: lastA });
     var nowSecA = Math.floor(Date.now() / 1000);
     var minTsA = nowSecA - 24 * 3600;
     var misses = [];
     await Promise.all(wanted.map(async function (anm) {
       var cachedA = await readCacheGet("/channel-activity/" + anm);
-      if (cachedA && Array.isArray(cachedA.b) && cachedA.b.length === 24) activity[anm] = cachedA.b;
-      else misses.push(anm);
+      if (cachedA && Array.isArray(cachedA.b) && cachedA.b.length === 24) {
+        activity[anm] = cachedA.b;
+        if (cachedA.l) lastA[anm] = cachedA.l;
+      } else misses.push(anm);
     }));
     if (misses.length) {
       var buckets = {};
+      var lastMiss = {};
       misses.forEach(function (anm) { buckets[anm] = new Array(24).fill(0); });
       try {
         var ph3 = misses.map(function () { return "?"; }).join(",");
         var rsA = await replica(env.DB_CHANNELS).prepare(
-          "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c " +
+          "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
           "FROM events WHERE channel IN (" + ph3 + ") AND created_at >= ? GROUP BY channel, age"
         ).bind(nowSecA, ...misses, minTsA).all();
         (rsA.results || []).forEach(function (r) {
+          if (r.mx && r.mx > (lastMiss[r.channel] || 0)) lastMiss[r.channel] = r.mx;
           var ageH = r.age;
           if (ageH >= 0 && ageH < 24 && buckets[r.channel]) buckets[r.channel][ageH] = r.c || 0;
         });
       } catch (e) { }
       misses.forEach(function (anm) {
         activity[anm] = buckets[anm];
-        readCachePut(context, "/channel-activity/" + anm, { b: buckets[anm] }, CHANNEL_READ_TTL);
+        if (lastMiss[anm]) lastA[anm] = lastMiss[anm];
+        readCachePut(context, "/channel-activity/" + anm, { b: buckets[anm], l: lastMiss[anm] || 0 }, CHANNEL_READ_TTL);
       });
     }
-    return json({ activity: activity });
+    return json({ activity: activity, last: lastA });
   }
 
   // Public read: discover recently-active geohash channels (kind 20000) so the
@@ -1046,17 +1052,19 @@ async function handleChannelAction(context, body) {
   if (body.action === "channel-active") {
     var cachedActive = await readCacheGet("/channel-active");
     if (cachedActive && cachedActive.activity && typeof cachedActive.activity === "object") {
-      return json({ activity: cachedActive.activity });
+      return json({ activity: cachedActive.activity, last: cachedActive.last || {} });
     }
     var nowSecD = Math.floor(Date.now() / 1000);
     var minTsD = nowSecD - 24 * 3600;
     var activeOut = {};
+    var lastOut = {};
     try {
       var rsD = await replica(env.DB_CHANNELS).prepare(
-        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c " +
+        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
         "FROM events WHERE kind = 20000 AND created_at >= ? GROUP BY channel, age LIMIT 12000"
       ).bind(nowSecD, minTsD).all();
       (rsD.results || []).forEach(function (r) {
+        if (r.mx && r.mx > (lastOut[r.channel] || 0)) lastOut[r.channel] = r.mx;
         var ageH = r.age;
         if (ageH < 0 || ageH >= 24) return;
         var b = activeOut[r.channel];
@@ -1064,8 +1072,8 @@ async function handleChannelAction(context, body) {
         b[ageH] = r.c || 0;
       });
     } catch (e) { }
-    readCachePut(context, "/channel-active", { activity: activeOut }, CHANNEL_READ_TTL);
-    return json({ activity: activeOut });
+    readCachePut(context, "/channel-active", { activity: activeOut, last: lastOut }, CHANNEL_READ_TTL);
+    return json({ activity: activeOut, last: lastOut });
   }
 
   // Public read: discover recently-active named channels (kind 23333) so the
@@ -1074,17 +1082,19 @@ async function handleChannelAction(context, body) {
   if (body.action === "channel-active-named") {
     var cachedActiveN = await readCacheGet("/channel-active-named");
     if (cachedActiveN && cachedActiveN.activity && typeof cachedActiveN.activity === "object") {
-      return json({ activity: cachedActiveN.activity });
+      return json({ activity: cachedActiveN.activity, last: cachedActiveN.last || {} });
     }
     var nowSecN = Math.floor(Date.now() / 1000);
     var minTsN = nowSecN - 24 * 3600;
     var activeOutN = {};
+    var lastOutN = {};
     try {
       var rsN = await replica(env.DB_CHANNELS).prepare(
-        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c " +
+        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
         "FROM events WHERE kind = 23333 AND created_at >= ? GROUP BY channel, age LIMIT 12000"
       ).bind(nowSecN, minTsN).all();
       (rsN.results || []).forEach(function (r) {
+        if (r.mx && r.mx > (lastOutN[r.channel] || 0)) lastOutN[r.channel] = r.mx;
         var ageH = r.age;
         if (ageH < 0 || ageH >= 24) return;
         var b = activeOutN[r.channel];
@@ -1092,8 +1102,8 @@ async function handleChannelAction(context, body) {
         b[ageH] = r.c || 0;
       });
     } catch (e) { }
-    readCachePut(context, "/channel-active-named", { activity: activeOutN }, CHANNEL_READ_TTL);
-    return json({ activity: activeOutN });
+    readCachePut(context, "/channel-active-named", { activity: activeOutN, last: lastOutN }, CHANNEL_READ_TTL);
+    return json({ activity: activeOutN, last: lastOutN });
   }
 
   // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
