@@ -498,6 +498,10 @@ body.solid-ui .cv-column-header {
         height: auto;
     }
 
+    body.columns-mode .cv-scroller {
+        padding-bottom: calc(10px + var(--keyboard-inset, 0px));
+    }
+
     body.columns-mode .cv-strip {
         scroll-snap-type: x mandatory;
         gap: 0;

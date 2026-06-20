@@ -616,47 +616,21 @@ window.nymHapticTap = function (ms) {
     });
 })();
 
-// Track the on-screen keyboard via visualViewport and expose --keyboard-inset
-// for CSS. iOS WebView reports the size coarsely/late, so on input focus we
-// raise the bar immediately with an estimate (the last measured height) and
-// only ever grow it toward the real value while opening, then settle exactly.
+// Track the on-screen keyboard via visualViewport so the chat input can stay
+// above it. On Android the native shell already resizes the viewport (inset
+// ~0); on iOS WKWebView the layout viewport does not shrink, so this exposes
+// the gap as --keyboard-inset for CSS to consume.
 (function () {
     var vv = window.visualViewport;
-    var root = document.documentElement;
-    var applied = 0;
-    function set(px) {
-        applied = px;
-        root.style.setProperty('--keyboard-inset', px + 'px');
-        document.body.classList.toggle('kb-open', px > 0);
-    }
-    if (!vv) {
-        window.nymKbExpect = function () {};
-        window.nymKbRelease = function () {};
-        return;
-    }
+    if (!vv) return;
     var raf = 0;
     function update() {
         raf = 0;
         var inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-        if (inset > 60) window._nymKbInset = inset;
-        // While opening, only rise toward the real height (no dip from coarse
-        // intermediate reports); after that window, track exactly.
-        if (window._nymKbExpected) { if (inset > applied) set(inset); }
-        else set(inset);
+        document.documentElement.style.setProperty('--keyboard-inset', inset + 'px');
     }
     function schedule() { if (!raf) raf = requestAnimationFrame(update); }
     vv.addEventListener('resize', schedule);
     vv.addEventListener('scroll', schedule);
-    window.nymKbExpect = function () {
-        window._nymKbExpected = true;
-        set(window._nymKbInset || Math.round(window.innerHeight * 0.36));
-        clearTimeout(window._nymKbTimer);
-        window._nymKbTimer = setTimeout(function () { window._nymKbExpected = false; schedule(); }, 700);
-    };
-    window.nymKbRelease = function () {
-        window._nymKbExpected = false;
-        clearTimeout(window._nymKbTimer);
-        set(0);
-    };
     update();
 })();
