@@ -2744,8 +2744,11 @@ Object.assign(NYM.prototype, {
         if (this._lastD1BackfillAt && now - this._lastD1BackfillAt < 30000) return;
         this._lastD1BackfillAt = now;
 
+        // Collect the message-restoring promises so we can recompute the sidebar
+        const restorePromises = [];
+
         if (typeof this.pmRestoreFromD1 === 'function') {
-            this.pmRestoreFromD1().catch(() => { });
+            restorePromises.push(this.pmRestoreFromD1().catch(() => { }));
         }
 
         if (typeof this.channelRestoreManyFromD1 === 'function') {
@@ -2753,7 +2756,21 @@ Object.assign(NYM.prototype, {
             const current = this.currentGeohash || this.currentChannel;
             if (current) channels.add(current);
             if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => channels.add(k));
-            if (channels.size) this.channelRestoreManyFromD1([...channels]).catch(() => { });
+            if (channels.size) restorePromises.push(this.channelRestoreManyFromD1([...channels]).catch(() => { }));
+        }
+
+        if (restorePromises.length && typeof this.recomputeAllUnreadCounts === 'function') {
+            Promise.allSettled(restorePromises).then(() => {
+                this.recomputeAllUnreadCounts();
+            });
+        }
+
+        // Seed unread badges for joined channels that weren't restored
+        if (typeof this.fetchGeohashActivityFromD1 === 'function') {
+            this.fetchGeohashActivityFromD1().catch(() => { });
+        }
+        if (typeof this.fetchNamedChannelActivityFromD1 === 'function') {
+            this.fetchNamedChannelActivityFromD1().catch(() => { });
         }
 
         if (typeof this._emojiRestoreFromD1 === 'function') {

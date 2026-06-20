@@ -159,6 +159,9 @@ Object.assign(NYM.prototype, {
             ]);
             merge(discovered && discovered.activity);
             merge(known && known.activity);
+            // Seed sidebar unread badges for joined channels we couldn't restore
+            // into the message cache, now that fresh activity buckets are in.
+            this._seedUnreadFromD1Activity();
             // Refresh the explorer view if it's open.
             if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
                 this.geohashMap.updatePoints();
@@ -166,6 +169,76 @@ Object.assign(NYM.prototype, {
         } catch (_) {
             // Best-effort; the explorer still works from locally stored messages.
             this._geohashActivityFetchedAt = 0;
+        }
+    },
+
+    // Seed sidebar unread badges for joined channels
+    _seedUnreadFromD1Activity() {
+        const geoAct = this._geohashD1Activity;
+        const namedAct = this._namedChannelActivity;
+        const haveGeo = geoAct && geoAct.size > 0;
+        const haveNamed = namedAct && namedAct.size > 0;
+        if ((!haveGeo && !haveNamed) || !this.channels) return;
+        if (!this.channelLastRead) this.channelLastRead = new Map();
+        const now = Math.floor(Date.now() / 1000);
+        let changed = false;
+        const seedKey = (unreadKey, buckets) => {
+            if (!Array.isArray(buckets)) return;
+            // Cache-derived counts are authoritative — never override them.
+            const cached = this.messages && this.messages.get(unreadKey);
+            if (Array.isArray(cached) && cached.length > 0) return;
+            const lastRead = this.channelLastRead.get(unreadKey) || 0;
+            // Buckets are hourly, index 0 = current hour. Sum the hours that fall
+            // after lastRead (whole channel when never read).
+            const span = lastRead > 0
+                ? Math.min(24, Math.max(0, Math.ceil((now - lastRead) / 3600)))
+                : 24;
+            let count = 0;
+            for (let h = 0; h < span; h++) count += (buckets[h] || 0);
+            if (count <= 0) return;
+            if (count > (this.unreadCounts.get(unreadKey) || 0)) {
+                this.unreadCounts.set(unreadKey, count);
+                this._renderUnreadBadge(unreadKey, count);
+                changed = true;
+            }
+        };
+        this.channels.forEach((value) => {
+            if (!value) return;
+            if (value.geohash) {
+                if (haveGeo) seedKey('#' + String(value.geohash).toLowerCase(), geoAct.get(String(value.geohash).toLowerCase()));
+            } else if (value.channel && haveNamed) {
+                seedKey(value.channel, namedAct.get(String(value.channel).toLowerCase()));
+            }
+        });
+        if (changed) this._persistUnreadCounts();
+    },
+
+    // Fetch recent-activity buckets for joined NAMED channels (kind 23333) into a
+    // map separate from the geohash explorer's, then seed their unread badges.
+    async fetchNamedChannelActivityFromD1() {
+        if (!this._getApiHost || !this._getApiHost()) return;
+        if (typeof this._storageApiRequest !== 'function') return;
+        const now = Date.now();
+        if (this._namedActivityFetchedAt && now - this._namedActivityFetchedAt < 30000) return;
+        const names = new Set();
+        this.channels.forEach((value) => {
+            if (value && !value.geohash && value.channel) names.add(String(value.channel).toLowerCase());
+        });
+        const list = [...names];
+        if (list.length === 0) return;
+        this._namedActivityFetchedAt = now;
+        try {
+            if (!this._namedChannelActivity) this._namedChannelActivity = new Map();
+            const data = await this._storageApiRequest('channel-activity', { channels: list }, false);
+            const activity = data && data.activity;
+            if (activity && typeof activity === 'object') {
+                for (const [name, buckets] of Object.entries(activity)) {
+                    if (Array.isArray(buckets)) this._namedChannelActivity.set(String(name).toLowerCase(), buckets);
+                }
+            }
+            this._seedUnreadFromD1Activity();
+        } catch (_) {
+            this._namedActivityFetchedAt = 0;
         }
     },
 
@@ -1516,6 +1589,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (next > cur) {
             this.channelLastRead.set(channel, next);
             this._persistUnreadCounts();
+            if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
             if (typeof this._markConversationNotificationsSeen === 'function') {
                 this._markConversationNotificationsSeen(channel, next);
             }
@@ -1687,6 +1761,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.channelLastRead.set(channel, lastTs);
         this.unreadCounts.set(channel, 0);
         this._persistUnreadCounts(true);
+        if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
         this._renderUnreadBadge(channel, 0);
         if (typeof this._markConversationNotificationsSeen === 'function') {
             this._markConversationNotificationsSeen(channel, lastTs);
@@ -1730,7 +1805,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Flush pending writes on unload so debounced state isn't lost.
         if (!this._unreadUnloadHooked && typeof window !== 'undefined') {
             this._unreadUnloadHooked = true;
-            const flush = () => this._persistUnreadCounts(true);
+            const flush = () => {
+                this._persistUnreadCounts(true);
+                if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1(true);
+            };
             window.addEventListener('pagehide', flush);
             window.addEventListener('beforeunload', flush);
             document.addEventListener('visibilitychange', () => {

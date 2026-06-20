@@ -742,6 +742,39 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Persist read pointers (channels, PMs, and groups)
+    _syncReadStateToD1(immediate = false) {
+        if (!this.pubkey) return;
+        if (!this._getApiHost || !this._getApiHost()) return;
+        const flush = () => {
+            this._readStateSyncTimer = null;
+            if (!this.channelLastRead || this.channelLastRead.size === 0) return;
+            let entries = [];
+            for (const [k, v] of this.channelLastRead) {
+                if (typeof k === 'string' && typeof v === 'number' && v > 0) entries.push([k, v]);
+            }
+            if (entries.length === 0) return;
+            // Bound the payload: keep the most-recently-read conversations.
+            const MAX_ENTRIES = 2000;
+            if (entries.length > MAX_ENTRIES) {
+                entries.sort((a, b) => b[1] - a[1]);
+                entries.length = MAX_ENTRIES;
+            }
+            const channelLastRead = {};
+            for (const [k, v] of entries) channelLastRead[k] = v;
+            // _saveSettingsBlobToD1 encrypts, hashes the category name, and skips
+            // the write when the content hash is unchanged.
+            this._saveSettingsBlobToD1('nymchat-readstate', JSON.stringify({ channelLastRead }));
+        };
+        if (immediate) {
+            if (this._readStateSyncTimer) { clearTimeout(this._readStateSyncTimer); this._readStateSyncTimer = null; }
+            flush();
+            return;
+        }
+        if (this._readStateSyncTimer) return;
+        this._readStateSyncTimer = setTimeout(flush, 5000);
+    },
+
     // Load encrypted settings categories from D1 and apply them. Returns true
     // when core settings were applied; false (e.g. fetch error, no record) tells
     // the caller to fall back to the Nostr gift-wrap load.
