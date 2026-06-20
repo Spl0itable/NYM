@@ -270,7 +270,7 @@ body.light-mode .verified-badge::before {
 
     .message-input {
         font-size: 16px !important;
-        min-height: 44px;
+        min-height: calc(16px * 1.4);
         -webkit-appearance: none;
         border-radius: 0 0 var(--radius-md) var(--radius-md);
     }

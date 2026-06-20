@@ -130,7 +130,7 @@ body.columns-mode .msg-hover-buttons {
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-md);
     overflow: hidden;
-    transition: all var(--transition);
+    transition: border-color var(--transition), box-shadow var(--transition), opacity var(--transition);
 }
 
 .cv-scroll-bottom {

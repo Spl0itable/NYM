@@ -1670,7 +1670,7 @@ body.chat-bubbles .edited-indicator-irc {
     font-size: var(--user-text-size);
     outline: none;
     resize: none;
-    min-height: 42px;
+    min-height: calc(var(--user-text-size) * 1.4);
     max-height: 160px;
     transition: all var(--transition);
 }
@@ -1716,6 +1716,43 @@ div.message-input .custom-emoji {
 .message-input-row .message-input {
     flex: 1;
     min-width: 0;
+}
+
+.input-container.composer-popout .input-wrapper {
+    min-height: var(--composer-row-base, 64px);
+}
+
+.input-container.composer-popout .message-input-row {
+    position: static;
+}
+
+.input-container.composer-popout .message-input {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: min(40vh, 360px);
+    background: var(--bg-tertiary);
+    border-color: rgb(from var(--primary) r g b / 0.3);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 12;
+}
+
+.input-container.composer-popout .quote-preview,
+.input-container.composer-popout .edit-preview {
+    bottom: calc(100% + var(--popout-overhang, 0px));
+    z-index: 20;
+}
+
+.input-container.composer-popout .autocomplete-dropdown,
+.input-container.composer-popout .emoji-autocomplete,
+.input-container.composer-popout .command-palette {
+    z-index: 20;
+}
+
+.input-container.composer-popout .translate-input-btn {
+    z-index: 13;
 }
 
 .translate-input-btn {

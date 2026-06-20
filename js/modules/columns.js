@@ -455,6 +455,12 @@ Object.assign(NYM.prototype, {
         col._observer.observe(col.listEl, { childList: true });
     },
 
+    _cvScrollFocusedToBottom() {
+        const col = this._cvColumns && this._cvColumns.find(c => c.id === this._cvFocusedId);
+        if (!col || !col.scrollerEl || col._atBottom === false) return;
+        requestAnimationFrame(() => { if (col.scrollerEl) col.scrollerEl.scrollTop = 0; });
+    },
+
     _cvColIcon(col) {
         if (col.type === 'pm' && col.pubkey) {
             const src = this.getAvatarUrl(col.pubkey);

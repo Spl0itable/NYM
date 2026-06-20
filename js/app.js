@@ -4226,7 +4226,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.507';
+const NYMCHAT_VERSION = 'v3.72.508';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -7123,10 +7123,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Auto-scroll to bottom when input is focused on mobile (only if near bottom)
     if (messageInput && messagesScroller) {
         messageInput.addEventListener('focus', function () {
-            if (window.innerWidth <= 768 && !nym.userScrolledUp) {
-                setTimeout(() => {
-                    nym._scheduleScrollToBottom();
-                }, 300);
+            if (window.innerWidth > 768) return;
+            if (document.body.classList.contains('columns-mode')) {
+                setTimeout(() => nym._cvScrollFocusedToBottom(), 300);
+            } else if (!nym.userScrolledUp) {
+                setTimeout(() => nym._scheduleScrollToBottom(), 300);
             }
         });
     }

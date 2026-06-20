@@ -921,6 +921,11 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         this._initRichMessageInput(input);
 
+        ['autocompleteDropdown', 'channelAutocomplete', 'emojiAutocomplete', 'commandPalette', 'kaomojiAutocomplete'].forEach((id) => {
+            const dd = document.getElementById(id);
+            if (dd) dd.addEventListener('mousedown', (e) => e.preventDefault());
+        });
+
         input.addEventListener('keydown', (e) => {
             const autocomplete = document.getElementById('autocompleteDropdown');
             const channelAc = document.getElementById('channelAutocomplete');
@@ -1718,8 +1723,40 @@ Object.assign(NYM.prototype, {
     },
 
     autoResizeTextarea(textarea) {
+        if (!textarea || !textarea.style) return;
+        const container = textarea.closest('.input-container');
+        const cs = getComputedStyle(textarea);
+        const padV = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        const borderV = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+        let lh = parseFloat(cs.lineHeight);
+        if (!lh) lh = parseFloat(cs.fontSize) * 1.4;
         textarea.style.height = 'auto';
-        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+        const prevMin = textarea.style.minHeight;
+        textarea.style.minHeight = '0px';
+        const contentH = textarea.scrollHeight;
+        textarea.style.minHeight = prevMin;
+        const expand = (contentH - padV) > lh * 1.5;
+        this._composerRowBase = Math.max(parseFloat(cs.minHeight) || 0, Math.ceil(lh)) + padV + borderV;
+        if (container) container.classList.toggle('composer-popout', expand);
+        textarea.style.height = '';
+        this._refreshComposerOffsets();
+    },
+
+    _refreshComposerOffsets() {
+        const input = document.getElementById('messageInput');
+        const wrapper = input && input.closest('.input-wrapper');
+        const container = input && input.closest('.input-container');
+        if (!wrapper) return;
+        const base = this._composerRowBase || 64;
+        wrapper.style.setProperty('--composer-row-base', base + 'px');
+        const expanded = !!(container && container.classList.contains('composer-popout'));
+        const overhang = expanded ? Math.max(0, input.offsetHeight - base) : 0;
+        wrapper.style.setProperty('--popout-overhang', overhang + 'px');
+        const ep = document.getElementById('editPreview');
+        const qp = document.getElementById('quotePreview');
+        const preview = (ep && ep.offsetHeight > 0) ? ep : ((qp && qp.offsetHeight > 0) ? qp : null);
+        const previewH = preview ? preview.offsetHeight : 0;
+        wrapper.style.setProperty('--ac-offset', (overhang + (previewH ? previewH + 8 : 0)) + 'px');
     },
 
     _emojiTokenForImg(img) {

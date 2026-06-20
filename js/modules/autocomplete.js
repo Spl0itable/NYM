@@ -172,14 +172,15 @@ Object.assign(NYM.prototype, {
         if (!emoji) return;
         const input = document.getElementById('messageInput');
         const value = input.value;
-        const cursor = (typeof input.selectionStart === 'number')
+        let cursor = (typeof input.selectionStart === 'number')
             ? input.selectionStart
             : value.length;
+        if (!/:[a-z0-9_+-]*$/i.test(value.substring(0, cursor))) cursor = value.length;
         const before = value.substring(0, cursor);
         const after = value.substring(cursor);
-        // Find the start of the :shortcode token at end of `before`
         const m = before.match(/:([a-z0-9_+-]*)$/i);
-        const colonIndex = m ? before.length - m[0].length : before.lastIndexOf(':');
+        if (!m) return;
+        const colonIndex = before.length - m[0].length;
         const replaced = before.substring(0, colonIndex) + emoji + ' ';
         input.value = replaced + after;
         input.selectionStart = input.selectionEnd = replaced.length;
@@ -247,12 +248,13 @@ Object.assign(NYM.prototype, {
         if (!kaomoji) return;
         const input = document.getElementById('messageInput');
         const value = input.value;
-        const cursor = (typeof input.selectionStart === 'number') ? input.selectionStart : value.length;
+        let cursor = (typeof input.selectionStart === 'number') ? input.selectionStart : value.length;
+        if (!/\\[a-z]*$/i.test(value.substring(0, cursor))) cursor = value.length;
         const before = value.substring(0, cursor);
         const after = value.substring(cursor);
-        // Replace the \search token immediately left of the cursor with the kaomoji
         const m = before.match(/\\[a-z]*$/i);
-        const slashIndex = m ? before.length - m[0].length : before.lastIndexOf('\\');
+        if (!m) return;
+        const slashIndex = before.length - m[0].length;
         const replaced = before.substring(0, slashIndex) + kaomoji + ' ';
         input.value = replaced + after;
         input.selectionStart = input.selectionEnd = replaced.length;

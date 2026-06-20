@@ -2119,8 +2119,7 @@ Object.assign(NYM.prototype, {
         textEl.innerHTML = this.renderCustomEmojiInEscapedText(this.escapeHtml(truncated));
         preview.style.display = 'flex';
         const input = document.getElementById('messageInput');
-        const wrapper = input.closest('.input-wrapper');
-        if (wrapper) wrapper.style.setProperty('--ac-offset', (preview.offsetHeight + 8) + 'px');
+        this._refreshComposerOffsets();
         input.focus();
     },
 
@@ -2128,8 +2127,7 @@ Object.assign(NYM.prototype, {
         this.pendingQuote = null;
         const preview = document.getElementById('quotePreview');
         if (preview) preview.style.display = 'none';
-        const wrapper = document.querySelector('.input-container .input-wrapper');
-        if (wrapper) wrapper.style.removeProperty('--ac-offset');
+        this._refreshComposerOffsets();
     },
 
     startEditMessage(contextData) {
@@ -2178,8 +2176,6 @@ Object.assign(NYM.prototype, {
 
         // Populate input with original content
         const input = document.getElementById('messageInput');
-        const wrapper = input.closest('.input-wrapper');
-        if (wrapper) wrapper.style.setProperty('--ac-offset', (preview.offsetHeight + 8) + 'px');
         input.value = content;
         input.focus();
         this.autoResizeTextarea(input);
@@ -2190,8 +2186,6 @@ Object.assign(NYM.prototype, {
         const preview = document.getElementById('editPreview');
         if (preview) preview.style.display = 'none';
         const input = document.getElementById('messageInput');
-        const wrapper = input.closest('.input-wrapper');
-        if (wrapper) wrapper.style.removeProperty('--ac-offset');
         input.value = '';
         this.autoResizeTextarea(input);
     },
