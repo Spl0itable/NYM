@@ -786,6 +786,7 @@ Object.assign(NYM.prototype, {
                 this._poolReconnectRetries = 0;  // Reset backoff on network restore
                 this._lastPoolReconnectSchedule = 0; // Clear debounce for network restore
                 this._schedulePoolReconnect();
+                this._ensureAllShardsConnected();
                 return;
             }
 
@@ -1862,7 +1863,7 @@ Object.assign(NYM.prototype, {
                 this._shardReconnecting.delete(shardId);
                 return;
             }
-            if (!this.useRelayProxy || !navigator.onLine) {
+            if (!this.useRelayProxy) {
                 this._shardReconnecting.delete(shardId);
                 return;
             }
@@ -1875,8 +1876,12 @@ Object.assign(NYM.prototype, {
                     this._shardReconnecting.delete(shardId);
                     return;
                 }
-                if (!this.useRelayProxy || !navigator.onLine) {
+                if (!this.useRelayProxy) {
                     this._shardReconnecting.delete(shardId);
+                    return;
+                }
+                if (!navigator.onLine) {
+                    attempt(retries + 1);
                     return;
                 }
 
@@ -1946,7 +1951,6 @@ Object.assign(NYM.prototype, {
     _startPoolShardHealthCheck() {
         if (this._poolShardHealthTimer) clearInterval(this._poolShardHealthTimer);
         this._poolShardHealthTimer = setInterval(() => {
-            if (document.hidden) return;
             this._ensureAllShardsConnected();
         }, 15000);
     },
@@ -3654,13 +3658,28 @@ Object.assign(NYM.prototype, {
     _drainRelayMessageQueue() {
         if (this._relayQueueDraining) return;
         this._relayQueueDraining = true;
+        let rescheduled = false;
         try {
+            const start = Date.now();
             while (this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
                 const entry = this._relayMsgQueue.shift();
                 if (entry.ok) this._dispatchRelayMessage(entry.msg, entry.relayUrl);
+                if (Date.now() - start > 24 && this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
+                    rescheduled = true;
+                    let resumed = false;
+                    const resume = () => {
+                        if (resumed) return;
+                        resumed = true;
+                        this._relayQueueDraining = false;
+                        this._drainRelayMessageQueue();
+                    };
+                    if (typeof this._yieldToIdle === 'function') this._yieldToIdle().then(resume, resume);
+                    setTimeout(resume, 100);
+                    return;
+                }
             }
         } finally {
-            this._relayQueueDraining = false;
+            if (!rescheduled) this._relayQueueDraining = false;
         }
     },
 

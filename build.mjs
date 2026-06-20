@@ -82,9 +82,10 @@ async function run() {
     if (rel === 'js/nostr-tools.js' || rel.startsWith('js/vendor/')) return 0;
     // Worker dependencies are imported by their workers, so they must be hashed
     // before the worker; the workers must be hashed before their referrers.
-    if (rel === 'js/modules/syntax-highlight.js' || rel === 'js/geo-decode.js') return 1;
+    if (rel === 'js/modules/syntax-highlight.js' || rel === 'js/geo-decode.js'
+        || rel === 'js/modules/message-format.js') return 1;
     if (rel === 'js/verify-worker.js' || rel === 'js/highlight-worker.js'
-        || rel === 'js/geo-decode-worker.js') return 2;
+        || rel === 'js/geo-decode-worker.js' || rel === 'js/format-worker.js') return 2;
     return 3;
   };
   const jsFiles = (await walk(path.join(root, 'js')))

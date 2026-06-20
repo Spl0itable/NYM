@@ -1055,6 +1055,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
         events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+        // Offload this batch's formatting to the worker pool; ingest emoji/imeta
+        // tags first so the formatter snapshot is complete.
+        if (typeof this._preformatBatch === 'function') {
+            for (const ev of events) {
+                if (typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(ev.tags);
+                if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(ev.tags);
+            }
+            try { await this._preformatBatch(events.map(ev => ev && ev.content)); } catch (_) { }
+        }
         let sliceStart = Date.now();
         for (let i = 0; i < events.length; i++) {
             if (await this._verifyRelayEventAsync(events[i])) {

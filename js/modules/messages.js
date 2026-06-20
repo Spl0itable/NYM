@@ -627,6 +627,7 @@ Object.assign(NYM.prototype, {
             : '';
 
         const messageEl = document.createElement('div');
+        let deferFormat = false;
 
         // Check if nym is blocked or message contains blocked keywords or is spam.
         // For our own outgoing messages, surface a system message so the sender
@@ -781,9 +782,17 @@ Object.assign(NYM.prototype, {
     </div>
 ` : '';
 
-            // Build the initial HTML with quote detection. Bot reasoning (if
-            // any) renders above the reply as a collapsed accordion.
-            let formattedContent = this.formatMessageWithQuotes(message.content);
+            // Build the initial content HTML
+            const preformatted = this._fmtCache && this._fmtCache.get(message.content);
+            let formattedContent;
+            if (preformatted != null) {
+                formattedContent = preformatted;
+            } else if (this._shouldDeferLiveFormat(message)) {
+                formattedContent = this._placeholderContentHtml(message.content);
+                deferFormat = true;
+            } else {
+                formattedContent = this.formatMessageWithQuotes(message.content);
+            }
             if (message.thinking && (message.isBot || this.isVerifiedBot(message.pubkey))) {
                 formattedContent = this._renderBotThinkingHtml(message.thinking) + formattedContent;
             }
@@ -944,75 +953,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Truncate long messages with "Read more" toggle
-        // Mobile: 400 chars, Desktop: 600 chars
-        // Quotes and replies are truncated independently so a short reply to a
-        // long quote stays fully visible while only the quote collapses.
-        const isMobileTruncate = window.innerWidth <= 768;
-        const truncateThreshold = isMobileTruncate ? 400 : 600;
-        let truncationTargets = [];
-        if (!message.isFileOffer && message.content) {
-            const contentEl = messageEl.querySelector('.message-content') || messageEl;
-            const bubbleTimeInner = contentEl.querySelector(':scope > .bubble-time-inner');
-
-            const makeReadMoreBtn = (inner) => {
-                const btn = document.createElement('button');
-                btn.className = 'read-more-btn';
-                btn.textContent = 'Read more';
-                btn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const isExpanded = inner.classList.toggle('truncated-expanded');
-                    btn.textContent = isExpanded ? 'Show less' : 'Read more';
-                });
-                return btn;
-            };
-
-            // Truncate each long top-level blockquote in place
-            contentEl.querySelectorAll(':scope > blockquote').forEach(bq => {
-                if ((bq.textContent || '').length > truncateThreshold) {
-                    const inner = document.createElement('span');
-                    inner.className = 'truncated-inner';
-                    while (bq.firstChild) inner.appendChild(bq.firstChild);
-                    bq.appendChild(inner);
-                    const btn = makeReadMoreBtn(inner);
-                    bq.appendChild(btn);
-                    bq.classList.add('has-truncation');
-                    truncationTargets.push({ inner, btn, host: bq });
-                }
-            });
-
-            // Truncate the reply (non-quoted) portion if it's long on its own
-            const replyText = message.content
-                .split('\n')
-                .filter(line => !line.startsWith('>'))
-                .join('\n')
-                .trim();
-            if (replyText.length > truncateThreshold) {
-                const replyNodes = [];
-                Array.from(contentEl.childNodes).forEach(node => {
-                    if (node === bubbleTimeInner) return;
-                    if (node.nodeType === 1 && node.tagName === 'BLOCKQUOTE') return;
-                    if (node.nodeType === 1 && node.classList.contains('msg-hover-buttons')) return;
-                    replyNodes.push(node);
-                });
-                if (replyNodes.length) {
-                    const inner = document.createElement('span');
-                    inner.className = 'truncated-inner';
-                    replyNodes.forEach(n => inner.appendChild(n));
-                    const btn = makeReadMoreBtn(inner);
-                    if (bubbleTimeInner) {
-                        contentEl.insertBefore(inner, bubbleTimeInner);
-                        contentEl.insertBefore(btn, bubbleTimeInner);
-                    } else {
-                        contentEl.appendChild(inner);
-                        contentEl.appendChild(btn);
-                    }
-                    contentEl.classList.add('has-truncation');
-                    truncationTargets.push({ inner, btn, host: contentEl });
-                }
-            }
-        }
 
         // Apply shop styles for own messages (load from cache if needed)
         if (message.pubkey === this.pubkey) {
@@ -1066,17 +1006,6 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Apply blur to images (including quoted images) when the message is
-        // not our own and the blur setting applies to this sender.
-        if (!message.isOwn) {
-            const shouldBlur = this.blurOthersImages === true ||
-                (this.blurOthersImages === 'friends' && !this.isFriend(message.pubkey));
-            if (shouldBlur) {
-                messageEl.querySelectorAll('img').forEach(img => {
-                    img.classList.add('blurred');
-                });
-            }
-        }
 
         // Insert in chronological order. During bulk render the caller has
         // already sorted the list and renders in order, so just append —
@@ -1129,15 +1058,6 @@ Object.assign(NYM.prototype, {
             this._scheduleScrollToBottom(true);
         }
 
-        // The char-count threshold only flags candidates; the collapse itself is
-        // height-based, so drop the toggle for content that already fits.
-        for (const t of truncationTargets) {
-            if (t.inner.clientHeight > 0 && t.inner.scrollHeight <= t.inner.clientHeight + 2) {
-                t.btn.remove();
-                t.host.classList.remove('has-truncation');
-                t.inner.classList.add('truncated-expanded');
-            }
-        }
 
         // Bind long-press on reader-avatar spans so users can open the "seen by" modal
         if (message.isOwn && message.isGroup && message.nymMessageId) {
@@ -1215,38 +1135,6 @@ Object.assign(NYM.prototype, {
             this.updateMessageZaps(zapKey);
         }
 
-        // iOS Safari: explicitly load videos inserted via innerHTML. Safari
-        // requires Range request support (206) to play videos; if the server
-        // doesn't support it, fall back to fetching the video as a blob URL.
-        // The reverse-column scroll container keeps the latest message pinned
-        // as media grows the list, so no scroll handling is needed here.
-        const videos = messageEl.querySelectorAll('video.message-video');
-        if (videos.length > 0) {
-            videos.forEach(vid => {
-                const source = vid.querySelector('source');
-                if (source) {
-                    const blobFallback = async () => {
-                        if (vid.dataset.blobLoaded) return;
-                        vid.dataset.blobLoaded = 'true';
-                        try {
-                            const resp = await fetch(source.src);
-                            const blob = await resp.blob();
-                            const blobUrl = URL.createObjectURL(blob);
-                            vid.dataset.blobSrc = blobUrl;
-                            vid.removeAttribute('src');
-                            source.src = blobUrl;
-                            source.type = 'video/mp4';
-                            vid.load();
-                        } catch (e) {
-                            console.warn('Video blob fallback failed:', e);
-                        }
-                    };
-                    source.addEventListener('error', blobFallback, { once: true });
-                    vid.addEventListener('error', blobFallback, { once: true });
-                }
-                vid.load();
-            });
-        }
 
         // Play notification sound for mentions and PMs (but not for historical messages, own messages, or bot messages)
         // Skip sound when bulk-rendering stored messages (e.g. opening an unread conversation)
@@ -1256,11 +1144,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Attach rich link previews for URLs in the message (async, non-blocking)
-        this._attachLinkPreviews(messageEl);
-
-        // Wire Blossom mirror fallbacks for media that fails to load from its primary host
-        this._attachMediaFallbacks(messageEl);
+        if (deferFormat) {
+            this._queueLiveFormat(message, messageEl);
+        } else {
+            this._finalizeMessageContent(messageEl, message);
+        }
     },
 
     _attachMediaFallbacks(root) {
@@ -1298,92 +1186,184 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    formatMessageWithQuotes(content, depth = 0) {
-        const MAX_QUOTE_DEPTH = 5;
+    // Content-dependent passes that must run after the formatted HTML is in the
+    // DOM: truncation, image blur, iOS video load, link previews, media
+    // fallbacks. Runs inline (sync render) or after the worker content swap.
+    _finalizeMessageContent(messageEl, message) {
+        const isMobileTruncate = window.innerWidth <= 768;
+        const truncateThreshold = isMobileTruncate ? 400 : 600;
+        const truncationTargets = [];
+        if (!message.isFileOffer && message.content) {
+            const contentEl = messageEl.querySelector('.message-content') || messageEl;
+            const bubbleTimeInner = contentEl.querySelector(':scope > .bubble-time-inner');
 
-        // Split content into lines and group consecutive > lines into quote blocks
-        const lines = content.split('\n');
-        let html = '';
-        let i = 0;
+            const makeReadMoreBtn = (inner) => {
+                const btn = document.createElement('button');
+                btn.className = 'read-more-btn';
+                btn.textContent = 'Read more';
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const isExpanded = inner.classList.toggle('truncated-expanded');
+                    btn.textContent = isExpanded ? 'Show less' : 'Read more';
+                });
+                return btn;
+            };
 
-        while (i < lines.length) {
-            if (lines[i].startsWith('>')) {
-                // Collect all consecutive > lines into one quote block
-                const quoteLines = [];
-                while (i < lines.length && lines[i].startsWith('>')) {
-                    quoteLines.push(lines[i].substring(1).trim());
-                    i++;
+            contentEl.querySelectorAll(':scope > blockquote').forEach(bq => {
+                if ((bq.textContent || '').length > truncateThreshold) {
+                    const inner = document.createElement('span');
+                    inner.className = 'truncated-inner';
+                    while (bq.firstChild) inner.appendChild(bq.firstChild);
+                    bq.appendChild(inner);
+                    const btn = makeReadMoreBtn(inner);
+                    bq.appendChild(btn);
+                    bq.classList.add('has-truncation');
+                    truncationTargets.push({ inner, btn, host: bq });
                 }
+            });
 
-                // If we've reached the max depth, strip the nested quote entirely
-                if (depth >= MAX_QUOTE_DEPTH) {
-                    continue;
-                }
-
-                // First line may have author attribution
-                const firstLine = quoteLines[0];
-                const authorMatch = firstLine.match(/^@([^:]+):\s*(.*)/);
-
-                if (authorMatch) {
-                    const quotedAuthor = authorMatch[1].trim();
-                    // Remaining text after author on first line, plus all continuation lines
-                    const messageParts = [];
-                    if (authorMatch[2]) messageParts.push(authorMatch[2]);
-                    for (let j = 1; j < quoteLines.length; j++) {
-                        messageParts.push(quoteLines[j]);
+            const replyText = message.content
+                .split('\n')
+                .filter(line => !line.startsWith('>'))
+                .join('\n')
+                .trim();
+            if (replyText.length > truncateThreshold) {
+                const replyNodes = [];
+                Array.from(contentEl.childNodes).forEach(node => {
+                    if (node === bubbleTimeInner) return;
+                    if (node.nodeType === 1 && node.tagName === 'BLOCKQUOTE') return;
+                    if (node.nodeType === 1 && node.classList.contains('msg-hover-buttons')) return;
+                    replyNodes.push(node);
+                });
+                if (replyNodes.length) {
+                    const inner = document.createElement('span');
+                    inner.className = 'truncated-inner';
+                    replyNodes.forEach(n => inner.appendChild(n));
+                    const btn = makeReadMoreBtn(inner);
+                    if (bubbleTimeInner) {
+                        contentEl.insertBefore(inner, bubbleTimeInner);
+                        contentEl.insertBefore(btn, bubbleTimeInner);
+                    } else {
+                        contentEl.appendChild(inner);
+                        contentEl.appendChild(btn);
                     }
-                    const quotedMessage = messageParts.join('\n');
-
-                    // Clean the author name of HTML, entities, and deduplicate suffixes for comparison
-                    let cleanAuthor = quotedAuthor.replace(/<[^>]*>/g, '').replace(/&lt;/g, '').replace(/&gt;/g, '').trim();
-                    cleanAuthor = cleanAuthor.replace(/^([^#]+)#([0-9a-f]{4})#\2$/i, '$1#$2');
-
-                    // Look up the author's pubkey
-                    let authorPubkey = null;
-                    this.users.forEach((user, pubkey) => {
-                        const userNym = this.parseNymFromDisplay(user.nym);
-                        const fullNym = `${userNym}#${this.getPubkeySuffix(pubkey)}`;
-                        if (fullNym === cleanAuthor || userNym === cleanAuthor) {
-                            authorPubkey = pubkey;
-                        }
-                    });
-
-                    // Wrap the #suffix in nym-suffix span for proper dimming
-                    const suffixMatch = cleanAuthor.match(/^(.+)(#[0-9a-f]{4})$/i);
-
-                    const flairHtml = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
-                    const displayAuthor = suffixMatch
-                        ? `${this.escapeHtml(suffixMatch[1])}<span class="nym-suffix">${this.escapeHtml(suffixMatch[2])}</span>${flairHtml}`
-                        : `${this.escapeHtml(cleanAuthor)}${flairHtml}`;
-
-                    html += `<blockquote><span class="quote-author">${displayAuthor}:</span> ${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
-                } else {
-                    // Regular quote without author
-                    const quotedMessage = quoteLines.join('\n');
-                    html += `<blockquote>${this.formatMessageWithQuotes(quotedMessage, depth + 1)}</blockquote>`;
-                }
-            } else if (lines[i].trim() === '') {
-                // Skip empty lines adjacent to quotes
-                i++;
-            } else {
-                // Collect consecutive non-quote, non-empty lines
-                const textLines = [];
-                while (i < lines.length && !lines[i].startsWith('>')) {
-                    textLines.push(lines[i]);
-                    i++;
-                }
-                const text = textLines.join('\n').replace(/^\n+/, '').replace(/\n+$/, '');
-                if (text) {
-                    html += this.formatMessage(text);
+                    contentEl.classList.add('has-truncation');
+                    truncationTargets.push({ inner, btn, host: contentEl });
                 }
             }
         }
 
-        if (!html) {
-            return this.formatMessage(content);
+        // The char-count threshold only flags candidates; the collapse itself is
+        // height-based, so drop the toggle for content that already fits.
+        for (const t of truncationTargets) {
+            if (t.inner.clientHeight > 0 && t.inner.scrollHeight <= t.inner.clientHeight + 2) {
+                t.btn.remove();
+                t.host.classList.remove('has-truncation');
+                t.inner.classList.add('truncated-expanded');
+            }
         }
 
-        return html;
+        // Blur images (including quoted images) for non-own senders when set.
+        if (!message.isOwn) {
+            const shouldBlur = this.blurOthersImages === true ||
+                (this.blurOthersImages === 'friends' && !this.isFriend(message.pubkey));
+            if (shouldBlur) {
+                messageEl.querySelectorAll('img').forEach(img => img.classList.add('blurred'));
+            }
+        }
+
+        // iOS Safari: explicitly load videos inserted via innerHTML, with a blob
+        // fallback when the host lacks Range (206) support.
+        const videos = messageEl.querySelectorAll('video.message-video');
+        if (videos.length > 0) {
+            videos.forEach(vid => {
+                const source = vid.querySelector('source');
+                if (source) {
+                    const blobFallback = async () => {
+                        if (vid.dataset.blobLoaded) return;
+                        vid.dataset.blobLoaded = 'true';
+                        try {
+                            const resp = await fetch(source.src);
+                            const blob = await resp.blob();
+                            const blobUrl = URL.createObjectURL(blob);
+                            vid.dataset.blobSrc = blobUrl;
+                            vid.removeAttribute('src');
+                            source.src = blobUrl;
+                            source.type = 'video/mp4';
+                            vid.load();
+                        } catch (e) {
+                            console.warn('Video blob fallback failed:', e);
+                        }
+                    };
+                    source.addEventListener('error', blobFallback, { once: true });
+                    vid.addEventListener('error', blobFallback, { once: true });
+                }
+                vid.load();
+            });
+        }
+
+        this._attachLinkPreviews(messageEl);
+        this._attachMediaFallbacks(messageEl);
+    },
+
+    // Defer formatting to the worker only for live, heavy, sizeable content —
+    // tiny/cheap content formats inline (a round-trip isn't worth it).
+    _shouldDeferLiveFormat(message) {
+        if (this._bulkAppending) return false;
+        const content = message.content;
+        if (!content || content.length < 120) return false;
+        if (message.isFileOffer || message.thinking) return false;
+        if (content.startsWith('/me ')) return false;
+        if (!_RX_FORMAT_TRIGGERS.test(content)) return false;
+        return !!this._getFormatWorker();
+    },
+
+    // Safe, instantly-renderable stand-in shown until the worker result swaps in.
+    _placeholderContentHtml(content) {
+        return this.escapeHtml(content).replace(/\n/g, '<br>');
+    },
+
+    _queueLiveFormat(message, messageEl) {
+        const content = message.content;
+        messageEl.dataset.fmtPending = '1';
+        const finishInline = () => {
+            let html;
+            try { html = this.formatMessageWithQuotes(content); }
+            catch (_) { html = this._placeholderContentHtml(content); }
+            this._swapMessageContent(messageEl, message, html, content);
+        };
+        if (!this._getFormatWorker()) { finishInline(); return; }
+        const items = [{ key: content, content, quoteFlair: this._resolveQuoteFlair(content) }];
+        this._workerFormatBatch(items, this._buildFormatCtx()).then(results => {
+            const html = results && results[0] ? results[0].html : null;
+            if (html != null) this._swapMessageContent(messageEl, message, html, content);
+            else finishInline();
+        }).catch(() => { try { finishInline(); } catch (_) { } });
+    },
+
+    // Replace the placeholder with formatted HTML in-place (the node's DOM
+    // position never changes, so message order is unaffected), then run the
+    // content-dependent passes. No-ops if the node was removed or the message
+    // was edited while the worker was running.
+    _swapMessageContent(messageEl, message, formattedHtml, originalContent) {
+        if (!messageEl || messageEl.dataset.fmtPending !== '1') return;
+        delete messageEl.dataset.fmtPending;
+        if (!messageEl.isConnected || message.content !== originalContent || formattedHtml == null) return;
+        const contentEl = messageEl.querySelector('.message-content');
+        if (!contentEl) return;
+        const boundary = contentEl.querySelector(':scope > .bubble-time-inner');
+        let n = contentEl.firstChild;
+        while (n && n !== boundary) { const next = n.nextSibling; contentEl.removeChild(n); n = next; }
+        contentEl.classList.remove('has-truncation');
+        const tpl = document.createElement('template');
+        tpl.innerHTML = formattedHtml;
+        contentEl.insertBefore(tpl.content, boundary || null);
+        this._finalizeMessageContent(messageEl, message);
+    },
+
+    formatMessageWithQuotes(content, depth = 0) {
+        return window.NymFormat.formatWithQuotes(content, this._mainFormatCtx(content), depth);
     },
 
     _enrichActionMentions(html) {
@@ -1438,259 +1418,7 @@ Object.assign(NYM.prototype, {
     },
 
     formatMessage(content) {
-        if (!_RX_FORMAT_TRIGGERS.test(content)) {
-            return content.indexOf('\n') === -1 ? content : content.replace(/\n/g, '<br>');
-        }
-
-        let formatted = content;
-
-        // Deduplicate suffixes in mentions from external apps (e.g., @user#abcd#abcd -> @user#abcd)
-        formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
-
-        formatted = formatted
-            .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-
-        // Code blocks and inline code — extract into placeholders so
-        // later markdown/mention/channel processing doesn't touch their contents
-        const codePlaceholders = [];
-        const splitCodeLang = (body) => {
-            const m = body.match(/^[ \t]*([A-Za-z0-9_+#.-]{1,20})[ \t]*\r?\n/);
-            return m ? { lang: m[1], body: body.slice(m[0].length) } : { lang: null, body: body };
-        };
-        const pushCodeBlock = (code) => {
-            const { lang, body } = splitCodeLang(code);
-            const trimmedCode = body.replace(/^\s*\n/, '').replace(/\s+$/, '');
-            const rawCode = trimmedCode
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>')
-                .replace(/&quot;/g, '"')
-                .replace(/&amp;/g, '&');
-            const hl = window.NymHighlight;
-            const normLang = hl ? hl.normalize(lang) : null;
-            // Highlighting is regex-heavy, so offload it to the highlight worker
-            let codeHtml = trimmedCode;
-            let hlAttr = '';
-            if (hl && normLang) {
-                const key = normLang + '\x00' + rawCode;
-                const cached = this._hlCache && this._hlCache.get(key);
-                if (cached !== undefined && cached !== null) {
-                    codeHtml = cached;
-                } else {
-                    const id = this._queueHighlight(rawCode, normLang, key);
-                    if (id === null) codeHtml = hl.highlight(rawCode, normLang); // no worker: do it inline
-                    else hlAttr = ` data-hl-id="${id}"`;
-                }
-            }
-            const langClass = normLang ? ` class="language-${normLang}"` : '';
-            const langLabel = normLang ? `<span class="code-lang-label">${normLang}</span>` : '';
-            const encodedRaw = btoa(unescape(encodeURIComponent(rawCode)));
-            const idx = codePlaceholders.length;
-            codePlaceholders.push(`<div class="code-block-wrapper">${langLabel}<pre><code${langClass}${hlAttr}>${codeHtml}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" data-action="codeBlockCopy">Copy</button></div>`);
-            return `\uFDD0${idx}\uFDD1`;
-        };
-        formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
-        // Unterminated fence (e.g. a truncated bot reply): render the remainder as a block
-        formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(code));
-        formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
-            const idx = codePlaceholders.length;
-            codePlaceholders.push(`<code>${code}</code>`);
-            return `\uFDD0${idx}\uFDD1`;
-        });
-
-        // Bold **text** (asterisks — fine anywhere) or __text__ (underscores — require word boundary)
-        formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        formatted = formatted.replace(/(?<!\w)__(.+?)__(?!\w)/g, '<strong>$1</strong>');
-
-        // Italic *text* (asterisks — fine anywhere) or _text_ (underscores — require word boundary
-        // so that underscores inside names/identifiers like @Cool_User#a1b2 are not treated as italic)
-        formatted = formatted.replace(/(?<![:/])\*([^*\s][^*]*)\*/g, '<em>$1</em>');
-        formatted = formatted.replace(/(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, '<em>$1</em>');
-
-        // Strikethrough ~~text~~
-        formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
-
-        // Blockquotes > text
-        formatted = formatted.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-
-        // Headers
-        formatted = formatted.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-        formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-        formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-        // Convert video URLs to video players
-        // Use __VID_n__ placeholders to prevent the general URL-to-link regex from
-        // matching URLs that are already embedded inside video HTML attributes.
-        const mediaPlaceholders = [];
-        const buildFallbackAttr = (url) => {
-            const mirrors = this.mediaFallbacks ? this.mediaFallbacks.get(url) : null;
-            if (!mirrors || !mirrors.length) return '';
-            const proxied = mirrors.map(m => this.getProxiedMediaUrl(m));
-            return ` data-media-fallbacks="${this.escapeHtml(proxied.join('|'))}"`;
-        };
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
-            (match, url, ext) => {
-                const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
-                const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
-                const proxiedUrl = this.getProxiedMediaUrl(url);
-                const fbAttr = buildFallbackAttr(url);
-                const idx = mediaPlaceholders.length;
-                mediaPlaceholders.push({
-                    kind: 'video',
-                    html: `<span class="video-container" data-action="stopPropagation"${fbAttr}><video controls playsinline webkit-playsinline preload="metadata" class="message-video"><source src="${proxiedUrl}" type="${type}"></video><button class="video-expand-btn" data-video-src="${proxiedUrl.replace(/"/g, '&quot;')}" data-action="expandVideoFromContainer">⛶</button></span>`
-                });
-                return `﷒${idx}﷓`;
-            }
-        );
-
-        // Convert image URLs to images (proxied through Cloudflare worker for IP privacy)
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
-            (match, url) => {
-                const proxiedUrl = this.getProxiedMediaUrl(url);
-                const fbAttr = buildFallbackAttr(url);
-                const idx = mediaPlaceholders.length;
-                mediaPlaceholders.push({
-                    kind: 'image',
-                    html: `<img src="${proxiedUrl}" alt="Image" class="msg-img" data-action="expandImageFromData"${fbAttr} />`
-                });
-                return `﷒${idx}﷓`;
-            }
-        );
-
-        // Convert Nymchat app channel links BEFORE general URLs
-        formatted = formatted.replace(
-            /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
-            (match, prefix, channelId) => {
-                return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${this.escapeHtml(channelId)}">${match}</span>`;
-            }
-        );
-
-        // Convert group invite links into a join chip BEFORE general URLs
-        formatted = formatted.replace(
-            /https?:\/\/[^\s<>"]*#gjoin=([A-Za-z0-9_-]+)/g,
-            (match, token) => {
-                const invite = typeof this.parseGroupInviteInput === 'function' ? this.parseGroupInviteInput(token) : null;
-                if (!invite) return match;
-                const name = this.escapeHtml(this.sanitizeGroupName(invite.n || '') || 'group');
-                const groupSvg = `<svg class="inline-group-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-                return `<span class="channel-link group-invite-chip" data-action="joinGroupFromInvite" data-invite="${this.escapeHtml(token)}">${groupSvg}Join ${name}</span>`;
-            }
-        );
-
-        // Convert other URLs to links (but not placeholders)
-        formatted = formatted.replace(
-            /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
-            '<a href="$1" target="_blank" rel="noopener">$1</a>'
-        );
-
-        // Restore media placeholders; collapse runs of 2+ media items into a gallery
-        formatted = formatted.replace(
-            /(?:﷒(\d+)﷓)(?:[ \t\r\n]*﷒(\d+)﷓)+/g,
-            (run) => {
-                const indices = [];
-                run.replace(/﷒(\d+)﷓/g, (_m, idx) => { indices.push(parseInt(idx, 10)); return ''; });
-                const inner = indices.map(i => mediaPlaceholders[i].html).join('');
-                const count = indices.length;
-                const sizeClass = count === 2 ? 'gallery-2' : count === 3 ? 'gallery-3' : 'gallery-4plus';
-                return `<div class="message-gallery ${sizeClass}" data-count="${count}">${inner}</div>`;
-            }
-        );
-        formatted = formatted.replace(/﷒(\d+)﷓/g, (_m, idx) => mediaPlaceholders[parseInt(idx, 10)].html);
-
-        // Process mentions and channel references (both geohash and non-geohash) in one pass.
-        // The trailing (?![^<]*>) prevents matches inside HTML attribute values
-        // (e.g. inside an <a href="...@user/...">), which would otherwise consume
-        // the closing quote and `>` of the tag and break the rendered HTML.
-        formatted = formatted.replace(
-            /(?:(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?]))(?![^<]*>)/gi,
-            (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
-                if (mentionWithSuffix) {
-                    // Wrap the #suffix in nym-suffix span for proper dimming
-                    const suffixIdx = mentionWithSuffix.search(/#[0-9a-f]{4}$/i);
-                    const namePart = mentionWithSuffix.substring(0, suffixIdx);
-                    const suffixPart = mentionWithSuffix.substring(suffixIdx);
-                    return `<span class="nm-mention">${namePart}<span class="nym-suffix">${suffixPart}</span></span>`;
-                } else if (simpleMention) {
-                    return `<span class="nm-mention">${simpleMention}</span>`;
-                } else if (channel) {
-                    const channelName = channel.substring(1).trim().toLowerCase();
-
-                    if (!channelName) {
-                        return match;
-                    }
-
-                    const isGeohash = this.isValidGeohash(channelName);
-                    const isActive = isGeohash
-                        ? this.currentGeohash === channelName
-                        : this.currentChannel === channelName;
-                    const classes = ['channel-reference'];
-                    if (isGeohash) classes.push('geohash-reference');
-                    if (isActive) classes.push('active-channel');
-
-                    let title;
-                    if (isGeohash) {
-                        const location = this.getGeohashLocation(channelName);
-                        title = `Geohash channel`;
-                        if (location) {
-                            title += `: ${this.escapeHtml(location)}`;
-                        }
-                    } else {
-                        title = `Channel: #${channelName}`;
-                    }
-
-                    return `${whitespace || ''}<span class="${classes.join(' ')} nm-underline" title="${title}" data-action="channelLink" data-channel-ref="g:${channelName}">${channel}</span>`;
-                }
-            }
-        );
-
-        // Convert emoji shortcodes :emoji: — built-in unicode first, then NIP-30 custom emoji
-        formatted = formatted.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
-            const emoji = this.emojiMap[code.toLowerCase()];
-            if (emoji) return emoji;
-            if (this.customEmojis && this.customEmojis.has(code)) {
-                return this.renderCustomEmojiImg(code) || match;
-            }
-            return match;
-        });
-
-        // Convert simple emoticons to emojis
-        formatted = formatted.replace(/(^|\s):\)($|\s)/g, '$1😊$2');
-        formatted = formatted.replace(/(^|\s):\(($|\s)/g, '$1😢$2');
-        formatted = formatted.replace(/(^|\s):D($|\s)/g, '$1😃$2');
-        formatted = formatted.replace(/(^|\s):P($|\s)/g, '$1😛$2');
-        formatted = formatted.replace(/(^|\s);-?\)($|\s)/g, '$1😉$2');
-        formatted = formatted.replace(/(^|\s):o($|\s)/gi, '$1😮$2');
-        formatted = formatted.replace(/(^|\s):\|($|\s)/g, '$1😐$2');
-        formatted = formatted.replace(/(^|\s)&lt;3($|\s)/g, '$1❤️$2');
-        formatted = formatted.replace(/(^|\s)\/\\($|\s)/g, '$1⚠️$2');
-
-        // Wrap emoji characters in <span class="emoji"> to isolate them from --font-sans
-        // This regex matches all Unicode emoji including: emoticons, symbols, dingbats,
-        // skin tone modifiers, regional indicator flag sequences, variation selectors,
-        // ZWJ sequences, keycap sequences (#️⃣ 0️⃣-9️⃣), and tag flag sequences.
-        formatted = formatted.replace(
-            /(?:<[^>]+>)|((?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?(?:\u{200D}(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\u{FE0F}|\u{FE0E})?(?:[\u{1F3FB}-\u{1F3FF}])?)*)(?:[\u{E0020}-\u{E007E}]+\u{E007F})?)/gu,
-            (match, emoji) => {
-                // If this is an HTML tag, skip it
-                if (!emoji) return match;
-                return `<span class="emoji">${match}</span>`;
-            }
-        );
-
-        // Restore code placeholders
-        formatted = formatted.replace(/\uFDD0(\d+)\uFDD1/g, (m, idx) => codePlaceholders[idx]);
-
-        // Handle game tokens
-        formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
-
-        // Line breaks
-        formatted = formatted.replace(/\n/g, '<br>');
-
-        return formatted;
+        return window.NymFormat.format(content, this._mainFormatCtx(content));
     },
 
     // Check if a raw message is emoji-only (1-6 emoji, optional whitespace, no other text)
@@ -2259,6 +1987,7 @@ Object.assign(NYM.prototype, {
     updateMessageInDOM(messageId, newContent) {
         const msgEl = this.findMessageElementAnywhere(messageId);
         if (!msgEl) return;
+        delete msgEl.dataset.fmtPending; // cancel any in-flight deferred-format swap
 
         // Update raw content data attribute
         msgEl.dataset.rawContent = newContent;
@@ -3907,6 +3636,165 @@ Object.assign(NYM.prototype, {
         if (this._hlKeyIds) this._hlKeyIds.clear();
         if (this._hlInflight) this._hlInflight.clear();
         if (this._hlPosts) this._hlPosts.clear();
+    },
+
+    // Snapshot of the app state the pure formatter needs, shared across a batch.
+    _buildFormatCtx() {
+        return {
+            proxyBase: (typeof this._getProxyBaseUrl === 'function' ? this._getProxyBaseUrl() : null) || null,
+            currentChannel: this.currentChannel || null,
+            currentGeohash: this.currentGeohash || null,
+            customEmojis: (this.customEmojis && this.customEmojis.size) ? Object.fromEntries(this.customEmojis) : null,
+            mediaFallbacks: (this.mediaFallbacks && this.mediaFallbacks.size) ? Object.fromEntries(this.mediaFallbacks) : null,
+        };
+    },
+
+    // ctx for synchronous main-thread formatting: adds the static emoji map, the
+    // highlight strategy that defers to the highlight worker, and quote flair.
+    _mainFormatCtx(content) {
+        const ctx = this._buildFormatCtx();
+        ctx.emojiMap = this.emojiMap;
+        ctx.highlightCode = (rawCode, normLang, trimmed) => this._mainHighlightCode(rawCode, normLang, trimmed);
+        if (content != null) ctx.quoteFlair = this._resolveQuoteFlair(content);
+        return ctx;
+    },
+
+    _mainHighlightCode(rawCode, normLang, trimmed) {
+        const hl = window.NymHighlight;
+        if (!hl || !normLang) return { codeHtml: trimmed, hlAttr: '' };
+        const key = normLang + '\x00' + rawCode;
+        const cached = this._hlCache && this._hlCache.get(key);
+        if (cached != null) return { codeHtml: cached, hlAttr: '' };
+        const id = this._queueHighlight(rawCode, normLang, key);
+        if (id === null) return { codeHtml: hl.highlight(rawCode, normLang), hlAttr: '' };
+        return { codeHtml: trimmed, hlAttr: ` data-hl-id="${id}"` };
+    },
+
+    // Resolve flair HTML for any quoted authors (needs this.users, so it stays on
+    // the main thread); the result rides along in ctx for the pure formatter.
+    _resolveQuoteFlair(content) {
+        if (!content || content.indexOf('>') === -1 || !window.NymFormat) return null;
+        const authors = window.NymFormat.extractQuoteAuthors(content);
+        if (!authors || !authors.length) return null;
+        const out = {};
+        for (const cleanAuthor of authors) {
+            let authorPubkey = null;
+            this.users.forEach((user, pubkey) => {
+                const userNym = this.parseNymFromDisplay(user.nym);
+                const fullNym = `${userNym}#${this.getPubkeySuffix(pubkey)}`;
+                if (fullNym === cleanAuthor || userNym === cleanAuthor) authorPubkey = pubkey;
+            });
+            out[cleanAuthor] = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
+        }
+        return out;
+    },
+
+    // Pool of format workers (mirrors the verify-worker pool). Returns the live
+    // worker records or null when workers are unavailable (caller formats inline).
+    _getFormatWorker() {
+        if (this._fmtWorkersFailed) return null;
+        if (this._fmtWorkers && this._fmtWorkers.length) return this._fmtWorkers;
+        if (typeof Worker !== 'function') { this._fmtWorkersFailed = true; return null; }
+        const n = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, 3));
+        this._fmtWorkers = [];
+        this._fmtPending = new Map();
+        this._fmtSeq = 0;
+        for (let i = 0; i < n; i++) {
+            let w;
+            try { w = new Worker('/js/format-worker.js'); } catch (_) { continue; }
+            const rec = { w, busy: 0 };
+            w.onmessage = (e) => this._onFormatResult(e.data || {}, rec);
+            w.onerror = () => this._dropFormatWorker(rec);
+            w.onmessageerror = () => this._dropFormatWorker(rec);
+            try { w.postMessage({ seq: 0, op: 'init', emojiMap: this.emojiMap }); } catch (_) { }
+            this._fmtWorkers.push(rec);
+        }
+        if (!this._fmtWorkers.length) { this._fmtWorkersFailed = true; return null; }
+        return this._fmtWorkers;
+    },
+
+    _onFormatResult(d, rec) {
+        const entry = this._fmtPending && this._fmtPending.get(d.seq);
+        if (entry) entry.finish(d.results || null);
+    },
+
+    _dropFormatWorker(rec) {
+        if (this._fmtWorkers) this._fmtWorkers = this._fmtWorkers.filter(r => r !== rec);
+        try { if (rec && rec.w) rec.w.terminate(); } catch (_) { }
+        if (this._fmtPending) {
+            for (const [, entry] of this._fmtPending) {
+                if (entry.rec === rec) entry.finish(null);
+            }
+        }
+        if (!this._fmtWorkers || !this._fmtWorkers.length) this._fmtWorkersFailed = true;
+    },
+
+    _workerFormatBatch(items, sharedCtx) {
+        const pool = this._getFormatWorker();
+        if (!pool) return Promise.resolve(null);
+        let rec = pool[0];
+        for (const r of pool) if (r.busy < rec.busy) rec = r;
+        const seq = ++this._fmtSeq;
+        rec.busy++;
+        return new Promise((resolve) => {
+            const entry = { rec, settled: false };
+            entry.finish = (val) => {
+                if (entry.settled) return;
+                entry.settled = true;
+                clearTimeout(entry.timer);
+                if (rec.busy > 0) rec.busy--;
+                this._fmtPending.delete(seq);
+                resolve(val);
+            };
+            // A silently-hung worker must never leave a permanent placeholder.
+            entry.timer = setTimeout(() => entry.finish(null), 5000);
+            this._fmtPending.set(seq, entry);
+            try {
+                rec.w.postMessage({ seq, items, ctx: sharedCtx });
+            } catch (_) {
+                this._dropFormatWorker(rec);
+                entry.finish(null);
+            }
+        });
+    },
+
+    // Format a batch of contents in the worker pool into the content-keyed cache
+    // displayMessage consumes. Best-effort; on failure rendering falls back inline.
+    async _preformatBatch(contents) {
+        const pool = this._getFormatWorker();
+        if (!pool) return;
+        if (!this._fmtCache) this._fmtCache = new Map();
+        const seen = new Set();
+        const unique = [];
+        for (const c of contents) {
+            if (typeof c !== 'string' || !c || seen.has(c) || this._fmtCache.has(c)) continue;
+            seen.add(c);
+            unique.push(c);
+        }
+        if (!unique.length) return;
+
+        const sharedCtx = this._buildFormatCtx();
+        const CHUNK = 60;
+        const jobs = [];
+        for (let i = 0; i < unique.length; i += CHUNK) {
+            const slice = unique.slice(i, i + CHUNK);
+            const items = slice.map(c => ({ key: c, content: c, quoteFlair: this._resolveQuoteFlair(c) }));
+            jobs.push(this._workerFormatBatch(items, sharedCtx));
+        }
+        const batches = await Promise.all(jobs);
+        for (const results of batches) {
+            if (!results) continue;
+            for (const r of results) {
+                if (r && r.html != null) this._fmtCache.set(r.key, r.html);
+            }
+        }
+        if (this._fmtCache.size > 1200) {
+            let drop = this._fmtCache.size - 800;
+            for (const k of this._fmtCache.keys()) {
+                if (drop-- <= 0) break;
+                this._fmtCache.delete(k);
+            }
+        }
     },
 
 });
