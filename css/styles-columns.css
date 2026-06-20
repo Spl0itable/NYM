@@ -516,6 +516,12 @@ body.solid-ui .cv-column-header {
         touch-action: pan-y;
     }
 
+    body.columns-mode .cv-column:not(.focused) {
+        content-visibility: auto;
+        contain-intrinsic-width: auto 100vw;
+        contain-intrinsic-height: auto 100dvh;
+    }
+
     body.columns-mode .cv-column.focused {
         border: none;
         box-shadow: none;
