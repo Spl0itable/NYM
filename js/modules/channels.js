@@ -159,6 +159,9 @@ Object.assign(NYM.prototype, {
             ]);
             merge(discovered && discovered.activity);
             merge(known && known.activity);
+            // Surface discovered channels in the sidebar (proxy pool has no relay
+            // backfill), ordered by their latest D1 activity.
+            this._populateSidebarFromD1Activity();
             // Seed sidebar unread badges for joined channels we couldn't restore
             // into the message cache, now that fresh activity buckets are in.
             this._seedUnreadFromD1Activity();
@@ -170,6 +173,45 @@ Object.assign(NYM.prototype, {
             // Best-effort; the explorer still works from locally stored messages.
             this._geohashActivityFetchedAt = 0;
         }
+    },
+
+    // Approximate last-activity (ms) from hourly D1 buckets (index 0 = current hour)
+    _d1BucketsLastActivityMs(buckets) {
+        if (!Array.isArray(buckets)) return 0;
+        const now = Math.floor(Date.now() / 1000);
+        for (let h = 0; h < buckets.length && h < 24; h++) {
+            if ((buckets[h] || 0) > 0) return (now - h * 3600) * 1000;
+        }
+        return 0;
+    },
+
+    // Populate the sidebar with channels discovered via D1 activity (geohash
+    // kind 20000 and named kind 23333). The relay proxy pool relies on D1
+    // instead of a relay backfill, so without this the sidebar never learns
+    // about active channels it hasn't joined.
+    _populateSidebarFromD1Activity() {
+        if (!this.useRelayProxy) return;
+        let added = false;
+        const consider = (name, buckets) => {
+            const nm = String(name).toLowerCase();
+            if (!nm || !/^[\p{L}\p{N}]+$/u.test(nm)) return;
+            const ts = this._d1BucketsLastActivityMs(buckets);
+            const key = '#' + nm;
+            if (this.channels.has(nm)) {
+                if (ts > (this.channelLastActivity.get(key) || 0)) {
+                    this.channelLastActivity.set(key, ts);
+                }
+                return;
+            }
+            if (this.isChannelBlocked(nm, nm)) return;
+            this.addChannelToList(nm, nm);
+            if (ts > 0) this.channelLastActivity.set(key, ts);
+            added = true;
+        };
+        if (this._geohashD1Activity) this._geohashD1Activity.forEach((b, n) => { if (this.isValidGeohash(n)) consider(n, b); });
+        if (this._namedChannelActivity) this._namedChannelActivity.forEach((b, n) => { if (!this.isValidGeohash(n)) consider(n, b); });
+        if (added) this._persistUnreadCounts();
+        this._scheduleChannelSort();
     },
 
     // Seed sidebar unread badges for joined channels
@@ -204,38 +246,51 @@ Object.assign(NYM.prototype, {
         };
         this.channels.forEach((value) => {
             if (!value) return;
-            if (value.geohash) {
-                if (haveGeo) seedKey('#' + String(value.geohash).toLowerCase(), geoAct.get(String(value.geohash).toLowerCase()));
-            } else if (value.channel && haveNamed) {
-                seedKey(value.channel, namedAct.get(String(value.channel).toLowerCase()));
+            const name = String(value.geohash || value.channel || '').toLowerCase();
+            if (!name) return;
+            // Named channels (kind 23333) share the '#name' key scheme but live in
+            // a separate activity map from geohash channels (kind 20000).
+            if (this.isValidGeohash(name)) {
+                if (haveGeo) seedKey('#' + name, geoAct.get(name));
+            } else if (haveNamed) {
+                seedKey('#' + name, namedAct.get(name));
             }
         });
         if (changed) this._persistUnreadCounts();
     },
 
-    // Fetch recent-activity buckets for joined NAMED channels (kind 23333) into a
-    // map separate from the geohash explorer's, then seed their unread badges.
+    // Discover recently-active NAMED channels (kind 23333) and fetch activity
+    // buckets for known ones into a map separate from the geohash explorer's,
+    // then surface them in the sidebar and seed their unread badges.
     async fetchNamedChannelActivityFromD1() {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiRequest !== 'function') return;
         const now = Date.now();
         if (this._namedActivityFetchedAt && now - this._namedActivityFetchedAt < 30000) return;
+        this._namedActivityFetchedAt = now;
         const names = new Set();
         this.channels.forEach((value) => {
-            if (value && !value.geohash && value.channel) names.add(String(value.channel).toLowerCase());
+            const nm = value ? String(value.geohash || value.channel || '').toLowerCase() : '';
+            if (nm && !this.isValidGeohash(nm)) names.add(nm);
         });
         const list = [...names];
-        if (list.length === 0) return;
-        this._namedActivityFetchedAt = now;
         try {
             if (!this._namedChannelActivity) this._namedChannelActivity = new Map();
-            const data = await this._storageApiRequest('channel-activity', { channels: list }, false);
-            const activity = data && data.activity;
-            if (activity && typeof activity === 'object') {
+            const merge = (activity) => {
+                if (!activity || typeof activity !== 'object') return;
                 for (const [name, buckets] of Object.entries(activity)) {
-                    if (Array.isArray(buckets)) this._namedChannelActivity.set(String(name).toLowerCase(), buckets);
+                    if (Array.isArray(buckets) && !this.isValidGeohash(name)) {
+                        this._namedChannelActivity.set(String(name).toLowerCase(), buckets);
+                    }
                 }
-            }
+            };
+            const [discovered, known] = await Promise.all([
+                this._storageApiRequest('channel-active-named', {}, false).catch(() => null),
+                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
+            ]);
+            merge(discovered && discovered.activity);
+            merge(known && known.activity);
+            this._populateSidebarFromD1Activity();
             this._seedUnreadFromD1Activity();
         } catch (_) {
             this._namedActivityFetchedAt = 0;

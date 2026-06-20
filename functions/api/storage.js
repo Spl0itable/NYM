@@ -1068,6 +1068,34 @@ async function handleChannelAction(context, body) {
     return json({ activity: activeOut });
   }
 
+  // Public read: discover recently-active named channels (kind 23333) so the
+  // sidebar can list channels the client has never joined. Same shape as
+  // channel-active.
+  if (body.action === "channel-active-named") {
+    var cachedActiveN = await readCacheGet("/channel-active-named");
+    if (cachedActiveN && cachedActiveN.activity && typeof cachedActiveN.activity === "object") {
+      return json({ activity: cachedActiveN.activity });
+    }
+    var nowSecN = Math.floor(Date.now() / 1000);
+    var minTsN = nowSecN - 24 * 3600;
+    var activeOutN = {};
+    try {
+      var rsN = await replica(env.DB_CHANNELS).prepare(
+        "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c " +
+        "FROM events WHERE kind = 23333 AND created_at >= ? GROUP BY channel, age LIMIT 12000"
+      ).bind(nowSecN, minTsN).all();
+      (rsN.results || []).forEach(function (r) {
+        var ageH = r.age;
+        if (ageH < 0 || ageH >= 24) return;
+        var b = activeOutN[r.channel];
+        if (!b) { b = new Array(24).fill(0); activeOutN[r.channel] = b; }
+        b[ageH] = r.c || 0;
+      });
+    } catch (e) { }
+    readCachePut(context, "/channel-active-named", { activity: activeOutN }, CHANNEL_READ_TTL);
+    return json({ activity: activeOutN });
+  }
+
   // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
   // delete an archived event when its author matches the deletion's signer.
   if (body.action === "channel-delete") {
