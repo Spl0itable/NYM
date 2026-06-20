@@ -210,9 +210,9 @@ body.light-mode .verified-badge::before {
 
     .main-content {
         height: 100vh;
-        height: 100dvh;
+        height: calc(100dvh - var(--keyboard-inset, 0px));
         max-height: 100vh;
-        max-height: 100dvh;
+        max-height: calc(100dvh - var(--keyboard-inset, 0px));
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -231,8 +231,6 @@ body.light-mode .verified-badge::before {
         border-top: 1px solid var(--glass-border);
         z-index: 500;
         flex-shrink: 0;
-        transform: translateY(calc(-1 * var(--keyboard-inset, 0px)));
-        will-change: transform;
     }
 
     .messages-container {
@@ -242,13 +240,13 @@ body.light-mode .verified-badge::before {
         overflow-x: hidden;
         padding-left: 5px;
         padding-right: 5px;
-        padding-bottom: calc(10px + var(--keyboard-inset, 0px));
+        padding-bottom: 10px;
     }
 
     .main-container {
         display: flex;
         flex-direction: column;
-        height: 100dvh;
+        height: calc(100dvh - var(--keyboard-inset, 0px));
         overflow: hidden;
     }
 
