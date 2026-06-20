@@ -231,8 +231,23 @@ body.light-mode .verified-badge::before {
         border-top: 1px solid var(--glass-border);
         z-index: 500;
         flex-shrink: 0;
+        transition: transform 0.24s ease-out;
+    }
+
+    .messages-list,
+    .cv-list {
+        transition: transform 0.24s ease-out;
+    }
+
+    body.kb-open .input-container,
+    body.kb-open .messages-list,
+    body.kb-open .cv-list {
         transform: translateY(calc(-1 * var(--keyboard-inset, 0px)));
         will-change: transform;
+    }
+
+    body.kb-open.chat-bubbles .message-group-avatar {
+        position: static;
     }
 
     .messages-container {
@@ -242,7 +257,7 @@ body.light-mode .verified-badge::before {
         overflow-x: hidden;
         padding-left: 5px;
         padding-right: 5px;
-        padding-bottom: calc(10px + var(--keyboard-inset, 0px));
+        padding-bottom: 10px;
     }
 
     .main-container {

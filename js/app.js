@@ -7124,11 +7124,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (messageInput && messagesScroller) {
         messageInput.addEventListener('focus', function () {
             if (window.innerWidth > 768) return;
+            if (typeof window.nymKbExpect === 'function') window.nymKbExpect();
             if (document.body.classList.contains('columns-mode')) {
                 setTimeout(() => nym._cvScrollFocusedToBottom(), 300);
             } else if (!nym.userScrolledUp) {
                 setTimeout(() => nym._scheduleScrollToBottom(), 300);
             }
+        });
+        messageInput.addEventListener('blur', function () {
+            if (typeof window.nymKbRelease === 'function') window.nymKbRelease();
         });
     }
 });
