@@ -760,6 +760,20 @@ function buildActivityResult(rows) {
   return { activity: activity, last: last };
 }
 
+async function topChannelActivityRows(db, kind, now, minTs, channelLimit) {
+  var sql =
+    "SELECT pb.channel AS channel, pb.age AS age, pb.c AS c, pb.mx AS mx FROM (" +
+    "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
+    "FROM events WHERE kind = ? AND created_at >= ? GROUP BY channel, age" +
+    ") pb JOIN (" +
+    "SELECT channel FROM events WHERE kind = ? AND created_at >= ? " +
+    "GROUP BY channel ORDER BY COUNT(*) DESC, channel LIMIT ?" +
+    ") top ON pb.channel = top.channel";
+  try {
+    return (await db.prepare(sql).bind(now, kind, minTs, kind, minTs, channelLimit).all()).results || [];
+  } catch (e) { return []; }
+}
+
 // A gift wrap is storable for a user only if it is a kind 1059/1060 event that
 // is cryptographically valid and addressed to that user via a `p` tag.
 function pmIsValidWrapForUser(ev, pubkey) {
@@ -1082,7 +1096,7 @@ async function handleChannelAction(context, body) {
     }
     var nowSecD = Math.floor(Date.now() / 1000);
     var minTsD = nowSecD - 24 * 3600;
-    var rowsD = await spamAwareActivityRows(replica(env.DB_CHANNELS), "kind = 20000 AND created_at >= ?", [nowSecD, minTsD], 12000);
+    var rowsD = await topChannelActivityRows(replica(env.DB_CHANNELS), 20000, nowSecD, minTsD, 4000);
     var builtD = buildActivityResult(rowsD);
     readCachePut(context, "/channel-active", { activity: builtD.activity, last: builtD.last }, CHANNEL_READ_TTL);
     return json({ activity: builtD.activity, last: builtD.last });
@@ -1098,7 +1112,7 @@ async function handleChannelAction(context, body) {
     }
     var nowSecN = Math.floor(Date.now() / 1000);
     var minTsN = nowSecN - 24 * 3600;
-    var rowsN = await spamAwareActivityRows(replica(env.DB_CHANNELS), "kind = 23333 AND created_at >= ?", [nowSecN, minTsN], 12000);
+    var rowsN = await topChannelActivityRows(replica(env.DB_CHANNELS), 23333, nowSecN, minTsN, 4000);
     var builtN = buildActivityResult(rowsN);
     readCachePut(context, "/channel-active-named", { activity: builtN.activity, last: builtN.last }, CHANNEL_READ_TTL);
     return json({ activity: builtN.activity, last: builtN.last });

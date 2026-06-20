@@ -146,33 +146,40 @@ Object.assign(NYM.prototype, {
         try {
             if (!this._geohashD1Activity) this._geohashD1Activity = new Map();
             if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
-            // Apply each response as soon as it lands rather than waiting for both,
-            // so the sidebar and explorer update progressively.
-            const apply = (data) => {
-                if (!data || typeof data !== 'object') return;
-                const activity = data.activity;
-                if (activity && typeof activity === 'object') {
-                    for (const [name, buckets] of Object.entries(activity)) {
-                        if (Array.isArray(buckets) && this.isValidGeohash(name)) {
-                            this._geohashD1Activity.set(String(name).toLowerCase(), buckets);
-                        }
+            const [discovered, known] = await Promise.all([
+                this._storageApiRequest('channel-active', {}, false).catch(() => null),
+                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
+            ]);
+            const hasDiscovered = discovered && discovered.activity && Object.keys(discovered.activity).length > 0;
+            const target = hasDiscovered ? new Map() : this._geohashD1Activity;
+            if (discovered && discovered.activity && typeof discovered.activity === 'object') {
+                for (const [name, buckets] of Object.entries(discovered.activity)) {
+                    if (Array.isArray(buckets) && this.isValidGeohash(name)) {
+                        target.set(String(name).toLowerCase(), buckets);
                     }
                 }
-                this._mergeD1Last(data.last);
-                this._populateSidebarFromD1Activity();
-                this._seedUnreadFromD1Activity();
-                if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
-                    this.geohashMap.updatePoints();
-                }
-            };
-            await Promise.all([
-                this._storageApiRequest('channel-active', {}, false).then(apply).catch(() => { }),
-                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).then(apply).catch(() => { }) : null
-            ].filter(Boolean));
+            }
+            this._mergeD1Last(discovered && discovered.last);
+            this._geohashD1Activity = target;
+            this._mergeUnreadBuckets(known);
+            this._populateSidebarFromD1Activity();
+            this._seedUnreadFromD1Activity();
+            if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
+                this.geohashMap.updatePoints();
+            }
         } catch (_) {
             // Best-effort; the explorer still works from locally stored messages.
             this._geohashActivityFetchedAt = 0;
         }
+    },
+
+    _mergeUnreadBuckets(data) {
+        if (!data || !data.activity || typeof data.activity !== 'object') return;
+        if (!this._d1UnreadBuckets) this._d1UnreadBuckets = new Map();
+        for (const [name, buckets] of Object.entries(data.activity)) {
+            if (Array.isArray(buckets)) this._d1UnreadBuckets.set(String(name).toLowerCase(), buckets);
+        }
+        this._mergeD1Last(data.last);
     },
 
     // Merge a { channel: lastCreatedAtSec } map from D1 into _d1ChannelLast.
@@ -207,7 +214,11 @@ Object.assign(NYM.prototype, {
     // about active channels it hasn't joined.
     _populateSidebarFromD1Activity() {
         if (!this.useRelayProxy) return;
+        // The explorer can plot thousands of channels, but the sidebar should
+        // only surface the most recently active discovered ones.
+        const SIDEBAR_DISCOVER_LIMIT = 30;
         let added = false;
+        const candidates = [];
         const consider = (name, buckets) => {
             const nm = String(name).toLowerCase();
             if (!nm || !/^[\p{L}\p{N}]+$/u.test(nm)) return;
@@ -220,23 +231,26 @@ Object.assign(NYM.prototype, {
                 return;
             }
             if (this.isChannelBlocked(nm, nm)) return;
-            this.addChannelToList(nm, nm);
-            if (ts > 0) this.channelLastActivity.set(key, ts);
-            added = true;
+            candidates.push({ nm, key, ts });
         };
         if (this._geohashD1Activity) this._geohashD1Activity.forEach((b, n) => { if (this.isValidGeohash(n)) consider(n, b); });
         if (this._namedChannelActivity) this._namedChannelActivity.forEach((b, n) => { if (!this.isValidGeohash(n)) consider(n, b); });
+        candidates.sort((a, b) => b.ts - a.ts);
+        for (let i = 0; i < candidates.length && i < SIDEBAR_DISCOVER_LIMIT; i++) {
+            const c = candidates[i];
+            this.addChannelToList(c.nm, c.nm);
+            if (c.ts > 0) this.channelLastActivity.set(c.key, c.ts);
+            added = true;
+        }
         if (added) this._persistUnreadCounts();
         this._scheduleChannelSort();
     },
 
-    // Seed sidebar unread badges for joined channels
+    // Seed sidebar unread badges from the spam-aware per-channel activity so the
+    // floor matches what the client actually renders (no spam/poll inflation).
     _seedUnreadFromD1Activity() {
-        const geoAct = this._geohashD1Activity;
-        const namedAct = this._namedChannelActivity;
-        const haveGeo = geoAct && geoAct.size > 0;
-        const haveNamed = namedAct && namedAct.size > 0;
-        if ((!haveGeo && !haveNamed) || !this.channels) return;
+        const act = this._d1UnreadBuckets;
+        if (!act || act.size === 0 || !this.channels) return;
         if (!this.channelLastRead) this.channelLastRead = new Map();
         if (!this._d1Unread) this._d1Unread = new Map();
         const now = Math.floor(Date.now() / 1000);
@@ -264,13 +278,7 @@ Object.assign(NYM.prototype, {
             if (!value) return;
             const name = String(value.geohash || value.channel || '').toLowerCase();
             if (!name) return;
-            // Named channels (kind 23333) share the '#name' key scheme but live in
-            // a separate activity map from geohash channels (kind 20000).
-            if (this.isValidGeohash(name)) {
-                if (haveGeo) seedKey('#' + name, geoAct.get(name));
-            } else if (haveNamed) {
-                seedKey('#' + name, namedAct.get(name));
-            }
+            seedKey('#' + name, act.get(name));
         });
         if (changed) this._persistUnreadCounts();
     },
@@ -293,25 +301,26 @@ Object.assign(NYM.prototype, {
         try {
             if (!this._namedChannelActivity) this._namedChannelActivity = new Map();
             if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
-            // Apply each response as soon as it lands rather than waiting for both.
-            const apply = (data) => {
-                if (!data || typeof data !== 'object') return;
-                const activity = data.activity;
-                if (activity && typeof activity === 'object') {
-                    for (const [name, buckets] of Object.entries(activity)) {
-                        if (Array.isArray(buckets) && !this.isValidGeohash(name)) {
-                            this._namedChannelActivity.set(String(name).toLowerCase(), buckets);
-                        }
+            const [discovered, known] = await Promise.all([
+                this._storageApiRequest('channel-active-named', {}, false).catch(() => null),
+                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).catch(() => null) : null
+            ]);
+
+            const hasDiscovered = discovered && discovered.activity && Object.keys(discovered.activity).length > 0;
+            const target = hasDiscovered ? new Map() : this._namedChannelActivity;
+            if (discovered && discovered.activity && typeof discovered.activity === 'object') {
+                for (const [name, buckets] of Object.entries(discovered.activity)) {
+                    if (Array.isArray(buckets) && !this.isValidGeohash(name)) {
+                        target.set(String(name).toLowerCase(), buckets);
                     }
                 }
-                this._mergeD1Last(data.last);
-                this._populateSidebarFromD1Activity();
-                this._seedUnreadFromD1Activity();
-            };
-            await Promise.all([
-                this._storageApiRequest('channel-active-named', {}, false).then(apply).catch(() => { }),
-                list.length ? this._storageApiRequest('channel-activity', { channels: list }, false).then(apply).catch(() => { }) : null
-            ].filter(Boolean));
+            }
+            this._mergeD1Last(discovered && discovered.last);
+            this._namedChannelActivity = target;
+            // Spam-aware activity feeds unread floors only.
+            this._mergeUnreadBuckets(known);
+            this._populateSidebarFromD1Activity();
+            this._seedUnreadFromD1Activity();
         } catch (_) {
             this._namedActivityFetchedAt = 0;
         }

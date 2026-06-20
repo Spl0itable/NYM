@@ -616,7 +616,6 @@ window.nymHapticTap = function (ms) {
     });
 })();
 
-// Keep the chat header, wallpaper and input aligned
 (function () {
     var vv = window.visualViewport;
     if (!vv) return;
@@ -625,12 +624,7 @@ window.nymHapticTap = function (ms) {
     function update() {
         raf = 0;
         var inset = Math.max(0, Math.round(window.innerHeight - vv.height));
-        var shift = Math.max(0, Math.round(vv.offsetTop));
         root.style.setProperty('--keyboard-inset', inset + 'px');
-        root.style.setProperty('--kb-shift', shift + 'px');
-        // Only engage the pinning transform while a keyboard is actually open so
-        // we never create a containing block / compositing layer at rest.
-        root.classList.toggle('keyboard-open', inset > 0 || shift > 0);
     }
     function schedule() { if (!raf) raf = requestAnimationFrame(update); }
     vv.addEventListener('resize', schedule);
