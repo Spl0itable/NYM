@@ -120,7 +120,7 @@ body.columns-mode .msg-hover-buttons {
     flex: 0 0 360px;
     width: 360px;
     max-width: 360px;
-    height: 100%;
+    align-self: stretch;
     min-height: 0;
     position: relative;
     display: flex;
@@ -496,6 +496,10 @@ body.solid-ui .cv-column-header {
 @media (max-width: 768px) {
     body.columns-mode .chat-header {
         height: auto;
+    }
+
+    body.columns-mode .cv-scroller {
+        padding-bottom: calc(10px + var(--keyboard-inset, 0px));
     }
 
     body.columns-mode .cv-strip {
