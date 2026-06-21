@@ -1577,6 +1577,9 @@ Object.assign(NYM.prototype, {
         // Archive-only self copy so group messages also hydrate from D1.
         if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
 
+        // Deposit each member's gift wrap into their D1 inbox
+        const depositToD1 = !!groupId && this._isArchivableGroupRumor(rumor);
+
         // Fast path — local key available. Offload each wrap to the crypto
         // worker pool so large groups don't block the UI thread.
         if (this.privkey) {
@@ -1586,6 +1589,7 @@ Object.assign(NYM.prototype, {
                 const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
                 this.sendDMToRelays(['EVENT', wrapped]);
                 this._recordGiftWrapId(sharedId, wrapped.id);
+                if (depositToD1) this._depositPMEvent(wrapped);
                 if (this.activeCosmetics?.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
                 }
@@ -1638,6 +1642,7 @@ Object.assign(NYM.prototype, {
                 const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
                 this.sendDMToRelays(['EVENT', wrapped]);
                 this._recordGiftWrapId(sharedId, wrapped.id);
+                if (depositToD1) this._depositPMEvent(wrapped);
 
                 if (this.activeCosmetics?.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);

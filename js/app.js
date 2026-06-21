@@ -4226,7 +4226,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.513';
+const NYMCHAT_VERSION = 'v3.72.514';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
