@@ -4226,7 +4226,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.515';
+const NYMCHAT_VERSION = 'v3.72.516';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -5597,6 +5597,17 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Restore PMs archived in D1 so private messages reappear across devices.
     if (typeof nym.pmRestoreFromD1 === 'function') {
         nym.pmRestoreFromD1().catch(() => { });
+    }
+    // Group messages other members sent are gift-wrapped to our per-group
+    // ephemeral keys (not our real pubkey), so pmRestoreFromD1 never sees them.
+    // Pull them from their ephemeral D1 inboxes — the keys were just loaded
+    // above — so group chats rehydrate like they do over relays.
+    if (typeof nym._recoverEphemeralHistory === 'function' &&
+        typeof nym._getAllSelfEphemeralPubkeys === 'function') {
+        const ephPks = nym._getAllSelfEphemeralPubkeys();
+        if (ephPks && ephPks.length) {
+            nym._recoverEphemeralHistory(ephPks).catch(() => { });
+        }
     }
 }
 

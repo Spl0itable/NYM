@@ -2636,11 +2636,27 @@ Object.assign(NYM.prototype, {
 
         if (this._getApiHost && this._getApiHost() && typeof this._storageApiStream === 'function') {
             try {
-                const extra = { pubkeys: ephPks.slice(0, 200) };
-                if (since > 0) extra.since = since;
-                const resp = await this._storageApiStream('pm-get', extra, false);
+                // Restore the full ephemeral-key inbox, exactly like the relay
+                // path REQs every '#p' ephemeral key — but against D1. Two things
+                // matter for parity:
+                //  - No `since` gate. Gift-wrap created_at is randomized/backdated
+                //    (NIP-59), so a lastPMSyncTime-based floor silently drops most
+                //    group wraps. pmRestoreFromD1 fetches from 0 for the same
+                //    reason; do the same here.
+                //  - Query ALL ephemeral keys, chunked to the server's 200-pubkey
+                //    cap, so groups whose keys have rotated past the first 200 are
+                //    still covered.
                 const evs = [];
-                await this._readNdjsonStream(resp, (ev) => { if (ev) evs.push(ev); });
+                for (let i = 0; i < ephPks.length; i += 200) {
+                    const chunk = ephPks.slice(i, i + 200);
+                    const resp = await this._storageApiStream('pm-get', { pubkeys: chunk }, false);
+                    await this._readNdjsonStream(resp, (ev) => { if (ev) evs.push(ev); });
+                }
+                // Order oldest-first and replay sequentially as a D1 backfill.
+                // Passing fromD1 marks these as history so they fold into the
+                // group chat instead of being treated as live messages that only
+                // raise notifications, and the in-order replay keeps message
+                // sequence stable.
                 evs.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
                 for (const ev of evs) {
                     try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
@@ -2758,6 +2774,12 @@ Object.assign(NYM.prototype, {
             restorePromises.push(this.pmRestoreFromD1().catch(() => { }));
         }
 
+        // 1:1 PMs and our own sent group messages restore via pmRestoreFromD1
+        // (keyed by our real pubkey). Group messages OTHER members sent are
+        // gift-wrapped to our per-group ephemeral keys and deposited into D1
+        // under those keys, so they must be pulled from the ephemeral inbox
+        // too — otherwise they only ever arrive live over relays and never
+        // rehydrate the group chat on reconnect.
         if (typeof this._recoverEphemeralHistory === 'function' &&
             typeof this._getAllSelfEphemeralPubkeys === 'function') {
             const ephPks = this._getAllSelfEphemeralPubkeys();
