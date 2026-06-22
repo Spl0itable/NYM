@@ -2639,9 +2639,12 @@ Object.assign(NYM.prototype, {
                 const extra = { pubkeys: ephPks.slice(0, 200) };
                 if (since > 0) extra.since = since;
                 const resp = await this._storageApiStream('pm-get', extra, false);
-                await this._readNdjsonStream(resp, (ev) => {
-                    try { Promise.resolve(this.handleGiftWrapDM(ev, {})).catch(() => { }); } catch (_) { }
-                });
+                const evs = [];
+                await this._readNdjsonStream(resp, (ev) => { if (ev) evs.push(ev); });
+                evs.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+                for (const ev of evs) {
+                    try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
+                }
             } catch (_) { }
             return;
         }
@@ -2753,6 +2756,14 @@ Object.assign(NYM.prototype, {
 
         if (typeof this.pmRestoreFromD1 === 'function') {
             restorePromises.push(this.pmRestoreFromD1().catch(() => { }));
+        }
+
+        if (typeof this._recoverEphemeralHistory === 'function' &&
+            typeof this._getAllSelfEphemeralPubkeys === 'function') {
+            const ephPks = this._getAllSelfEphemeralPubkeys();
+            if (ephPks && ephPks.length) {
+                restorePromises.push(this._recoverEphemeralHistory(ephPks).catch(() => { }));
+            }
         }
 
         if (typeof this.channelRestoreManyFromD1 === 'function') {
