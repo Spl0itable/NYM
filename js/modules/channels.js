@@ -2023,19 +2023,33 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.pmMessages) for (const k of this.pmMessages.keys()) keys.add(k);
         if (this.unreadCounts) for (const k of this.unreadCounts.keys()) keys.add(k);
         const d1Floor = this._d1Unread || new Map();
+        const windowStart = Math.floor(Date.now() / 1000) - 86400;
         for (const k of keys) {
             if (!k) continue;
-            const store = (k.startsWith('pm-') || k.startsWith('group-')) ? this.pmMessages : this.messages;
+            const isConv = k.startsWith('pm-') || k.startsWith('group-');
+            const store = isConv ? this.pmMessages : this.messages;
             const cached = store && store.get(k);
+            const persisted = this.unreadCounts.get(k) || 0;
             let count;
             if (Array.isArray(cached) && cached.length > 0) {
                 count = this._recomputeUnreadCount(k);
             } else {
                 // No cached messages to derive from — keep the persisted count
-                count = this.unreadCounts.get(k) || 0;
+                count = persisted;
             }
-            // Never drop below the D1 archive count (cache may be stale/partial).
-            count = Math.max(count, d1Floor.get(k) || 0);
+            const floor = d1Floor.get(k);
+            if (isConv) {
+                // PM/group history is restored in full before recompute, so the
+                // cache count is authoritative (lets cross-device reads clear).
+                count = Math.max(count, floor || 0);
+            } else {
+                const lastRead = (this.channelLastRead && this.channelLastRead.get(k)) || 0;
+                if (floor !== undefined && lastRead >= windowStart) {
+                    count = Math.max(count, floor);
+                } else {
+                    count = Math.max(count, persisted, floor || 0);
+                }
+            }
             if (count > 0) this.unreadCounts.set(k, count);
             else this.unreadCounts.delete(k);
             this._renderUnreadBadge(k, count);

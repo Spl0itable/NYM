@@ -2796,18 +2796,18 @@ Object.assign(NYM.prototype, {
             if (channels.size) restorePromises.push(this.channelRestoreManyFromD1([...channels]).catch(() => { }));
         }
 
-        if (restorePromises.length && typeof this.recomputeAllUnreadCounts === 'function') {
-            Promise.allSettled(restorePromises).then(() => {
-                this.recomputeAllUnreadCounts();
-            });
-        }
-
-        // Seed unread badges for joined channels that weren't restored
+        const seedPromises = [];
         if (typeof this.fetchGeohashActivityFromD1 === 'function') {
-            this.fetchGeohashActivityFromD1().catch(() => { });
+            seedPromises.push(this.fetchGeohashActivityFromD1().catch(() => { }));
         }
         if (typeof this.fetchNamedChannelActivityFromD1 === 'function') {
-            this.fetchNamedChannelActivityFromD1().catch(() => { });
+            seedPromises.push(this.fetchNamedChannelActivityFromD1().catch(() => { }));
+        }
+
+        if ((restorePromises.length || seedPromises.length) && typeof this.recomputeAllUnreadCounts === 'function') {
+            Promise.allSettled([...restorePromises, ...seedPromises]).then(() => {
+                this.recomputeAllUnreadCounts();
+            });
         }
 
         if (typeof this._emojiRestoreFromD1 === 'function') {
