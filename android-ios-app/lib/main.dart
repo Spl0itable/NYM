@@ -1,54 +1,106 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:nym_bar/theme.dart';
-import 'package:nym_bar/screens/webview_screen.dart';
-import 'package:nym_bar/services/notification_service.dart';
-import 'package:nym_bar/utils/webview_platform_initializer.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-// App theme colors - must match theme.dart
-const Color kDarkBackgroundColor = Color(0xFF14141E);
-const Color kLightBackgroundColor = Color(0xFFFFFFFF);
+import 'app.dart';
+import 'core/constants/storage_keys.dart';
+import 'core/theme/nym_theme.dart';
+import 'features/identity/vault_boot_unlock.dart';
+import 'services/storage/key_value_store.dart';
+import 'state/nostr_controller.dart';
+import 'state/settings_provider.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  configureWebViewPlatform();
-  
-  // Initialize local notifications (works on all devices without Google Play Services)
-  await NotificationService().initialize();
-  
-  // Set edge-to-edge display mode for immersive experience
+
+  // Open the key/value store (mirrors the PWA's synchronous localStorage).
+  final kv = await KeyValueStore.open();
+
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  
-  // Initial system UI style will be updated dynamically based on theme
-  // Start with system preference
-  final brightness = WidgetsBinding.instance.platformDispatcher.platformBrightness;
-  final isLight = brightness == Brightness.light;
-  final bgColor = isLight ? kLightBackgroundColor : kDarkBackgroundColor;
-  
-  SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-    statusBarColor: bgColor,
-    statusBarIconBrightness: isLight ? Brightness.dark : Brightness.light,
-    statusBarBrightness: isLight ? Brightness.light : Brightness.dark,
-    systemNavigationBarColor: bgColor,
-    systemNavigationBarIconBrightness: isLight ? Brightness.dark : Brightness.light,
-    systemNavigationBarDividerColor: bgColor,
-  ));
-  
-  runApp(const MyApp());
+
+  // Manual container so we can boot the Nostr controller (identity + relays)
+  // here in the real app only — widget tests construct their own ProviderScope
+  // and never touch networking / secure storage.
+  final container = ProviderContainer(
+    overrides: [keyValueStoreProvider.overrideWithValue(kv)],
+  );
+
+  runApp(
+    UncontrolledProviderScope(
+      container: container,
+      // The boot-unlock gate mirrors `DOMContentLoaded → await
+      // nym.unlockVaultAtBoot() BEFORE initialize()`: when the vault is enabled
+      // it blocks until the user unlocks (decrypting the stored secrets) and
+      // only THEN boots the controller. When the vault is off it boots
+      // immediately, behaving exactly as before.
+      child: const _BootUnlockGate(),
+    ),
+  );
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+/// Top-level gate enforcing the PWA's boot ordering: identity-vault unlock runs
+/// before `nostrControllerProvider.init()` reads any identity secret.
+///
+/// * Vault not enabled → boot the controller immediately and show the app.
+/// * Vault enabled → show [VaultBootUnlock]; only on success (or "forget") do
+///   we boot the controller and proceed.
+class _BootUnlockGate extends ConsumerStatefulWidget {
+  const _BootUnlockGate();
+
+  @override
+  ConsumerState<_BootUnlockGate> createState() => _BootUnlockGateState();
+}
+
+class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
+  late bool _unlocked;
+
+  @override
+  void initState() {
+    super.initState();
+    final kv = ref.read(keyValueStoreProvider);
+    final vaultEnabled = kv.getBool(StorageKeys.vaultEnabled);
+    _unlocked = !vaultEnabled;
+    if (_unlocked) {
+      // No vault: boot the identity + relays now (was main()'s fire-and-forget).
+      _bootController();
+    }
+  }
+
+  void _bootController({Map<String, String>? unlockedSecrets}) {
+    ref.read(nostrControllerProvider).init(unlockedSecrets: unlockedSecrets);
+  }
+
+  void _onUnlocked(Map<String, String> secrets) {
+    if (!mounted) return;
+    // Decrypted secrets are held in memory (the native analogue of `_vaultMem`)
+    // and handed to identity restore — never re-plaintexted at rest.
+    _bootController(unlockedSecrets: secrets);
+    setState(() => _unlocked = true);
+  }
+
+  void _onForget() {
+    if (!mounted) return;
+    // Vault + secrets discarded; boot proceeds to a clean ephemeral identity.
+    _bootController();
+    setState(() => _unlocked = true);
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_unlocked) return const NymchatApp();
+    // The unlock screen needs the theme too; wrap it in a minimal MaterialApp
+    // so it matches the app's appearance (the PWA applies the saved color mode
+    // before showing the unlock modal). Reuses the same colour provider the
+    // full app does so the look is identical.
+    final colors = ref.watch(nymColorsProvider);
     return MaterialApp(
       title: 'Nymchat',
       debugShowCheckedModeBanner: false,
-      theme: lightTheme,
-      darkTheme: darkTheme,
-      themeMode: ThemeMode.system, // Respond to system light/dark mode
-      home: const WebViewScreen(),
+      theme: buildNymThemeData(colors),
+      home: VaultBootUnlock(
+        onUnlocked: _onUnlocked,
+        onForget: _onForget,
+      ),
     );
   }
 }

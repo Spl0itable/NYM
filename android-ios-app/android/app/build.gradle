@@ -13,7 +13,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.mycompany.CounterApp"
+    namespace = "com.nym.bar"
     compileSdk = flutter.compileSdkVersion
     // Use NDK r27+ for 16 KB page-size support
     ndkVersion = "27.0.12077973"

@@ -7,29 +7,88 @@ environment:
   sdk: ^3.6.0
 
 dependencies:
-  gal: ^2.0.0
-  path_provider: ^2.0.0
-  http: ^1.0.0
-  webview_flutter_android: ^4.0.0
-  app_links: ^6.0.0
-  image_picker: '>=1.1.2'
-  webview_flutter_wkwebview: ^3.0.0
-  file_selector: ^1.0.0
-  webview_flutter_web: any
   flutter:
     sdk: flutter
   cupertino_icons: any
-  google_fonts: any
-  webview_flutter: any
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Nostr / crypto
+  bip340: ^0.3.0
+  pointycastle: ^3.9.1
+  cryptography: ^2.7.0
+  elliptic: ^0.3.11
+  convert: ^3.1.1
+  crypto: ^3.0.5
+  bech32: ^0.2.2
+
+  # Networking
+  web_socket_channel: ^3.0.1
+  http: ^1.0.0
+
+  # Storage
+  shared_preferences: ^2.3.2
+  sqflite: ^2.3.3
+  path_provider: ^2.0.0
+  path: ^1.9.0
+  flutter_secure_storage: ^9.2.2
+
+  # Media / files
+  gal: ^2.0.0
+  image_picker: '>=1.1.2'
+  file_picker: ^8.1.2
+  file_selector: ^1.0.0
+  cached_network_image: ^3.4.1
+  share_plus: ^10.0.2
   url_launcher: any
+
+  # Realtime media
+  flutter_webrtc: ^0.12.5+hotfix.1
+
+  # Notifications
   flutter_local_notifications: ^18.0.0
   permission_handler: any
+  # Foreground playback of the synthesized notification tones (notifications.js
+  # Web Audio equivalent — we feed it the rendered WAV bytes).
+  audioplayers: ^6.0.0
+
+  # QR
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^6.0.2
+
+  # Auth / biometrics
+  local_auth: ^2.3.0
+
+  # UI helpers
+  google_fonts: any
+  flutter_svg: ^2.0.10+1
+  app_links: ^6.0.0
+  emoji_picker_flutter: ^3.1.0
+  visibility_detector: ^0.4.0+2
+
+  # Utils
+  intl: ^0.19.0
+  collection: ^1.18.0
+  uuid: ^4.5.1
+
+  # Legacy WebView shell (kept during native migration)
+  webview_flutter: any
+  webview_flutter_android: ^4.0.0
+  webview_flutter_wkwebview: ^3.0.0
+  webview_flutter_web: any
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  fake_async: any
   flutter_lints: any
   flutter_launcher_icons: any
+  riverpod_generator: ^2.4.0
+  build_runner: ^2.4.13
+  riverpod_lint: ^2.3.13
+  sqflite_common_ffi: ^2.3.0
 
 flutter:
   uses-material-design: true
@@ -37,6 +96,7 @@ flutter:
     - assets/images/
     - assets/text/
     - assets/documents/
+    - assets/data/
 
 flutter_launcher_icons:
   android: true

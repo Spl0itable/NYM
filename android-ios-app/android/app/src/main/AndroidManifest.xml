@@ -1,16 +1,58 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Core connectivity -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+    <!-- WebRTC audio/video calls + screenshare (flutter_webrtc),
+         camera (image_picker/mobile_scanner), microphone (calls/audio) -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- WebRTC routes audio through Bluetooth headsets; new + legacy names -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+
+    <!-- Keep the connection/call alive -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- Foreground service for active calls + screen-capture (getDisplayMedia) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
+
+    <!-- Notifications (local + future FCM). POST_NOTIFICATIONS needed on API 33+ -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Exact-alarm-free scheduling; receive boot for rescheduled notifications -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- Biometric / device-credential unlock (local_auth) -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+
+    <!-- Media access for image_picker / file_picker / gal (scoped storage).
+         API 33+ uses granular READ_MEDIA_*; legacy <=32 uses READ_EXTERNAL_STORAGE. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+    <!-- gal: saving images/videos to the gallery on legacy API levels -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"/>
+
+    <!-- Hardware features are optional so the app installs on devices lacking them -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+
     <application
         android:label="Nymchat"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-
+        android:usesCleartextTraffic="false"
         android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".MainActivity"
@@ -29,22 +71,23 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <intent-filter android:autoVerify="true">
+            <!-- Custom scheme: nymchat://… (app_links / deep_links) -->
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="nymchat"/>
             </intent-filter>
+            <!-- Universal links: the hosts the deep-link parser recognizes
+                 (deep_links.dart kNymLinkHosts) + the served PWA host.
+                 autoVerify drives App Links against /.well-known/assetlinks.json. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="app.nymchat.app"/>
+                <data android:scheme="https" android:host="app.nym.bar"/>
                 <data android:scheme="https" android:host="web.nymchat.app"/>
-            </intent-filter>
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="https" android:host="nymchat.app"/>
             </intent-filter>
         </activity>
@@ -57,9 +100,19 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- url_launcher: open a Lightning wallet via lightning: URIs (zaps/shop) -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="lightning"/>
+        </intent>
+        <!-- url_launcher: open external https links + share targets -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND"/>
+            <data android:mimeType="*/*"/>
         </intent>
     </queries>
 </manifest>

@@ -4,10 +4,18 @@
 <dict>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
+		<string>applinks:app.nymchat.app</string>
+		<string>applinks:app.nym.bar</string>
 		<string>applinks:web.nymchat.app</string>
 		<string>applinks:nymchat.app</string>
+		<string>webcredentials:app.nymchat.app</string>
 		<string>webcredentials:web.nymchat.app</string>
 		<string>webcredentials:nymchat.app</string>
+	</array>
+	<!-- Keychain access group for flutter_secure_storage (Keychain-backed). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.nym.bar</string>
 	</array>
 </dict>
 </plist>
