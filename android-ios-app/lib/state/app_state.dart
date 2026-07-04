@@ -981,6 +981,14 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// tests.
   void Function(String storageKey)? onPmMessageIngested;
 
+  /// Fired when a NEW PM conversation row is created (any path: inbound/own
+  /// message, UI thread-start, or hydration). The controller wires this to the
+  /// debounced critical resubscribe so the main REQ's direct-mode kind-0
+  /// filter starts watching the new contact's profile (the PWA's
+  /// `addPMConversation` new-branch → `_scheduleCriticalResubscribe`,
+  /// pms.js:2795-2805). Best-effort; may be null in pure state tests.
+  void Function(String peerPubkey)? onPMConversationAdded;
+
   /// Fired whenever the closed-PM set ([_closedPMs] / [_closedPMTimes]) mutates
   /// (close, re-open, or a strictly-newer inbound that re-opens a thread). The
   /// controller wires this to KV persistence (`nym_closed_pms` /
@@ -1013,6 +1021,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Read-only view of the per-conversation read watermark (for persistence).
   Map<String, int> get channelLastRead => Map.unmodifiable(_channelLastRead);
 
+  /// Fired when [markChannelRead] ADVANCES a conversation's watermark, with
+  /// the key + new ts. The controller wires this to
+  /// [NotificationHistoryNotifier.markConversationSeen] — the PWA's
+  /// `_markChannelRead` → `_markConversationNotificationsSeen`
+  /// (channels.js:1735-1741), so reading a conversation (locally OR via a
+  /// synced watermark from another device) retro-marks its bell entries
+  /// viewed without opening the notifications modal. Best-effort.
+  void Function(String key, int tsSec)? onChannelReadMarked;
+
   /// Records that [key] was read up to [tsSec] (keeps the max). Fires
   /// [onChannelReadChanged] so the controller persists it.
   void markChannelRead(String key, int tsSec) {
@@ -1021,6 +1038,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (tsSec <= cur) return;
     _channelLastRead[key] = tsSec;
     onChannelReadChanged?.call();
+    onChannelReadMarked?.call(key, tsSec);
   }
 
   /// Restores the read watermark from KV at boot (paired with [channelLastRead]).
@@ -1148,6 +1166,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void clearSessionDedup() {
     _seenIds.clear();
     _seenNymMessageIds.clear();
+    _deletedEventIds.clear();
+    _pendingDeletions.clear();
   }
 
   int _localSeq = 1000000;
@@ -1245,6 +1265,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _channelMessageReaders.clear();
     _processedPollVoteIds.clear();
     _pendingPollVotes.clear();
+    _pendingDeletions.clear();
     state = AppState.live(pubkey, nym);
     // Seed the web-of-trust roots (app.js:1100-1101): the verified developer +
     // Nymbot anchor every transitive vouch chain.
@@ -1287,6 +1308,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _channelMessageReaders.clear();
     _processedPollVoteIds.clear();
     _pendingPollVotes.clear();
+    _pendingDeletions.clear();
+    // NIP-09 memory goes too: the on-disk copy was wiped (panic) or belongs
+    // to the departing identity's cache (sign-out re-hydrates on next boot).
+    _deletedEventIds.clear();
     state = AppState.empty();
   }
 
@@ -1448,6 +1473,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
         _ingestReaction(e);
       case EventKind.zapReceipt:
         ingestZapReceipt(e);
+      case EventKind.deletion:
+        ingestDeletionEvent(e);
       case EventKind.appData:
         if (PollLogic.isPollEvent(e)) {
           ingestPoll(e);
@@ -1472,6 +1499,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     final m = EventMapper.channelMessage(e, selfPubkey: state.selfPubkey);
     if (m == null) return;
+    // NIP-09: drop messages already deleted (or matched by a parked
+    // out-of-order deletion from the same author) — messages.js:437-443.
+    if (suppressDeletedMessage(m)) return;
     final key = EventMapper.channelKeyOf(e);
     if (key == null) return;
     m.seq = _ingestSeq++;
@@ -1550,9 +1580,24 @@ class AppStateNotifier extends StateNotifier<AppState> {
     state = state.copyWith();
   }
 
+  /// Resolves a kind-0 display name with the PWA's fallback chain
+  /// `profile.name || profile.username || profile.display_name`
+  /// (nostr-core.js:697-698, same chain in the profile-batch handler at
+  /// 2272-2274), capped at 20 chars (`truncatedName = profileName.substring(0,
+  /// 20)`, nostr-core.js:699). Null when no candidate is present.
+  static String? _kind0DisplayName(UserProfile p) {
+    for (final v in [p.name, p.username, p.displayName]) {
+      if (v != null && v.isNotEmpty) {
+        return v.length > 20 ? v.substring(0, 20) : v;
+      }
+    }
+    return null;
+  }
+
   void _ingestProfile(NostrEvent e) {
     final p = EventMapper.profile(e);
     if (p == null) return;
+    final resolvedName = _kind0DisplayName(p);
     final existing = state.users[e.pubkey];
     var changed = false;
     if (existing != null) {
@@ -1565,10 +1610,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
         if (prev == null ||
             prev.kind0Ts != p.kind0Ts ||
             prev.picture != p.picture ||
-            prev.name != p.name) {
+            prev.name != p.name ||
+            prev.username != p.username ||
+            prev.displayName != p.displayName) {
           existing.profile = p;
-          if ((p.name ?? '').isNotEmpty) {
-            existing.nym = getNymFromPubkey(p.name!, e.pubkey);
+          if (resolvedName != null) {
+            existing.nym = getNymFromPubkey(resolvedName, e.pubkey);
           }
           changed = true;
         }
@@ -1578,7 +1625,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       // `getNymFromPubkey` default is `nym#xxxx`, users.js:1085).
       state.users[e.pubkey] = User(
         pubkey: e.pubkey,
-        nym: getNymFromPubkey(p.name ?? 'nym', e.pubkey),
+        nym: getNymFromPubkey(resolvedName ?? 'nym', e.pubkey),
         profile: p,
       );
       changed = true;
@@ -1588,7 +1635,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // stored kind-0 (nostr-core.js:2308-2329, name capped at 20 chars). Without
     // it a conversation created before the profile arrived keeps its fallback
     // name forever.
-    if (e.pubkey != state.selfPubkey && (p.name ?? '').isNotEmpty) {
+    if (e.pubkey != state.selfPubkey && resolvedName != null) {
       if (_syncPmConversationNym(e.pubkey)) changed = true;
     }
     // Self kind-0: also overwrite the sidebar HEADER nym, not just the avatar
@@ -1603,8 +1650,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // stale kind-0 can never regress the name.
     String? selfNym;
     if (e.pubkey == state.selfPubkey) {
-      final name = state.users[e.pubkey]?.profile?.name;
-      if (name != null && name.isNotEmpty) {
+      final stored = state.users[e.pubkey]?.profile;
+      final name = stored == null ? null : _kind0DisplayName(stored);
+      if (name != null) {
         final resolved = getNymFromPubkey(name, e.pubkey);
         if (resolved != state.selfNym) selfNym = resolved;
       }
@@ -1636,6 +1684,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final r = EventMapper.reaction(e);
     if (r == null || r.emoji.isEmpty) return;
 
+    // When no `k` tag is present, only accept the reaction if it targets a
+    // KNOWN message (reactions.js:226-242) — otherwise it's a reaction from
+    // another Nostr app to a non-Nymchat note that merely shares an id space.
+    if (kTag == null && !isKnownMessageId(r.messageId)) return;
+
     // Latest-by-timestamp wins on out-of-order delivery (reactions.js).
     final actionKey = '${r.messageId}:${r.emoji}:${r.reactor}';
     final last = _reactionLastAction[actionKey];
@@ -1655,6 +1708,21 @@ class AppStateNotifier extends StateNotifier<AppState> {
       removed: r.removed,
       reactorNym: _nymForPubkey(r.reactor),
     );
+  }
+
+  /// True when [messageId] identifies a message already in ANY conversation
+  /// (channels, PMs, groups), matched by event id or the PM/group
+  /// `nymMessageId` — the PWA's no-`k`-tag reaction guard (reactions.js:
+  /// 226-242), which keeps reactions from other Nostr apps to non-Nymchat
+  /// notes out of the store and out of notifications.
+  bool isKnownMessageId(String messageId) {
+    if (messageId.isEmpty) return false;
+    for (final msgs in state.messages.values) {
+      for (final m in msgs) {
+        if (m.id == messageId || m.nymMessageId == messageId) return true;
+      }
+    }
+    return false;
   }
 
   /// Applies a single reaction add/remove to the reactor map and recomputes the
@@ -1865,8 +1933,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// into the `pm-<peer>` store, creating/refreshing the conversation. Dedups
   /// on event id and nymMessageId. Honors [closedPMs] for backlog.
   void ingestPMMessage(Message m) {
-    final peer = m.conversationPubkey;
-    if (peer == null) return;
+    final rawPeer = m.conversationPubkey;
+    if (rawPeer == null) return;
+    // Canonical lowercase hex (mirrors [switchView]): the peer id keys the
+    // conversation row, the unread counts, and — for the Nymbot — the
+    // `view.id == kNymbotPubkey` BotChatScreen routing, all exact string
+    // matches against lowercase-hex constants. An archived/legacy wrap must
+    // never mint a parallel non-canonical row.
+    final peer =
+        _hex64AnyCaseRe.hasMatch(rawPeer) ? rawPeer.toLowerCase() : rawPeer;
     // A closed conversation only re-opens when a message strictly newer than
     // the close time arrives; older relay backlog is ignored (pms.js).
     if (_closedPMs.contains(peer)) {
@@ -1881,13 +1956,68 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
     }
     if (m.id.isNotEmpty && !_seenIds.add(m.id)) return;
+    // NIP-09: drop deleted PM/group-rumor copies (pms.js:3722-3724).
+    if (suppressDeletedMessage(m)) return;
+
+    final key = _canonicalPmStorageKey(
+        m.conversationKey ?? PmLogic.pmStorageKey(peer));
+    final list = state.messages.putIfAbsent(key, () => <Message>[]);
+
+    // Dual-wrap merge (pms.js:1184-1233): nymchat sends BOTH a bitchat-format
+    // and a nymchat-format wrap to unknown peers, so the recipient may decrypt
+    // both copies of one logical message. Correlate first on sender + the
+    // shared `x`-tag nymMessageId (set on both wraps; content equality would
+    // miss older senders' >255-byte bitchat truncation), falling back to
+    // sender + identical content + <5s timestamps for legacy events without
+    // the tag. On a match the EXISTING row is upgraded in place — adopt the
+    // nymMessageId, prefer the longer content (bitchat truncation), and flip
+    // `senderVerified` so the padlock upgrades when the verified nymchat copy
+    // lands after the unverified bitchat one — never a second row.
+    final nymId = m.nymMessageId;
+    Message? dup;
+    if (nymId != null && nymId.isNotEmpty) {
+      for (final e in list) {
+        if (e.pubkey == m.pubkey && e.nymMessageId == nymId) {
+          dup = e;
+          break;
+        }
+      }
+    }
+    if (dup == null) {
+      for (final e in list) {
+        if (e.pubkey == m.pubkey &&
+            e.content == m.content &&
+            (e.createdAt - m.createdAt).abs() < 5) {
+          dup = e;
+          break;
+        }
+      }
+    }
+    if (dup != null) {
+      var changed = false;
+      if ((dup.nymMessageId == null || dup.nymMessageId!.isEmpty) &&
+          nymId != null &&
+          nymId.isNotEmpty) {
+        dup.nymMessageId = nymId;
+        _seenNymMessageIds.add(nymId);
+        changed = true;
+      }
+      if (m.content.length > dup.content.length) {
+        dup.content = m.content;
+        changed = true;
+      }
+      if (m.senderVerified == true && dup.senderVerified != true) {
+        dup.senderVerified = true;
+        changed = true;
+      }
+      if (changed) state = state.copyWith();
+      return;
+    }
     if (m.nymMessageId != null && !_seenNymMessageIds.add(m.nymMessageId!)) {
       return;
     }
     m.seq = _nextIngestSeq();
 
-    final key = m.conversationKey ?? PmLogic.pmStorageKey(peer);
-    final list = state.messages.putIfAbsent(key, () => <Message>[]);
     list.add(m);
     list.sort(compareMessages);
 
@@ -1898,8 +2028,16 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final convo = state.pmConversations.firstWhere(
       (c) => c.pubkey == peer,
       orElse: () {
-        final c = PMConversation(pubkey: peer, nym: m.isOwn ? '' : m.author);
+        // Own self-copy to an unknown peer: fall back to the PWA's
+        // `getNymFromPubkey(peerPubkey)` default `nym#xxxx` (pms.js:1321-1322 →
+        // users.js:1085) — never an empty nym, which would render as a bare
+        // '#xxxx' row title until a profile lands.
+        final c = PMConversation(
+          pubkey: peer,
+          nym: m.isOwn ? getNymFromPubkey('nym', peer) : m.author,
+        );
         state.pmConversations.add(c);
+        onPMConversationAdded?.call(peer);
         return c;
       },
     );
@@ -1952,6 +2090,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (m.nymMessageId != null && !_seenNymMessageIds.add(m.nymMessageId!)) {
       return false;
     }
+    // NIP-09: drop deleted group messages (pms.js:3722-3724).
+    if (suppressDeletedMessage(m)) return false;
     m.seq = _nextIngestSeq();
 
     final key = m.conversationKey ?? GroupLogic.groupStorageKey(gid);
@@ -2033,6 +2173,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
         lastMessageTime: timestampMs,
       ));
       state = state.copyWith();
+      // A group first learned about via a regular message (missed invite) is
+      // persisted/synced immediately — the PWA runs `_saveGroupConversations()`
+      // + `_debouncedNostrSettingsSave(15000)` right after the
+      // `addGroupConversation` create (groups.js:1296-1297).
+      onGroupStoreChanged?.call();
       return;
     }
     var changed = false;
@@ -2163,7 +2308,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
       g.banner = nz(data['banner']);
       g.avatar = nz(data['avatar']);
       g.description = nz(data['description']);
-      g.allowMemberInvites = data['allowMemberInvites'] != false;
+      // ABSENCE-SAFE: the PWA's synced `nymchat-groups` blob never carries
+      // `allowMemberInvites` (it is localStorage-only, groups.js:317-355) and
+      // its apply never touches the field (app.js:5963-5972) — only the LOCAL
+      // `nym_groups_<pubkey>` blob (hydrated through this same method) has it.
+      // Without the key guard a newer-metaUpdatedAt blob from a PWA device
+      // would silently flip a disabled member-invite policy back to true.
+      if (data.containsKey('allowMemberInvites')) {
+        g.allowMemberInvites = data['allowMemberInvites'] != false;
+      }
       g.inviteEnabled = data['inviteEnabled'] == true;
       g.inviteEpoch = (data['inviteEpoch'] as num?)?.toInt() ?? 0;
       g.metaUpdatedAt = incomingMetaTs;
@@ -2513,6 +2666,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
             : (nym ?? getNymFromPubkey('nym', peerPubkey)),
         lastMessageTime: DateTime.now().millisecondsSinceEpoch,
       ));
+      onPMConversationAdded?.call(peerPubkey);
       state = state.copyWith();
     } else {
       // Existing thread → re-sync the row nym from the users map (the PWA's
@@ -2529,6 +2683,29 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (closed.isEmpty && closedTimes.isEmpty) return;
     _closedPMs.addAll(closed);
     _closedPMTimes.addAll(closedTimes);
+  }
+
+  /// Merges synced closed-PM state, byte-matching the PWA's two INDEPENDENT
+  /// additive branches (app.js:6528-6538): `closedPMs` is a pure set union —
+  /// an entry arriving WITHOUT a close time gets NO time stamped (so any
+  /// archived message can still re-open the thread, `closedAt = 0`), and
+  /// `closedPMTimes` is a per-key monotonic-max merge applied regardless of
+  /// set membership (orphaned time entries from legacy/raced payloads are
+  /// kept). Fires [onClosedPmsChanged] when anything changed so the controller
+  /// persists the KV mirror.
+  void mergeClosedPmSync(Iterable<String> closed, Map<String, int> times) {
+    var changed = false;
+    for (final pk in closed) {
+      if (pk.isNotEmpty && _closedPMs.add(pk)) changed = true;
+    }
+    times.forEach((pk, ts) {
+      if (ts <= 0) return;
+      if (ts > (_closedPMTimes[pk] ?? 0)) {
+        _closedPMTimes[pk] = ts;
+        changed = true;
+      }
+    });
+    if (changed) onClosedPmsChanged?.call();
   }
 
   /// Additively merges synced/boot-restored left-group state (PWA
@@ -2782,6 +2959,126 @@ class AppStateNotifier extends StateNotifier<AppState> {
     return applyLocalEdit(hitKey, content);
   }
 
+  // -------------------------------------------------------------------------
+  // Inbound NIP-09 deletions (nostr-core.js `handleDeletionEvent` /
+  // `_findMessageAuthor` / `_applyVerifiedDeletion` / `_consumePendingDeletion`).
+  // -------------------------------------------------------------------------
+
+  /// Event ids (and paired PM/group `nymMessageId`s) verified as NIP-09
+  /// deleted. Gates ingest so relay backlog / D1 replay can't resurrect a
+  /// deleted message (`this.deletedEventIds`, checked at messages.js:437 /
+  /// pms.js:3722). Capped at 5000 → pruned to the newest 4000, like the PWA.
+  final Set<String> _deletedEventIds = <String>{};
+
+  /// Read-only snapshot for persistence (the PWA's `persistDedupSets`).
+  Set<String> get deletedEventIds => Set.unmodifiable(_deletedEventIds);
+
+  /// Deletions whose ORIGINAL message hasn't arrived yet: deleted id →
+  /// claimant pubkeys. Consumed on ingest when a matching message from the
+  /// same author lands (out-of-order relay delivery, nostr-core.js:2000-2013).
+  final Map<String, Set<String>> _pendingDeletions = <String, Set<String>>{};
+
+  /// Fired whenever [_deletedEventIds] grows, so the controller can persist
+  /// the set (PWA `persistDedupSets`). Best-effort; may be null in tests.
+  void Function()? onDeletedIdsChanged;
+
+  /// Seeds [_deletedEventIds] from the on-disk cache at boot.
+  void hydrateDeletedIds(Set<String> ids) {
+    _deletedEventIds.addAll(ids);
+  }
+
+  /// Applies an inbound public kind-5 (NIP-09) deletion — nostr-core.js
+  /// `handleDeletionEvent` (line 1985). Only the original author may delete:
+  /// a mismatched requester is ignored, and an unknown original is parked in
+  /// [_pendingDeletions] until (if) it arrives from the claimed author.
+  void ingestDeletionEvent(NostrEvent e) {
+    final requester = e.pubkey;
+    if (requester.isEmpty) return;
+    var deleted = false;
+    for (final t in e.tagsNamed('e')) {
+      if (t.length < 2 || t[1].isEmpty) continue;
+      final deletedId = t[1];
+      final originalAuthor = findMessageAuthor(deletedId);
+      if (originalAuthor != null && originalAuthor != requester) continue;
+      if (originalAuthor == null) {
+        (_pendingDeletions[deletedId] ??= <String>{}).add(requester);
+        if (_pendingDeletions.length > 5000) {
+          final entries = _pendingDeletions.entries.toList();
+          _pendingDeletions
+            ..clear()
+            ..addEntries(entries.sublist(entries.length - 4000));
+        }
+        continue;
+      }
+      _applyVerifiedDeletion(deletedId);
+      deleted = true;
+    }
+    if (deleted) onDeletedIdsChanged?.call();
+  }
+
+  /// The stored author of the message with [id] (event id or PM/group
+  /// `nymMessageId`), or null when we don't hold it
+  /// (`_findMessageAuthor`, nostr-core.js:2019).
+  String? findMessageAuthor(String id) {
+    if (id.isEmpty) return null;
+    for (final msgs in state.messages.values) {
+      for (final m in msgs) {
+        if (m.id == id || m.nymMessageId == id) {
+          return m.pubkey.isEmpty ? null : m.pubkey;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Records [deletedId] (plus any paired id of the same message) as deleted
+  /// and removes the message from every conversation
+  /// (`_applyVerifiedDeletion`, nostr-core.js:2038).
+  void _applyVerifiedDeletion(String deletedId) {
+    _deletedEventIds.add(deletedId);
+    for (final msgs in state.messages.values) {
+      for (final m in msgs) {
+        if (m.id == deletedId || m.nymMessageId == deletedId) {
+          if (m.id.isNotEmpty) _deletedEventIds.add(m.id);
+          final nid = m.nymMessageId;
+          if (nid != null && nid.isNotEmpty) _deletedEventIds.add(nid);
+        }
+      }
+    }
+    if (_deletedEventIds.length > 5000) {
+      final arr = _deletedEventIds.toList();
+      _deletedEventIds
+        ..clear()
+        ..addAll(arr.sublist(arr.length - 4000));
+    }
+    removeMessage(deletedId);
+  }
+
+  /// Ingest gate: true when [m] was already NIP-09 deleted, or a parked
+  /// out-of-order deletion from the SAME author matches it (which then
+  /// upgrades to a verified deletion). Mirrors the display gate at
+  /// messages.js:437-443 + `_consumePendingDeletion` (nostr-core.js:2093).
+  bool suppressDeletedMessage(Message m) {
+    final nid = m.nymMessageId;
+    if (_deletedEventIds.contains(m.id) ||
+        (nid != null && _deletedEventIds.contains(nid))) {
+      return true;
+    }
+    if (m.pubkey.isEmpty) return false;
+    for (final id in <String>[m.id, if (nid != null && nid.isNotEmpty) nid]) {
+      if (id.isEmpty) continue;
+      final claimants = _pendingDeletions[id];
+      if (claimants != null && claimants.contains(m.pubkey)) {
+        _pendingDeletions.remove(id);
+        if (m.id.isNotEmpty) _deletedEventIds.add(m.id);
+        if (nid != null && nid.isNotEmpty) _deletedEventIds.add(nid);
+        onDeletedIdsChanged?.call();
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Removes a message locally (deletion request / mod delete). Mirrors
   /// `publishDeletionEvent`'s DOM + stored-message removal. Matches on both the
   /// event id and the nymMessageId (PM/group bubbles key on nymMessageId).
@@ -2920,6 +3217,14 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   /// Hydrates the channel companion sets/maps from persisted KV state (boot).
+  ///
+  /// [replace] switches the pinned/hidden/blocked sets from an additive union
+  /// (boot hydration of an empty store) to a FULL REPLACE — the PWA's synced
+  /// apply does `nym.pinnedChannels = new Set(s.pinnedChannels)` (and the same
+  /// for blocked/hidden, app.js:6350-6389), so an unpin/unhide/unblock on one
+  /// device propagates instead of resurrecting from the local union.
+  /// joinedChannels stays additive in both modes (the PWA's userJoinedChannels
+  /// apply only ever adds, app.js:6362-6376).
   void hydrateChannelState({
     Set<String>? pinned,
     Set<String>? hidden,
@@ -2927,10 +3232,29 @@ class AppStateNotifier extends StateNotifier<AppState> {
     Map<String, int>? unreadCounts,
     Map<String, int>? lastActivity,
     List<ChannelEntry>? joinedChannels,
+    bool replace = false,
   }) {
-    if (pinned != null) state.pinnedChannels.addAll(pinned);
-    if (hidden != null) state.hiddenChannels.addAll(hidden);
-    if (blocked != null) state.blockedChannels.addAll(blocked);
+    if (replace) {
+      if (pinned != null) {
+        state.pinnedChannels
+          ..clear()
+          ..addAll(pinned);
+      }
+      if (hidden != null) {
+        state.hiddenChannels
+          ..clear()
+          ..addAll(hidden);
+      }
+      if (blocked != null) {
+        state.blockedChannels
+          ..clear()
+          ..addAll(blocked);
+      }
+    } else {
+      if (pinned != null) state.pinnedChannels.addAll(pinned);
+      if (hidden != null) state.hiddenChannels.addAll(hidden);
+      if (blocked != null) state.blockedChannels.addAll(blocked);
+    }
     if (unreadCounts != null) state.unreadCounts.addAll(unreadCounts);
     if (lastActivity != null) state.channelLastActivity.addAll(lastActivity);
     if (joinedChannels != null) {
@@ -2961,7 +3285,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
     var changed = false;
     byKey.forEach((key, msgs) {
       if (key.isEmpty || msgs.isEmpty) return;
-      if (_hydrateMessagesInto(key, msgs)) changed = true;
+      // Re-key a legacy-encoded PM thread onto the canonical lowercase-hex
+      // storage key ([switchView]'s canonicalization) so restored history and
+      // the live view always share ONE thread — a `pm-<PUBKEY>` cache row
+      // must not open as an empty parallel conversation.
+      if (_hydrateMessagesInto(_canonicalPmStorageKey(key), msgs)) {
+        changed = true;
+      }
     });
     // Rebuild the PM sidebar rows from the hydrated threads — the PWA's
     // `_populateSidebarFromHydration` (persistence.js:533-549): every cached
@@ -2985,7 +3315,14 @@ class AppStateNotifier extends StateNotifier<AppState> {
           break;
         }
       }
-      if (peer == null || _closedPMs.contains(peer)) continue;
+      if (peer == null) continue;
+      // Canonical lowercase hex, matching [switchView]'s PM-id
+      // canonicalization: the row's pubkey feeds `ChatView.pm(...)` on tap and
+      // the exact-match routing/unread keys downstream (the Nymbot
+      // `view.id == kNymbotPubkey` screen swap), so a legacy-encoded restored
+      // id must never produce a row that misses them.
+      if (_hex64AnyCaseRe.hasMatch(peer)) peer = peer.toLowerCase();
+      if (_closedPMs.contains(peer)) continue;
       if (state.pmConversations.any((c) => c.pubkey == peer)) continue;
       final ts = msgs.last.timestamp;
       final known = state.users[peer]?.nym;
@@ -2997,9 +3334,23 @@ class AppStateNotifier extends StateNotifier<AppState> {
         lastMessageTime:
             ts > 0 ? ts : DateTime.now().millisecondsSinceEpoch,
       ));
+      onPMConversationAdded?.call(peer);
       changed = true;
     }
     if (changed) state = state.copyWith();
+  }
+
+  /// Canonicalizes a `pm-<pubkey>` storage key's peer id to lowercase 64-hex,
+  /// mirroring [switchView]'s PM-id canonicalization. Non-PM keys and already
+  /// canonical (or non-hex) ids pass through unchanged. Keeps every restored
+  /// thread on the SAME key the live view/unread/routing paths use.
+  String _canonicalPmStorageKey(String key) {
+    if (!key.startsWith('pm-')) return key;
+    final id = key.substring(3);
+    if (_hex64AnyCaseRe.hasMatch(id) && id != id.toLowerCase()) {
+      return 'pm-${id.toLowerCase()}';
+    }
+    return key;
   }
 
   /// Shared hydration insert: dedup-seed + append + resort one key's cached
@@ -3031,12 +3382,16 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void hydrateProfiles(Map<String, UserProfile> profiles) {
     profiles.forEach((pubkey, p) {
       final existing = state.users[pubkey];
+      // PWA name chain `name || username || display_name`, 20-char cap
+      // (nostr-core.js:697-700) — [UserProfile] parses `username`, so the
+      // cached path resolves the same nym as live kind-0 ingest.
+      final resolvedName = _kind0DisplayName(p);
       if (existing != null) {
         if (existing.profile == null ||
             p.kind0Ts >= existing.profile!.kind0Ts) {
           existing.profile = p;
-          if ((p.name ?? '').isNotEmpty) {
-            existing.nym = getNymFromPubkey(p.name!, pubkey);
+          if (resolvedName != null) {
+            existing.nym = getNymFromPubkey(resolvedName, pubkey);
           }
         }
       } else {
@@ -3044,7 +3399,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         // users.js:1085 — the PWA never shows 'anon').
         state.users[pubkey] = User(
           pubkey: pubkey,
-          nym: getNymFromPubkey(p.name ?? 'nym', pubkey),
+          nym: getNymFromPubkey(resolvedName ?? 'nym', pubkey),
           profile: p,
         );
       }
@@ -3057,8 +3412,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // then skip because this hydration already stored the same profile.
     String? selfNym;
     if (state.selfPubkey.isNotEmpty) {
-      final name = state.users[state.selfPubkey]?.profile?.name;
-      if (name != null && name.isNotEmpty) {
+      final stored = state.users[state.selfPubkey]?.profile;
+      final name = stored == null ? null : _kind0DisplayName(stored);
+      if (name != null) {
         final resolved = getNymFromPubkey(name, state.selfPubkey);
         if (resolved != state.selfNym) selfNym = resolved;
       }
@@ -3127,18 +3483,25 @@ class AppStateNotifier extends StateNotifier<AppState> {
   ///      [_kDiscoverSidebarLimit], most-recent first — `SIDEBAR_DISCOVER_LIMIT`).
   ///   2. **Last-activity**: `channelLastActivity[#key]` is raised to the D1
   ///      last-seen (ms) so the channel sorts by real recency (PWA keeps the max).
-  ///   3. **Unread floor**: for an already-listed (joined) channel that ISN'T the
-  ///      active view, the summed buckets seed `unreadCounts[#key]` as a FLOOR
+  ///   3. **Unread floor** ([seedUnread] passes only): for an already-listed
+  ///      (joined) channel that ISN'T the active view, the buckets NEWER than
+  ///      the channel's read watermark seed `unreadCounts[#key]` as a FLOOR
   ///      (only ever raised — D1 is the archive of record, channels.js:268-269).
   ///
-  /// Mirrors the PWA's discovery vs. known split loosely: the discovery response
-  /// drives sidebar+last; the unread floor is conservative here because the native
-  /// store has no per-channel `channelLastRead` to bound the bucket span, so it
-  /// only RAISES a badge and never seeds the active/opened view.
+  /// Mirrors the PWA's discovery vs. known split: only the spam-aware
+  /// `channel-activity` probe for KNOWN channels feeds unread floors
+  /// (`_mergeUnreadBuckets(known)` → `_seedUnreadFromD1Activity`,
+  /// channels.js:164-166/320-323 — "Spam-aware activity feeds unread floors
+  /// only"); the raw `channel-active`/`channel-active-named` discovery buckets
+  /// drive sidebar/globe recency only, so callers pass [seedUnread] false for
+  /// them. The bucket span is bounded by the per-channel `channelLastRead`
+  /// watermark exactly like `_seedUnreadFromD1Activity` (channels.js:258-266):
+  /// a channel read N hours ago seeds at most the newest N hourly buckets.
   void applyChannelActivity(
     Map<String, List<int>> activity,
     Map<String, int> last, {
     bool geohash = false,
+    bool seedUnread = false,
   }) {
     if (activity.isEmpty && last.isEmpty) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -3208,29 +3571,44 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
     }
 
-    // 3) Unread floor for already-listed, non-active channels.
-    activity.forEach((rawKey, buckets) {
-      final key = rawKey.toLowerCase();
-      if (key.isEmpty) return;
-      final storageKey = '#$key';
-      // Never seed the open view (it's being read) or a blocked channel.
-      if (state.view.kind == ViewKind.channel &&
-          state.view.storageKey == storageKey) {
-        return;
-      }
-      if (state.blockedChannels.contains(key)) return;
-      if (!state.channels.any((c) => c.key == key)) return; // joined only
-      var count = 0;
-      for (final b in buckets) {
-        if (b > 0) count += b;
-      }
-      if (count <= 0) return;
-      // D1 is a FLOOR: only ever raise the badge, never lower it.
-      if (count > (state.unreadCounts[storageKey] ?? 0)) {
-        state.unreadCounts[storageKey] = count;
-        changed = true;
-      }
-    });
+    // 3) Unread floor for already-listed, non-active channels — spam-aware
+    //    known-channel passes only (`_seedUnreadFromD1Activity`).
+    if (seedUnread) {
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      activity.forEach((rawKey, buckets) {
+        final key = rawKey.toLowerCase();
+        if (key.isEmpty) return;
+        final storageKey = '#$key';
+        // Never seed the open view (it's being read) or a blocked channel.
+        if (state.view.kind == ViewKind.channel &&
+            state.view.storageKey == storageKey) {
+          return;
+        }
+        if (state.blockedChannels.contains(key)) return;
+        if (!state.channels.any((c) => c.key == key)) return; // joined only
+        // Bound the bucket span by the read watermark (channels.js:258-266):
+        // hourly buckets, index 0 = current hour; sum only the hours after
+        // lastRead (whole 24h window when never read). Watermarks are stamped
+        // under both the '#key' storage form and the bare key (clearUnread) —
+        // honor whichever is newest.
+        final byStorage = _channelLastRead[storageKey] ?? 0;
+        final byBare = _channelLastRead[key] ?? 0;
+        final lastRead = byStorage > byBare ? byStorage : byBare;
+        final span = lastRead > 0
+            ? ((nowSec - lastRead) / 3600).ceil().clamp(0, 24)
+            : 24;
+        var count = 0;
+        for (var h = 0; h < span && h < buckets.length; h++) {
+          if (buckets[h] > 0) count += buckets[h];
+        }
+        if (count <= 0) return;
+        // D1 is a FLOOR: only ever raise the badge, never lower it.
+        if (count > (state.unreadCounts[storageKey] ?? 0)) {
+          state.unreadCounts[storageKey] = count;
+          changed = true;
+        }
+      });
+    }
 
     if (changed) state = state.copyWith();
   }
@@ -3761,12 +4139,13 @@ class NotificationEntry {
     required this.title,
     required this.body,
     required this.ts,
+    int? receivedAt,
     this.route,
     this.eventId,
     this.senderPubkey,
     this.contextLabel,
     this.viewed = false,
-  });
+  }) : receivedAt = (receivedAt != null && receivedAt > 0) ? receivedAt : ts;
 
   /// `'message' | 'mention' | 'reaction' | 'call' | 'pm' | 'group' | …`.
   final String type;
@@ -3776,13 +4155,22 @@ class NotificationEntry {
   /// Milliseconds since epoch.
   final int ts;
 
+  /// When THIS client (or the syncing device) observed the notification, ms —
+  /// the PWA's `receivedAt` (notifications.js:39-42). The viewed/last-read
+  /// comparisons use this, not the event's `created_at`, so a delayed event
+  /// with an older `created_at` isn't auto-marked viewed. Falls back to [ts]
+  /// for legacy entries (`n.receivedAt || n.timestamp`).
+  final int receivedAt;
+
   /// An opaque route/target the UI can use to navigate on tap (e.g. a PM pubkey,
   /// a channel key, or a group id). Null when not actionable.
   final String? route;
 
   /// The source event id (channel event id / PM nymMessageId / reaction id),
   /// used to dedup live + replayed copies (notifications.js `eventId`).
-  final String? eventId;
+  /// Mutable: the cross-device history merge adopts a synced copy's id onto a
+  /// fuzzily-matched local entry (app.js:5847-5850).
+  String? eventId;
 
   /// The sender's pubkey (notifications.js `senderPubkey`), used in the
   /// no-eventId dedup fallback.
@@ -3804,6 +4192,7 @@ class NotificationEntry {
         'title': title,
         'body': body,
         'timestamp': ts,
+        if (receivedAt > 0) 'receivedAt': receivedAt,
         if (route != null) 'route': route,
         if (eventId != null) 'eventId': eventId,
         if (senderPubkey != null) 'senderPubkey': senderPubkey,
@@ -3811,24 +4200,63 @@ class NotificationEntry {
         if (viewed) 'viewed': true,
       };
 
-  /// Rebuilds an entry from persisted JSON (N3). Returns null when the record
-  /// lacks the minimal fields (title/body/timestamp), so a corrupt row is
-  /// skipped rather than throwing.
+  /// Rebuilds an entry from persisted JSON (N3) OR a PWA-shaped synced record.
+  /// Returns null when the record lacks the minimal fields
+  /// (title/body/timestamp), so a corrupt row is skipped rather than throwing.
+  ///
+  /// A PWA record carries `channelInfo` instead of the native `type`/`route`
+  /// fields (notifications.js entry shape); when the native fields are absent,
+  /// type/route/eventId/senderPubkey are derived from it so cross-device
+  /// merges of PWA-written history land actionable entries.
   static NotificationEntry? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final title = raw['title'];
     final body = raw['body'];
     final ts = raw['timestamp'];
     if (title is! String || body is! String || ts is! num) return null;
+    // PWA channelInfo fallbacks (type-specific route derivation mirrors the
+    // notification onclick dispatch, notifications.js:92-108).
+    String? ciType;
+    String? ciRoute;
+    String? ciEventId;
+    String? ciPubkey;
+    final ci = raw['channelInfo'];
+    if (ci is Map) {
+      if (ci['eventId'] is String) ciEventId = ci['eventId'] as String;
+      if (ci['pubkey'] is String) ciPubkey = ci['pubkey'] as String;
+      String? str(String k) => ci[k] is String ? ci[k] as String : null;
+      switch (ci['type']) {
+        case 'pm':
+          ciType = 'pm';
+          ciRoute = ciPubkey;
+        case 'group':
+          ciType = 'group';
+          ciRoute = str('groupId');
+        case 'geohash':
+          ciType = 'mention';
+          ciRoute = str('channel') ?? str('geohash');
+        case 'reaction':
+          ciType = 'reaction';
+          ciRoute = switch (ci['sourceType']) {
+            'pm' => str('sourcePubkey'),
+            'group' => str('sourceGroupId'),
+            'geohash' => str('sourceChannel') ?? str('sourceGeohash'),
+            _ => null,
+          };
+      }
+    }
+    final receivedAt = raw['receivedAt'];
     return NotificationEntry(
-      type: raw['type'] is String ? raw['type'] as String : 'message',
+      type: raw['type'] is String ? raw['type'] as String : (ciType ?? 'message'),
       title: title,
       body: body,
       ts: ts.toInt(),
-      route: raw['route'] is String ? raw['route'] as String : null,
-      eventId: raw['eventId'] is String ? raw['eventId'] as String : null,
-      senderPubkey:
-          raw['senderPubkey'] is String ? raw['senderPubkey'] as String : null,
+      receivedAt: receivedAt is num ? receivedAt.toInt() : null,
+      route: raw['route'] is String ? raw['route'] as String : ciRoute,
+      eventId: raw['eventId'] is String ? raw['eventId'] as String : ciEventId,
+      senderPubkey: raw['senderPubkey'] is String
+          ? raw['senderPubkey'] as String
+          : ciPubkey,
       contextLabel:
           raw['contextLabel'] is String ? raw['contextLabel'] as String : null,
       viewed: raw['viewed'] == true,
@@ -3878,6 +4306,13 @@ class NotificationHistoryNotifier
   bool _hydrating = false;
   final List<void Function()> _pendingRecords = [];
 
+  /// Lightweight mirror of the entries buffered in [_pendingRecords] during
+  /// hydration, exposed via [entriesForAlertDedup] so the LOUD alert path can
+  /// dedup a multi-relay duplicate against a record that hasn't landed yet
+  /// (the boot race the buffering itself was added for). Cleared with the
+  /// buffer once hydration settles.
+  final List<NotificationEntry> _pendingEntries = [];
+
   /// PWA localStorage key for the persisted bell history
   /// (`_loadNotificationHistory`/`_saveNotificationHistory`,
   /// notifications.js:218/231). Kept as a literal here (not a typed Settings
@@ -3899,6 +4334,20 @@ class NotificationHistoryNotifier
   static const int _seenKeysTtlMs = 48 * 60 * 60 * 1000; // 48h
   static const int _maxSeenKeys = 500;
 
+  /// The cross-device "everything observed before this is read" watermark, ms —
+  /// the PWA's `notificationLastReadTime` (`nym_notification_last_read`,
+  /// app.js:746). Only ever adopted from another device via
+  /// [adoptNotificationLastReadTime] (the PWA never advances it locally); an
+  /// entry whose [NotificationEntry.receivedAt] is at/under it lands pre-viewed
+  /// (notifications.js:55) and is excluded from the badge (notifications.js:
+  /// 416-420).
+  int _lastReadTimeMs = 0;
+  static const String _lastReadStoreKey = 'nym_notification_last_read';
+
+  /// The synced last-read watermark for the outbound `nymchat-notifications`
+  /// wrap (settings.js:535).
+  int get notificationLastReadTime => _lastReadTimeMs;
+
   /// Fired when the seen-keys map actually GROWS (a notification was viewed/
   /// dismissed here), so the controller can republish the read-state wrap — the
   /// native equivalent of the PWA's `_debouncedNostrSettingsSave` on
@@ -3917,11 +4366,29 @@ class NotificationHistoryNotifier
       final prefs = await ref.read(emojiPrefsProvider.future);
       _prefs = prefs;
       // N26: hydrate the cross-device seen-keys map (independent of the bell
-      // history, so it loads even when the history blob is empty).
+      // history, so it loads even when the history blob is empty). MERGE into
+      // (never overwrite) the live map: keys added during the async window by
+      // an early settings-get merge or a view-open would otherwise be
+      // clobbered (their `_persistSeenKeys` was a no-op while `_prefs` was
+      // still null), so re-persist when pre-hydration keys existed.
       final seenRaw = prefs.getString(_seenKeysStoreKey);
       if (seenRaw != null && seenRaw.isNotEmpty) {
-        _seenKeys = _decodeSeenKeys(seenRaw);
+        final loaded = _decodeSeenKeys(seenRaw);
+        if (_seenKeys.isEmpty) {
+          _seenKeys = loaded;
+        } else {
+          loaded.forEach((k, v) => _seenKeys.putIfAbsent(k, () => v));
+          _persistSeenKeys();
+        }
+      } else if (_seenKeys.isNotEmpty) {
+        _persistSeenKeys();
       }
+      // Restore the last-read watermark (PWA boot read of
+      // `nym_notification_last_read`, app.js:746). An inbound sync adopt that
+      // raced hydration wins (monotonic max).
+      final lastReadRaw = prefs.getString(_lastReadStoreKey);
+      final lastRead = int.tryParse(lastReadRaw ?? '') ?? 0;
+      if (lastRead > _lastReadTimeMs) _lastReadTimeMs = lastRead;
       final raw = prefs.getString(_historyKey);
       if (raw == null || raw.isEmpty) return;
       final decoded = jsonDecode(raw);
@@ -3949,6 +4416,7 @@ class NotificationHistoryNotifier
       // instead of being clobbered by it. Replaying AFTER the state overwrite
       // keeps the invariant: ingest never precedes hydration.
       _hydrating = false;
+      _pendingEntries.clear();
       if (_pendingRecords.isNotEmpty && mounted) {
         final pending = List.of(_pendingRecords);
         _pendingRecords.clear();
@@ -4008,12 +4476,58 @@ class NotificationHistoryNotifier
   /// `viewed` on read (see [markConversationSeen]).
   int _countUnread(List<NotificationEntry> entries) {
     final cutoff = DateTime.now().millisecondsSinceEpoch - _maxAgeMs;
+    final lastRead = _channelLastReadSnapshot();
     return entries
         .where((e) =>
             !e.viewed &&
             e.ts > cutoff &&
-            (_blocked.isEmpty || !_blocked.contains(e.senderPubkey)))
+            // Observed at/under the synced last-read watermark → read
+            // elsewhere (`observedAt <= lastRead`, notifications.js:416-420).
+            e.receivedAt > _lastReadTimeMs &&
+            (_blocked.isEmpty || !_blocked.contains(e.senderPubkey)) &&
+            !_alreadySeenByWatermark(e, lastRead))
         .length;
+  }
+
+  /// Snapshot of the per-conversation read watermarks for the badge predicate.
+  /// Empty when the store is detached (tests) or the app state is unavailable.
+  Map<String, int> _channelLastReadSnapshot() {
+    final ref = _ref;
+    if (ref == null) return const {};
+    try {
+      return ref.read(appStateProvider.notifier).channelLastRead;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// PWA `_notificationAlreadySeen` (notifications.js:321-327): true when the
+  /// source conversation's read watermark is at/after this notification's
+  /// timestamp — a message already read (here, or on another device via the
+  /// synced `nymchat-readstate` watermark) lands pre-viewed at record time
+  /// (notifications.js:56/158) and is excluded from the badge count
+  /// (notifications.js:422). Candidate keys mirror `_notificationConvKey`,
+  /// covering both the bare route and the storage-key form the watermarks are
+  /// stamped under.
+  bool _alreadySeenByWatermark(
+      NotificationEntry n, Map<String, int> lastRead) {
+    final route = n.route;
+    if (lastRead.isEmpty || route == null || route.isEmpty || n.ts <= 0) {
+      return false;
+    }
+    final keys = switch (n.type) {
+      'pm' => [route, 'pm-$route'],
+      'group' => [route, 'group-$route'],
+      'channel' || 'mention' => [route, '#$route'],
+      _ => [route],
+    };
+    var seen = 0;
+    for (final k in keys) {
+      final v = lastRead[k] ?? 0;
+      if (v > seen) seen = v;
+    }
+    if (seen == 0) return false;
+    return n.ts ~/ 1000 <= seen;
   }
 
   /// Records a notification, trimming entries older than 24h and capping the
@@ -4032,11 +4546,33 @@ class NotificationHistoryNotifier
     String? eventId,
     String? senderPubkey,
     String? contextLabel,
+    int? receivedAtMs,
   }) {
+    // The PWA's digest gate (`body.includes('10 recent messages:')`,
+    // notifications.js:13/125): a channel-digest body never enters the bell
+    // history or the badge count, on ANY path. Sits above the hydration
+    // buffer so a digest is never buffered either.
+    if (body.contains('10 recent messages:')) return;
     // Boot race: hydration hasn't resolved yet — buffer and replay after it,
     // so this record is deduped/seen-checked against the REAL history instead
     // of an empty one (and isn't clobbered by `_hydrate`'s state overwrite).
     if (_hydrating) {
+      // Freeze receivedAt at buffer time (the PWA stamps `Date.now()` when the
+      // notification is observed, notifications.js:42) so the replay doesn't
+      // shift it to the hydration-complete instant.
+      final observedAt =
+          receivedAtMs ?? DateTime.now().millisecondsSinceEpoch;
+      _pendingEntries.add(NotificationEntry(
+        type: type,
+        title: title,
+        body: body,
+        ts: ts ?? observedAt,
+        receivedAt: observedAt,
+        route: route,
+        eventId: eventId,
+        senderPubkey: senderPubkey,
+        contextLabel: contextLabel,
+      ));
       _pendingRecords.add(() => record(
             type: type,
             title: title,
@@ -4046,6 +4582,7 @@ class NotificationHistoryNotifier
             eventId: eventId,
             senderPubkey: senderPubkey,
             contextLabel: contextLabel,
+            receivedAtMs: observedAt,
           ));
       return;
     }
@@ -4076,16 +4613,27 @@ class NotificationHistoryNotifier
       title: title,
       body: body,
       ts: stamp,
+      receivedAt: receivedAtMs ?? now,
       route: route,
       eventId: eventId,
       senderPubkey: senderPubkey,
       contextLabel: contextLabel,
     );
     // N26: silence a notification already seen/dismissed on another device (its
-    // key is in the synced seen-map) by landing it pre-viewed — it stays in the
-    // bell history but doesn't bump the unread badge (PWA showNotification,
-    // notifications.js:53-54).
-    if (_isSeen(entry)) entry.viewed = true;
+    // key is in the synced seen-map), observed before the synced last-read
+    // watermark (`receivedAt <= notificationLastReadTime`, notifications.js:55),
+    // OR at/under the source conversation's read watermark
+    // (`_notificationAlreadySeen`, notifications.js:56/158) by landing it
+    // pre-viewed — it stays in the bell history but doesn't bump the unread
+    // badge (PWA showNotification, notifications.js:53-57). A newly-viewed
+    // entry's key is remembered like the PWA so it silences on our other
+    // devices too.
+    if (_isSeen(entry) ||
+        entry.receivedAt <= _lastReadTimeMs ||
+        _alreadySeenByWatermark(entry, _channelLastReadSnapshot())) {
+      entry.viewed = true;
+      if (_rememberSeen(entry)) _persistSeenKeys();
+    }
     final kept = [
       entry,
       ...state.entries.where((e) => now - e.ts < _maxAgeMs),
@@ -4113,6 +4661,13 @@ class NotificationHistoryNotifier
   /// `_markConversationNotificationsSeen` on channel/PM/group read.
   void markConversationSeen(String route, {int? tsSec}) {
     if (route.isEmpty) return;
+    // Boot race: operate on the hydrated history, not the empty pre-hydrate
+    // state (which `_hydrate`'s overwrite would discard) — same buffering as
+    // [record].
+    if (_hydrating) {
+      _pendingRecords.add(() => markConversationSeen(route, tsSec: tsSec));
+      return;
+    }
     var changed = false;
     var seenGrew = false;
     final cutoffMs = tsSec != null ? tsSec * 1000 : null;
@@ -4138,6 +4693,12 @@ class NotificationHistoryNotifier
   /// newly-viewed entry's key is remembered (N26) so reading the bell here
   /// silences the same notifications on our other devices.
   void markAllViewed() {
+    // Boot race: defer until the persisted history has loaded so the flip
+    // covers the real entries (and its seen-keys aren't clobbered).
+    if (_hydrating) {
+      _pendingRecords.add(markAllViewed);
+      return;
+    }
     var seenGrew = false;
     for (final e in state.entries) {
       if (!e.viewed) {
@@ -4146,6 +4707,37 @@ class NotificationHistoryNotifier
       }
     }
     state = state.copyWith(entries: List.of(state.entries), unread: 0);
+    _persist(); // N3: persist the viewed flags.
+    if (seenGrew) {
+      _persistSeenKeys();
+      onSeenChanged?.call();
+    }
+  }
+
+  /// Marks the given [entries] viewed — the per-item half of the PWA's
+  /// scroll-into-view read semantics (`_setupNotificationSeenObserver`,
+  /// notifications.js:596-642: an item ≥60% visible in the modal body flips
+  /// `viewed` + remembers its seen-key, deducting the badge per item). Each
+  /// newly-viewed entry's key is remembered (N26) so it silences on our other
+  /// devices; the badge is re-derived from the remaining unviewed entries.
+  /// No-op for entries already viewed / not in the store.
+  void markEntriesViewed(Iterable<NotificationEntry> entries) {
+    if (_hydrating) {
+      final captured = List.of(entries);
+      _pendingRecords.add(() => markEntriesViewed(captured));
+      return;
+    }
+    var changed = false;
+    var seenGrew = false;
+    for (final e in entries) {
+      if (e.viewed || !state.entries.contains(e)) continue;
+      e.viewed = true;
+      changed = true;
+      if (_rememberSeen(e)) seenGrew = true;
+    }
+    if (!changed) return;
+    final list = List.of(state.entries);
+    state = state.copyWith(entries: list, unread: _countUnread(list));
     _persist(); // N3: persist the viewed flags.
     if (seenGrew) {
       _persistSeenKeys();
@@ -4240,6 +4832,14 @@ class NotificationHistoryNotifier
   /// anything changed.
   bool mergeSeenNotifications(dynamic incoming) {
     if (incoming is! Map) return false;
+    // Boot race: merge after hydration so the retro-mark runs against the
+    // real entries and the merged keys persist (pre-hydration `_prefs` is
+    // null). Returns false — the deferred merge reports nothing to buffer's
+    // caller, which ignores the result.
+    if (_hydrating) {
+      _pendingRecords.add(() => mergeSeenNotifications(incoming));
+      return false;
+    }
     final cutoff = DateTime.now().millisecondsSinceEpoch - _seenKeysTtlMs;
     var added = false;
     incoming.forEach((k, v) {
@@ -4271,6 +4871,163 @@ class NotificationHistoryNotifier
     return true;
   }
 
+  /// Adopts a NEWER synced `notificationLastReadTime` (app.js:5791-5811):
+  /// persist the watermark, then retro-mark every unviewed entry observed
+  /// at/under it viewed (remembering its seen-key so the read state
+  /// propagates onward). Idempotent — an older/equal value is a no-op and
+  /// never republishes.
+  void adoptNotificationLastReadTime(int tsMs) {
+    if (tsMs <= 0 || tsMs <= _lastReadTimeMs) return;
+    if (_hydrating) {
+      _pendingRecords.add(() => adoptNotificationLastReadTime(tsMs));
+      return;
+    }
+    _lastReadTimeMs = tsMs;
+    try {
+      _prefs?.setString(_lastReadStoreKey, '$tsMs');
+    } catch (_) {}
+    var retro = false;
+    var seenGrew = false;
+    for (final e in state.entries) {
+      if (e.viewed) continue;
+      if (e.receivedAt > _lastReadTimeMs) continue;
+      e.viewed = true;
+      retro = true;
+      // The PWA remembers WITHOUT republishing (`_rememberNotificationSeen(n,
+      // false)`, app.js:5801) — inbound merges never fire onSeenChanged.
+      if (_rememberSeen(e)) seenGrew = true;
+    }
+    if (seenGrew) _persistSeenKeys();
+    if (retro) {
+      final entries = List.of(state.entries);
+      state = state.copyWith(entries: entries, unread: _countUnread(entries));
+      _persist();
+    } else {
+      // The watermark alone can change the badge (`observedAt <= lastRead`
+      // is a count-time exclusion, notifications.js:419).
+      final unread = _countUnread(state.entries);
+      if (unread != state.unread) state = state.copyWith(unread: unread);
+    }
+  }
+
+  /// Merges a `notificationHistory` array synced from another device — the
+  /// PWA's cross-device notification sync (app.js:5814-5894). Matching is by
+  /// eventId when available, else (senderPubkey, body, ~minute timestamp), so
+  /// duplicates across devices collapse into one entry:
+  ///
+  ///  * a match adopts the synced `viewed` flag (never un-views) + a missing
+  ///    eventId, and remembers the seen-key of a viewed entry;
+  ///  * a new entry is skipped for blocked senders and for a `missed-call-…`
+  ///    id whose call [isCallAnswered] reports answered (the answered status
+  ///    is the tombstone); otherwise it lands with its original `receivedAt`
+  ///    and computes `viewed` from the synced flag, the last-read watermark,
+  ///    and the seen-map — so synced notifications keep their unread status.
+  ///
+  /// Idempotent; returns true when anything changed. Inbound merges never
+  /// fire [onSeenChanged].
+  bool mergeHistory(
+    List<dynamic> incoming, {
+    bool Function(String callId)? isCallAnswered,
+  }) {
+    if (incoming.isEmpty) return false;
+    if (_hydrating) {
+      _pendingRecords.add(() =>
+          mergeHistory(incoming, isCallAnswered: isCallAnswered));
+      return false;
+    }
+    final cutoff = DateTime.now().millisecondsSinceEpoch - _maxAgeMs;
+    final entries = List.of(state.entries);
+    NotificationEntry? findLocalMatch(NotificationEntry n) {
+      final evId = n.eventId ?? '';
+      if (evId.isNotEmpty) {
+        for (final m in entries) {
+          final mid = m.eventId ?? '';
+          if (mid.isNotEmpty && mid == evId) return m;
+        }
+      }
+      for (final m in entries) {
+        if (m.body != n.body) continue;
+        if ((m.senderPubkey ?? '') != (n.senderPubkey ?? '')) continue;
+        if ((m.ts - n.ts).abs() > 60000) continue;
+        return m;
+      }
+      return null;
+    }
+
+    var changed = false;
+    var seenAdded = false;
+    for (final raw in incoming) {
+      final n = NotificationEntry.fromJson(raw);
+      if (n == null || n.ts <= cutoff) continue;
+      final existing = findLocalMatch(n);
+      if (existing != null) {
+        if (n.viewed && !existing.viewed) {
+          existing.viewed = true;
+          changed = true;
+        }
+        final evId = n.eventId ?? '';
+        if ((existing.eventId ?? '').isEmpty && evId.isNotEmpty) {
+          existing.eventId = evId;
+          changed = true;
+        }
+        if (existing.viewed && _rememberSeen(existing)) seenAdded = true;
+        continue;
+      }
+      final pk = n.senderPubkey ?? '';
+      if (pk.isNotEmpty && _blocked.contains(pk)) continue;
+      // Don't re-add a missed-call entry for a call answered here or elsewhere
+      // (app.js:5860-5862).
+      final evId = n.eventId ?? '';
+      if (evId.startsWith('missed-call-') &&
+          (isCallAnswered?.call(evId.substring(12)) ?? false)) {
+        continue;
+      }
+      // `receivedAt` already fell back to `timestamp` in fromJson (the PWA's
+      // `observedAt` for legacy entries, app.js:5866).
+      if (!n.viewed &&
+          (n.receivedAt <= _lastReadTimeMs || _isSeen(n))) {
+        n.viewed = true;
+      }
+      if (n.viewed && _rememberSeen(n)) seenAdded = true;
+      entries.add(n);
+      changed = true;
+    }
+    if (seenAdded) _persistSeenKeys();
+    if (!changed) return false;
+    final kept = entries.where((e) => e.ts > cutoff).toList()
+      ..sort((a, b) => b.ts.compareTo(a.ts)); // newest-first (store order)
+    if (kept.length > _cap) kept.removeRange(_cap, kept.length);
+    state = NotificationHistoryState(entries: kept, unread: _countUnread(kept));
+    _persist();
+    return true;
+  }
+
+  /// Serializes the bell history for the outbound `nymchat-notifications`
+  /// wrap — the PWA's `_serialiseNotificationsForSync` (settings.js:69-88):
+  /// entries within the 24h window, newest 100, oldest-first (the PWA's array
+  /// order), bodies clipped to 240 chars, `viewed` always present.
+  List<Map<String, dynamic>> historyForSync() {
+    final cutoff = DateTime.now().millisecondsSinceEpoch - _maxAgeMs;
+    final recent =
+        state.entries.where((e) => e.ts > cutoff).take(100).toList();
+    return [
+      for (final e in recent.reversed)
+        {
+          ...e.toJson(),
+          'body': e.body.length > 240 ? e.body.substring(0, 240) : e.body,
+          'viewed': e.viewed,
+        },
+    ];
+  }
+
+  /// The entries the loud alert path's replay/dedup guard should scan: the
+  /// live history PLUS anything buffered during the async hydration window —
+  /// without the buffered half, multi-relay duplicates of one live event
+  /// landing at boot each see an "empty" history and double-popup.
+  List<NotificationEntry> get entriesForAlertDedup => _hydrating
+      ? [...state.entries, ..._pendingEntries]
+      : state.entries;
+
   /// Removes the history entry carrying [eventId] and re-derives the badge — the
   /// PWA's `_retractMissedCallNotification` (calls.js:282, removes the entry
   /// whose `eventId === 'missed-call-'+callId`). Used by the cross-device
@@ -4278,6 +5035,13 @@ class NotificationHistoryNotifier
   /// phantom "Missed call" surfaced here. No-op when no entry matches.
   void removeByEventId(String eventId) {
     if (eventId.isEmpty) return;
+    // Boot race: a retraction landing before hydration would no-op against
+    // the empty state and the phantom entry would then be restored from the
+    // persisted blob — defer it past the load.
+    if (_hydrating) {
+      _pendingRecords.add(() => removeByEventId(eventId));
+      return;
+    }
     final kept =
         state.entries.where((e) => e.eventId != eventId).toList();
     if (kept.length == state.entries.length) return;
@@ -4293,8 +5057,13 @@ class NotificationHistoryNotifier
   /// (`nym_notification_seen` is in the clear-data list, settings_helpers.dart).
   void clear() {
     _pendingRecords.clear(); // Drop boot-buffered records too (signOut/panic).
+    _pendingEntries.clear();
     _seenKeys = <String, int>{};
     _prefs?.remove(_seenKeysStoreKey);
+    // The last-read watermark is identity-scoped read state — drop it too
+    // (`nym_notification_last_read` is in the PWA clear-data list, app.js:4071).
+    _lastReadTimeMs = 0;
+    _prefs?.remove(_lastReadStoreKey);
     state = const NotificationHistoryState();
     _persist(); // N3: clear the stored blob too.
   }

@@ -139,7 +139,14 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
                 type: MaterialType.transparency,
                 child: SafeArea(child: body),
               ),
-              Positioned(top: 14, right: 14, child: CtxCloseButton(onTap: widget.onClose)),
+              // Offset by the status-bar inset — the PWA's `top:14px` viewport
+              // already starts below the system chrome; without this the X
+              // sits under the status bar and can't be tapped.
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 14,
+                right: 14,
+                child: CtxCloseButton(onTap: widget.onClose),
+              ),
             ],
           ),
         ),

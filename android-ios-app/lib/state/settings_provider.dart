@@ -34,6 +34,13 @@ class SettingsController extends StateNotifier<Settings> {
     if (cb != null) cb();
   }
 
+  /// Public trigger for [onSyncedChange], for slices that persist a synced
+  /// setting straight to the KV store outside this controller's setters (the
+  /// columns deck's `nym_columns_layout` writes — `_cvSaveLayout`'s trailing
+  /// `nostrSettingsSave()`, columns.js:993-994) — so they schedule the
+  /// debounced cross-device publish without poking the hook field directly.
+  void notifySyncedChange() => _syncedChanged();
+
   /// Reloads settings from the (now-wiped) store back to first-run defaults —
   /// the panic path's analogue of the PWA's page reload re-reading empty
   /// localStorage. Called by [NostrController.resetAfterPanic] after the KV
@@ -122,6 +129,14 @@ class SettingsController extends StateNotifier<Settings> {
 
   void setWallpaperType(String type) {
     _kv.setString(StorageKeys.wallpaperType, type);
+    // Selecting a non-custom wallpaper clears the stored custom URL — the PWA's
+    // `saveWallpaper(type)` does `localStorage.removeItem('nym_wallpaper_custom_url')`
+    // for every preset type (users.js:901-909), so the stale URL neither
+    // lingers on-device nor keeps riding the outbound settings sync
+    // (`wallpaperCustomUrl`, settings.js:124 syncs '' once cleared).
+    if (type != 'custom') {
+      _kv.remove(StorageKeys.wallpaperCustomUrl);
+    }
     state = state.copyWith(wallpaperType: type);
     _syncedChanged();
   }
@@ -294,9 +309,18 @@ class SettingsController extends StateNotifier<Settings> {
 
   // --- Channels -------------------------------------------------------------
 
+  /// Hook fired after [setGroupChatPMOnlyMode] persists a CHANGED value, so
+  /// the [NostrController] can flip the critical REQ's channelMode gate
+  /// (relays.js:2488 `!this.settings.groupChatPMOnlyMode`; the PWA re-applies
+  /// via `applyGroupChatPMOnlyMode` only when the value changed, app.js:3978).
+  /// Registered by the controller at boot.
+  void Function(bool enabled)? onGroupChatPMOnlyModeChanged;
+
   void setGroupChatPMOnlyMode(bool v) {
+    final changed = state.groupChatPMOnlyMode != v;
     _kv.setBool(StorageKeys.groupchatPmOnlyMode, v);
     state = state.copyWith(groupChatPMOnlyMode: v);
+    if (changed) onGroupChatPMOnlyModeChanged?.call(v);
     _syncedChanged();
   }
 
@@ -411,7 +435,17 @@ class SettingsController extends StateNotifier<Settings> {
   /// values, not a user edit, so it must not trigger a cross-device publish (the
   /// PWA guards the same re-read with `_applyingRemoteSettings`).
   void reloadFromStore() {
+    final prev = state;
     state = Settings.fromStore(_kv);
+    // A remote/out-of-band change to these must still reach the relay layer —
+    // the PWA's remote-settings apply calls applyLowDataMode /
+    // applyGroupChatPMOnlyMode when the value CHANGED (app.js:6329-6346).
+    if (prev.lowDataMode != state.lowDataMode) {
+      onLowDataModeChanged?.call(state.lowDataMode);
+    }
+    if (prev.groupChatPMOnlyMode != state.groupChatPMOnlyMode) {
+      onGroupChatPMOnlyModeChanged?.call(state.groupChatPMOnlyMode);
+    }
   }
 }
 

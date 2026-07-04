@@ -175,7 +175,4 @@ Future<void> _confirmDelete(
   }
 }
 
-String _baseNym(String nym) {
-  final hash = nym.indexOf('#');
-  return hash > 0 ? nym.substring(0, hash) : nym;
-}
+String _baseNym(String nym) => splitNymSuffix(nym).base;

@@ -57,7 +57,10 @@ class VaultBootUnlock extends ConsumerStatefulWidget {
 
 class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   final _pw = TextEditingController();
-  String? _error;
+
+  /// Non-null while the `_vaultErrorModal` state is showing — the card swaps
+  /// from the unlock prompt to the "Unlock failed" chrome with this message.
+  String? _failMessage;
   bool _busy = false;
 
   bool get _isBiometric =>
@@ -73,10 +76,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   /// on failure show `_vaultErrorModal` (Try again / Forget identity).
   Future<void> _unlock() async {
     if (_busy) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
+    setState(() => _busy = true);
     final vault = ref.read(identityVaultProvider);
     try {
       String password;
@@ -86,25 +86,13 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         // path) we gate on local_auth and derive from a per-device secret. This
         // is a platform-equivalence choice, not a 1:1 port of the PRF scheme.
         final ok = await _biometricAuth();
-        if (!ok) {
-          if (mounted) {
-            setState(() {
-              _busy = false;
-              _error = 'Biometric unlock was cancelled.';
-            });
-          }
-          return;
-        }
+        if (!ok) throw StateError('Biometric unlock was cancelled.');
         password = await _deviceBiometricSecret();
       } else {
         password = _pw.text;
-        if (password.isEmpty) {
-          setState(() {
-            _busy = false;
-            _error = 'Enter your password or PIN.';
-          });
-          return;
-        }
+        // `unlockVault`'s own guard (key-vault.js:257) — like every unlock
+        // failure it surfaces through the "Unlock failed" card, not inline.
+        if (password.isEmpty) throw StateError('Enter your password or PIN.');
       }
       // `unlockVault` derives the key, verifies the check token (throws on a
       // wrong factor) and returns the decrypted secrets. We hand them to the
@@ -114,14 +102,43 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
       final secrets = await vault.unlock(password);
       if (mounted) widget.onUnlocked(secrets);
     } catch (e) {
-      // `_vaultErrorModal`: "Wrong password/PIN or unrecognised passkey."
+      // `unlockVaultAtBoot`'s retry loop: `_vaultErrorModal(e.message ||
+      // 'Unlock failed.')` (key-vault.js:344) — swap the card to the separate
+      // "Unlock failed" state carrying the thrown message.
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = 'Wrong password/PIN or unrecognised passkey.';
+          _failMessage = _messageOf(e);
         });
       }
     }
+  }
+
+  /// `e && e.message ? e.message : 'Unlock failed.'` (key-vault.js:344).
+  static String _messageOf(Object e) {
+    final m = e is StateError
+        ? e.message
+        : e is FormatException
+            ? e.message
+            : e is ArgumentError
+                ? e.message?.toString()
+                : null;
+    return (m == null || m.isEmpty) ? 'Unlock failed.' : m;
+  }
+
+  /// "Try again" on the error modal — the boot loop prompts again with a fresh
+  /// (empty) field (`_vaultPromptModal` rebuilds the input each time).
+  void _retry() {
+    _pw.clear();
+    setState(() => _failMessage = null);
+  }
+
+  /// "Forget identity" on the ERROR modal resolves `'reset'` straight into
+  /// `_forgetIdentityAndReload` — no second confirmation (key-vault.js:345,398),
+  /// unlike the prompt's Forget which confirms first.
+  Future<void> _forgetFromError() async {
+    await ref.read(identityVaultProvider).reset();
+    if (mounted) widget.onForget();
   }
 
   /// "Forget identity" — confirm, then reset the vault (`resetVault`) and hand
@@ -201,88 +218,9 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // `.modal-header` (no lock glyph in the PWA prompt).
-                      Container(
-                        padding: const EdgeInsets.only(bottom: 14),
-                        margin: const EdgeInsets.only(bottom: 24),
-                        decoration: BoxDecoration(
-                          border: Border(
-                              bottom: BorderSide(color: c.glassBorder)),
-                        ),
-                        child: Text(
-                          'Unlock your identity'.toUpperCase(),
-                          style: TextStyle(
-                            color: c.primary,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                      ),
-                      // `.form-hint.nm-vault-text`: 13px, line-height 1.5,
-                      // left, `margin: 0 0 16px`.
-                      Text(
-                        'Your Nymchat identity key is encrypted on this device.'
-                        '${isBio ? ' Use your biometric to unlock.' : ''}',
-                        style: TextStyle(
-                            color: c.textDim, fontSize: 13, height: 1.5),
-                      ),
-                      const SizedBox(height: 16),
-                      if (!isBio)
-                        ModalChrome.focusRing(
-                          c,
-                          child: TextField(
-                            controller: _pw,
-                            autofocus: true,
-                            obscureText: true,
-                            enabled: !_busy,
-                            keyboardType: TextInputType.visiblePassword,
-                            onSubmitted: (_) => _unlock(),
-                            decoration: ModalChrome.inputDecoration(
-                                c, 'Password or PIN'),
-                            style:
-                                TextStyle(color: c.textBright, fontSize: 15),
-                          ),
-                        ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          _error!,
-                          style: TextStyle(color: c.danger, fontSize: 13),
-                        ),
-                      ],
-                      // Body → actions gap: the password `.form-group` carries
-                      // `margin-bottom: 20px` and `.modal-body` another 20px
-                      // (40 total); the biometric prompt has no field, so only
-                      // the text's 16px margin + the body's 20px apply.
-                      SizedBox(height: isBio ? 20 : 40),
-                      // `.modal-actions`: flex row, gap 10, justify center; no
-                      // `align-items`, so the default stretch sizes the
-                      // `.icon-btn` to the 42px `.send-btn` beside it.
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ModalChrome.iconButton(c, 'Forget identity',
-                              _busy ? null : _forget,
-                              height: 42),
-                          const SizedBox(width: 10),
-                          ModalChrome.sendButton(
-                            c,
-                            'Unlock',
-                            _busy ? null : _unlock,
-                            child: _busy
-                                ? SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: c.primary),
-                                  )
-                                : null,
-                          ),
-                        ],
-                      ),
-                    ],
+                    children: _failMessage != null
+                        ? _errorChildren(c)
+                        : _promptChildren(c, isBio),
                   ),
                 ),
               ),
@@ -291,5 +229,115 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         ),
       ),
     );
+  }
+
+  /// The `.modal-header` (no lock glyph in the PWA prompt).
+  Widget _header(NymColors c, String text) {
+    return Container(
+      padding: const EdgeInsets.only(bottom: 14),
+      margin: const EdgeInsets.only(bottom: 24),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.glassBorder)),
+      ),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          color: c.primary,
+          fontSize: 22,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.5,
+        ),
+      ),
+    );
+  }
+
+  /// `_vaultPromptModal` — "Unlock your identity" with the factor field.
+  List<Widget> _promptChildren(NymColors c, bool isBio) {
+    return [
+      _header(c, 'Unlock your identity'),
+      // `.form-hint.nm-vault-text`: 13px, line-height 1.5, left,
+      // `margin: 0 0 16px`.
+      Text(
+        'Your Nymchat identity key is encrypted on this device.'
+        '${isBio ? ' Use your biometric to unlock.' : ''}',
+        style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
+      ),
+      const SizedBox(height: 16),
+      if (!isBio)
+        ModalChrome.focusRing(
+          c,
+          child: TextField(
+            controller: _pw,
+            autofocus: true,
+            obscureText: true,
+            enabled: !_busy,
+            keyboardType: TextInputType.visiblePassword,
+            onSubmitted: (_) => _unlock(),
+            decoration: ModalChrome.inputDecoration(c, 'Password or PIN'),
+            style: TextStyle(color: c.textBright, fontSize: 15),
+          ),
+        ),
+      // Body → actions gap: the password `.form-group` carries
+      // `margin-bottom: 20px` and `.modal-body` another 20px
+      // (40 total); the biometric prompt has no field, so only
+      // the text's 16px margin + the body's 20px apply.
+      SizedBox(height: isBio ? 20 : 40),
+      // `.modal-actions`: flex row, gap 10, justify center; no
+      // `align-items`, so the default stretch sizes the
+      // `.icon-btn` to the 42px `.send-btn` beside it. CSS flex items
+      // SHRINK when the row is tight — mirror that with loose Flexibles so a
+      // narrow viewport compresses the buttons instead of overflowing.
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Flexible(
+              child: ModalChrome.iconButton(
+                  c, 'Forget identity', _busy ? null : _forget,
+                  height: 42)),
+          const SizedBox(width: 10),
+          Flexible(
+            child: ModalChrome.sendButton(
+              c,
+              'Unlock',
+              _busy ? null : _unlock,
+              child: _busy
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: c.primary),
+                    )
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    ];
+  }
+
+  /// `_vaultErrorModal` — the separate "Unlock failed" card: the thrown
+  /// message as the `.form-hint.nm-vault-text` body, "Forget identity"
+  /// (`.icon-btn`, no re-confirm) / "Try again" (`.send-btn`).
+  List<Widget> _errorChildren(NymColors c) {
+    return [
+      _header(c, 'Unlock failed'),
+      Text(
+        _failMessage!,
+        style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
+      ),
+      // The p's 16px bottom margin collapses into `.modal-body`'s 20px.
+      const SizedBox(height: 20),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Flexible(
+              child: ModalChrome.iconButton(
+                  c, 'Forget identity', _forgetFromError,
+                  height: 42)),
+          const SizedBox(width: 10),
+          Flexible(child: ModalChrome.sendButton(c, 'Try again', _retry)),
+        ],
+      ),
+    ];
   }
 }

@@ -25,6 +25,7 @@ import '../../models/nostr_event.dart';
 import '../../services/api/api_client.dart' show Nip98Auth;
 import '../../services/nostr/event_signer.dart';
 import '../../state/app_state.dart';
+import '../../state/nostr_controller.dart' show nostrControllerProvider;
 import '../../state/settings_provider.dart';
 import '../../widgets/context_menu/interaction_hooks.dart'
     show giftCreditsRequestProvider;
@@ -339,7 +340,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     _auth = auth;
     _privkey = privkey;
     _signer = signer ?? (privkey != null ? LocalSigner(privkey) : null);
-    _wireApiWsAuth();
   }
 
   /// Late-attaches the ACTIVE [EventSigner] (local key OR NIP-46 remote) on
@@ -351,27 +351,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   void attachSigner(EventSigner? signer) {
     if (signer != null) {
       _signer = signer;
-      _wireApiWsAuth();
     }
-  }
-
-  /// Wires the service's WS-first `/api` transport: the socket's one-time AUTH
-  /// handshake signs a kind-27235 `api-ws` event bound to `https://<host>/api/WS`
-  /// (`_signBotAuth('api-ws', 'WS')` inside `_ensureApiSocket`, shop.js:30 —
-  /// endpoint 'WS' → `/api/WS`, pms.js:1652), signed ONCE per connection through
-  /// the active signer so every bot money op rides the authenticated socket and
-  /// only the HTTP fallback signs per action.
-  void _wireApiWsAuth() {
-    final signer = _signer;
-    if (signer == null) return;
-    // `…/api/bot` → `…/api/WS` (same fixed host as the service URL).
-    final url =
-        _service.baseUrl.replaceFirst(RegExp(r'/bot$'), '/WS');
-    _service.setApiWsAuthBuilder(() => Nip98Auth.buildSigned(
-          action: 'api-ws',
-          url: url,
-          signer: signer,
-        ));
   }
 
   /// `_purgeBotPMArchive` seam (pms.js:1881-1891): batch `pm-delete` of the
@@ -594,7 +574,16 @@ class BotChatController extends StateNotifier<BotChatState> {
   void ensureIntro() {
     final list = _thread;
     if (!_primed) _primeHandled(list);
-    if (list.isNotEmpty) return;
+    if (list.isNotEmpty) {
+      // A non-empty conversation re-renders exclusively from the persisted
+      // store on every open (`loadPMMessages`, pms.js:3040-3086) — all
+      // transient `_displayBotInfoMessage` DOM (welcome, `?help` guide,
+      // `?balance`/`?git` cards) is dropped on a conversation switch.
+      if (state.infoMessages.isNotEmpty) {
+        state = state.copyWith(infoMessages: const <Message>[]);
+      }
+      return;
+    }
     // The PWA re-renders the WHOLE empty conversation as transient DOM on
     // EVERY open (`loadPMMessages`'s empty branch, pms.js:3065-3082): the
     // 'Start of private message' line, the welcome bubble (only when the chat
@@ -766,6 +755,12 @@ class BotChatController extends StateNotifier<BotChatState> {
       if (botWrap != null) {
         selfWrap = await _wrapRumor(rumor, selfPubkey);
         if (selfWrap != null) _publishDmEvent(selfWrap.toJson());
+        // `sendPM` records own activity right after `sendNIP17PM`
+        // (pms.js:1596): refresh our own lastSeen + the throttled presence
+        // broadcast on bot-screen sends like every other send surface.
+        try {
+          _ref.read(nostrControllerProvider).recordOwnActivity();
+        } catch (_) {}
       }
     }
 

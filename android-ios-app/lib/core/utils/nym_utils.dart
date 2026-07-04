@@ -19,6 +19,21 @@ String getNymFromPubkey(String baseNym, String pubkey) {
   return '$base#${getPubkeySuffix(pubkey)}';
 }
 
+final RegExp _nymSplitRe =
+    RegExp(r'^([\s\S]*)#([0-9a-f]{4})$', caseSensitive: false);
+
+/// Splits a display nym into its base and dimmed `#xxxx` suffix. ONLY a
+/// trailing 4-hex-char suffix counts (the PWA's `getDisplayNymHtml` split,
+/// users.js:1093-1098 `/^(.*)#([0-9a-f]{4})$/`); any other `#` — including
+/// one inside the name, like `player#1` — stays in the base with an empty
+/// suffix. Render sites must use this instead of `indexOf('#')`, which
+/// truncates such names.
+({String base, String suffix}) splitNymSuffix(String nym) {
+  final m = _nymSplitRe.firstMatch(nym);
+  if (m == null) return (base: nym, suffix: '');
+  return (base: m.group(1)!, suffix: '#${m.group(2)!}');
+}
+
 /// PM conversation key: `pm-<sorted pubkeys>` (docs/specs/03 §3.4).
 String getPMConversationKey(String self, String other) {
   final pair = [self, other]..sort();

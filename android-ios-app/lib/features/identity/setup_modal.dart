@@ -207,10 +207,20 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (avatar != null) await kv.setString(StorageKeys.avatarUrl, avatar);
     if (banner != null) await kv.setString(StorageKeys.bannerUrl, banner);
 
-    // The ephemeral keypair was already booted in main(); publish the chosen
-    // profile so the nym + avatar/banner/bio land on relays (saveToNostrProfile).
-    // avatar/banner are the hosted URLs returned by `uploadImage`; if no image
-    // was picked they're null, so nothing new is published for them.
+    // Ensure the controller is booted. At COLD boot main() already booted the
+    // ephemeral identity behind this modal (init() is then a no-op via its
+    // _started guard), but after a panic-wipe remount NOTHING has re-booted
+    // it — the PWA reloads the page, which re-runs its whole boot chain.
+    // Without this the shell mounts with no identity (empty pubkey → '????'
+    // suffix) and no relay service, so nothing ever loads. Runs AFTER the
+    // autoEphemeral/nick persists (the boot adopts the chosen nick) and
+    // BEFORE saveProfile (the publish needs a live identity + signer).
+    await controller.init();
+
+    // Publish the chosen profile so the nym + avatar/banner/bio land on
+    // relays (saveToNostrProfile). avatar/banner are the hosted URLs returned
+    // by `uploadImage`; if no image was picked they're null, so nothing new
+    // is published for them.
     await controller.saveProfile(
       name: nym.isEmpty ? null : nym,
       about: bio.isEmpty ? null : bio,
@@ -232,7 +242,16 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     //    idempotent with that remount.
     //  * NIP-46 — `finishNostrConnect` persisted the session; `onComplete()`
     //    advances the gate so the shell shows (restored fully on next boot).
-    if (result != null) widget.onComplete();
+    if (result != null) {
+      // NIP-46 persists the session but does not itself boot the controller
+      // (nsec re-boots inside loginWithNsec, where this is a no-op). At cold
+      // boot the background ephemeral session covers until relaunch; after a
+      // panic-wipe remount there is NO running session, so boot now —
+      // init() restores the just-persisted login (idempotent via _started).
+      await ref.read(nostrControllerProvider).init();
+      if (!mounted) return;
+      widget.onComplete();
+    }
   }
 
   @override
@@ -308,6 +327,13 @@ class _SetupModalState extends ConsumerState<SetupModal> {
                       maxLines: 3,
                       showCounter: true,
                     ),
+                    const SizedBox(height: 5),
+                    // `.form-hint` under the bio char count (index.html:1332):
+                    // 11px textDim, margin-top 5.
+                    Text(
+                      'Short bio shown on your profile (max 150 characters)',
+                      style: TextStyle(color: c.textDim, fontSize: 11),
+                    ),
                     // (The PWA's `.nm-h-52` "NOTE: Nymchat is bridged with…"
                     // callout is intentionally absent in the native app —
                     // product decision. Bio `.form-group` margin-bottom 20 is
@@ -332,7 +358,9 @@ class _SetupModalState extends ConsumerState<SetupModal> {
                             : null,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    // `.modal-actions.nm-h-7` margin-bottom: 20px
+                    // (no-inline.css:25) — the Enter row → ToS footer gap.
+                    const SizedBox(height: 20),
                     // `.setup-modal-content>span` footer (index.html:1337-1340):
                     // centered `.nm-dim` line at the inherited 16px default;
                     // "Terms of Service"/"Privacy Policy" are `.nm-secondary`
@@ -432,6 +460,11 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     int maxLines = 1,
     bool showCounter = false,
   }) {
+    // Light mode forces `input/.form-input { background: rgba(0,0,0,0.04);
+    // border-color: rgba(0,0,0,0.1); color: #000 } !important`
+    // (styles-themes-responsive.css:561-592); dark keeps the `.form-input`
+    // white/0.05 fill + glass border.
+    final baseBorder = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     final field = TextField(
       controller: controller,
       maxLength: maxLength,
@@ -439,23 +472,28 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       onChanged: showCounter ? (_) => setState(() {}) : null,
       inputFormatters:
           maxLength == null ? null : [LengthLimitingTextInputFormatter(maxLength)],
-      style: TextStyle(color: c.textBright, fontSize: 15),
+      style: TextStyle(
+        color: c.isLight ? const Color(0xFF000000) : c.textBright,
+        fontSize: 15,
+      ),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: TextStyle(color: c.textDim, fontSize: 15),
         counterText: '',
         filled: true,
-        // `.form-input` fill white/0.05.
-        fillColor: Colors.white.withValues(alpha: 0.05),
+        // `.form-input` fill white/0.05 (light: black/0.04).
+        fillColor: c.isLight
+            ? const Color(0x0A000000)
+            : Colors.white.withValues(alpha: 0.05),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         enabledBorder: OutlineInputBorder(
           borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: c.glassBorder),
+          borderSide: BorderSide(color: baseBorder),
         ),
         border: OutlineInputBorder(
           borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: c.glassBorder),
+          borderSide: BorderSide(color: baseBorder),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: NymRadius.rsm,

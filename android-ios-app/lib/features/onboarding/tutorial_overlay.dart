@@ -450,41 +450,23 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     );
   }
 
-  /// Places the card below/above the ring (per the PWA algorithm) or centered.
+  /// Places the card per the PWA's `positionStep` measure-then-place pass
+  /// (app.js:242-269): below the ring only when the MEASURED card fits
+  /// (`spaceBelow > cardH + 16`), else above when that fits, else clamped
+  /// fully on-screen near the bottom (overlapping the target if necessary —
+  /// this is what keeps the "Messages" step's card from running off the
+  /// bottom edge when its target spans the whole viewport). Implemented with
+  /// a [CustomSingleChildLayout] so the real card size is known at placement
+  /// time, exactly like the PWA's hidden-render measurement frame.
   Widget _positionedCard(NymColors c, Rect? ring, Size screen) {
-    const cardMax = 420.0;
-    final cardWidth =
-        (screen.width - 24).clamp(0.0, cardMax); // 12px margin each side
-    final card = ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: cardWidth),
-      child: _card(c),
-    );
-
-    if (ring == null) {
-      // Centered (welcome / "All set!").
-      return Center(
-        child: Padding(padding: const EdgeInsets.all(24), child: card),
-      );
-    }
-
-    // Anchor below if it fits, else above, else clamp into the bottom area.
-    // We don't know the card height ahead of layout, so estimate generously and
-    // let Align handle the vertical placement region.
-    final spaceBelow = screen.height - ring.bottom;
-    final spaceAbove = ring.top;
-    final below = spaceBelow >= spaceAbove;
-
-    // Horizontal: center the card on the target, clamped 12px from edges.
-    final targetCenterX = ring.center.dx;
-    var left = targetCenterX - cardWidth / 2;
-    left = left.clamp(12.0, (screen.width - cardWidth - 12).clamp(12.0, screen.width));
-
-    return Positioned(
-      left: left,
-      top: below ? ring.bottom + 12 : null,
-      bottom: below ? null : (screen.height - ring.top) + 12,
-      width: cardWidth,
-      child: card,
+    return Positioned.fill(
+      child: CustomSingleChildLayout(
+        delegate: _TutorialCardLayoutDelegate(
+          ring: ring,
+          phone: screen.width <= NymDimens.mobileBreakpoint,
+        ),
+        child: _card(c),
+      ),
     );
   }
 
@@ -632,6 +614,66 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
       ),
     );
   }
+}
+
+/// The PWA `positionStep` card placement, given the laid-out card size:
+///
+///  * sized to `max-width: min(420px, 92vw)` (phones: 94vw,
+///    styles-themes-responsive.css:104-107) and never taller than the
+///    viewport minus margins;
+///  * no ring → centered (min 12px margins);
+///  * below the ring when the card fits (`spaceBelow > cardH + 16`), else
+///    above when that fits, else `min(viewportH - cardH - 12,
+///    max(12, ringBottom + 12))` — clamped fully on-screen;
+///  * horizontally centered on the ring, clamped 12px from the edges.
+class _TutorialCardLayoutDelegate extends SingleChildLayoutDelegate {
+  const _TutorialCardLayoutDelegate({required this.ring, required this.phone});
+
+  final Rect? ring;
+  final bool phone;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    final w = constraints.maxWidth;
+    final capped = phone ? w * 0.94 : w * 0.92;
+    final maxW = capped < 420.0 || phone ? capped : 420.0;
+    final maxH = (constraints.maxHeight - 24).clamp(0.0, double.infinity);
+    return BoxConstraints(maxWidth: maxW, maxHeight: maxH);
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    final r = ring;
+    if (r == null) {
+      // Centered (welcome / "All set!"), min 12px margins.
+      final left = (size.width - childSize.width) / 2;
+      final top = (size.height - childSize.height) / 2;
+      return Offset(left < 12 ? 12 : left, top < 12 ? 12 : top);
+    }
+    final spaceBelow = size.height - r.bottom;
+    final spaceAbove = r.top;
+    final double top;
+    if (spaceBelow > childSize.height + 16) {
+      top = r.bottom + 12;
+    } else if (spaceAbove > childSize.height + 16) {
+      top = r.top - childSize.height - 12;
+    } else {
+      // Fallback: keep the card fully on-screen in the bottom area (the card
+      // is height-capped above, so this is always >= 12).
+      final onScreen = size.height - childSize.height - 12;
+      final below = r.bottom + 12 < 12 ? 12.0 : r.bottom + 12;
+      top = onScreen < below ? onScreen : below;
+    }
+    var left = r.left + (r.width - childSize.width) / 2;
+    final maxLeft = size.width - childSize.width - 12;
+    if (left > maxLeft) left = maxLeft;
+    if (left < 12) left = 12;
+    return Offset(left, top);
+  }
+
+  @override
+  bool shouldRelayout(_TutorialCardLayoutDelegate old) =>
+      old.ring != ring || old.phone != phone;
 }
 
 /// Fills the screen with [dim], punching a rounded-rect [hole] clear so the

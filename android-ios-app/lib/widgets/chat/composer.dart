@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../common/css_focus_ring.dart';
 import '../nym_icons.dart';
 import '../../features/autocomplete/autocomplete_dropdown.dart';
 import '../../features/autocomplete/autocomplete_queries.dart';
@@ -26,6 +27,7 @@ import '../../features/emoji/emoji_data.dart';
 import '../../features/emoji/emoji_picker.dart';
 import '../../features/emoji/gif_picker.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/identity/dev_nsec_modal.dart';
 import '../../features/messages/format/message_content.dart'
     show InlineEmojiText, proxiedMedia;
 import '../../features/messages/inline_network_image.dart';
@@ -121,9 +123,13 @@ class _ComposerState extends ConsumerState<Composer> {
   // --- Quote-reply / edit preview chips (F1/F2) ----------------------------
   // The PWA defers the quote/edit until SEND: a colored chip sits above the
   // input while the user's typed text stays clean (messages.js setQuoteReply /
-  // startEditMessage). `_pendingQuote` carries the author + stripped text;
+  // startEditMessage). `_pendingQuote` carries the author, the nested-quote-
+  // STRIPPED text used by the send prepend (`pendingQuote.text`), and the FULL
+  // original content the chip snippet is cleaned from (`setQuoteReply` builds
+  // `cleanText` from its `text` ARGUMENT, messages.js:1845-1846, so nested
+  // `> …` lines still show in the 120-char preview with the `>` removed);
   // `_pendingEdit` carries the message id + original content.
-  ({String author, String text})? _pendingQuote;
+  ({String author, String text, String fullText})? _pendingQuote;
   PendingEdit? _pendingEdit;
 
   // --- Per-conversation unsent drafts ---------------------------------------
@@ -293,7 +299,11 @@ class _ComposerState extends ConsumerState<Composer> {
             TextSelection.collapsed(offset: _controller.text.length);
       case QuoteAction(:final fullNym, :final content):
         // Set the quote chip; the input text stays clean (messages.js:1816).
-        _pendingQuote = (author: fullNym, text: _strippedQuoteText(content));
+        _pendingQuote = (
+          author: fullNym,
+          text: _strippedQuoteText(content),
+          fullText: content,
+        );
     }
     _focus.requestFocus();
     setState(() {});
@@ -447,7 +457,37 @@ class _ComposerState extends ConsumerState<Composer> {
           _withCurrentGroup((gid) => controller.revokeModerator(gid, pubkey)),
       transferOwner: (pubkey) =>
           _withCurrentGroup((gid) => controller.transferOwner(gid, pubkey)),
+      // `/nick <reserved>` → the developer-nsec challenge (cmdNick's reserved
+      // gate, commands.js:614-626).
+      openDevNsecChallenge: () => unawaited(_runDevNsecChallenge()),
     );
+  }
+
+  /// The `/nick <reserved>` challenge flow (`showDevNsecModal('nick')` →
+  /// `applyDeveloperIdentity`, commands.js:614-626): prompt for the developer
+  /// nsec, and on a verified match switch the RUNNING session to the developer
+  /// account — natively the in-session nsec login ([NostrController.
+  /// loginWithNsec], the same primitive the nsec-import modal uses) plays
+  /// `applyDeveloperIdentity`'s role — then surface the PWA's confirmation.
+  /// Cancel/dismiss aborts with the PWA's cancellation line (commands.js:617).
+  Future<void> _runDevNsecChallenge() async {
+    if (!mounted) return;
+    final result = await DevNsecModal.open(context);
+    if (result == null) {
+      _onSystemMessage('Nickname change cancelled.');
+      return;
+    }
+    try {
+      await ref.read(nostrControllerProvider).loginWithNsec(result.nsec);
+    } catch (_) {
+      // The modal pre-verified the nsec, so a failure here is a login-flow
+      // error; surface the abort line rather than crashing the composer.
+      if (mounted) _onSystemMessage('Nickname change cancelled.');
+      return;
+    }
+    if (!mounted) return;
+    final nym = ref.read(appStateProvider).selfNym;
+    _onSystemMessage('Identity verified. You are now logged in as $nym.');
   }
 
   /// Runs [action] against the current group id when the active view is a group.
@@ -595,12 +635,17 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   /// Toggle [code] in the favorites list and persist (translate.js:102-108):
-  /// append when absent, remove when present.
+  /// append when absent, remove when present. Persistence routes through
+  /// [_ensurePrefs] so the write NEVER silently no-ops — the PWA's
+  /// `_toggleTranslateFavorite` always hits localStorage. (In practice prefs
+  /// are already resolved here: the dropdown open awaits [_ensurePrefs], and
+  /// stars only exist inside the dropdown.)
   void _toggleTranslateFavorite(String code) {
     final next = [..._translateFavorites];
     if (!next.remove(code)) next.add(code);
     setState(() => _translateFavorites = next);
-    _prefs?.setString(kTranslateFavoritesKey, jsonEncode(next));
+    _ensurePrefs()
+        .then((prefs) => prefs.setString(kTranslateFavoritesKey, jsonEncode(next)));
   }
 
   /// Insert text at the current selection (mirrors PWA `insertEmoji`/`insertGif`
@@ -622,9 +667,27 @@ class _ComposerState extends ConsumerState<Composer> {
     _focus.requestFocus();
   }
 
+  /// Hides an emoji/GIF picker WITHOUT a selection (✕ / tap-out / button
+  /// toggle) and, on desktop widths, returns focus to the message input —
+  /// `closeEnhancedEmojiModal`/`closeGifPicker` → `_focusMessageInput`
+  /// (reactions.js:908 / ui-context.js:2194), which bails at ≤768px
+  /// (channels.js:1383-1393) so a phone keyboard isn't yanked open.
+  void _hidePickerAndRefocus(OverlayPortalController portal) {
+    portal.hide();
+    if (!mounted) return;
+    if (MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint) {
+      return;
+    }
+    _focus.requestFocus();
+  }
+
+  void _hideEmojiPicker() => _hidePickerAndRefocus(_emojiPortal);
+
+  void _hideGifPicker() => _hidePickerAndRefocus(_gifPortal);
+
   Future<void> _toggleEmojiPicker() async {
     if (_emojiPortal.isShowing) {
-      _emojiPortal.hide();
+      _hideEmojiPicker();
       return;
     }
     _gifPortal.hide();
@@ -636,7 +699,7 @@ class _ComposerState extends ConsumerState<Composer> {
 
   Future<void> _toggleGifPicker() async {
     if (_gifPortal.isShowing) {
-      _gifPortal.hide();
+      _hideGifPicker();
       return;
     }
     _emojiPortal.hide();
@@ -1063,7 +1126,10 @@ class _ComposerState extends ConsumerState<Composer> {
     // publish when an identity is live, falling back to local echo otherwise.
     // `?`/@Nymbot interception and `/` commands are handled inside sendCurrent.
     controller.sendCurrent(content);
-    _pushSentHistory(typed);
+    // The PWA records the FINAL composed content — quote prepend included —
+    // in the ↑/↓ recall history (`commandHistory.push(content)` AFTER the
+    // quote prepend, messages.js:2363-2364).
+    _pushSentHistory(content);
     _controller.clear();
     _popout = false;
     _syncPopoutPortal();
@@ -1146,7 +1212,9 @@ class _ComposerState extends ConsumerState<Composer> {
     // Publish the draft under a FRESH ephemeral keypair (unlinkable to the
     // durable nym), mirroring the normal send's fire-and-forget dispatch.
     controller.sendCurrentPseudonymous(content);
-    _pushSentHistory(typed);
+    // Recall history gets the composed content incl. the quote prepend
+    // (messages.js:2363-2364) — see [_send].
+    _pushSentHistory(content);
     _controller.clear();
     _popout = false;
     _syncPopoutPortal();
@@ -1416,19 +1484,15 @@ class _ComposerState extends ConsumerState<Composer> {
   /// column (author nym / label over the snippet) + close ✕. The chip slot is
   /// ALWAYS present (an [AnimatedSize] collapsing to 0) so toggling a chip
   /// never re-parents the TextField below it — the keyboard stays up.
+  ///
+  /// While the tall draft floats (`_popout`), the chip moves INTO the popout
+  /// overlay above the grown field: the PWA lifts it by the overhang
+  /// (`.input-container.composer-popout .quote-preview/.edit-preview
+  /// { bottom: calc(100% + var(--popout-overhang)); z-index: 20 }`,
+  /// styles-chat.css:1749-1752) so it stays visible — and its cancel ✕
+  /// tappable — over the field that would otherwise paint on top of it.
   Widget _inputWithChips(BuildContext context, bool inputEnabled) {
-    final chip = _pendingEdit != null
-        ? _EditPreviewChip(
-            text: _quotePreviewText(_pendingEdit!.content),
-            onClose: _cancelEdit,
-          )
-        : (_pendingQuote != null
-            ? _QuotePreviewChip(
-                author: _pendingQuote!.author,
-                text: _quotePreviewText(_pendingQuote!.text),
-                onClose: _clearQuote,
-              )
-            : null);
+    final block = _popout ? null : _chipBlock();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -1437,26 +1501,46 @@ class _ComposerState extends ConsumerState<Composer> {
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           alignment: Alignment.bottomLeft,
-          child: chip == null
-              ? const SizedBox(height: 0, width: double.infinity)
-              : Padding(
-                  // `margin-bottom: 8px` between the chip and the field.
-                  padding: const EdgeInsets.only(bottom: 8),
-                  // Re-mounts (and so replays the slide-in) when the chip KIND
-                  // changes — the PWA recreates the element on each
-                  // setQuoteReply/startEditMessage.
-                  child: _ChipSlideIn(
-                    key: ValueKey(_pendingEdit != null ? 'edit' : 'quote'),
-                    // Keyed so the autocomplete dropdown can clear the chip
-                    // height (`--ac-offset`, 04-F2). Measures the chip alone
-                    // (the +8 gap is added in the offset, matching the PWA's
-                    // `previewH + 8`).
-                    child: KeyedSubtree(key: _chipKey, child: chip),
-                  ),
-                ),
+          child: block ?? const SizedBox(height: 0, width: double.infinity),
         ),
         _input(context, inputEnabled),
       ],
+    );
+  }
+
+  /// The quote/edit preview chip with its 8px bottom gap and slide-in, or null
+  /// when neither is pending. Rendered in-flow above the field normally, or
+  /// inside the popout overlay while the field floats (see [_inputWithChips]).
+  Widget? _chipBlock() {
+    final chip = _pendingEdit != null
+        ? _EditPreviewChip(
+            text: _quotePreviewText(_pendingEdit!.content),
+            onClose: _cancelEdit,
+          )
+        : (_pendingQuote != null
+            ? _QuotePreviewChip(
+                author: _pendingQuote!.author,
+                // Snippet from the FULL original content, not the stripped
+                // send text (messages.js:1845-1846).
+                text: _quotePreviewText(_pendingQuote!.fullText),
+                onClose: _clearQuote,
+              )
+            : null);
+    if (chip == null) return null;
+    return Padding(
+      // `margin-bottom: 8px` between the chip and the field.
+      padding: const EdgeInsets.only(bottom: 8),
+      // Re-mounts (and so replays the slide-in) when the chip KIND
+      // changes — the PWA recreates the element on each
+      // setQuoteReply/startEditMessage.
+      child: _ChipSlideIn(
+        key: ValueKey(_pendingEdit != null ? 'edit' : 'quote'),
+        // Keyed so the autocomplete dropdown can clear the chip
+        // height (`--ac-offset`, 04-F2). Measures the chip alone
+        // (the +8 gap is added in the offset, matching the PWA's
+        // `previewH + 8`).
+        child: KeyedSubtree(key: _chipKey, child: chip),
+      ),
     );
   }
 
@@ -1599,9 +1683,14 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// The floating `.composer-popout .message-input` box: anchored to the in-flow
   /// slot's bottom-left, it grows upward and overlays the messages. Same width as
-  /// the input (`_anchorWidth`), capped at `min(40vh,360)`.
+  /// the input (`_anchorWidth`), capped at `min(40vh,360)`. A pending quote/edit
+  /// chip rides ABOVE the grown field here — the PWA repositions it by the
+  /// popout overhang at z-index 20 over the field's z-index 12
+  /// (styles-chat.css:1749-1752) so the chip (and its cancel ✕) is never
+  /// occluded by a tall draft.
   Widget _popoutOverlay(BuildContext context, Widget field) {
     if (!_popout) return const SizedBox.shrink();
+    final chipBlock = _chipBlock();
     return CompositedTransformFollower(
       link: _acAnchor,
       targetAnchor: Alignment.bottomLeft,
@@ -1609,10 +1698,22 @@ class _ComposerState extends ConsumerState<Composer> {
       showWhenUnlinked: false,
       child: Align(
         alignment: Alignment.bottomLeft,
-        child: SizedBox(
-          key: _popoutFieldKey,
-          width: _anchorWidth(context),
-          child: field,
+        child: Material(
+          type: MaterialType.transparency,
+          child: SizedBox(
+            width: _anchorWidth(context),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (chipBlock != null) chipBlock,
+                // [_popoutFieldKey] wraps ONLY the field: `--ac-offset`'s
+                // overhang term measures the field's growth past the base row
+                // (the chip carries its own `+ chipH + 8` term).
+                SizedBox(key: _popoutFieldKey, child: field),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1843,27 +1944,21 @@ class _ComposerState extends ConsumerState<Composer> {
     }
 
     if (!_popout) {
-      // `.message-input:focus`: a 3px primary@0.06 focus ring (spread, no blur)
-      // hugging the field's rounded-bottom shape. ALWAYS render the DecoratedBox
-      // (toggling only the shadow) — conditionally returning `stack` vs
-      // `DecoratedBox(child: stack)` re-parents the TextField subtree the instant
-      // it focuses, which REMOUNTS the EditableText and drops the just-requested
-      // keyboard. That was the "first tap only highlights, tap again to actually
-      // open the keyboard (then the paste toolbar shows)" bug. A stable tree keeps
-      // the first tap focusing AND raising the keyboard.
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: focused
-              ? [
-                  BoxShadow(
-                    color: c.primaryA(0.06),
-                    spreadRadius: 3,
-                    blurRadius: 0,
-                  ),
-                ]
-              : const [],
-        ),
+      // `.message-input:focus`: a 3px primary@0.06 focus ring hugging the
+      // field's rounded-bottom shape — painted OUTSIDE the field only (CSS
+      // box-shadow semantics; a spread BoxShadow also fills behind the
+      // translucent field and highlights the whole input, which the PWA never
+      // does). ALWAYS rendered (toggling only `show`) — conditionally
+      // returning `stack` vs a wrapped `stack` re-parents the TextField
+      // subtree the instant it focuses, which REMOUNTS the EditableText and
+      // drops the just-requested keyboard. That was the "first tap only
+      // highlights, tap again to actually open the keyboard (then the paste
+      // toolbar shows)" bug. A stable tree keeps the first tap focusing AND
+      // raising the keyboard.
+      return CssFocusRing(
+        show: focused,
+        color: c.primaryA(0.06),
+        radius: radius,
         child: stack,
       );
     }
@@ -1901,7 +1996,7 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  void _toggleTranslateDropdown() {
+  Future<void> _toggleTranslateDropdown() async {
     if (_translatePortal.isShowing) {
       _translatePortal.hide();
       return;
@@ -1909,7 +2004,16 @@ class _ComposerState extends ConsumerState<Composer> {
     if (_controller.text.trim().isEmpty || _translating) return;
     _emojiPortal.hide();
     _gifPortal.hide();
+    // The PWA lazily loads `nym_translate_favorites` from localStorage on
+    // first dropdown render (`_getTranslateFavorites`, translate.js:93-99) —
+    // resolve prefs and RE-read the favorites on every open so a fresh
+    // session (no emoji/GIF picker opened yet) shows the saved stars, and
+    // favorites toggled elsewhere (bot chat / relay settings sync) aren't
+    // stale here.
+    final prefs = await _ensurePrefs();
+    if (!mounted) return;
     setState(() {
+      _translateFavorites = _loadTranslateFavorites(prefs);
       _translateQuery = '';
       // Snapshot the favorites-pinned order at open (re-pins only on reopen).
       _translateLangOrder =
@@ -2177,11 +2281,11 @@ class _ComposerState extends ConsumerState<Composer> {
         // relay-sourced packs live — no override needed.
         overlayChildBuilder: (context) => _popover(
           link: _emojiAnchor,
-          onDismiss: _emojiPortal.hide,
+          onDismiss: _hideEmojiPicker,
           child: EmojiPicker(
             recents: _recents,
             onSelect: _onEmojiSelected,
-            onClose: _emojiPortal.hide,
+            onClose: _hideEmojiPicker,
           ),
         ),
         child: _IconBtn(
@@ -2203,14 +2307,14 @@ class _ComposerState extends ConsumerState<Composer> {
         controller: _gifPortal,
         overlayChildBuilder: (context) => _popover(
           link: _gifAnchor,
-          onDismiss: _gifPortal.hide,
+          onDismiss: _hideGifPicker,
           // `.gif-picker` ≤768: `width: 90%; max-width: 350px`
           // (styles-themes-responsive.css:89-97, ui-context.js:2017-2031).
           phoneWidthFactor: 0.9,
           child: GifPicker(
             favoritesStore: FavoriteGifsStore(_prefs!),
             onSelect: _onGifSelected,
-            onClose: _gifPortal.hide,
+            onClose: _hideGifPicker,
           ),
         ),
         child: _IconBtn(
@@ -2230,7 +2334,9 @@ class _ComposerState extends ConsumerState<Composer> {
   /// [phoneWidthFactor] pins the picker to that fraction of the viewport width
   /// on phones — the GIF picker's ≤768 rule is `width: 90%; max-width: 350px`
   /// (styles-themes-responsive.css:89-97) where the emoji picker only caps
-  /// (`max-width: 90%`, :407-419).
+  /// (`max-width: 90%`, :407-419) on top of its base `width: 350px`
+  /// (styles-components.css:1214). The no-factor fallback cap below matches
+  /// that 350 (the picker itself already self-caps at `min(350, 90vw)`).
   Widget _popover({
     required LayerLink link,
     required VoidCallback onDismiss,
@@ -2271,9 +2377,9 @@ class _ComposerState extends ConsumerState<Composer> {
                     )
                   : ConstrainedBox(
                       constraints: BoxConstraints(
-                          maxWidth: media.size.width - 16 < 360
+                          maxWidth: media.size.width - 16 < 350
                               ? media.size.width - 16
-                              : 360),
+                              : 350),
                       child: picker,
                     ),
             ),
@@ -2628,7 +2734,12 @@ class _PreviewChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: c.bgTertiary,
+        // solid-ui repaints the chip opaque: `body.solid-ui .quote-preview,
+        // .edit-preview { background: #1c1c2c }` — which IS the solid dark
+        // bg-tertiary — but light `#ececea` (styles-themes-responsive.css:
+        // 1836-1843), NOT the solid light bg-tertiary `#f0f0ed`, so the token
+        // alone can't carry the light plate.
+        color: c.solidUi && c.isLight ? const Color(0xFFECECEA) : c.bgTertiary,
         // `border: 1px solid var(--glass-border)`; `body.light-mode
         // .quote-preview/.edit-preview` re-states rgba(0,0,0,0.08) — the light
         // glassBorder — so both themes resolve to glassBorder.
@@ -2728,9 +2839,9 @@ class _QuotePreviewChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final hashIdx = author.indexOf('#');
-    final base = hashIdx >= 0 ? author.substring(0, hashIdx) : author;
-    final suffix = hashIdx >= 0 ? author.substring(hashIdx) : '';
+    final split = splitNymSuffix(author);
+    final base = split.base;
+    final suffix = split.suffix;
     return _PreviewChip(
       barColor: c.primary,
       onClose: onClose,

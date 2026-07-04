@@ -394,102 +394,93 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           constraints: const BoxConstraints(maxWidth: 500),
           child: Material(
             color: Colors.transparent,
-            child: Container(
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                borderRadius: NymRadius.rxl,
-                border: Border.all(color: c.glassBorder),
-                // `.modal-content` box-shadow: --shadow-lg (0 8 32 black@.5)
-                // + --shadow-glow (faint primary) + 1px white@.05 ring.
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.5),
-                    blurRadius: 32,
-                    offset: const Offset(0, 8),
-                  ),
-                  BoxShadow(
-                    color: c.primaryA(0.12),
-                    blurRadius: 24,
-                  ),
-                  BoxShadow(
-                    color: Colors.white.withValues(alpha: 0.05),
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
+            // `.modal-content` card chrome, shared with every other standard
+            // modal: shadow-lg + shadow-glow (primary@.1/20px) + white@.05
+            // ring in dark; a single `0 8px 40px black@0.12` in light
+            // (styles-themes-responsive.css:1050-1052).
+            child: ModalChrome.box(
+              c,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxHeight: MediaQuery.of(context).size.height * 0.9,
                 ),
-                child: Stack(
-                  children: [
-                    // Pinned modal chrome: the SETTINGS title (+ floating ✕
-                    // chip) stays fixed at the top and the Cancel/Save
-                    // `.modal-actions` row stays fixed at the bottom; only the
-                    // sections between them scroll, like the PWA modal.
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _header(c),
-                        // `.modal-header { margin-bottom: 24px }` — the gap
-                        // between the header rule and the search row shows the
-                        // modal background.
-                        const SizedBox(height: 24),
-                        // `.settings-search` is `position: sticky; top: 0` over
-                        // the scrolling modal body (styles-components.css:136),
-                        // so it renders as a pinned row above the scroll view.
-                        _searchBar(c),
-                        Flexible(
-                      child: SingleChildScrollView(
-                        // Sections are full-bleed; the no-results text carries
-                        // the `.modal-content { padding: 32px }` horizontal
-                        // inset itself. The 20px body→actions gap
-                        // (`.modal-body { margin-bottom }`) lives on the pinned
-                        // actions row so it stays constant while scrolling.
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (visibleSections.isEmpty)
-                              // `.settings-no-results { padding: 18px 0 6px;
-                              //   color: text-dim; font-size: 13px;
-                              //   text-align: center }`.
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(32, 18, 32, 6),
-                                child: Text(
-                                  'No settings match your search.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                      color: c.textDim, fontSize: 13),
-                                ),
-                              ),
-                            for (final s in visibleSections)
-                              SettingsSection(
-                                title: s.spec.title,
-                                // A live query force-expands matching sections
-                                // (filterSettings removes `collapsed` without
-                                // persisting); empty query renders the saved
-                                // layout.
-                                open: q.isNotEmpty
-                                    ? true
-                                    : (_open[s.spec.key] ?? true),
-                                onToggle: () => _toggleSection(s.spec.key),
-                                children: [
-                                  for (final g in s.groups) g.child,
-                                ],
-                              ),
-                          ],
-                        ),
+                // `.modal-content { max-height: 90vh; overflow-y: auto }`
+                // (styles-components.css:17-27): the WHOLE card scrolls — the
+                // SETTINGS header (and its absolute ✕ chip) scrolls off-screen
+                // and the Cancel/Save `.modal-actions` row sits at the END of
+                // the content — only `.settings-search` sticks
+                // (`position: sticky; top: 0`, styles-components.css:136-140).
+                child: CustomScrollView(
+                  shrinkWrap: true,
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: Stack(
+                        children: [
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _header(c),
+                              // `.modal-header { margin-bottom: 24px }` — the
+                              // gap between the header rule and the search row
+                              // shows the modal background.
+                              const SizedBox(height: 24),
+                            ],
+                          ),
+                          // `.modal-close`: 32×32 glass ✕ chip, absolute
+                          // top-right (14,14) INSIDE the scroll content — like
+                          // the PWA's `position: absolute` chip it scrolls away
+                          // with the header.
+                          ModalChrome.closeChip(
+                              c, () => Navigator.of(context).maybePop()),
+                        ],
                       ),
                     ),
-                        _actions(c),
-                      ],
+                    PinnedHeaderSliver(child: _searchBar(c)),
+                    SliverToBoxAdapter(
+                      // Sections are full-bleed; the no-results text carries
+                      // the `.modal-content { padding: 32px }` horizontal
+                      // inset itself.
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (visibleSections.isEmpty)
+                            // `.settings-no-results { padding: 18px 0 6px;
+                            //   color: text-dim; font-size: 13px;
+                            //   text-align: center }`.
+                            Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(32, 18, 32, 6),
+                              child: Text(
+                                'No settings match your search.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: c.textDim, fontSize: 13),
+                              ),
+                            ),
+                          for (final s in visibleSections)
+                            SettingsSection(
+                              title: s.spec.title,
+                              // A live query force-expands matching sections
+                              // (filterSettings removes `collapsed` without
+                              // persisting); empty query renders the saved
+                              // layout.
+                              open: q.isNotEmpty
+                                  ? true
+                                  : (_open[s.spec.key] ?? true),
+                              onToggle: () => _toggleSection(s.spec.key),
+                              children: [
+                                for (final g in s.groups) g.child,
+                              ],
+                            ),
+                          // `.modal-actions` is the last block of the scrolled
+                          // content (you scroll to the bottom to reach Save);
+                          // the 20px body→actions gap (`.modal-body
+                          // { margin-bottom }`) lives on its padding.
+                          _actions(c),
+                        ],
+                      ),
                     ),
-                    // `.modal-close`: 32×32 glass ✕ chip, absolute top-right
-                    // (14,14) over the card — not inline in the title row.
-                    ModalChrome.closeChip(
-                        c, () => Navigator.of(context).maybePop()),
                   ],
                 ),
               ),
@@ -2687,76 +2678,106 @@ class _WallpaperPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return GridView.count(
-      crossAxisCount: 3,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 8,
-      mainAxisSpacing: 8,
-      childAspectRatio: 1.4,
+    // `.wallpaper-grid { grid-template-columns: repeat(3, 1fr); gap: 10px }`
+    // (styles-features.css:3133-3138). Row heights follow each tile's own
+    // 16:10 preview + label, so plain Rows beat GridView's fixed-aspect cells.
+    return Column(
       children: [
-        for (final o in _options)
-          GestureDetector(
-            onTap: o.id == 'custom' ? onUploadCustom : () => onChanged(o.id),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Expanded(
-                  child: Container(
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      // `.wallpaper-preview` background: rgba(0,0,0,0.3) dark /
-                      // #ffffff light (styles-features.css:3170 +
-                      // styles-themes-responsive.css:1354-1357), so the light
-                      // thumbnails read light-primary-on-white like the PWA.
-                      color: c.isLight
-                          ? Colors.white
-                          : Colors.black.withValues(alpha: 0.3),
-                      borderRadius: NymRadius.rxs,
-                      border: Border.all(
-                        color: o.id == value ? c.primary : c.glassBorder,
-                        width: o.id == value ? 2 : 1,
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    // `.wallpaper-option` icons (index.html:1420-1471): "None"
-                    // is the two-line ✕ SVG, "Upload" is the feather upload
-                    // glyph. Each pattern tile renders the SAME tiled CSS
-                    // pattern as the live wallpaper at thumbnail scale
-                    // (`.wallpaper-preview.wallpaper-<name>`,
-                    // styles-features.css:3184-3243) via the shared painter's
-                    // preview variant.
-                    child: o.id == 'none'
-                        ? NymSvgIcon(NymIcons.close,
-                            size: 18, color: c.textDim)
-                        : o.id == 'custom'
-                            ? _customTile(c)
-                            : ClipRRect(
-                                borderRadius: NymRadius.rxs,
-                                child: CustomPaint(
-                                  size: Size.infinite,
-                                  painter: WallpaperPatternPainter(
-                                    type: o.id,
-                                    primary: c.primary,
-                                    isLight: c.isLight,
-                                    preview: true,
-                                  ),
-                                ),
-                              ),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  o.label,
-                  style: TextStyle(
-                    color: o.id == value ? c.primary : c.textDim,
-                    fontSize: 10,
-                  ),
-                ),
+        for (var row = 0; row < _options.length; row += 3) ...[
+          if (row > 0) const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = row; i < row + 3 && i < _options.length; i++) ...[
+                if (i > row) const SizedBox(width: 10),
+                Expanded(child: _option(c, _options[i])),
               ],
-            ),
+            ],
           ),
+        ],
       ],
+    );
+  }
+
+  /// One `.wallpaper-option` tile (styles-features.css:3140-3182): padding 6,
+  /// an ALWAYS-2px border (transparent at rest, so selecting never shifts
+  /// content), radius 12; `.selected` rings the WHOLE option — preview + label
+  /// — in `--primary` and tints its background primary@0.1.
+  Widget _option(NymColors c, ({String id, String label}) o) {
+    final selected = o.id == value;
+    return GestureDetector(
+      onTap: o.id == 'custom' ? onUploadCustom : () => onChanged(o.id),
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: selected ? c.primaryA(0.1) : null,
+          borderRadius: NymRadius.rsm,
+          border: Border.all(
+            color: selected ? c.primary : Colors.transparent,
+            width: 2,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // `.wallpaper-preview`: 16:10, radius 8, and a CONSTANT 1px border
+            // (glass dark / black@0.12 light) regardless of selection.
+            AspectRatio(
+              aspectRatio: 16 / 10,
+              child: Container(
+                decoration: BoxDecoration(
+                  // `.wallpaper-preview` background: rgba(0,0,0,0.3) dark /
+                  // #ffffff light (styles-features.css:3170 +
+                  // styles-themes-responsive.css:1354-1357), so the light
+                  // thumbnails read light-primary-on-white like the PWA.
+                  color: c.isLight
+                      ? Colors.white
+                      : Colors.black.withValues(alpha: 0.3),
+                  borderRadius: NymRadius.rxs,
+                  border: Border.all(
+                    color: c.isLight ? const Color(0x1F000000) : c.glassBorder,
+                  ),
+                ),
+                alignment: Alignment.center,
+                // `.wallpaper-option` icons (index.html:1420-1471): "None" is
+                // the two-line ✕ SVG, "Upload" is the feather upload glyph —
+                // both 20px. Each pattern tile renders the SAME tiled CSS
+                // pattern as the live wallpaper at thumbnail scale
+                // (`.wallpaper-preview.wallpaper-<name>`,
+                // styles-features.css:3184-3243) via the shared painter's
+                // preview variant.
+                child: o.id == 'none'
+                    ? NymSvgIcon(NymIcons.close, size: 20, color: c.textDim)
+                    : o.id == 'custom'
+                        ? _customTile(c)
+                        : ClipRRect(
+                            borderRadius: NymRadius.rxs,
+                            child: CustomPaint(
+                              size: Size.infinite,
+                              painter: WallpaperPatternPainter(
+                                type: o.id,
+                                primary: c.primary,
+                                isLight: c.isLight,
+                                preview: true,
+                              ),
+                            ),
+                          ),
+              ),
+            ),
+            // `.wallpaper-option { gap: 6px }` + `.wallpaper-label`: 11px
+            // text-dim, primary when selected.
+            const SizedBox(height: 6),
+            Text(
+              o.label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: selected ? c.primary : c.textDim,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2787,14 +2808,14 @@ class _WallpaperPicker extends StatelessWidget {
                     proxiedAvatarUrl(path) ?? path,
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => NymSvgIcon(NymIcons.upload,
-                        size: 18, color: c.textDim),
+                        size: 20, color: c.textDim),
                   )
                 : Image.file(File(path), fit: BoxFit.cover),
           ),
         );
       }
     }
-    return NymSvgIcon(NymIcons.upload, size: 18, color: c.textDim);
+    return NymSvgIcon(NymIcons.upload, size: 20, color: c.textDim);
   }
 }
 

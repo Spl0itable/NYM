@@ -1,15 +1,18 @@
-// Emoji picker — 1:1 port of the PWA's composer `#emojiPicker .emoji-picker`
-// surface (reactions.js `setupEmojiPicker`, lines 1195-1227; markup
-// index.html:791; styles styles-components.css:2090-2171).
+// Emoji picker — 1:1 port of the PWA's composer `.enhanced-emoji-modal`, the
+// surface the composer Emoji button actually opens (reactions.js
+// `toggleEmojiPicker` → `showEnhancedEmojiPickerForInput` →
+// `_ensureEnhancedEmojiModal`, lines 690-895; styles styles-components.css:
+// 1204-1254). The legacy `#emojiPicker` markup (index.html:791, reactions.js
+// `setupEmojiPicker`:1195) is dead — nothing ever toggles it `.active`.
 //
 // Layout (top → bottom), matching `_emojiSectionsHtml` (emoji.js lines 534-557):
-//   - sticky search box (`.emoji-picker-search`)
+//   - `.emoji-modal-header`: search input + close ✕
 //   - "Recently Used" section (when recents exist)
 //   - custom NIP-30 pack sections (rendered as network images)
 //   - default categories in `kEmojiCategoryOrder`, titles capitalized
-// Grid: 6 columns (styles-components.css:2152); 5 columns at width ≤480px
-// (styles-themes-responsive.css:436-439). Search filters by emoji char or any
-// of its shortcode names (emoji.js `_applyEmojiSearch`, lines 789-804).
+// Grid `.emoji-grid`: 6 columns (styles-components.css:1310); 5 columns at
+// width ≤480px (styles-themes-responsive.css:437-439). Search filters by emoji
+// char or any of its shortcode names (emoji.js `_applyEmojiSearch`).
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -305,8 +308,13 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       child: Padding(
         padding: EdgeInsets.only(bottom: keyboardInset),
         child: ConstrainedBox(
-          // .emoji-picker: max 360×400.
-          constraints: BoxConstraints(maxWidth: 360, maxHeight: maxPanelHeight),
+          // `.enhanced-emoji-modal`: width 350, max-height 400
+          // (styles-components.css:1214-1215); the phone placement adds
+          // `max-width: 90%` inline (reactions.js:883, innerWidth ≤768).
+          constraints: BoxConstraints(
+              maxWidth:
+                  width <= 768 ? (width * 0.9).clamp(0.0, 350.0) : 350.0,
+              maxHeight: maxPanelHeight),
           child: LayoutBuilder(builder: (context, constraints) {
             final height = constraints.maxHeight.isFinite
                 ? constraints.maxHeight
@@ -314,23 +322,22 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
             return Container(
               height: height,
               decoration: BoxDecoration(
-                // `.emoji-picker` bg: with Transparency ON (no `solid-ui` body
-                // class) the PWA hardcodes rgba(20,20,35,0.9) dark
-                // (styles-components.css:2094) / rgba(255,255,255,0.92) light
-                // (styles-themes-responsive.css:1167-1171); with Transparency OFF
-                // (`solid-ui`, the default) it's the opaque `var(--glass-bg)`
-                // (#14141e dark / #ffffff light, styles-themes-responsive.css:
-                // 1583-1600) — which is exactly `c.glassBg`.
-                color: transparency
-                    ? (c.isLight
-                        ? const Color(0xEBFFFFFF) // rgba(255,255,255,0.92)
-                        : const Color(0xE6141423)) // rgba(20,20,35,0.9)
-                    : c.glassBg,
+                // `.enhanced-emoji-modal` bg: `var(--bg-secondary)`
+                // (styles-components.css:1208) — the themed surface color; the
+                // light-mode rule (styles-themes-responsive.css:1162-1165)
+                // overrides only shadow/border, NOT the background. With
+                // Transparency OFF (`solid-ui`) it's the opaque
+                // `var(--glass-bg)` (#14141e dark / #ffffff light,
+                // styles-themes-responsive.css:1597/1624) — `c.glassBg`.
+                color: transparency ? c.bgSecondary : c.glassBg,
+                // Border `var(--glass-border)`; the light-mode border-color
+                // override rgba(0,0,0,0.08) equals light `--glass-border`.
                 border: Border.all(color: c.glassBorder),
                 borderRadius: NymRadius.rmd,
                 // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5); light mode redefines
                 // it to rgba(0,0,0,0.12) (styles-themes-responsive.css:537, and
-                // explicitly on `body.light-mode .emoji-picker` at :1167-1171).
+                // explicitly on `body.light-mode .enhanced-emoji-modal` at
+                // :1162-1165).
                 boxShadow: [
                   BoxShadow(
                     color: c.isLight
@@ -408,8 +415,13 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     }
   }
 
-  /// `.emoji-picker-search-input` (styles-components.css:2121-2135).
+  /// `.emoji-search-input` (styles-components.css:1245-1254).
   Widget _search(NymColors c) {
+    // Light mode restyles this input via `body.light-mode input`
+    // (styles-themes-responsive.css:561-569): fill rgba(0,0,0,0.04) and
+    // border rgba(0,0,0,0.1), both !important, in every state.
+    final borderColor =
+        c.isLight ? const Color(0x1A000000) : c.glassBorder;
     // Some callers mount the picker inside an OverlayPortal / LookupBoundary.
     // TextField requires a Material ancestor *within the closest*
     // LookupBoundary, so wrap the input itself defensively.
@@ -418,35 +430,38 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       child: TextField(
         controller: _searchController,
         onChanged: (v) => setState(() => _query = _sanitizeUserText(v).trim()),
-        // `color: var(--text-bright)`; light mode forces this input to #000
-        // via `body.light-mode input { color: #000000 !important }`
-        // (styles-themes-responsive.css:585-592). Unlike `.emoji-search-input`
-        // / `.gif-search-input`, `.emoji-picker-search-input` is NOT in the
-        // more specific `color: var(--text) !important` list (:1063-1068), so
-        // the generic #000 rule wins here.
-        style: TextStyle(
-            color: c.isLight ? const Color(0xFF000000) : c.textBright,
-            fontSize: 12),
-        cursorColor: c.isLight ? Colors.black : Colors.white,
+        // `color: var(--text-bright)`; light mode wins with the MORE specific
+        // `body.light-mode .emoji-search-input { color: var(--text)
+        // !important }` (styles-themes-responsive.css:1063-1068), which beats
+        // the generic `body.light-mode input { color: #000 }` rule (:583-593)
+        // on specificity — so light mode uses the themed `--text`.
+        style: TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
+        cursorColor: c.isLight ? c.text : c.textBright,
         decoration: InputDecoration(
           isDense: true,
-          hintText: 'Search emoji...',
+          // reactions.js:709.
+          hintText: 'Search emoji by name...',
           hintStyle: TextStyle(color: c.textDim, fontSize: 12),
           filled: true,
-          fillColor: Colors.white.withValues(alpha: 0.05),
+          fillColor: c.isLight
+              ? const Color(0x0A000000) // rgba(0,0,0,0.04)
+              : Colors.white.withValues(alpha: 0.05),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           border: OutlineInputBorder(
             borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.glassBorder),
+            borderSide: BorderSide(color: borderColor),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.glassBorder),
+            borderSide: BorderSide(color: borderColor),
           ),
+          // No `.emoji-search-input:focus` rule exists in the PWA (the primary
+          // focus ring belonged to the dead `.emoji-picker-search-input:focus`,
+          // styles-components.css:2133), so focus keeps the same border.
           focusedBorder: OutlineInputBorder(
             borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.primary),
+            borderSide: BorderSide(color: borderColor),
           ),
         ),
       ),
@@ -485,8 +500,8 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     return out.toString();
   }
 
-  /// `.emoji-picker-section` + `.emoji-picker-section-title` (10px uppercase
-  /// dim, letter-spacing 1) wrapping a grid (styles-components.css:2137-2154).
+  /// `.emoji-section` + `.emoji-section-title` (10px uppercase dim,
+  /// letter-spacing 1) wrapping a grid (styles-components.css:1255-1312).
   /// [onToggleFavorite]/[isFavorite] add the trailing favorite-star button on
   /// default-category and custom-pack titles (emoji.js:446-451, 510-512).
   _Section _section(NymColors c,
@@ -502,7 +517,8 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     );
   }
 
-  /// `.emoji-btn`: 23px glyph, transparent, hover highlight (here a tap target).
+  /// `.emoji-option`: 23px glyph, transparent, hover highlight (here a tap
+  /// target).
   Widget _unicodeCell(String emoji) {
     return _EmojiCell(
       onTap: () => widget.onSelect(emoji),
@@ -565,7 +581,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
                 child: Text(
                   section.title.toUpperCase(),
                   overflow: TextOverflow.ellipsis,
-                  // `.emoji-picker-section-title`: 10px upper, ls1, dim.
+                  // `.emoji-section-title`: 10px upper, ls1, dim.
                   style: TextStyle(
                       fontSize: 10, color: c.textDim, letterSpacing: 1),
                 ),
@@ -647,9 +663,9 @@ class _FavStar extends StatelessWidget {
   }
 }
 
-/// `.emoji-btn` tap target: transparent, radius xs. On hover the cell fills
+/// `.emoji-option` tap target: transparent, radius xs. On hover the cell fills
 /// `rgba(255,255,255,0.08)` and the glyph scales to 1.15
-/// (styles-components.css:2166-2171).
+/// (styles-components.css:1325-1341).
 class _EmojiCell extends StatefulWidget {
   const _EmojiCell({required this.onTap, required this.child});
   final VoidCallback onTap;

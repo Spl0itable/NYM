@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/nym_utils.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/nym_avatar.dart';
@@ -80,20 +81,47 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
       return (nym != null && nym.isNotEmpty) ? nym : 'Someone';
     }
 
+    // `fmtTyper` (nostr-core.js:1432-1437): the trailing `#xxxx` renders in a
+    // dimmed `.nym-suffix` span (opacity .7, 0.9em, weight 100); a nym with no
+    // trailing 4-hex suffix (or a '#' inside the name) renders whole.
+    List<InlineSpan> typerSpans(String pk) {
+      final split = splitNymSuffix(nymOf(pk));
+      return [
+        TextSpan(text: split.base),
+        if (split.suffix.isNotEmpty)
+          TextSpan(
+            text: split.suffix,
+            style: TextStyle(
+              color: c.textDim.withValues(alpha: 0.7),
+              fontSize: 12 * 0.9,
+              fontWeight: FontWeight.w100,
+            ),
+          ),
+      ];
+    }
+
     Widget content = const SizedBox.shrink();
     if (active) {
       final visible = pubkeys.take(3).toList();
-      final String text;
+      final List<InlineSpan> spans;
       if (pubkeys.length == 1) {
         // A bot "is thinking" rather than "is typing" (PWA `_renderTypingInto`
         // `isVerifiedBot` → verb 'thinking').
         final isBot =
             ref.read(nostrControllerProvider).isVerifiedBot(pubkeys[0]);
-        text = '${nymOf(pubkeys[0])} is ${isBot ? 'thinking' : 'typing'}';
+        spans = [
+          ...typerSpans(pubkeys[0]),
+          TextSpan(text: ' is ${isBot ? 'thinking' : 'typing'}'),
+        ];
       } else if (pubkeys.length == 2) {
-        text = '${nymOf(pubkeys[0])} and ${nymOf(pubkeys[1])} are typing';
+        spans = [
+          ...typerSpans(pubkeys[0]),
+          const TextSpan(text: ' and '),
+          ...typerSpans(pubkeys[1]),
+          const TextSpan(text: ' are typing'),
+        ];
       } else {
-        text = '${pubkeys.length} people are typing';
+        spans = [TextSpan(text: '${pubkeys.length} people are typing')];
       }
       content = Padding(
         // `.typing-indicator`: padding 4px 20px, gap 8.
@@ -127,8 +155,8 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
             const SizedBox(width: 8),
             // `.typing-indicator-text`: nowrap + ellipsis, 12px text-dim.
             Expanded(
-              child: Text(
-                text,
+              child: Text.rich(
+                TextSpan(children: spans),
                 style: TextStyle(color: c.textDim, fontSize: 12, height: 1),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:nym_bar/core/theme/nym_colors.dart';
+import 'package:nym_bar/features/emoji/emoji_prefetch.dart';
 import 'package:nym_bar/core/theme/nym_theme.dart';
 import 'package:nym_bar/features/emoji/custom_emoji.dart';
 import 'package:nym_bar/features/messages/format/message_content.dart';
@@ -56,6 +57,9 @@ Future<void> _pumpMessage(
 }
 
 void main() {
+  // Custom-emoji ingest arms a module-global deferred prefetch Timer; cancel
+  // it so widget tests don't fail on a pending timer at teardown.
+  tearDown(resetCustomEmojiPrefetchForTest);
   group('isSvgUrl', () {
     test('detects a bare .svg url', () {
       expect(isSvgUrl('https://cdn.example/foo.svg'), isTrue);
@@ -87,6 +91,10 @@ void main() {
       expect(find.byType(InlineNetworkImage), findsOneWidget);
       // The literal `:partyblob:` token must NOT appear as visible text.
       expect(find.textContaining(':partyblob:'), findsNothing);
+      // The custom-emoji ingest armed the module-global 3s prefetch timer;
+      // cancel it INSIDE the body — the binding's pending-timer invariant
+      // runs before group tearDown callbacks.
+      resetCustomEmojiPrefetchForTest();
     });
 
     test('SVG custom-emoji URL routes through the SVG path (proxied)', () {

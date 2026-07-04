@@ -491,22 +491,26 @@ class ShopStyleBubblePreview extends StatelessWidget {
       // The style still carries its tiled `--style-pattern` watermark (ocean,
       // sakura, …) and/or content bg (satoshi/eclipse/crt) in IRC — just no
       // rounded bubble. The watermark Stack is clipped to the content rect.
+      // CSS `background-position` origin is the PADDING BOX: the watermark
+      // must fill the padded strip (tiles start at the box's top-left corner,
+      // not inside the text inset) — this is also what makes the pattern
+      // actually visible on the short IRC demo line.
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(color: styleBg),
         clipBehavior: watermark != null ? Clip.antiAlias : Clip.none,
         child: Stack(
-          alignment: Alignment.center,
           children: [
             if (watermark != null)
               Positioned.fill(child: StyleWatermarkLayer(watermark: watermark)),
-            label,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: label,
+            ),
           ],
         ),
       );
     }
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
       decoration: BoxDecoration(
         // Bubble layout: `body.chat-bubbles .message-content` is the rounded
         // translucent bubble (`background: rgba(255,255,255,.14)`, radius 16 /
@@ -525,11 +529,22 @@ class ShopStyleBubblePreview extends StatelessWidget {
       ),
       clipBehavior: watermark != null ? Clip.antiAlias : Clip.none,
       child: Stack(
-        alignment: Alignment.center,
         children: [
+          // CSS `background-position` origin is the PADDING BOX — the tiled
+          // `--style-pattern` starts at the bubble's top-left corner, with the
+          // text inset by the padding on top of it (the previous structure
+          // tiled from INSIDE the padding, offsetting every pattern by the
+          // 12/8 inset vs the PWA card).
           if (watermark != null)
             Positioned.fill(child: StyleWatermarkLayer(watermark: watermark)),
-          label,
+          Padding(
+            // Default bubble padding 8px 12px 6px (styles-features.css:3607);
+            // a style's own `.message-content` padding OUTRANKS it — satoshi's
+            // `padding: 10px 15px` (0,3,0 beats 0,2,1) — like message_row.
+            padding:
+                deco.contentPadding ?? const EdgeInsets.fromLTRB(12, 8, 12, 6),
+            child: label,
+          ),
         ],
       ),
     );
@@ -549,6 +564,7 @@ class ShopAuraBubble extends StatelessWidget {
     required this.bubble,
     this.padding,
     this.defaultFill = true,
+    this.styleActive = false,
   });
 
   final List<CosmeticAura> auras;
@@ -566,6 +582,14 @@ class ShopAuraBubble extends StatelessWidget {
   /// active-items preview wrapping a styled content bubble).
   final bool defaultFill;
 
+  /// True when the previewed message carries an active `style-…` message
+  /// style. The PWA gates several aura layers on `:not([class*="style-"])`:
+  /// gold's bubble wash (styles-features.css:3700), frost's flat fill (:1165),
+  /// the cosmic bubble starfield (:1192) and the hologram iridescent
+  /// fill/sheen (:1203-1211) — a styled bubble keeps only rings/glows.
+  /// Item-card demos never carry a style, so the default is false.
+  final bool styleActive;
+
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
@@ -575,20 +599,25 @@ class ShopAuraBubble extends StatelessWidget {
     // Fill: the bubble paints the aura gradient only when the PWA bubble has
     // one (gold); otherwise the aura's flat wash (frost) or the layout default.
     // IRC paints the 135° row gradient / flat wash with no default fill.
+    // An active message style drops gold's bubble wash (`body.chat-bubbles
+    // .message:not([class*="style-"]).cosmetic-aura-gold .message-content`,
+    // styles-features.css:3700) and frost's flat fill (`:not([class*=
+    // "style-"]).cosmetic-frost`, :1165 — BOTH layouts); the IRC gold ROW
+    // gradient (:1099) carries no such gate.
     List<Color>? fillGradient;
     Color? fillColor;
     if (bubble) {
-      if (last.bubblePaintsGradient) {
+      if (last.bubblePaintsGradient && !styleActive) {
         fillGradient = last.bubbleFillGradient;
       } else {
-        fillColor = last.background ??
+        fillColor = (styleActive ? null : last.background) ??
             (defaultFill
                 ? (c.isLight ? const Color(0x1A000000) : const Color(0x24FFFFFF))
                 : null);
       }
     } else {
       fillGradient = last.gradient;
-      fillColor = last.background;
+      fillColor = styleActive ? null : last.background;
     }
 
     // Every aura's outer glow (`0 0 {blur}px {color}`), at the layout's
@@ -611,9 +640,14 @@ class ShopAuraBubble extends StatelessWidget {
             .firstWhere((b) => b != null, orElse: () => null);
 
     // Watermark (first aura carrying one) + overlay (first prism/holo/ring aura).
+    // The cosmic BUBBLE starfield only tiles when no message style is active
+    // (`body.chat-bubbles .message:not([class*="style-"]).cosmetic-aura-cosmic
+    // .message-content`, styles-features.css:1192-1195); frost's EDGE
+    // snowflakes (:1149-1161) and the ungated IRC row starfield (:1179) stay.
     CosmeticAura? watermarkAura;
     for (final a in auras) {
-      if (a.watermark != null) {
+      if (a.watermark != null &&
+          (a.edgeWatermark || !bubble || !styleActive)) {
         watermarkAura = a;
         break;
       }
@@ -685,6 +719,10 @@ class ShopAuraBubble extends StatelessWidget {
                           aura: overlayAura,
                           radius: radius,
                           bubble: bubble,
+                          // Drops the hologram iridescent fill + sheen when a
+                          // `style-…` class is active (styles-features.css:
+                          // 1203-1211) — the ring/glow stay.
+                          styleActive: styleActive,
                         ),
                       ),
                     ),

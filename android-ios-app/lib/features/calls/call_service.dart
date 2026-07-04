@@ -957,6 +957,12 @@ class CallService {
     return _seenMap().containsKey(callId);
   }
 
+  /// The recorded seen-status for [callId] (`seen | pending | missed |
+  /// declined | answered`), or null when unknown — the PWA's `_callStatus`
+  /// read. Used by the synced notification-history merge to skip re-adding a
+  /// missed-call entry for a call answered elsewhere (app.js:5860-5862).
+  String? seenCallStatus(String callId) => _seenMap()[callId]?.s;
+
   /// calls.js `_markCallSeen` — record [callId] with [status], keeping the
   /// higher-ranked status if one already exists, then persist (TTL-pruned).
   void _markCallSeen(String? callId, String status) {

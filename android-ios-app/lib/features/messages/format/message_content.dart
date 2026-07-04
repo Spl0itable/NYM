@@ -1576,17 +1576,66 @@ class _QuoteBox extends ConsumerWidget {
     // `blockquote`: border-left 3px primary@0.4, padding-left 12 ONLY (no
     // vertical/right padding), bg secondary@0.1, radius `0 8 8 0`, with
     // `transition: background var(--transition)` (styles-chat.css:1270-1279).
-    BoxDecoration deco({bool hovered = false}) => BoxDecoration(
-          // `.message-content > blockquote:hover { background:
-          // secondary@0.18 }` (styles-chat.css:1281-1283) — the desktop hover
-          // brightening that signals the quote is clickable.
-          color: c.secondaryA(hovered ? 0.18 : 0.1),
-          border: Border(left: BorderSide(color: c.primaryA(0.4), width: 3)),
-          borderRadius: const BorderRadius.only(
-            topRight: Radius.circular(8),
-            bottomRight: Radius.circular(8),
-          ),
-        );
+    //
+    // solid-ui overrides (styles-themes-responsive.css:1808-1833): opaque
+    // plates `#1c1c2c`/`#ececea` (ghost `#1f1f1f`+`#888` / `#d5d5d5`+`#555`)
+    // with a FULL-alpha primary border, and — inside a SELF bubble in
+    // chat-bubbles mode — a translucent black@0.25 / white@0.35 wash over the
+    // primary-tinted bubble plate instead. No hover brightening in solid: the
+    // override's specificity (0,2,2) beats `blockquote:hover` (0,2,1).
+    final ghost = ref.watch(
+        settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
+    final bubbles = ref.watch(
+        settingsProvider.select((s) => s.chatLayout == 'bubbles'));
+    bool hostIsSelf() {
+      final id = hostMessageId;
+      if (id == null || id.isEmpty) return false;
+      final app = ref.read(appStateProvider);
+      final msgs = app.messages[app.view.storageKey];
+      if (msgs == null) return false;
+      for (final m in msgs) {
+        if (m.id == id) return m.isOwn;
+      }
+      return false;
+    }
+
+    BoxDecoration deco({bool hovered = false}) {
+      final Color bg;
+      final Color borderC;
+      if (c.solidUi) {
+        if (bubbles && hostIsSelf()) {
+          // body.solid-ui.chat-bubbles .message.self … blockquote
+          // (themes:1828-1833) — outranks the ghost background rule too.
+          bg = c.isLight
+              ? Colors.white.withValues(alpha: 0.35)
+              : Colors.black.withValues(alpha: 0.25);
+          borderC = ghost
+              ? (c.isLight ? const Color(0xFF555555) : const Color(0xFF888888))
+              : c.primary;
+        } else if (ghost) {
+          bg = c.isLight ? const Color(0xFFD5D5D5) : const Color(0xFF1F1F1F);
+          borderC =
+              c.isLight ? const Color(0xFF555555) : const Color(0xFF888888);
+        } else {
+          bg = c.isLight ? const Color(0xFFECECEA) : const Color(0xFF1C1C2C);
+          borderC = c.primary;
+        }
+      } else {
+        // `.message-content > blockquote:hover { background: secondary@0.18 }`
+        // (styles-chat.css:1281-1283) — the desktop hover brightening that
+        // signals the quote is clickable (glass mode only).
+        bg = c.secondaryA(hovered ? 0.18 : 0.1);
+        borderC = c.primaryA(0.4);
+      }
+      return BoxDecoration(
+        color: bg,
+        border: Border(left: BorderSide(color: borderC, width: 3)),
+        borderRadius: const BorderRadius.only(
+          topRight: Radius.circular(8),
+          bottomRight: Radius.circular(8),
+        ),
+      );
+    }
     // `.message-content > blockquote { cursor: pointer }` (styles-chat.css:1276):
     // ONLY the top-level quote is tappable; tapping it jumps the list to the
     // quoted source message and flashes it (PWA `_scrollToQuotedMessage`, bound
@@ -1638,9 +1687,9 @@ class _QuoteBox extends ConsumerWidget {
   /// The `<span class="quote-author">author#suffix:</span>` header, splitting
   /// the base nym (secondary 600) from a dimmed `.nym-suffix` (`#xxxx`).
   Widget _quoteAuthor(NymColors c, String author) {
-    final hash = author.indexOf('#');
-    final base = hash > 0 ? author.substring(0, hash) : author;
-    final suffix = hash > 0 ? author.substring(hash) : null;
+    final split = splitNymSuffix(author);
+    final base = split.base;
+    final suffix = split.suffix.isEmpty ? null : split.suffix;
     return Text.rich(
       TextSpan(
         children: [

@@ -325,13 +325,12 @@ class _MessageSkeletonState extends State<MessageSkeleton>
     // (`rgb(from var(--primary) r g b / 0.25)` dark / `.20` light,
     // styles-features.css:3642 / themes:1400) and an others' bubble the
     // translucent gray (`rgba(255,255,255,0.14)` dark / `rgba(0,0,0,0.10)`
-    // light, :3602 / themes:1408). Only the `sk-line` bars inside use the
-    // `bg-tertiary` shimmer fill.
-    final fill = self
-        ? c.primaryA(c.isLight ? 0.20 : 0.25)
-        : (c.isLight
-            ? const Color(0x1A000000) // rgba(0,0,0,0.10)
-            : Colors.white.withValues(alpha: 0.14));
+    // light, :3602 / themes:1408) — and, being real bubble classes, the
+    // `body.solid-ui` opaque plates (`#2a2a3a`/color-mix self, themes:
+    // 1660-1700) too. All of that is what the theme's resolved
+    // `bubbleSelfBg`/`bubbleOtherBg` tokens carry. Only the `sk-line` bars
+    // inside use the `bg-tertiary` shimmer fill.
+    final fill = self ? c.bubbleSelfBg : c.bubbleOtherBg;
     // A group lead keeps the 4px tail corner; a `.bubble-grouped` continuation
     // is fully rounded-16 (`body.chat-bubbles .message.bubble-grouped
     // .message-content`, styles-features.css:3493-3500).
@@ -362,10 +361,12 @@ class _MessageSkeletonState extends State<MessageSkeleton>
         ),
     ];
     return ConstrainedBox(
-      // The real bubble constraints: `.message-content { min-width: 180px;
-      // max-width: 85% }` (styles-features.css:3602-3616).
+      // The live bubble's 180px floor is deliberately ZEROED for skeletons
+      // (`body.chat-bubbles .msg-skeleton .message-content { min-width: 0 }`,
+      // styles-chat.css:2040), so narrow placeholder bubbles shrink-wrap to
+      // their line and the shimmer groups keep their varied widths. Only the
+      // `max-width: 85%` cap applies (styles-features.css:3602-3616).
       constraints: BoxConstraints(
-        minWidth: 180,
         maxWidth: MediaQuery.sizeOf(context).width * 0.85,
       ),
       child: Container(

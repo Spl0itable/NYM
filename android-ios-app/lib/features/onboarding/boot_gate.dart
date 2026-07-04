@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../screens/home_shell.dart';
+import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../identity/setup_modal.dart';
@@ -85,23 +86,52 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
   @override
   void initState() {
     super.initState();
-    // maybeStartTutorial(false): skip if already seen.
+    // Onboarding waits for the SYNCED settings to hydrate before deciding —
+    // `tutorialSeen` is a device-spanning synced flag, so a user who already
+    // completed (or skipped) the tutorial on another device must not see it
+    // again when setting up here. The PWA defers the same way:
+    // `startOnboardingWhenHydrated` → `_onSettingsHydrated(maybeStartTutorial)`
+    // (app.js:5652-5661), with the controller's built-in 10s fallback so an
+    // offline boot still onboards.
+    unawaited(_startOnboardingWhenHydrated());
+  }
+
+  /// Delay timers (PWA's `setTimeout`s), cancelled on dispose so a torn-down
+  /// shell never leaves them pending.
+  Timer? _tutorialDelay;
+  Timer? _encryptPromptDelay;
+
+  @override
+  void dispose() {
+    _tutorialDelay?.cancel();
+    _encryptPromptDelay?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _startOnboardingWhenHydrated() async {
+    try {
+      await ref.read(nostrControllerProvider).settingsHydrated;
+    } catch (_) {}
+    if (!mounted) return;
+    // maybeStartTutorial(false): skip if already seen (now including a flag
+    // that just arrived from the remote settings restore).
     final kv = ref.read(keyValueStoreProvider);
     final seen = kv.getString(StorageKeys.tutorialSeen) == 'true' ||
         kv.getBool(StorageKeys.tutorialSeen, defaultValue: false);
     if (!seen) {
-      // setTimeout(300) in the PWA — defer one frame so the shell paints first.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      // The PWA's 300ms settle delay before starting (app.js:446).
+      _tutorialDelay = Timer(const Duration(milliseconds: 300), () {
         if (mounted) setState(() => _showTutorial = true);
       });
     }
-    // Encrypt-at-rest prompt (key-vault.js `maybePromptEncryptAtRest`): once the
-    // shell is reached, offer to set up identity encryption if a plaintext
-    // identity secret is sitting in storage and the user hasn't declined. Deferred
-    // post-frame so it doesn't fight the tutorial (the PWA delays it ~2.5s); only
-    // shown when the first-run tutorial isn't up.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_maybePromptEncryptAtRest());
+    // Encrypt-at-rest prompt (key-vault.js `maybePromptEncryptAtRest`): offer
+    // to set up identity encryption if a plaintext identity secret sits in
+    // storage and the user hasn't declined. The PWA fires it 2.5s AFTER
+    // settings hydration (settings.js:253-256) — the synced
+    // `encryptAtRestPreferred` flag must land first; never over the tutorial
+    // (re-offered on its dismiss).
+    _encryptPromptDelay = Timer(const Duration(milliseconds: 2500), () {
+      if (mounted) unawaited(_maybePromptEncryptAtRest());
     });
   }
 
@@ -142,6 +172,13 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
   Future<void> _dismissTutorial() async {
     final kv = ref.read(keyValueStoreProvider);
     await kv.setString(StorageKeys.tutorialSeen, 'true');
+    // Publish the seen flag into the SYNCED settings so other devices never
+    // re-prompt this user (the PWA's `endTutorial` → `nostrSettingsSave()`,
+    // app.js:424-428; the flag rides the `data` section, settings.js:24).
+    // Covers Skip, Done, and Escape — every dismissal path lands here.
+    try {
+      ref.read(nostrControllerProvider).syncSettings();
+    } catch (_) {}
     if (mounted) setState(() => _showTutorial = false);
     // The encrypt-at-rest prompt is suppressed while the tutorial is up; now
     // that it's closed, offer it (still gated by shouldPromptEncryptAtRest).

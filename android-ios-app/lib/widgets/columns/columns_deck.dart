@@ -372,6 +372,13 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final kv = ref.read(keyValueStoreProvider);
     final data = _columns.map((c) => c.toJson()).toList();
     kv.setString(StorageKeys.columnsLayout, jsonEncode(data));
+    // `_cvSaveLayout` also fires `nostrSettingsSave()` on EVERY save
+    // (columns.js:993-994): columnsLayout rides in the synced appearance
+    // section, so each layout mutation (add/remove/reorder/repurpose/re-seed)
+    // must schedule the debounced cross-device settings-set publish. The
+    // publish snapshot-reads the layout back out of the KV store
+    // (storage_sync.dart:256), so the write above is all the state it needs.
+    ref.read(settingsProvider.notifier).notifySyncedChange();
   }
 
   /// Load a saved layout (`_cvLoadLayout`); null when absent/empty/malformed.
@@ -696,12 +703,25 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       final primary = _columns.indexWhere(
           (d) => d.key == _primaryKey && d.kind == _ColumnKind.channel);
       if (primary >= 0) {
+        final oldDesc = _columns[primary];
         setState(() {
           _columns[primary] = desc;
           _focused = primary;
         });
         // The repurposed column stays the primary under its new key.
         _primaryKey = desc.key;
+        // `_cvNavigateColumn` → `_cvRenderColumn` re-renders pinned to the
+        // newest message (`col._atBottom = true`, columns.js:511-512), so the
+        // OLD conversation's scroll flag must not survive the swap: on desktop
+        // the slot is keyed by the column key, so the fresh _DeckColumnState
+        // never reports its initial at-bottom and a stale `false` would wedge
+        // the read gate when this conversation is later re-shown. Drop the old
+        // flag (like the removal path) and reset the new key to at-bottom
+        // (absent == true).
+        if (!_columns.any((d) => d.storageKey == oldDesc.storageKey)) {
+          _atBottomByKey.remove(oldDesc.storageKey);
+        }
+        _atBottomByKey.remove(desc.storageKey);
         // `_cvNavigateColumn` → `_cvSubscribeChannel` (geo relays + typing sub
         // + D1 restore; the view already points here, so no re-switch needed).
         _subscribeChannel(desc);
@@ -712,6 +732,15 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     }
 
     // (3) Otherwise add a new column, focus + scroll to it (`cvAddColumn`).
+    // `cvAddColumn` refuses channel descriptors while PM-only mode is on
+    // (columns.js:217: `groupChatPMOnlyMode && desc.type === 'channel' →
+    // return`) — the single choke point that keeps every path (globe geohash
+    // opens, commands, deep links, notifications) from creating a channel
+    // column in PM-only mode. Silent no-op, exactly like the PWA.
+    if (desc.kind == _ColumnKind.channel &&
+        ref.read(settingsProvider).groupChatPMOnlyMode) {
+      return;
+    }
     setState(() {
       _columns.add(desc);
       _focused = _columns.length - 1;
@@ -2021,10 +2050,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
 
   /// Strips the `#suffix` off a nym for the `@name` mention token (mirrors
   /// messages_list `_baseNym`).
-  String _baseNym(String nym) {
-    final hash = nym.indexOf('#');
-    return hash > 0 ? nym.substring(0, hash) : nym;
-  }
+  String _baseNym(String nym) => splitNymSuffix(nym).base;
 
   /// The `.cv-column-header` (padding 10/12, bottom border, gap 8). On desktop:
   /// 6-dot grip + icon + title (all draggable to reorder, `cursor:grab`) + a

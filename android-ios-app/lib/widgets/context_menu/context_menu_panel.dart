@@ -268,16 +268,23 @@ class ContextMenuPanel extends ConsumerWidget {
               // Back chevron (top-left) → return to the originating group menu
               // (`.context-menu-back`, ui-context.js:369-373). Hidden otherwise.
               // 28×28 at top/left 10, black 0.4 bg (hover 0.6), white chevron.
+              //
+              // Both floating buttons offset by the status-bar inset: the
+              // PWA's `top:14px` is measured from a web viewport that already
+              // starts BELOW the system chrome, while this Stack spans the full
+              // screen — without the inset the buttons render under the status
+              // bar (visibly misplaced AND un-tappable). The panel body handles
+              // its own inset via SafeArea.
               if (backToGroupId != null)
                 Positioned(
-                  top: 10,
+                  top: MediaQuery.of(context).padding.top + 10,
                   left: 10,
                   child: _BackButton(
                     onTap: () => _onBack(context, backToGroupId!),
                   ),
                 ),
               Positioned(
-                top: 14,
+                top: MediaQuery.of(context).padding.top + 14,
                 right: 14,
                 child: CtxCloseButton(onTap: onClose),
               ),

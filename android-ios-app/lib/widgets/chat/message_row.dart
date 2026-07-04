@@ -360,11 +360,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// The bare `contains` missed real mentions (e.g. an iOS-auto-capitalised
   /// "@Nym" against the lowercase self nym), leaving the highlight off.
   ///
-  /// Self and PM rows never highlight locally — the PWA class chain is an
-  /// else-if (`self` / `pm` win over `mentioned`, messages.js:684-693).
+  /// Self and PM/group rows never highlight — the PWA class chain is an
+  /// else-if (`self` / `pm` win over `mentioned`, messages.js:686-692), so a
+  /// PM or group message never gets the `.mentioned` treatment. The guard runs
+  /// BEFORE the caller's fast flag so it can't be bypassed.
   bool _isMentionedRow() {
-    if (widget.mentioned) return true;
     if (message.isOwn || message.isPM) return false;
+    if (widget.mentioned) return true;
     final cleanNym = stripPubkeySuffix(ref.read(appStateProvider).selfNym);
     if (cleanNym.isEmpty) return false;
     final selfPubkey = ref.read(nostrControllerProvider).identity?.pubkey;
@@ -438,24 +440,33 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// the style per [composeSupporterStyle].
   MessageStyleDecoration? _styleDecoration(BuildContext context) {
     final cos = _cosmetics;
-    final isLight = context.nym.isLight;
-    final styled = messageStyleDecoration(cos.styleId, isLight: isLight);
+    final c = context.nym;
+    final isLight = c.isLight;
+    // solid-ui swaps the translucent satoshi/supporter washes for the opaque
+    // `body.solid-ui` plates (styles-themes-responsive.css:1714-1776).
+    final solidUi = c.solidUi;
+    final styled = messageStyleDecoration(cos.styleId,
+        isLight: isLight, solidUi: solidUi);
     if (styled != null) {
       return cos.supporter
-          ? composeSupporterStyle(styled, cos.styleId!, isLight: isLight)
+          ? composeSupporterStyle(styled, cos.styleId!,
+              isLight: isLight, solidUi: solidUi)
           : styled;
     }
     if (cos.supporter) {
-      return isLight ? supporterStyleDecorationLight : supporterStyleDecoration;
+      return supporterStyleDecorationFor(isLight: isLight, solidUi: solidUi);
     }
     return null;
   }
 
   /// The active special-cosmetic auras (gold/neon/prism/frost/phoenix/cosmic/
   /// hologram) composed onto the bubble/row, resolved for the current brightness
-  /// (the PWA swaps gold — and a derived tone for the rest — in `light-mode`).
+  /// (the PWA swaps gold — and a derived tone for the rest — in `light-mode`)
+  /// and for solid-ui (which flattens gold's translucent washes to opaque
+  /// plates, styles-themes-responsive.css:1722-1776).
   List<CosmeticAura> _resolveAuras(BuildContext context) =>
-      resolveCosmeticAuras(_cosmetics, isLight: context.nym.isLight);
+      resolveCosmeticAuras(_cosmetics,
+          isLight: context.nym.isLight, solidUi: context.nym.solidUi);
 
   /// True when the message element carries a `style-…` class — the PWA adds the
   /// RAW active style id as a class (`messageEl.classList.add(activeStyle)`), so
@@ -490,6 +501,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final style = _authorStyle(c, self: self, size: size);
     final bracketColor = style.color;
     final suffix = getPubkeySuffix(message.pubkey);
+    // `.nym-suffix` base weight is 100 (styles-chat.css:706-709), but a
+    // Genesis holder's suffix is raised to 400 (`.message-author
+    // .has-genesis-flair .nym-suffix { font-weight: 400 }`,
+    // styles-features.css:1224-1227) alongside the 700 nym bolding.
+    final suffixWeight =
+        hasGenesisFlair(_cosmetics) ? FontWeight.w400 : FontWeight.w100;
     // `message.author` carries the stored nym which already includes its
     // `#suffix` (User.nym / the `anon#xxxx` fallback). Strip it so the canonical
     // suffix below isn't appended twice (PWA renders the base nym + a separate
@@ -510,7 +527,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                   style: style.copyWith(
                     color: style.color?.withValues(alpha: 0.7),
                     fontSize: size * 0.9,
-                    fontWeight: FontWeight.w100,
+                    fontWeight: suffixWeight,
                   ),
                 ),
             ]),
@@ -1541,7 +1558,17 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // gated on NO active message style (`body.chat-bubbles .message:not(
     // [class*="style-"]).cosmetic-aura-gold .message-content`,
     // styles-features.css:3699-3701): a styled bubble keeps only the ring/glow.
-    final bubbleGradient = (lastAura != null &&
+    // Ghost + solid-ui flattens EVERY translucent bubble wash — fire/ice/
+    // rainbow/satoshi/supporter/aura-gold all go `#2a2a2a !important`
+    // (self fire/ice/rainbow `#444444 !important`; light `#dddddd`/`#bbbbbb`)
+    // via `body.solid-ui.theme-ghost.chat-bubbles …` (styles-themes-
+    // responsive.css:1777-1806), and the (0,4,1) ghost-solid base fill
+    // (:1686-1700) also buries frost's (0,4,0) icy wash. Only eclipse/crt's
+    // plates and aurora's transparent fill survive: their last-loaded
+    // features-sheet rules tie the ghost base at (0,4,1) / carry !important.
+    final ghostSolid = c.solidUi && settings.theme == NymThemeKey.ghost;
+    final bubbleGradient = (!ghostSolid &&
+            lastAura != null &&
             lastAura.bubblePaintsGradient &&
             !_styleClassActive)
         ? lastAura.bubbleFillGradient
@@ -1556,7 +1583,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // replacement fill (styles-features.css:3675-3686, the gradient clips to the
     // text over a `linear-gradient(transparent, transparent)` border-box layer).
     // The frost flat wash applies only when no message style is active
-    // (`.message:not([class*="style-"]).cosmetic-frost`, :1163-1166).
+    // (`.message:not([class*="style-"]).cosmetic-frost`, :1163-1166) — and
+    // only on OTHERS' bubbles: the frost rule's specificity (0,4,0, no
+    // !important) LOSES to `body.chat-bubbles .message.self .message-content`
+    // (0,4,1, styles-features.css:3642-3647), so a SELF frost bubble keeps the
+    // primary self fill in both themes. (Gold's wash and hologram's fill carry
+    // !important and do apply to self — those flow through [bubbleGradient] /
+    // the overlay painter, not here.)
     //
     // SELF + fire/ice: `body.chat-bubbles .message.self.style-fire/.style-ice
     // .message-content { background: rgb(from var(--primary) r g b / 0.25)
@@ -1565,18 +1598,56 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // fill (themes:1412-1415) and the supporter bubble wash: a self fire/ice
     // bubble keeps primary@0.25 in BOTH themes; only other users' bubbles get
     // the style override.
+    //
+    // solid-ui widens the self override to RAINBOW and swaps the fill for the
+    // opaque `color-mix(in srgb, var(--primary) 22%, #2a2a3a)` plate
+    // (`body.solid-ui.chat-bubbles .message.self.style-fire/.style-ice/
+    // .style-rainbow .message-content { … !important }`, themes:1708-1711 —
+    // 0,6,1, so it even beats the solid gold-aura plate) = `c.bubbleSelfBg`.
     final selfFireIce = self &&
         (_cosmetics.styleId == 'style-fire' ||
-            _cosmetics.styleId == 'style-ice');
-    final bubbleColor = selfFireIce
-        ? c.primaryA(0.25)
-        : deco?.contentBackgroundFor(bubble: true) ??
-            (_styleClassActive ? null : lastAura?.background) ??
-            (self
-                ? c.primaryA(c.isLight ? 0.20 : 0.25)
-                : (c.isLight
-                    ? const Color(0x1A000000) // black @ 0.10
-                    : Colors.white.withValues(alpha: 0.14)));
+            _cosmetics.styleId == 'style-ice' ||
+            (c.solidUi && _cosmetics.styleId == 'style-rainbow'));
+    // solid-ui gold-aura plate on a STYLED message: `body.solid-ui
+    // [.light-mode].chat-bubbles .message.cosmetic-aura-gold .message-content
+    // { background: #38311e / #f0e3ad !important }` (themes:1722/:1746) has no
+    // `:not([class*="style-"])` gate and outcascades every solid style plate
+    // (satoshi/supporter declared earlier at equal specificity; eclipse/crt
+    // not !important). Unstyled messages take it via [bubbleGradient] instead
+    // (dark keeps the glass wash there — see `_cosmeticAurasSolid`).
+    Color? auraStyledFill;
+    for (final a in auras) {
+      auraStyledFill = a.bubbleStyledFill ?? auraStyledFill;
+    }
+    final Color bubbleColor;
+    if (ghostSolid &&
+        !selfFireIce &&
+        !(deco?.transparentBubble ?? false) &&
+        _cosmetics.styleId != 'style-eclipse' &&
+        _cosmetics.styleId != 'style-crt') {
+      // Ghost-solid flatten (see [ghostSolid] above): the satoshi/supporter/
+      // gold `#2a2a2a !important` group rule (themes:1781-1785, 0,6,1) beats
+      // the non-important self `#444444` (:1690), so ONLY an unstyled or
+      // fire/ice/rainbow self bubble keeps the self grey.
+      final flattenedToOther = _cosmetics.styleId == 'style-satoshi' ||
+          _cosmetics.supporter ||
+          auras.any((a) => a.id == 'cosmetic-aura-gold');
+      bubbleColor =
+          (self && !flattenedToOther) ? c.bubbleSelfBg : c.bubbleOtherBg;
+    } else if (selfFireIce) {
+      // Glass keeps primary@0.25 in BOTH themes (features:3708-3711); solid
+      // resolves to the opaque color-mix plate via the theme token.
+      bubbleColor = c.solidUi ? c.bubbleSelfBg : c.primaryA(0.25);
+    } else if (_styleClassActive && auraStyledFill != null) {
+      bubbleColor = auraStyledFill;
+    } else {
+      // Base fills come from the theme tokens: glass = self primary@0.25/0.20,
+      // others white@0.14 / black@0.10; solid-ui = the opaque `#2a2a3a` /
+      // `#e6e6e0` (+ color-mix self) plates (themes:1660-1684).
+      bubbleColor = deco?.contentBackgroundFor(bubble: true) ??
+          (_styleClassActive || self ? null : lastAura?.background) ??
+          (self ? c.bubbleSelfBg : c.bubbleOtherBg);
+    }
     final radius = _bubbleRadius(self);
 
     // The bubble interior = the body, THEN the `.bubble-time-inner` (the
@@ -1679,19 +1750,32 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           // `.message.mentioned .message-content`: `box-shadow: inset 0 0 0 1px
           // rgb(from var(--secondary) r g b / 0.25)` (styles-features.css:3657)
           // — light mode strokes .2 (themes:1404) — rendered as a 1px inner
-          // border on the bubble.
-          mentionRing:
-              mentioned ? c.secondaryA(c.isLight ? 0.2 : 0.25) : null,
+          // border on the bubble. solid-ui strokes the FULL secondary
+          // (`body.solid-ui[.light-mode].chat-bubbles .message.mentioned
+          // .message-content { box-shadow: inset 0 0 0 1px var(--secondary) }`,
+          // themes:1669/:1682 — higher specificity than both glass rules).
+          mentionRing: mentioned
+              ? (c.solidUi
+                  ? c.secondary
+                  : c.secondaryA(c.isLight ? 0.2 : 0.25))
+              : null,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+            // Default bubble padding 8px 12px 6px (styles-features.css:3607).
+            // A style's own `.message-content` padding OUTRANKS it — satoshi's
+            // `padding: 10px 15px` (specificity 0,3,0, styles-features.css:
+            // 548-549) beats the chat-bubbles rule (0,2,1), so a satoshi
+            // bubble is padded 10/15 in BOTH layouts.
+            padding: deco?.contentPadding ??
+                const EdgeInsets.fromLTRB(12, 8, 12, 6),
             // The 180px floor above lands on the DECORATED box, but the loose
             // Stack inside [_decorateBubble] would let the interior (and the
             // time's right-edge pin) collapse to the body's width. Re-assert
-            // the floor on the interior — 180 minus the 12+12 horizontal
-            // padding — so the Positioned time hugs the true right padding
-            // edge of a min-width bubble, exactly like `margin-left: auto`.
+            // the floor on the interior — 180 minus the horizontal padding —
+            // so the Positioned time hugs the true right padding edge of a
+            // min-width bubble, exactly like `margin-left: auto`.
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 180 - 24),
+              constraints: BoxConstraints(
+                  minWidth: 180 - (deco?.contentPadding?.horizontal ?? 24)),
               child: innerContent,
             ),
           ),
@@ -2097,6 +2181,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         ZapBadge(message: message),
         for (final r in reactions)
           _ReactionBadge(
+            messageId: message.id,
             reaction: r,
             onTap: (rect) => _toggleReaction(context, r),
             onLongPress: (rect) => _showReactors(context, r, rect),
@@ -2136,8 +2221,11 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // toggle skips the local update and stays silent, reactions.js:946).
     if (!wasReacted && _selfReactedLocally(r.emoji)) {
       HapticFeedback.mediumImpact();
-      final center = _globalCenterOfContext(context);
-      if (center != null) ReactionBurst.play(context, center, r.emoji);
+      // Anchor at the reaction badge for this emoji once the optimistic add
+      // has laid it out (post-frame), falling back to the message centre —
+      // `_burstOnBadge(messageId, emoji, messageEl)`, reactions.js:977.
+      ReactionBurst.playAtBadge(context, message.id, r.emoji,
+          fallbackCenter: _globalCenterOfContext(context));
     }
   }
 
@@ -2252,11 +2340,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       kind: inferOriginalKind(message, view: view),
     ));
     // Buzz + burst with the optimistic local add, BEFORE any signing/publish
-    // (`nymHapticTap` + `_burstOnBadge`, reactions.js:955-977).
+    // (`nymHapticTap` + `_burstOnBadge`, reactions.js:955-977). Anchored at
+    // the emoji's reaction badge once the optimistic add lays it out
+    // (post-frame), message-centre fallback — like the badge-tap toggle path.
     if (!already && _selfReactedLocally(emoji)) {
       HapticFeedback.mediumImpact();
-      final center = _globalCenterOfContext(context);
-      if (center != null) ReactionBurst.play(context, center, emoji);
+      ReactionBurst.playAtBadge(context, message.id, emoji,
+          fallbackCenter: _globalCenterOfContext(context));
     }
   }
 
@@ -2406,10 +2496,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     return r?.center;
   }
 
-  String _baseNym(String nym) {
-    final hash = nym.indexOf('#');
-    return hash > 0 ? nym.substring(0, hash) : nym;
-  }
+  // Trailing-`#xxxx`-only strip (users.js:1093-1098): a `#` inside the name
+  // (e.g. `player#1`) belongs to the name.
+  String _baseNym(String nym) => splitNymSuffix(nym).base;
 
   BorderRadius _bubbleRadius(bool self) {
     const r = Radius.circular(16);
@@ -2622,10 +2711,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 /// modal instead", reactions.js:512).
 class _ReactionBadge extends StatefulWidget {
   const _ReactionBadge({
+    required this.messageId,
     required this.reaction,
     required this.onTap,
     required this.onLongPress,
   });
+  final String messageId;
   final MessageReaction reaction;
   final void Function(Rect) onTap;
   final void Function(Rect) onLongPress;
@@ -2637,6 +2728,58 @@ class _ReactionBadge extends StatefulWidget {
 class _ReactionBadgeState extends State<_ReactionBadge> {
   bool _pressed = false;
   bool _hover = false;
+
+  /// Registered with [ReactionBurst] so bursts anchor at THIS badge — the
+  /// PWA's `_burstOnBadge` badge query (reactions.js:50-52).
+  final GlobalKey _anchorKey = GlobalKey();
+
+  /// Last seen count/own-flag, for the live-increment self-burst below.
+  int _lastCount = -1;
+  bool _lastUserReacted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    ReactionBurst.registerBadge(
+        widget.messageId, widget.reaction.emoji, _anchorKey);
+    _lastCount = widget.reaction.count;
+    _lastUserReacted = widget.reaction.userReacted;
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReactionBadge old) {
+    super.didUpdateWidget(old);
+    if (old.messageId != widget.messageId ||
+        old.reaction.emoji != widget.reaction.emoji) {
+      ReactionBurst.unregisterBadge(
+          old.messageId, old.reaction.emoji, _anchorKey);
+      ReactionBurst.registerBadge(
+          widget.messageId, widget.reaction.emoji, _anchorKey);
+      _lastCount = widget.reaction.count;
+      _lastUserReacted = widget.reaction.userReacted;
+      return;
+    }
+    // Burst when ANOTHER user's live reaction ticks this badge up while it is
+    // mounted (the PWA bursts on the badge for live inbound reactions,
+    // reactions.js:328-332). Our OWN adds are excluded (userReacted flips in
+    // the same update) — those burst from the toggle call sites, which anchor
+    // here via the registry.
+    final r = widget.reaction;
+    if (_lastCount >= 0 &&
+        r.count > _lastCount &&
+        r.userReacted == _lastUserReacted) {
+      ReactionBurst.playAtBadge(context, widget.messageId, r.emoji);
+    }
+    _lastCount = r.count;
+    _lastUserReacted = r.userReacted;
+  }
+
+  @override
+  void dispose() {
+    ReactionBurst.unregisterBadge(
+        widget.messageId, widget.reaction.emoji, _anchorKey);
+    super.dispose();
+  }
 
   Rect _rect(BuildContext context) {
     final box = context.findRenderObject() as RenderBox?;
@@ -2653,6 +2796,7 @@ class _ReactionBadgeState extends State<_ReactionBadge> {
     final c = context.nym;
     final r = widget.reaction;
     return RawGestureDetector(
+      key: _anchorKey,
       // The PWA cancels the badge's pending 500ms reactors-modal hold on the
       // FIRST `touchmove` (reactions.js:543-549) — the same tight pre-fire
       // slop as the message quick-react hold — so a slow scroll started on a
@@ -3903,8 +4047,14 @@ List<List<MessageGroupEntry>> buildMessageGroups(
     final entry = MessageGroupEntry(
       message: m,
       reactions: reactions[m.id] ?? const [],
-      mentioned:
-          mentionToken.isNotEmpty && !m.isOwn && m.content.contains(mentionToken),
+      // PWA `.mentioned` never applies to self or PM/group rows (else-if class
+      // chain, messages.js:686-692), and `isMentioned` bails while the self nym
+      // is unknown (`if (!content || !this.nym) return false`, messages.js:400)
+      // — a bare '@' token (empty nym at boot) must not flag every '@'.
+      mentioned: mentionToken.length > 1 &&
+          !m.isOwn &&
+          !m.isPM &&
+          m.content.contains(mentionToken),
     );
     if (useBubbles &&
         groups.isNotEmpty &&

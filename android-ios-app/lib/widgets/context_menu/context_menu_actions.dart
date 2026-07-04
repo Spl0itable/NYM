@@ -1,3 +1,4 @@
+import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../nym_icons.dart';
 
@@ -303,7 +304,6 @@ CtxTarget ctxTargetForMessage(
   );
 }
 
-String _baseNym(String nym) {
-  final hash = nym.indexOf('#');
-  return hash > 0 ? nym.substring(0, hash) : nym;
-}
+/// Trailing-`#xxxx`-only strip: a `#` inside the name (e.g. `player#1`)
+/// belongs to the name (users.js:1093-1098).
+String _baseNym(String nym) => splitNymSuffix(nym).base;

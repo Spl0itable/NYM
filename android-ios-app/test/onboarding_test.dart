@@ -175,7 +175,9 @@ void main() {
 
       await tester.pumpWidget(_host(kv, const BootGate()));
       await tester.pump(); // shell paints
-      await tester.pump(); // post-frame callback flips _showTutorial
+      await tester.pump(); // hydration gate resolves (no boot → starts open)
+      // The PWA's 300ms settle delay before the tutorial starts (app.js:446).
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.byType(TutorialOverlay), findsOneWidget);
       expect(find.byKey(const Key('tutorialCard')), findsOneWidget);
@@ -194,6 +196,8 @@ void main() {
       await tester.pumpWidget(_host(kv, const BootGate()));
       await tester.pump();
       await tester.pump();
+      // Even past the tutorial's 300ms start delay, the seen flag holds.
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.byType(TutorialOverlay), findsNothing);
     });

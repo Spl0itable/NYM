@@ -32,20 +32,48 @@ class VerifiedBadge extends StatelessWidget {
             : const Color(0xFF1DA1F2),
         shape: BoxShape.circle,
       ),
-      child: Text(
-        '✓',
-        style: TextStyle(
-          color: Colors.white,
-          // CSS ✓ is 12px inside the 20px circle; scale for other sizes.
-          fontSize: size * 0.6,
-          fontWeight: FontWeight.w700,
-          height: 1,
-        ),
+      // The ✓ is DRAWN, not a Text glyph: the CSS `content:"✓"` at
+      // font-weight 700 gets faux-bolded by the browser, while Flutter's
+      // U+2713 falls back to a symbol font that ignores the weight — the
+      // badge check rendered visibly thinner/different from the PWA's.
+      child: CustomPaint(
+        size: Size.square(size),
+        painter: _CheckPainter(scale: size / 20.0),
       ),
     );
     final t = tooltip;
     return (t == null || t.isEmpty) ? badge : Tooltip(message: t, child: badge);
   }
+}
+
+/// The badge's bold white check, matching the PWA's 12px w700 "✓" inside the
+/// 20px circle. Authored in the 20×20 badge box and scaled uniformly.
+class _CheckPainter extends CustomPainter {
+  const _CheckPainter({required this.scale});
+
+  final double scale;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = scale;
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      // ≈ the stroke weight of a bold 12px ✓.
+      ..strokeWidth = 2.0 * s
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+    final path = Path()
+      ..moveTo(6.0 * s, 10.6 * s)
+      ..lineTo(8.9 * s, 13.4 * s)
+      ..lineTo(14.2 * s, 6.8 * s);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CheckPainter oldDelegate) =>
+      oldDelegate.scale != scale;
 }
 
 /// The friend badge (`.friend-badge`, styles-features.css:1483-1495): a

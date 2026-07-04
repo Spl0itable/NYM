@@ -532,11 +532,11 @@ class _ThroughputPainter extends CustomPainter {
 // =============================================================================
 // Relay list (.relay-stats-relay-list / .relay-stats-row)
 //
-// Mirrors the PWA `renderRelayStats` shard line + `renderRelayList` (app.js
-// 7399-7680): an optional shard fan-in line (proxy mode), then up to two
+// Mirrors the PWA `renderRelayList` (app.js 7554-7680): up to two
 // sub-sections inside the list — "App data" (the /api backend, clickable for a
 // per-action breakdown) and "Relay data" (clickable per relay for a per-kind
-// breakdown).
+// breakdown). The PWA's shard fan-in line above the list (`rsShardLine`,
+// app.js 7399-7420) is intentionally omitted in the native app.
 // =============================================================================
 
 class _RelayListSection extends StatelessWidget {

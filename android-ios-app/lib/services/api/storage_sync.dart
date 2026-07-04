@@ -603,6 +603,23 @@ class StorageSync {
     return false;
   }
 
+  /// Drops the oldest ~10% of the synced bell history
+  /// (`trimOldestNotifications`, settings.js:542-547).
+  static bool _trimOldestNotifications(Map<String, dynamic> p) {
+    final arr = p['notificationHistory'];
+    if (arr is! List || arr.length <= 1) return false;
+    final drop = (arr.length * 0.1).ceil().clamp(1, arr.length);
+    p['notificationHistory'] = arr.sublist(drop);
+    return true;
+  }
+
+  /// The notifications wrap's trim chain — history first, then seen keys, one
+  /// trim per oversize round (the PWA's `[trimOldestNotifications,
+  /// trimOldestSeen]` trimFns array, settings.js:560: each round runs the
+  /// first fn that trims).
+  static bool _trimNotifications(Map<String, dynamic> p) =>
+      _trimOldestNotifications(p) || _trimOldestSeen(p);
+
   /// Drops the oldest 25% of seen-notification keys (`trimOldestSeen`,
   /// settings.js:549-556).
   static bool _trimOldestSeen(Map<String, dynamic> p) {
@@ -664,25 +681,54 @@ class StorageSync {
     return ok;
   }
 
-  /// Publishes the cross-device notification read-state wrap — the PWA's
-  /// `nymchat-notifications` category (settings.js:559). N26 scopes this to the
-  /// seen-keys map (`seenNotifications`, the read-state); the bell history blob
-  /// itself stays device-local (its cross-device sync is out of N26's scope).
-  /// No-op (and no network call) when [seenNotifications] is empty or unchanged
-  /// since the last publish (content-hash dedup in [_setSettingsCategory]).
-  /// Returns whether the category was actually sent.
+  /// The most recent inbound `nymchat-notifications` payload decoded by
+  /// [settingsGet] / [settingsTransfersSince]. Both clients write the SAME
+  /// hashed D1 row for this category, so an outbound write must carry the
+  /// fields this client doesn't own yet (`notificationHistory` /
+  /// `notificationLastReadTime`, which the PWA syncs — settings.js:534-557)
+  /// forward instead of zeroing another device's synced bell state.
+  Map<String, dynamic>? _lastInboundNotifications;
+
+  /// Publishes the cross-device notification wrap — the PWA's
+  /// `nymchat-notifications` category, byte-shaped like the PWA payload
+  /// `{notificationHistory, notificationLastReadTime, seenNotifications?}`
+  /// (settings.js:557-558; `seenNotifications` is present only when
+  /// non-empty). [notificationHistory] / [notificationLastReadTime] default to
+  /// the values last read back from D1 (the inbound payload cached by
+  /// [settingsGet]) so a seen-keys-only write does not clobber another
+  /// client's synced bell history / last-read in the shared row; the
+  /// controller can thread live values once it owns them. No-op (and no
+  /// network call) when the payload would be empty — `history 0 && lastRead 0
+  /// && no seen keys`, the PWA's publish gate (settings.js:540) — or when
+  /// unchanged since the last publish (content-hash dedup in
+  /// [_setSettingsCategory]). Returns whether the category was actually sent.
   Future<bool> notificationsWrapSet(
-      Map<String, dynamic> seenNotifications) async {
-    if (seenNotifications.isEmpty) return false;
+    Map<String, dynamic> seenNotifications, {
+    List<dynamic>? notificationHistory,
+    int? notificationLastReadTime,
+  }) async {
     const dTag = 'nymchat-notifications';
+    final inbound = _lastInboundNotifications;
+    final history = List<dynamic>.of(notificationHistory ??
+        (inbound?['notificationHistory'] is List
+            ? inbound!['notificationHistory'] as List
+            : const <dynamic>[]));
+    final lastRead = notificationLastReadTime ??
+        (inbound?['notificationLastReadTime'] as num?)?.toInt() ??
+        0;
+    if (history.isEmpty && lastRead <= 0 && seenNotifications.isEmpty) {
+      return false;
+    }
     final payload = <String, dynamic>{
-      'v': 2,
-      'seenNotifications': Map<String, dynamic>.of(seenNotifications),
+      'notificationHistory': history,
+      'notificationLastReadTime': lastRead,
+      if (seenNotifications.isNotEmpty)
+        'seenNotifications': Map<String, dynamic>.of(seenNotifications),
     };
     // Same hashed-column scheme + wrap path as the settings sections
     // (settings.js:559-560 routes this category through `_publishCategoryWrap`
-    // with the oldest-seen trim, `trimOldestSeen`).
-    return _publishCategoryWrap(payload, dTag, trim: _trimOldestSeen);
+    // with `[trimOldestNotifications, trimOldestSeen]`).
+    return _publishCategoryWrap(payload, dTag, trim: _trimNotifications);
   }
 
   /// Publishes the cross-device read-state category — the PWA's
@@ -731,6 +777,25 @@ class StorageSync {
   static String _groupSyncDTag(String prefix, String groupId) =>
       '$prefix-${groupId.toLowerCase()}';
 
+  /// Clears a left group's ephemeral-keys blob in D1 by overwriting the
+  /// `nymchat-keys-<gid>` category with `{}` (`_clearGroupSyncData`,
+  /// settings.js:192-197, called from `leaveGroup`, groups.js:1826).
+  /// Security-relevant: without it a later `settings-get` (fresh device /
+  /// reinstall) restores the last-published decryption keys for a group the
+  /// user left. The history wraps are deliberately kept so the user's own
+  /// backlog stays durable (the PWA comment, settings.js:192-194). D1-only,
+  /// like the PWA (`_saveSettingsBlobToD1`, no relay `nym-sync` wrap); the
+  /// content-hash dedup in [_setSettingsCategory] makes a repeat clear a
+  /// session-local no-op and the worker no-ops an unchanged `contentHash`
+  /// server-side. Best-effort — failures are swallowed.
+  Future<void> clearGroupSyncData(String groupId) async {
+    final dTag = _groupSyncDTag('nymchat-keys', groupId);
+    await _setSettingsCategory(
+      d1Category(dTag),
+      jsonEncode(_withCat(<String, dynamic>{}, dTag)),
+    );
+  }
+
   /// `YYYYMM` bucket id for a unix-seconds timestamp (`_historyBucketId`,
   /// settings.js:511), used to time-bucket group history so each wrap holds at
   /// most one month of messages.
@@ -747,7 +812,9 @@ class StorageSync {
   ///
   ///  * **`nymchat-keys-<gid>`** — one wrap per group carrying `{groupEphemeralKeys:
   ///    {gid: entry}}`; stale members (not in [groupConversations]'s member list)
-  ///    are dropped, and left groups are skipped entirely.
+  ///    are dropped. Left groups are never republished and their keys blob is
+  ///    overwritten with `{}` (the PWA's leave-time `_clearGroupSyncData`,
+  ///    settings.js:195-197 — see [clearGroupSyncData]).
   ///  * **`nymchat-groups`** — a single `{groupConversations: {...}}` wrap.
   ///  * **`nymchat-history-<gid>-<YYYYMM>-<shard>`** — the group backlog bucketed
   ///    by month and packed into byte-bounded shards.
@@ -784,6 +851,19 @@ class StorageSync {
         );
       } catch (_) {
         // Best-effort per group (settings.js:461 `catch (_) {}`).
+      }
+    }
+
+    // Left groups: the PWA zeroes the keys blob at leave time
+    // (`_clearGroupSyncData` via groups.js:1826); native reaches the same D1
+    // end-state on the sync flush — `{}` over `nymchat-keys-<gid>` for every
+    // left group, so a fresh device can't restore keys for a group the user
+    // left. Idempotent (content-hash dedup client- and server-side).
+    for (final gid in leftGroups) {
+      try {
+        await clearGroupSyncData(gid);
+      } catch (_) {
+        // Best-effort.
       }
     }
 
@@ -1042,7 +1122,12 @@ class StorageSync {
     final groupMessageHistory = <String, List<dynamic>>{};
     for (final d in decoded) {
       final c = d.category;
-      if (c == 'nymchat-notifications') notificationsPayload = d.payload;
+      if (c == 'nymchat-notifications') {
+        notificationsPayload = d.payload;
+        // Cache for carry-forward in [notificationsWrapSet] (copied so a
+        // caller-side mutation of the surfaced payload can't corrupt it).
+        _lastInboundNotifications = Map<String, dynamic>.of(d.payload);
+      }
       if (c == 'nymchat-readstate') readStatePayload = d.payload;
       if (c == 'nymchat-groups') {
         final gc = d.payload['groupConversations'];
@@ -1164,6 +1249,11 @@ class StorageSync {
             ? payload['__cat'] as String
             : e.key.toString();
         payload.remove('__cat');
+        if (realCat == 'nymchat-notifications') {
+          // Cache for carry-forward in [notificationsWrapSet], same as
+          // [settingsGet] — this refresh path sees the shared row too.
+          _lastInboundNotifications = Map<String, dynamic>.of(payload);
+        }
         decoded.add(_DecodedCategory(
           category: realCat,
           payload: payload,
@@ -1755,13 +1845,14 @@ class StorageSync {
     _emojiFetchedAt = now;
     StorageStream stream;
     try {
-      // Public read (`_storageApiStream('emoji-get', {}, false)`). The pubkey
-      // rides the body so the worker can append our own 10030 line
-      // (storage.js:1170/1186-1194); over the authed `/api` socket it is
-      // pinned server-side exactly like the PWA.
+      // Public read with an EMPTY body on both transports, byte-parity with
+      // `_storageApiStream('emoji-get', {}, false)` (emoji.js:206) — the PWA
+      // never sends a pubkey here, so the HTTP fallback stays an anonymous
+      // read. Over the authed `/api` socket the worker pins the session pubkey
+      // server-side and appends our own 10030 line (storage.js:1170/1186-1194)
+      // exactly like the PWA's socket path.
       stream = await _api.storageStream({
         'action': 'emoji-get',
-        'pubkey': _pubkey,
       });
     } catch (_) {
       _emojiFetchedAt = 0; // allow a retry (emoji.js:208)
@@ -2037,8 +2128,10 @@ class SettingsLoadResult {
   /// conversation key are concatenated here.
   final Map<String, List<dynamic>> groupMessageHistory;
 
-  /// The decrypted `nymchat-notifications` wrap payload (N26), when present —
-  /// carries `seenNotifications` (the cross-device notification read-state map).
+  /// The decrypted `nymchat-notifications` wrap payload, when present —
+  /// carries `seenNotifications` (the cross-device notification read-state
+  /// map) plus the PWA's `notificationHistory` / `notificationLastReadTime`
+  /// (settings.js:534-557; app.js:5790-5894 merges all three inbound).
   /// Surfaced separately from the settings [payload] because the caller merges
   /// it additively (idempotently) regardless of the settings ts gate.
   final Map<String, dynamic>? notificationsPayload;

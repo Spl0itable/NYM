@@ -103,7 +103,11 @@ Future<_CanaryResult> _fetchCanary() async {
   if (res.statusCode < 200 || res.statusCode >= 300) {
     throw Exception('http ${res.statusCode}');
   }
-  final doc = jsonDecode(res.body) as Map<String, dynamic>;
+  // `res.body` would decode charset-less application/json as Latin-1 and
+  // mangle any non-ASCII content, breaking the re-hashed event id. The PWA's
+  // `response.json()` always decodes UTF-8, so mirror that here.
+  final doc = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true))
+      as Map<String, dynamic>;
   final signed = doc['content'] is String && (doc['sig'] ?? '') != '';
   final sig = signed ? _verifyCanarySig(doc) : 'unsigned';
   final c = signed

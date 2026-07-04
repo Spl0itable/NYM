@@ -73,6 +73,7 @@ class CommandHooks {
     this.addMod,
     this.removeMod,
     this.transferOwner,
+    this.openDevNsecChallenge,
   });
 
   /// `/poll` → open the poll editor modal (polls agent). TODO(verify): modal
@@ -111,6 +112,15 @@ class CommandHooks {
   final void Function(String pubkey)? addMod;
   final void Function(String pubkey)? removeMod;
   final void Function(String pubkey)? transferOwner;
+
+  /// `/nick <reserved>` → the developer-nsec challenge modal
+  /// (`showDevNsecModal('nick')` → `applyDeveloperIdentity` on success,
+  /// commands.js:614-626). The hook owns the whole outcome: verify → switch
+  /// the running session to the developer identity + the "Identity verified…"
+  /// line, cancel → the PWA's 'Nickname change cancelled.' line. Unset
+  /// (headless/tests) → the engine's reserved gate aborts with the same
+  /// cancellation message.
+  final void Function()? openDevNsecChallenge;
 }
 
 /// Resolves a `@nym` / `nym#xxxx` / 64-hex target to a pubkey + display nym, or

@@ -30,6 +30,57 @@ class ReactionBurst {
       if (entry.mounted) entry.remove();
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // Badge anchoring — the PWA bursts ON the reaction badge for that emoji
+  // (`_burstOnBadge` queries `[data-emoji]` under the message and falls back to
+  // the message element, reactions.js:50-52). Mounted badges register here so
+  // the burst can anchor at the badge's live position.
+  // ---------------------------------------------------------------------------
+
+  static final Map<String, GlobalKey> _badges = <String, GlobalKey>{};
+
+  static String _badgeKeyOf(String messageId, String emoji) =>
+      '$messageId|$emoji';
+
+  /// Called by a mounted reaction badge to expose its position.
+  static void registerBadge(String messageId, String emoji, GlobalKey key) {
+    _badges[_badgeKeyOf(messageId, emoji)] = key;
+  }
+
+  /// Removes a badge registration iff it still points at [key] (a replacement
+  /// badge may have re-registered the same message/emoji first).
+  static void unregisterBadge(String messageId, String emoji, GlobalKey key) {
+    final k = _badgeKeyOf(messageId, emoji);
+    if (identical(_badges[k], key)) _badges.remove(k);
+  }
+
+  /// Global centre of the registered badge for [messageId]+[emoji], or null.
+  static Offset? badgeCenter(String messageId, String emoji) {
+    final key = _badges[_badgeKeyOf(messageId, emoji)];
+    final box = key?.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize || !box.attached) return null;
+    return box.localToGlobal(box.size.center(Offset.zero));
+  }
+
+  /// Bursts on the badge for [messageId]+[emoji] once the current frame has
+  /// laid it out (an optimistic add mounts the badge this frame), falling back
+  /// to [fallbackCenter] when no badge exists — `_burstOnBadge(messageId,
+  /// emoji, fallbackEl)`: badge first, message element fallback, silent when
+  /// neither resolves (reactions.js:50-52).
+  static void playAtBadge(
+    BuildContext context,
+    String messageId,
+    String emoji, {
+    Offset? fallbackCenter,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) return;
+      final center = badgeCenter(messageId, emoji) ?? fallbackCenter;
+      if (center == null) return;
+      play(context, center, emoji);
+    });
+  }
 }
 
 class _Spark {

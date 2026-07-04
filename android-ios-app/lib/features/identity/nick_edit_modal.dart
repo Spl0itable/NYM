@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../core/crypto/bech32_codec.dart';
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/nym_utils.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/nostr/nym_generator.dart';
 import '../../state/app_state.dart';
@@ -107,9 +108,9 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     // editor opens pre-filled with your REAL saved nickname, not "anon####".
     final selfNym = ref.read(appStateProvider).selfNym;
     final nym = selfNym.isNotEmpty ? selfNym : (id?.nym ?? '');
-    // The nym is `name#suffix`; the input edits only the name part.
-    final hash = nym.indexOf('#');
-    _originalNick = hash >= 0 ? nym.substring(0, hash) : nym;
+    // The nym is `name#suffix`; the input edits only the name part. Split on
+    // the TRAILING 4-hex suffix only, so a name containing '#' survives.
+    _originalNick = splitNymSuffix(nym).base;
     _nick = TextEditingController(text: _originalNick);
 
     // Pre-fill bio + lightning from the current profile so opening the editor
@@ -904,9 +905,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   void _randomize() {
     final pk = _pubkey;
     final generated = NymGenerator().generate(pk);
-    final hash = generated.indexOf('#');
-    final base = hash >= 0 ? generated.substring(0, hash) : generated;
-    setState(() => _nick.text = base);
+    setState(() => _nick.text = splitNymSuffix(generated).base);
   }
 
   void _copyToClipboard(String value, String confirm) {

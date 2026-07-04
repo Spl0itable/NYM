@@ -579,7 +579,13 @@ class NymOutlineButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final accent = danger ? c.danger : c.text;
+    // `.icon-btn` rest palette: white/0.05 fill + glass border + `--text`
+    // label in dark; black/0.03 fill + black/0.1 border + `--primary` label
+    // in light (`body.light-mode .icon-btn`, styles-themes-responsive.css:
+    // 595-599) — same as _IconButtonState in modal_chrome.dart. The danger
+    // variant is a separate class (danger/0.08 fill, danger/0.3 border,
+    // danger label) with no light override.
+    final accent = danger ? c.danger : (c.isLight ? c.primary : c.text);
     final text = Text(
       uppercase ? label.toUpperCase() : label,
       textAlign: TextAlign.center,
@@ -597,13 +603,12 @@ class NymOutlineButton extends StatelessWidget {
         height: height,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          // `.icon-btn`: bg white@5%, 1px glass border, radius xs.
-          color: danger
-              ? accent.withValues(alpha: 0.08)
-              : c.text.withValues(alpha: 0.05),
+          color: danger ? c.danger.withValues(alpha: 0.08) : c.subtleFill,
           borderRadius: NymRadius.rxs,
           border: Border.all(
-            color: danger ? accent.withValues(alpha: 0.3) : c.glassBorder,
+            color: danger
+                ? c.danger.withValues(alpha: 0.3)
+                : (c.isLight ? const Color(0x1A000000) : c.glassBorder),
           ),
         ),
         // Center + widthFactor keeps the pill shrink-wrapped while centering

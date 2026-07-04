@@ -279,6 +279,8 @@ class NotificationsService {
     final settings = _ref.read(settingsProvider);
     if (!settings.notificationsEnabled) return;
     if (context.isBlocked) return;
+    // Digest bodies ("10 recent messages:") never alert (notifications.js:13).
+    if (body.contains('10 recent messages:')) return;
     if (context.isBot) return;
     // notifyFriendsOnly: skip non-friends (notifications.js line 12).
     if (notifyFriendsOnly &&
@@ -332,7 +334,13 @@ class NotificationsService {
 
     final eventId = context.eventId ?? '';
     final sender = context.senderPubkey ?? '';
-    final history = _ref.read(notificationHistoryProvider).entries;
+    // `entriesForAlertDedup` covers the store's async hydration window too:
+    // while the persisted history loads, `record()` calls are buffered (not in
+    // `state.entries` yet), so scanning only the live entries let multi-relay
+    // duplicates of one boot-time event double-popup.
+    final history = _ref
+        .read(notificationHistoryProvider.notifier)
+        .entriesForAlertDedup;
     final isDupe = history.any((e) {
       if (eventId.isNotEmpty && e.eventId == eventId) return true;
       return e.title == title &&

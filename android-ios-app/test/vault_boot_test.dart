@@ -262,7 +262,9 @@ class _FakeVault extends IdentityVault {
   @override
   Future<Map<String, String>> unlock(String password) async {
     if (password != correct) {
-      throw StateError('Wrong password/PIN.');
+      // Same message as the production wrap in IdentityVault.unlock — the
+      // widget surfaces the thrown e.message verbatim.
+      throw StateError('Wrong password/PIN or unrecognised passkey.');
     }
     return {SecretKeys.sessionNsec: 'decrypted-nsec'};
   }

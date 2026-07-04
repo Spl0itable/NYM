@@ -45,6 +45,18 @@ class GroupManager {
     _service.setEphemeralKeys(allEphemeralSecretKeys());
   }
 
+  /// Deletes [groupId]'s ephemeral key entry and re-arms the service's unwrap
+  /// candidates — the PWA's `groupEphemeralKeys.delete(groupId)` +
+  /// `_saveEphemeralKeys()` on leave (groups.js:1822-1824). Without it a left
+  /// group's keys keep riding [allEphemeralPubkeys] / [allEphemeralSecretKeys]
+  /// (and the local `nym_ephemeral_keys_<pubkey>` blob via
+  /// [ephemeralKeysForSync]) until restart. Called from
+  /// `NostrController.leaveGroup`.
+  void removeGroup(String groupId) {
+    if (_keys.remove(groupId) == null) return;
+    _refreshServiceKeys();
+  }
+
   /// Serialized per-group ephemeral key state for the `nymchat-keys-<gid>`
   /// cross-device sync categories (`gid → _serializeEphemeralKeys(ek)`, the map
   /// the PWA iterates in `_publishEncryptedSettings`, settings.js:435-461).
