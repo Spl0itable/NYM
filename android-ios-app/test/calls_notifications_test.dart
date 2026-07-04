@@ -122,6 +122,53 @@ void main() {
       expect(CallSignal.reaction(callId: 'c', emoji: '🔥'),
           {'type': 'reaction', 'callId': 'c', 'emoji': '🔥'});
     });
+
+    test('reaction omits emojiTags when absent/empty (calls.js if(tags.length))',
+        () {
+      // No tags supplied → field absent (unicode reaction, like the PWA).
+      expect(
+          CallSignal.reaction(callId: 'c', emoji: '🔥')
+              .containsKey('emojiTags'),
+          isFalse);
+      // Empty list → still absent (the PWA only sets it when length > 0).
+      expect(
+          CallSignal.reaction(callId: 'c', emoji: '🔥', emojiTags: const [])
+              .containsKey('emojiTags'),
+          isFalse);
+    });
+
+    test('reaction attaches emojiTags for a custom :shortcode:', () {
+      final tags = [
+        ['emoji', 'partyblob', 'https://e.example/partyblob.png'],
+      ];
+      final p =
+          CallSignal.reaction(callId: 'c', emoji: ':partyblob:', emojiTags: tags);
+      expect(p['type'], 'reaction');
+      expect(p['emoji'], ':partyblob:');
+      expect(p['emojiTags'], tags);
+    });
+
+    test('chatReaction carries op and (optionally) emojiTags', () {
+      // Base shape unchanged when no tags.
+      expect(
+          CallSignal.chatReaction(
+              callId: 'c', mid: 'm1', emoji: '👍', op: 'add'),
+          {
+            'type': 'chat-reaction',
+            'callId': 'c',
+            'mid': 'm1',
+            'emoji': '👍',
+            'op': 'add',
+          });
+      // Custom shortcode threads emojiTags through.
+      final tags = [
+        ['emoji', 'wow', 'https://e.example/wow.png'],
+      ];
+      final p = CallSignal.chatReaction(
+          callId: 'c', mid: 'm1', emoji: ':wow:', op: 'add', emojiTags: tags);
+      expect(p['op'], 'add');
+      expect(p['emojiTags'], tags);
+    });
   });
 
   group('ring-timeout logic transitions ringing -> ended', () {

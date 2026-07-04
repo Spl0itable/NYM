@@ -248,14 +248,16 @@ void main() {
       expect(w['allowWrites'], isTrue);
     });
 
-    test('omits empty branch', () {
+    test('always sends the branch key — empty string when unset', () {
+      // Byte-parity with the PWA's `branch: git.branch || ''` (pms.js:2464):
+      // the key is always present on the wire, '' meaning "provider default".
       const cfg = GitConfig(
         provider: GitProvider.gitea,
         host: 'codeberg.org',
         token: 't',
         repo: 'o/r',
       );
-      expect(cfg.toWire().containsKey('branch'), isFalse);
+      expect(cfg.toWire()['branch'], '');
       expect(GitProvider.gitea.defaultHost, 'codeberg.org');
     });
   });

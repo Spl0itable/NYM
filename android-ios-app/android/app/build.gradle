@@ -14,7 +14,7 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.nym.bar"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     // Use NDK r27+ for 16 KB page-size support
     ndkVersion = "27.0.12077973"
 
@@ -42,7 +42,7 @@ android {
         applicationId "com.nym.bar"
         minSdk = 23
         targetSdk = 36
-        versionCode = 117
+        versionCode = 128
         versionName = flutter.versionName
         
         // Support all ABIs - AGP 8.7.3 automatically handles 16 KB alignment

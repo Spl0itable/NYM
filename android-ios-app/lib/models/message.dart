@@ -1,6 +1,31 @@
 /// Delivery state for a PM/group message.
 enum DeliveryStatus { sending, sent, delivered, read, failed }
 
+/// What kind of row a [Message] renders as.
+///
+/// * [normal] — an ordinary chat message (bubble / IRC row).
+/// * [system] — a centered muted `.system-message` pill injected into the
+///   conversation flow (command feedback, P2P/call status, flood notices).
+/// * [action] — the purple-italic `.action-message` variant of a system message.
+/// * [me] — a `/me …` emote rendered as an italic `* author action *` line.
+///
+/// Mirrors the PWA's `displaySystemMessage(content, type)` (`messages.js:1511`)
+/// and the `/me` branch (`messages.js:662`).
+enum MessageKind { normal, system, action, me }
+
+MessageKind messageKindFromString(String? s) {
+  switch (s) {
+    case 'system':
+      return MessageKind.system;
+    case 'action':
+      return MessageKind.action;
+    case 'me':
+      return MessageKind.me;
+    default:
+      return MessageKind.normal;
+  }
+}
+
 DeliveryStatus deliveryStatusFromString(String? s) {
   switch (s) {
     case 'sent':
@@ -14,6 +39,32 @@ DeliveryStatus deliveryStatusFromString(String? s) {
     default:
       return DeliveryStatus.sending;
   }
+}
+
+/// An optional inline action button carried by a [MessageKind.system] row.
+///
+/// The PWA renders some system lines with an embedded `<button>` — e.g. the
+/// spam false-positive notice has `data-action="reportSpamFalsePositive"` with
+/// the flagged message stashed in a `data-spam-content` attribute
+/// (messages.js:645). Native rows can't embed HTML, so the button is modelled
+/// here: a [label] plus a [kind] discriminator and the [payload] the handler
+/// needs (the flagged content for [SystemActionKind.reportSpamFalsePositive]).
+enum SystemActionKind { reportSpamFalsePositive }
+
+class SystemAction {
+  const SystemAction({
+    required this.kind,
+    required this.label,
+    this.payload = '',
+  });
+
+  final SystemActionKind kind;
+
+  /// Button text (`Report false positive`).
+  final String label;
+
+  /// Action data — the flagged message body for the spam false-positive report.
+  final String payload;
 }
 
 /// Unified message model covering channel, PM and group messages, mirroring the
@@ -37,7 +88,7 @@ class Message {
     this.conversationPubkey,
     this.eventKind = 0,
     this.isHistorical = false,
-    this.senderVerified = false,
+    this.senderVerified,
     this.bitchatMessageId,
     this.nymMessageId,
     this.deliveryStatus = DeliveryStatus.sending,
@@ -51,7 +102,11 @@ class Message {
     this.optimistic = false,
     this.spamGated = false,
     this.blocked = false,
-  }) : timestamp = timestamp ?? createdAt * 1000;
+    this.kind = MessageKind.normal,
+    this.systemAction,
+    Map<String, String>? readers,
+  })  : timestamp = timestamp ?? createdAt * 1000,
+        readers = readers ?? <String, String>{};
 
   String id;
   String author;
@@ -86,7 +141,14 @@ class Message {
   int eventKind;
 
   bool isHistorical;
-  bool senderVerified;
+
+  /// Tri-state cryptographic verification of a sealed (NIP-17/NIP-59) sender,
+  /// mirroring the PWA's `senderVerified` (`messages.js:736`): `true` when the
+  /// seal's signer matches the claimed author, `false` for a throwaway-key
+  /// (Bitchat) seal, `null` when the seal isn't available to verify (restored
+  /// history, or a public channel message that carries no seal). Drives the
+  /// `.crypto-verified-badge` lock shown on PM/group messages.
+  bool? senderVerified;
   String? bitchatMessageId;
   String? nymMessageId;
   DeliveryStatus deliveryStatus;
@@ -111,6 +173,31 @@ class Message {
 
   /// Flagged from a blocked user.
   bool blocked;
+
+  /// What kind of row this renders as (normal / system / action / `/me`).
+  /// Defaults to [MessageKind.normal]; a system/action message is one injected
+  /// by [Message.system] (`displaySystemMessage`).
+  MessageKind kind;
+
+  /// Optional inline action button for a [MessageKind.system] row (e.g. the
+  /// spam false-positive "Report false positive" affordance). Null for ordinary
+  /// system lines. Not serialised — these notices are session-local.
+  SystemAction? systemAction;
+
+  /// Read-receipt readers for own channel/group messages: `pubkey → nym`. Drives
+  /// the stacked reader-avatar delivery indicator (`group-readers`/
+  /// `channel-readers`, `groups.js:2624`). Empty for everyone else.
+  final Map<String, String> readers;
+
+  /// True for the centered system/action pill rows (not an ordinary message).
+  bool get isSystemRow =>
+      kind == MessageKind.system || kind == MessageKind.action;
+
+  /// True when this is a `/me` emote (rendered as an italic action line). The
+  /// PWA keys this off the raw content prefix (`messages.js:662`), so we accept
+  /// either an explicit [MessageKind.me] or the `/me ` content prefix.
+  bool get isMeAction =>
+      kind == MessageKind.me || content.startsWith('/me ');
 
   DateTime get dateTime => DateTime.fromMillisecondsSinceEpoch(timestamp);
 
@@ -143,7 +230,50 @@ class Message {
         'fileOffer': fileOffer,
         'isBot': isBot,
         'thinking': thinking,
+        'kind': kind.name,
       };
+
+  /// Builds a centered system/action pill row for the conversation flow,
+  /// mirroring `displaySystemMessage(content, type)` (`messages.js:1511`). Pass
+  /// [action] for the purple-italic `.action-message` variant. The id is
+  /// synthetic (`sys-…`) and the row is flagged so the list renders the pill.
+  factory Message.system(
+    String content, {
+    bool action = false,
+    int? createdAtMs,
+  }) {
+    final ms = createdAtMs ?? DateTime.now().millisecondsSinceEpoch;
+    return Message(
+      id: 'sys-${ms.toRadixString(36)}-${content.hashCode.toUnsigned(20)}',
+      author: '',
+      pubkey: '',
+      content: content,
+      createdAt: ms ~/ 1000,
+      timestamp: ms,
+      kind: action ? MessageKind.action : MessageKind.system,
+    );
+  }
+
+  /// A [MessageKind.system] pill that carries an inline action [SystemAction]
+  /// button (e.g. the spam false-positive notice with its "Report false
+  /// positive" affordance, messages.js:645).
+  factory Message.systemWithAction(
+    String content,
+    SystemAction action, {
+    int? createdAtMs,
+  }) {
+    final ms = createdAtMs ?? DateTime.now().millisecondsSinceEpoch;
+    return Message(
+      id: 'sys-${ms.toRadixString(36)}-${content.hashCode.toUnsigned(20)}',
+      author: '',
+      pubkey: '',
+      content: content,
+      createdAt: ms ~/ 1000,
+      timestamp: ms,
+      kind: MessageKind.system,
+      systemAction: action,
+    );
+  }
 
   factory Message.fromJson(Map<String, dynamic> j) {
     return Message(
@@ -164,7 +294,8 @@ class Message {
       conversationPubkey: j['conversationPubkey'] as String?,
       eventKind: (j['eventKind'] as num?)?.toInt() ?? 0,
       isHistorical: j['isHistorical'] == true,
-      senderVerified: j['senderVerified'] == true,
+      senderVerified:
+          j['senderVerified'] is bool ? j['senderVerified'] as bool : null,
       bitchatMessageId: j['bitchatMessageId'] as String?,
       nymMessageId: j['nymMessageId'] as String?,
       deliveryStatus: deliveryStatusFromString(j['deliveryStatus'] as String?),
@@ -175,6 +306,7 @@ class Message {
       fileOffer: (j['fileOffer'] as Map?)?.cast<String, dynamic>(),
       isBot: j['isBot'] == true,
       thinking: j['thinking'] as String?,
+      kind: messageKindFromString(j['kind'] as String?),
     );
   }
 }

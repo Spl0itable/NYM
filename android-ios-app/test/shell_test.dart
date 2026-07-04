@@ -4,12 +4,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:nym_bar/core/theme/nym_colors.dart';
+import 'package:nym_bar/features/emoji/emoji_prefetch.dart';
 import 'package:nym_bar/core/theme/nym_theme.dart';
 import 'package:nym_bar/screens/home_shell.dart';
 import 'package:nym_bar/services/storage/key_value_store.dart';
+import 'package:nym_bar/state/app_state.dart';
 import 'package:nym_bar/state/settings_provider.dart';
 
+/// The production initial state is now the EMPTY logged-out shell (the demo seed
+/// was removed — it leaked into login/first-run). This smoke test wants demo
+/// content to render, so it injects `AppState.seed()` (kept for tests) via an
+/// override, exactly as a real session would once data arrives.
+class _SeededAppState extends AppStateNotifier {
+  _SeededAppState() {
+    state = AppState.seed();
+  }
+}
+
 void main() {
+  // Custom-emoji ingest arms a module-global deferred prefetch Timer; cancel
+  // it so widget tests don't fail on a pending timer at teardown.
+  tearDown(resetCustomEmojiPrefetchForTest);
   testWidgets('HomeShell renders a sample channel and a message', (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final kv = await KeyValueStore.open();
@@ -28,7 +43,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [keyValueStoreProvider.overrideWithValue(kv)],
+        overrides: [
+          keyValueStoreProvider.overrideWithValue(kv),
+          appStateProvider.overrideWith((ref) => _SeededAppState()),
+        ],
         child: MaterialApp(
           theme: buildNymThemeData(colors),
           home: const HomeShell(),
@@ -48,5 +66,10 @@ void main() {
 
     // Sidebar identity header (also appears as the author of self messages).
     expect(find.text('you#1a2b'), findsWidgets);
+
+    // ChatPane kicks the module-global 3s custom-emoji prefetch; cancel it
+    // INSIDE the body — the binding's pending-timer invariant runs before
+    // group tearDown callbacks.
+    resetCustomEmojiPrefetchForTest();
   });
 }

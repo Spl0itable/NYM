@@ -103,3 +103,38 @@ final pendingComposerActionProvider =
     StateNotifierProvider<InteractionHooks, ComposerAction?>(
   (ref) => InteractionHooks(),
 );
+
+/// A pending "Gift Nymbot Credits" request raised by the context menu
+/// (ui-context.js:102-108 → `showBotCreditsModal({pubkey, nym})`). The
+/// bot-credits modal is owned by the nymbot slice, which has no public open()
+/// entry point yet; rather than editing it, the context menu posts the recipient
+/// here and the nymbot slice watches [giftCreditsRequestProvider], opens its
+/// gift-credit modal with the recipient prefilled, then calls [consume].
+///
+/// The nymbot slice observes this provider (home_shell.dart + bot_chat_screen)
+/// and opens BotCreditsModal with the recipient prefilled, then calls [consume].
+class GiftCreditsRequest {
+  const GiftCreditsRequest({required this.pubkey, required this.nym});
+
+  /// The recipient's pubkey.
+  final String pubkey;
+
+  /// The recipient's base nym (no `#suffix`).
+  final String nym;
+}
+
+class GiftCreditsHooks extends StateNotifier<GiftCreditsRequest?> {
+  GiftCreditsHooks() : super(null);
+
+  void request({required String pubkey, required String nym}) =>
+      state = GiftCreditsRequest(pubkey: pubkey, nym: nym);
+
+  /// Clears the pending request once the nymbot slice has opened the modal.
+  void consume() => state = null;
+}
+
+/// The gift-credits mailbox. The context menu writes; the nymbot slice reads.
+final giftCreditsRequestProvider =
+    StateNotifierProvider<GiftCreditsHooks, GiftCreditsRequest?>(
+  (ref) => GiftCreditsHooks(),
+);

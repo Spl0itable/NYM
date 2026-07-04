@@ -21,13 +21,15 @@ import '../../models/group.dart';
 // TODO(verify): the PWA has no PM deep-link form (`#pm:`); confirmed absent in
 // app.js `parseUrlChannel` and js/modules/message-format.js. Not implemented.
 
-/// The hosts the PWA serves deep links from. `shareChannel()` builds links on
-/// the runtime origin (`app.nymchat.app` in production); the message formatter
-/// recognizes `app.nym.bar/#<e|g|c>:<id>` chips. We accept both.
-// TODO(verify): the canonical production host(s). The Flutter share path
-// (channel_share.dart) pins `app.nymchat.app`; the formatter regex pins
-// `app.nym.bar`. Both are honoured here.
+/// The hosts the app accepts deep links from — kept in sync with the
+/// AndroidManifest intent-filter + iOS associated-domains. `shareChannel()`
+/// builds links on the runtime origin (`web.nymchat.app` in production — the
+/// only OFFICIAL_HOST, `build-verify.js:10`); `nymchat.app` is the apex; the
+/// legacy `app.nymchat.app` is still parsed so older shared links keep working;
+/// `app.nym.bar` is the message-formatter chip host.
 const Set<String> kNymLinkHosts = {
+  'web.nymchat.app',
+  'nymchat.app',
   'app.nymchat.app',
   'app.nym.bar',
 };

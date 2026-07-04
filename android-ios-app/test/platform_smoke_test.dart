@@ -26,6 +26,7 @@ void main() {
       'android.permission.MODIFY_AUDIO_SETTINGS',
       'android.permission.POST_NOTIFICATIONS',
       'android.permission.VIBRATE',
+      'android.permission.ACCESS_FINE_LOCATION',
       'android.permission.USE_BIOMETRIC',
       'android.permission.WAKE_LOCK',
       'android.permission.FOREGROUND_SERVICE',
@@ -86,6 +87,7 @@ void main() {
     const requiredKeys = <String>[
       'NSCameraUsageDescription',
       'NSMicrophoneUsageDescription',
+      'NSLocationWhenInUseUsageDescription',
       'NSPhotoLibraryUsageDescription',
       'NSPhotoLibraryAddUsageDescription',
       'NSFaceIDUsageDescription',
@@ -115,10 +117,18 @@ void main() {
   });
 
   group('iOS entitlements + project', () {
-    test('associated domains include the deep-link hosts', () {
+    test('keychain entitlement present; associated domains deliberately absent',
+        () {
       final ent = _read('ios/Runner/Runner.entitlements');
-      expect(ent, contains('applinks:app.nymchat.app'));
       expect(ent, contains('keychain-access-groups'));
+      // Universal Links (applinks:) were deliberately REMOVED: the automatic
+      // App Store provisioning profile lacks the Associated Domains
+      // capability, and shipping the entitlement without it fails signing.
+      // The file documents this; deep links still work via the custom scheme.
+      // If the capability is ever added in the Apple Developer portal, restore
+      // `applinks:app.nymchat.app` and flip this expectation back.
+      expect(ent, isNot(contains('applinks:')));
+      expect(ent, contains('Associated Domains'));
     });
 
     test('entitlements wired into the Xcode build settings', () {

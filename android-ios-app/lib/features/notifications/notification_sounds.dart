@@ -268,6 +268,20 @@ const Map<String, String> kLegacySoundAliases = {
   'msn': 'msnding',
 };
 
+/// The incoming-call ringtone beep — a single 480 Hz sine note at gain 0.07
+/// rendered for 0.4 s, verbatim from calls.js `_startRingtone.playBeep`
+/// (`o.frequency.value = 480; g.gain.value = 0.07; o.stop(ctx.currentTime + 0.4)`,
+/// calls.js:907-910). CallService loops this every 2 s while a call rings (the
+/// PWA's `setInterval(playBeep, 2000)`, calls.js:913). Kept here next to the
+/// notification sounds so it reuses the same [renderSoundWav] synthesis +
+/// audioplayers playback rather than a second audio engine. Not part of
+/// [kNotificationSounds] — it isn't a user-selectable `settings.sound` value.
+const SoundDescriptor kIncomingCallRingtone = SoundDescriptor(
+  wave: SoundWave.sine,
+  gain: 0.07,
+  notes: [SoundNote(f: 480, d: 0.4)],
+);
+
 /// Resolve a `settings.sound` value to its descriptor, honoring legacy aliases.
 /// Returns null for `'none'` (Silent) or any unknown value — matching
 /// notifications.js where an unknown key short-circuits `playSound`.

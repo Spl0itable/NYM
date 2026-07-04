@@ -4,11 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:nym_bar/core/theme/nym_colors.dart';
 import 'package:nym_bar/core/theme/nym_theme.dart';
 import 'package:nym_bar/features/globe/geo_projection.dart';
 import 'package:nym_bar/features/globe/geohash_explorer.dart';
 import 'package:nym_bar/features/globe/topojson.dart';
+import 'package:nym_bar/services/storage/key_value_store.dart';
+import 'package:nym_bar/state/settings_provider.dart';
 
 void main() {
   group('TopoJSON decoder', () {
@@ -103,6 +107,11 @@ void main() {
 
   group('GeohashExplorer widget', () {
     testWidgets('renders without throwing', (tester) async {
+      // The explorer now reads settingsProvider (→ keyValueStoreProvider) and
+      // appStateProvider, so the smoke test must supply the key/value store the
+      // same way the rest of the suite does.
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
       final colors = resolveNymColors(
         theme: NymThemeKey.bitchat,
         brightness: Brightness.dark,
@@ -110,6 +119,7 @@ void main() {
       );
       await tester.pumpWidget(
         ProviderScope(
+          overrides: [keyValueStoreProvider.overrideWithValue(kv)],
           child: MaterialApp(
             theme: ThemeData.dark().copyWith(
               extensions: <ThemeExtension<dynamic>>[colors],

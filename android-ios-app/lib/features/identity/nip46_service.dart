@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/constants/relays.dart';
@@ -89,8 +89,31 @@ class _WebSocketNip46Socket implements Nip46Socket {
   Future<void> close() => _channel.sink.close();
 }
 
-Nip46Socket _defaultSocketFactory(String relayUrl) =>
-    _WebSocketNip46Socket(relayUrl);
+/// A socket that failed to open. It keeps the service alive (no crash) while
+/// surfacing failure through logs.
+class _FailingNip46Socket implements Nip46Socket {
+  _FailingNip46Socket(this.error);
+
+  final Object error;
+
+  @override
+  Stream<String> get messages => const Stream.empty();
+
+  @override
+  void send(String data) {}
+
+  @override
+  Future<void> close() async {}
+}
+
+Nip46Socket _defaultSocketFactory(String relayUrl) {
+  try {
+    return _WebSocketNip46Socket(relayUrl);
+  } catch (e) {
+    debugPrint('[NIP46] Failed to open socket for $relayUrl: $e');
+    return _FailingNip46Socket(e);
+  }
+}
 
 /// Parsed `nostrconnect://` or `bunker://` connection string.
 class Nip46ConnectionUri {
@@ -431,6 +454,11 @@ class Nip46Service implements Nip46Signer {
   void _openRelay({bool persistent = false}) {
     final relay = _relayUrl!;
     final socket = _socketFactory(relay);
+    if (socket is _FailingNip46Socket) {
+      debugPrint('[NIP46] Socket open failed; skipping subscribe. error=${socket.error}');
+      _connected = false;
+      return;
+    }
     _socket = socket;
     _subId = '${persistent ? 'nip46-session' : 'nip46-auth'}-'
         '${DateTime.now().millisecondsSinceEpoch}';

@@ -1,10 +1,18 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show compute;
+
 import '../../models/nostr_event.dart';
 import 'keys.dart';
 import 'schnorr.dart';
 
 /// NIP-13 proof of work.
+
+/// The Nymchat channel-message PoW floor in leading-zero bits (`nymchatPowFloor`,
+/// app.js:556). Every channel message carries at least this much work, which is
+/// what lets other clients treat the sender as a Nymchat client (the web-of-trust
+/// self-attestation) and gate un-attested spam.
+const int kNymchatPowFloor = 16;
 
 /// Counts the number of leading zero bits in the 32-byte event id [idHex].
 int getPow(String idHex) {
@@ -77,6 +85,64 @@ NostrEvent minePow(UnsignedEvent ev, int difficulty, Uint8List privkey) {
       event.id = id;
       event.sig = signId(id, privkey);
       return event;
+    }
+    nonce++;
+  }
+}
+
+/// Grinds a `['nonce', n, difficulty]` tag onto [ev] until its id has at least
+/// [difficulty] leading zero bits, returning the UnsignedEvent ready to sign.
+/// Unlike [minePow] this does NOT need the private key — it grinds purely from
+/// the event's own [UnsignedEvent.pubkey], so it works for remote (NIP-46)
+/// signers too: mine here, then hand the result to the signer. The grind runs in
+/// a `compute` isolate so a 16-bit floor doesn't hitch the UI on send.
+Future<UnsignedEvent> mineNonce(UnsignedEvent ev, int difficulty) async {
+  if (difficulty <= 0) return ev;
+  final minedTags = await compute(_powGrind, <String, Object?>{
+    'pubkey': ev.pubkey,
+    'createdAt': ev.createdAt,
+    'kind': ev.kind,
+    'tags': ev.tags,
+    'content': ev.content,
+    'difficulty': difficulty,
+  });
+  return UnsignedEvent(
+    pubkey: ev.pubkey,
+    createdAt: ev.createdAt,
+    kind: ev.kind,
+    tags: minedTags,
+    content: ev.content,
+  );
+}
+
+/// `compute` entry point for [mineNonce] — pure, isolate-safe nonce grind.
+List<List<String>> _powGrind(Map<String, Object?> args) {
+  final pubkey = args['pubkey'] as String;
+  final createdAt = args['createdAt'] as int;
+  final kind = args['kind'] as int;
+  final content = args['content'] as String;
+  final difficulty = args['difficulty'] as int;
+  final base = (args['tags'] as List)
+      .map((t) => (t as List).cast<String>())
+      .toList();
+  final tags = <List<String>>[
+    for (final t in base)
+      if (t.isEmpty || t[0] != 'nonce') List<String>.from(t),
+  ];
+  final nonceIndex = tags.length;
+  tags.add(['nonce', '0', '$difficulty']);
+  var nonce = 0;
+  while (true) {
+    tags[nonceIndex] = ['nonce', '$nonce', '$difficulty'];
+    final ev = NostrEvent(
+      pubkey: pubkey,
+      createdAt: createdAt,
+      kind: kind,
+      tags: tags,
+      content: content,
+    );
+    if (getPow(ev.computeId()) >= difficulty) {
+      return [for (final t in tags) List<String>.from(t)];
     }
     nonce++;
   }

@@ -298,9 +298,21 @@ const Map<String, String> kBuiltinEmoji = {
 class NymFormat {
   const NymFormat._();
 
+  /// Strips the trailing game-state token `\n[gc:BASE64]` that PWA hides with
+  /// `.game-token { display:none }` (`message-format.js:279`,
+  /// `styles-chat.css:1330-1332`). The token is kept in the PWA DOM only for the
+  /// game module to read; visually it is invisible, so we elide it entirely to
+  /// avoid leaking a literal `[gc:…]` blob into the body.
+  static final RegExp _rxGameToken = RegExp(r'\n\[gc:[A-Za-z0-9+/=]+\]');
+
   /// Parses [content] into block nodes per the active [ctx].
   static List<FormatBlock> format(String content, [FormatContext? ctx]) {
     final c = ctx ?? FormatContext.empty;
+
+    // Elide the hidden game-state token first (matches PWA `display:none`).
+    if (content.contains('[gc:')) {
+      content = content.replaceAll(_rxGameToken, '');
+    }
 
     // Fast path: no trigger chars -> plain paragraphs split on blank lines,
     // keeping single newlines inside a paragraph.

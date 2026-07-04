@@ -33,6 +33,34 @@ class GeoFeature {
   final double area;
 }
 
+/// A render-ready city point (`decodeCities`, geo-decode.js:119): the projected
+/// dot position, its name, importance rank, and max population. The PWA filters
+/// the list by [rank] against a zoom-dependent cutoff and draws labels from
+/// [name].
+@immutable
+class CityPoint {
+  const CityPoint({
+    required this.lng,
+    required this.lat,
+    required this.name,
+    required this.rank,
+    required this.pop,
+  });
+
+  final double lng;
+  final double lat;
+
+  /// Place name (`properties.name`), '' if absent.
+  final String name;
+
+  /// `properties.scalerank` (0 = world's largest). Higher zoom reveals higher
+  /// ranks. Defaults to 10 when absent.
+  final int rank;
+
+  /// `properties.pop_max` (or pop_min), 0 if absent.
+  final int pop;
+}
+
 /// Decodes the bundled `countries-110m.json` (world-atlas TopoJSON) into a list
 /// of [GeoFeature], sorted largest-area first — a faithful Dart port of
 /// `decodeTopoJson` + `annotateFeature` + `decodeWorld` from `js/geo-decode.js`.
@@ -43,6 +71,102 @@ List<GeoFeature> decodeWorldTopoJson(String jsonString) {
   final topo = json.decode(jsonString) as Map<String, dynamic>;
   return _decodeWorld(topo);
 }
+
+/// Decodes `ne_50m_admin_1_states_provinces_lakes.json` (a GeoJSON
+/// FeatureCollection, NOT TopoJSON) into a list of admin-1 (state/province)
+/// [GeoFeature], sorted largest-area first — a faithful Dart port of
+/// `decodeAdmin1` (geo-decode.js:102). Each feature carries its `name`
+/// (`properties.name`, falling back to `properties.name_en`), bounds, centroid
+/// and area for border drawing + label placement.
+///
+/// Pure (no Flutter bindings), so it can run inside a `compute`/Isolate; the
+/// admin-1 dataset is large (~1.7 MB), so decode it off the UI thread.
+List<GeoFeature> decodeAdmin1GeoJson(String jsonString) {
+  final geo = json.decode(jsonString) as Map<String, dynamic>;
+  return _decodeAdmin1(geo);
+}
+
+/// Decodes `ne_50m_populated_places_simple.json` (a GeoJSON FeatureCollection)
+/// into a list of [CityPoint], sorted by ascending [CityPoint.rank] — a faithful
+/// Dart port of `decodeCities` (geo-decode.js:119). Reads `scalerank`
+/// (defaulting to 10), `name`, and `pop_max`/`pop_min`.
+///
+/// Pure (no Flutter bindings), so it can run inside a `compute`/Isolate.
+List<CityPoint> decodeCitiesGeoJson(String jsonString) {
+  final geo = json.decode(jsonString) as Map<String, dynamic>;
+  return _decodeCities(geo);
+}
+
+List<GeoFeature> _decodeAdmin1(Map<String, dynamic> geo) {
+  final featuresJson = geo['features'];
+  if (featuresJson is! List) return const [];
+
+  final feats = <GeoFeature>[];
+  for (final f in featuresJson) {
+    if (f is! Map) continue;
+    final geom = f['geometry'];
+    if (geom is! Map) continue;
+    final props = (f['properties'] as Map?) ?? const {};
+    final name = (props['name'] as String?) ??
+        (props['name_en'] as String?) ??
+        '';
+    final type = geom['type'];
+    final coords = geom['coordinates'];
+    List<List<List<List<double>>>> polys;
+    if (type == 'Polygon') {
+      polys = [_coordsToPolygon(coords as List)];
+    } else if (type == 'MultiPolygon') {
+      polys = [for (final p in (coords as List)) _coordsToPolygon(p as List)];
+    } else {
+      continue;
+    }
+    feats.add(_annotate(name, polys));
+  }
+
+  feats.sort((a, b) => b.area.compareTo(a.area));
+  return feats;
+}
+
+List<CityPoint> _decodeCities(Map<String, dynamic> geo) {
+  final featuresJson = geo['features'];
+  if (featuresJson is! List) return const [];
+
+  final out = <CityPoint>[];
+  for (final f in featuresJson) {
+    if (f is! Map) continue;
+    final geom = f['geometry'];
+    final coords = geom is Map ? geom['coordinates'] : null;
+    if (coords is! List || coords.length < 2) continue;
+    final props = (f['properties'] as Map?) ?? const {};
+
+    final rankRaw = props['scalerank'] ?? props['SCALERANK'];
+    final rank = rankRaw is num ? rankRaw.toInt() : 10;
+
+    final popRaw = props['pop_max'] ?? props['POP_MAX'] ?? props['pop_min'];
+    final pop = popRaw is num ? popRaw.toInt() : 0;
+
+    out.add(CityPoint(
+      lng: (coords[0] as num).toDouble(),
+      lat: (coords[1] as num).toDouble(),
+      name: (props['name'] as String?) ?? (props['NAME'] as String?) ?? '',
+      rank: rank,
+      pop: pop,
+    ));
+  }
+
+  out.sort((a, b) => a.rank.compareTo(b.rank));
+  return out;
+}
+
+/// Converts raw GeoJSON Polygon coordinates (`[ring][pt][lng,lat]`) into the
+/// `ring -> [lng,lat]` shape [_annotate]/the painter expect.
+List<List<List<double>>> _coordsToPolygon(List rings) => [
+      for (final ring in rings)
+        [
+          for (final pt in (ring as List))
+            [(pt[0] as num).toDouble(), (pt[1] as num).toDouble()],
+        ],
+    ];
 
 List<GeoFeature> _decodeWorld(Map<String, dynamic> topo) {
   // Quantization transform: x_real = x*scale + translate (delta-decoded arcs).

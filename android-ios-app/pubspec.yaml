@@ -1,7 +1,7 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 1.0.1+117
+version: 1.0.1+128
 
 environment:
   sdk: ^3.6.0
@@ -43,6 +43,8 @@ dependencies:
   cached_network_image: ^3.4.1
   share_plus: ^10.0.2
   url_launcher: any
+  # Inline video playback for video messages / galleries (PWA <video>).
+  video_player: ^2.9.1
 
   # Realtime media
   flutter_webrtc: ^0.12.5+hotfix.1
@@ -54,9 +56,15 @@ dependencies:
   # Web Audio equivalent — we feed it the rendered WAV bytes).
   audioplayers: ^6.0.0
 
-  # QR
+  # QR (generation only — the PWA has no camera QR-scanning, so the
+  # mobile_scanner plugin was unused; it was also the sole driver of the iOS
+  # 15.5 deployment floor that broke the CocoaPods install).
   qr_flutter: ^4.1.0
-  mobile_scanner: ^6.0.2
+
+  # Geolocation — the GPS source for proximity channel sort (the PWA's
+  # `navigator.geolocation.getCurrentPosition`, app.js:3917). permission_handler
+  # already gates the grant; geolocator fetches the actual coordinates.
+  geolocator: ^13.0.0
 
   # Auth / biometrics
   local_auth: ^2.3.0
@@ -67,6 +75,9 @@ dependencies:
   app_links: ^6.0.0
   emoji_picker_flutter: ^3.1.0
   visibility_detector: ^0.4.0+2
+  # Scroll-to-index for the message list (jump-to-quoted-message), since a plain
+  # ListView can't land on an off-screen, lazily-built item.
+  scrollable_positioned_list: ^0.3.8
 
   # Utils
   intl: ^0.19.0
@@ -95,8 +106,34 @@ flutter:
   assets:
     - assets/images/
     - assets/text/
-    - assets/documents/
     - assets/data/
+
+  # Bundled Roboto for the primary UI sans — guarantees correct line metrics on
+  # any device (including de-Googled / minimal Android builds whose system font
+  # set Flutter can't reach). Emoji and symbol glyphs are rendered by the OS's
+  # native fallback (Apple Color Emoji on iOS, Noto Color Emoji on Android),
+  # which Flutter resolves automatically — bundling NotoColorEmoji.ttf is too
+  # large for App Store builds (~24MB) and unnecessary on platforms with a
+  # native color-emoji font.
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
+    # Bundled broad TEXT sans fallback so glyphs the primary Roboto lacks still
+    # resolve instead of tofu boxes — the bitcoin sign ₿ (U+20BF), extra currency
+    # / punctuation / dashes, Greek / Cyrillic. Deliberately a plain text sans
+    # with NO emoji-range glyphs: a monochrome SYMBOL font here would shadow the
+    # OS COLOUR emoji for dual-presentation codepoints (⚡ ★ ☂ ❤ …), painting them
+    # as black outlines. Colour emoji stay on the OS native font (Apple Color
+    # Emoji on iOS) to match the PWA and avoid an ~11MB binary bump. Also drives
+    # the satoshi ₿ / matrix watermark TextPainter (cosmetics.dart).
+    - family: Noto Sans
+      fonts:
+        - asset: assets/fonts/NotoSans-Regular.ttf
 
 flutter_launcher_icons:
   android: true

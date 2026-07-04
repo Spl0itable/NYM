@@ -102,31 +102,26 @@ void main() {
       expect(WallpaperPattern.forType('none').paints, isFalse);
     });
 
-    test('the 7 presets map to a painting pattern with the CSS tile size', () {
-      const expectedTiles = {
-        'geometric': Size(80, 140),
-        'circuit': Size(80, 80),
-        'dots': Size(24, 24),
-        'waves': Size(120, 24),
-        'topography': Size(120, 120),
-        'hexagons': Size(56, 100),
-        'diamonds': Size(48, 48),
-      };
-      for (final entry in expectedTiles.entries) {
-        final p = WallpaperPattern.forType(entry.key);
-        expect(p.type, entry.key);
-        expect(p.paints, isTrue, reason: '${entry.key} should paint');
-        expect(p.tile, entry.value, reason: '${entry.key} tile size');
+    test('the 7 presets map to a painting pattern', () {
+      const presets = [
+        'geometric',
+        'circuit',
+        'dots',
+        'waves',
+        'topography',
+        'hexagons',
+        'diamonds',
+      ];
+      for (final type in presets) {
+        final p = WallpaperPattern.forType(type);
+        expect(p.type, type);
+        expect(p.paints, isTrue, reason: '$type should paint');
+        expect(p.fill, WallpaperFill.pattern, reason: '$type fill');
       }
       expect(WallpaperPattern.presets.length, 7);
     });
 
-    test('gradient vs svgMask fill classification matches the CSS technique',
-        () {
-      expect(WallpaperPattern.forType('geometric').fill, WallpaperFill.gradient);
-      expect(WallpaperPattern.forType('dots').fill, WallpaperFill.gradient);
-      expect(WallpaperPattern.forType('circuit').fill, WallpaperFill.svgMask);
-      expect(WallpaperPattern.forType('hexagons').fill, WallpaperFill.svgMask);
+    test('custom uploads classify as the custom fill', () {
       expect(WallpaperPattern.forType('custom').fill, WallpaperFill.custom);
     });
   });

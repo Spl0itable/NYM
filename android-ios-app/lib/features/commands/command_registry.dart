@@ -10,6 +10,8 @@
 // parser, alias resolution, gating, and formatting unit-testable without a
 // running engine (test/commands_test.dart).
 
+import '../nymbot/bot_commands.dart';
+
 /// Where a command is allowed to run, mirroring the "Context" column of the
 /// §7 table. The PWA enforces this inside each `cmd*` handler (e.g. `/who`
 /// errors in PMs, `/poll` errors in PM/group, group-only commands require an
@@ -20,7 +22,7 @@ enum CommandContext {
   /// Runs anywhere (channel, PM, or group).
   all,
 
-  /// Public-channel only (`/who`, `/share`). Rejected in PM/group.
+  /// Public-channel only (`/who`). Rejected in PM/group.
   channel,
 
   /// Channel-only AND never in a PM (`/poll`). Same as [channel] for gating
@@ -269,7 +271,9 @@ const List<CommandSpec> kCommandSpecs = [
     name: '/share',
     desc: 'Share #channel URL',
     category: CommandCategory.channels,
-    context: CommandContext.channel,
+    // No context gate: `cmdShare` → `shareChannel()` (channels.js:411-427)
+    // runs even in PM mode — the URL falls back to
+    // `currentChannel || 'nymchat'`.
   ),
   // --- pms ----------------------------------------------------------------
   CommandSpec(
@@ -357,6 +361,52 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.misc,
   ),
 ];
+
+// --- Public `?` Nymbot command palette ------------------------------------
+// The `?`-prefixed bot command palette reuses the SAME `#commandPalette` surface
+// as `/`, but with the PUBLIC bot command set (`showBotCommandPalette`,
+// commands.js:436). Unlike `/`, the bot list is FLAT (no category headers) and
+// renders in catalogue order, the first row pre-selected, filtered by
+// `cmd.startsWith(input.toLowerCase())` where `cmd` includes its `?` prefix.
+//
+// We DERIVE the rows from the real bot-command catalogue (`kBotCommands` in
+// features/nymbot/bot_commands.dart) rather than duplicating the list. The
+// public channel palette excludes the "Credits (private Nymbot chat)" group
+// (`?balance/?buy/?model/?git/?gift/?transfer`) — those are PM-only and live in
+// the bot's private chat (`botPMCommands`), not the public `?` palette.
+
+/// One selectable row of the public `?` bot-command palette: the command token
+/// (including the leading `?`, e.g. `?flip`) and its one-line description. This
+/// is the bot-command analogue of [CommandSpec] for the shared palette surface.
+class BotPaletteCommand {
+  const BotPaletteCommand({required this.command, required this.desc});
+
+  /// The full command token shown as `.command-name`, including `?` (`?flip`).
+  final String command;
+
+  /// `.command-desc` text (the catalogue's README description).
+  final String desc;
+}
+
+/// The public `?` palette catalogue, derived from [kBotCommands] in
+/// catalogue order with the credit/PM-only commands filtered out. Built once.
+final List<BotPaletteCommand> kBotPaletteCommands = [
+  for (final c in kBotCommands)
+    if (!c.creditCommand)
+      BotPaletteCommand(command: '?${c.name}', desc: c.description),
+];
+
+/// Filters the public bot palette for [input] (the raw `?needle`). Mirrors
+/// `showBotCommandPalette` (commands.js:442-443): a command matches when its
+/// `?cmd` token starts with the lower-cased input. Returns the rows in
+/// catalogue order, or an empty list when nothing matches (hide the palette).
+List<BotPaletteCommand> buildBotPaletteRows(String input) {
+  final needle = input.toLowerCase();
+  return [
+    for (final c in kBotPaletteCommands)
+      if (c.command.startsWith(needle)) c,
+  ];
+}
 
 // Formatting transforms — exact strings the PWA's cmd* handlers send.
 String _meFormatter(String args) => '/me $args';

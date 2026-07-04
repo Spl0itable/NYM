@@ -44,6 +44,10 @@ class CallParticipant {
       );
 }
 
+/// Per-message delivery state for a self call-chat row (calls.js
+/// `.call-chat-receipt`): `sent` until at least one peer reads it, then `read`.
+enum CallChatDelivery { sent, read }
+
 /// One in-call chat row (calls.js `ac.chatLog` entries).
 class CallChatMessage {
   const CallChatMessage({
@@ -51,12 +55,66 @@ class CallChatMessage {
     required this.text,
     required this.isSelf,
     required this.mid,
+    this.reactions = const {},
+    this.readers = const {},
+    this.delivery = CallChatDelivery.sent,
   });
 
   final String pubkey;
   final String text;
   final bool isSelf;
   final String mid;
+
+  /// emoji → set of reactor pubkeys (calls.js `ac.chatReactions[mid]`). A
+  /// reaction is "self" when the set contains the local pubkey.
+  final Map<String, Set<String>> reactions;
+
+  /// pubkey → nym of peers that have read this self message (group calls render
+  /// reader avatars; 1:1 renders ✓/✓✓). calls.js `ac.chatReaders[mid]`.
+  final Map<String, String> readers;
+
+  /// 1:1 receipt state for self rows (calls.js delivery-status sent|read).
+  final CallChatDelivery delivery;
+
+  CallChatMessage copyWith({
+    Map<String, Set<String>>? reactions,
+    Map<String, String>? readers,
+    CallChatDelivery? delivery,
+  }) =>
+      CallChatMessage(
+        pubkey: pubkey,
+        text: text,
+        isSelf: isSelf,
+        mid: mid,
+        reactions: reactions ?? this.reactions,
+        readers: readers ?? this.readers,
+        delivery: delivery ?? this.delivery,
+      );
+}
+
+/// One floating/flying in-call reaction (calls.js `.call-react-fly-item`). The
+/// overlay animates each from the bottom upward over ~3.1s, then drops it.
+class CallFlyReaction {
+  const CallFlyReaction({
+    required this.id,
+    required this.emoji,
+    required this.leftPercent,
+    this.pubkey,
+    this.who,
+  });
+
+  /// Stable key so the overlay can keep an [AnimationController] per item.
+  final int id;
+  final String emoji;
+
+  /// Horizontal position as a 0–100 percentage (calls.js `8 + random*74`).
+  final double leftPercent;
+
+  /// The reactor's pubkey (decorated nym in the "who" pill); null for self.
+  final String? pubkey;
+
+  /// A plain "who" label (e.g. "You") when [pubkey] is null.
+  final String? who;
 }
 
 /// The whole call snapshot consumed by the overlay + incoming modal.
@@ -78,7 +136,15 @@ class CallState {
     this.elapsedSeconds = 0,
     this.chatLog = const [],
     this.chatUnread = 0,
-    this.typingNyms = const [],
+    this.typingPubkeys = const [],
+    this.flyReactions = const [],
+    this.switchingCamera = false,
+    this.videoInputCount = 0,
+    this.shareRestricted = false,
+    this.presenter,
+    this.presentRequests = const {},
+    this.isMod = false,
+    this.canShareScreen = true,
   });
 
   final CallPhase phase;
@@ -105,7 +171,38 @@ class CallState {
 
   final List<CallChatMessage> chatLog;
   final int chatUnread;
-  final List<String> typingNyms;
+
+  /// Pubkeys currently typing in call chat (decorated by the overlay). calls.js
+  /// `ac.chatTypers` keys.
+  final List<String> typingPubkeys;
+
+  /// Active floating reactions (self + incoming) to animate over the grid.
+  final List<CallFlyReaction> flyReactions;
+
+  // --- presenter / screen-share moderation (group calls, calls.js) ----------
+
+  /// Mid-switch-camera flag — disables the switch button (calls.js
+  /// `ac.switchingCamera`).
+  final bool switchingCamera;
+
+  /// Number of video input devices (the switch-cam button hides unless > 1;
+  /// calls.js `_updateCameraSwitchBtn`).
+  final int videoInputCount;
+
+  /// "Only the presenter can share" is on (calls.js `ac.shareRestricted`).
+  final bool shareRestricted;
+
+  /// The assigned presenter's pubkey, if any (calls.js `ac.presenter`).
+  final String? presenter;
+
+  /// Pubkeys that requested to present (calls.js `ac.presentRequests`).
+  final Set<String> presentRequests;
+
+  /// We can moderate this (group) call (calls.js `_isCallMod`).
+  final bool isMod;
+
+  /// We are allowed to screen-share right now (calls.js `canShareScreen`).
+  final bool canShareScreen;
 
   bool get isActiveCall =>
       phase == CallPhase.ringing ||
@@ -133,7 +230,15 @@ class CallState {
     int? elapsedSeconds,
     List<CallChatMessage>? chatLog,
     int? chatUnread,
-    List<String>? typingNyms,
+    List<String>? typingPubkeys,
+    List<CallFlyReaction>? flyReactions,
+    bool? switchingCamera,
+    int? videoInputCount,
+    bool? shareRestricted,
+    String? presenter,
+    Set<String>? presentRequests,
+    bool? isMod,
+    bool? canShareScreen,
   }) =>
       CallState(
         phase: phase ?? this.phase,
@@ -152,6 +257,14 @@ class CallState {
         elapsedSeconds: elapsedSeconds ?? this.elapsedSeconds,
         chatLog: chatLog ?? this.chatLog,
         chatUnread: chatUnread ?? this.chatUnread,
-        typingNyms: typingNyms ?? this.typingNyms,
+        typingPubkeys: typingPubkeys ?? this.typingPubkeys,
+        flyReactions: flyReactions ?? this.flyReactions,
+        switchingCamera: switchingCamera ?? this.switchingCamera,
+        videoInputCount: videoInputCount ?? this.videoInputCount,
+        shareRestricted: shareRestricted ?? this.shareRestricted,
+        presenter: presenter ?? this.presenter,
+        presentRequests: presentRequests ?? this.presentRequests,
+        isMod: isMod ?? this.isMod,
+        canShareScreen: canShareScreen ?? this.canShareScreen,
       );
 }

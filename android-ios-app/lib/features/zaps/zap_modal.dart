@@ -8,9 +8,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../features/identity/modal_chrome.dart';
 import '../../services/api/api_client.dart';
+import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import 'lnurl.dart';
+import 'zap_logic.dart';
 
 /// `#zapModal` (`.zap-modal`, index.html lines 2021-2098; zaps.js
 /// `showZapModal` / `generateZapInvoice` / `displayZapInvoice`). Preset amounts
@@ -55,9 +58,15 @@ class ZapModal extends ConsumerStatefulWidget {
     String? messageId,
     String? originalKind,
   }) {
+    // `.modal` barrier: solid-ui (default) dark `rgba(0,0,0,0.75)` →
+    // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
+    // (styles-themes-responsive.css:1630-1635).
+    final isLight = context.nym.isLight;
     return showDialog<void>(
       context: context,
-      barrierColor: const Color(0xB3000000), // rgba(0,0,0,0.7)
+      barrierColor: isLight
+          ? const Color(0x73000000) // black @ 0.45
+          : const Color(0xBF000000), // black @ 0.75
       builder: (_) => ZapModal(
         recipientPubkey: recipientPubkey,
         recipientNym: recipientNym,
@@ -76,6 +85,7 @@ enum _Phase { amount, generating, invoice, paid, error }
 
 class _ZapModalState extends ConsumerState<ZapModal> {
   final _customController = TextEditingController();
+  final _customFocus = FocusNode();
   final _commentController = TextEditingController();
   final _api = ApiClient();
   int? _selected;
@@ -83,6 +93,10 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   String _statusText = '';
   LnInvoice? _invoice;
   Timer? _verifyTimer;
+
+  /// True while the manual "I've paid" re-check is in flight (zaps.js
+  /// `manualCheckPayment` shows a "Checking payment..." spinner state).
+  bool _checkingManual = false;
 
   /// Lowercased bolt11s we've already counted as paid (zaps.js
   /// `_selfCountedZapInvoices`) — guards against the verify poll and a kind-9735
@@ -92,10 +106,24 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   @override
   void dispose() {
     _customController.dispose();
+    _customFocus.dispose();
     _commentController.dispose();
     _verifyTimer?.cancel();
     _api.dispose();
     super.dispose();
+  }
+
+  /// The Custom field's "Generate" (and Enter) path (zaps.js `triggerCustom`):
+  /// a blank/≤0 custom amount focuses the field and returns (no fallback to a
+  /// selected preset); a valid one clears any preset highlight and generates.
+  void _triggerCustom() {
+    final val = int.tryParse(_customController.text.trim());
+    if (val == null || val <= 0) {
+      _customFocus.requestFocus();
+      return;
+    }
+    setState(() => _selected = null);
+    _generate();
   }
 
   int? get _amount {
@@ -193,11 +221,77 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   /// bolt11 (zaps.js `handleZapPaymentSuccess`; dedup via `_selfCountedZapInvoices`).
   void _markPaid(LnInvoice invoice) {
     if (!_settledInvoices.add(invoice.dedupKey)) return; // already counted
-    HapticFeedback.lightImpact(); // PWA `window.nymHapticTap`
+    // PWA `window.nymHapticTap` — the same shared 30ms vibrate every other
+    // haptic site fires (inline-bindings.js:112-114), mapped app-wide to
+    // mediumImpact.
+    HapticFeedback.mediumImpact();
+    // Record our own zap on the target message's badge instantly (zaps.js
+    // `_recordOwnMessageZap`), deduped by the invoice's bolt11 so a later
+    // kind-9735 echo for the same payment can't double-count (same dedupKey
+    // scheme as the receipt path, _onPrivateZap).
+    final messageId = widget.messageId;
+    if (messageId != null && messageId.isNotEmpty) {
+      ref.read(appStateProvider.notifier).recordMessageZap(
+            messageId: messageId,
+            zapperPubkey: ref.read(appStateProvider).selfPubkey,
+            amountSats: invoice.amountSats,
+            dedupKey: ZapLogic.dedupKey(bolt11: invoice.pr, eventId: ''),
+            // The self-zap is verify-URL/server confirmed → verified (zaps.js
+            // `_recordOwnMessageZap(..., true)`, line 1102/1606).
+          );
+      // Announce the zap so OTHER clients update the badge (zaps.js
+      // `_publishOwnMessageZapEvent` / `_publishOwnPrivateZapEvent`). The
+      // controller reads the current view and picks public (channel) vs
+      // gift-wrapped (PM/group) delivery. Deduped end-to-end by bolt11 so this
+      // announce, the self-record above, and any public-receipt echo of the
+      // same payment count once.
+      unawaited(ref.read(nostrControllerProvider).announceMessageZap(
+            messageId: messageId,
+            recipientPubkey: widget.recipientPubkey,
+            bolt11: invoice.pr,
+            originalKind: widget.originalKind,
+          ));
+    }
     setState(() => _phase = _Phase.paid);
     Future<void>.delayed(const Duration(seconds: 2), () {
       if (mounted) Navigator.of(context).maybePop();
     });
+  }
+
+  /// "I've paid" manual re-check (zaps.js `manualCheckPayment`). Re-checks the
+  /// current invoice once and finalizes if paid; otherwise shows the PWA's
+  /// "not paid yet — tap again" status line without leaving the invoice screen.
+  Future<void> _manualCheck() async {
+    final invoice = _invoice;
+    if (invoice == null || _checkingManual) return;
+    setState(() {
+      _checkingManual = true;
+      _statusText = 'Checking payment...';
+    });
+    try {
+      final paid = await _api.zapVerify(
+        pr: invoice.pr,
+        verifyUrl: invoice.verify,
+        providerPubkey: invoice.providerPubkey,
+      );
+      if (!mounted) return;
+      if (paid) {
+        _verifyTimer?.cancel();
+        _markPaid(invoice);
+        return;
+      }
+      setState(() {
+        _checkingManual = false;
+        _statusText =
+            'Not paid yet — complete the payment in your wallet, then tap again.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _checkingManual = false;
+        _statusText = 'Could not check yet — try again in a moment.';
+      });
+    }
   }
 
   Future<void> _copyInvoice() async {
@@ -227,36 +321,69 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         constraints: const BoxConstraints(maxWidth: 400),
         width: MediaQuery.of(context).size.width * 0.9,
         margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.all(32),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: c.bgSecondary,
           border: Border.all(color: c.glassBorder),
           borderRadius: NymRadius.rxl,
-          boxShadow: const [
-            BoxShadow(color: Color(0x80000000), blurRadius: 32, offset: Offset(0, 8)),
+          // `body.light-mode .modal-content { box-shadow: 0 8px 40px
+          // rgba(0,0,0,0.12) }` — softer single shadow in light mode
+          // (styles-themes-responsive.css:1050-1052).
+          boxShadow: [
+            BoxShadow(
+              color: c.isLight
+                  ? const Color(0x1F000000) // black @ 0.12
+                  : const Color(0x80000000), // black @ 0.5
+              blurRadius: c.isLight ? 40 : 32,
+              offset: const Offset(0, 8),
+            ),
           ],
         ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+        // `showDialog` does not insert a Material, so the InkWell-based buttons
+        // (amount grid, close, generate, copy/wallet, "I've paid") would fail
+        // `debugCheckHasMaterial`. A transparent Material supplies the ink
+        // ancestor without painting over the Container's own decoration.
+        child: Material(
+          type: MaterialType.transparency,
+          // `.modal-close` is a separate absolutely-positioned chip over the
+          // card, not an inline Row child — so the body and the chip are
+          // siblings in a Stack. The `.modal-content` 32px padding lives on the
+          // scroll content so the chip can sit at the card corner (14,14).
+          child: Stack(
             children: [
-              _header(c),
-              const SizedBox(height: 16),
-              Text(
-                widget.messageId != null
-                    ? 'Zapping @${widget.recipientNym}'
-                    : "Zapping @${widget.recipientNym}'s profile",
-                style: TextStyle(color: c.textDim, fontSize: 13),
+              SingleChildScrollView(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _header(c),
+                    const SizedBox(height: 24), // `.modal-header` margin-bottom
+                // `#zapRecipientInfo` (`.nm-h-75`) — centered, body-size, mb20.
+                Text(
+                  widget.messageId != null
+                      ? 'Zapping @${widget.recipientNym}'
+                      : "Zapping @${widget.recipientNym}'s profile",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: c.textDim, fontSize: 15),
+                ),
+                const SizedBox(height: 20),
+                if (_phase == _Phase.amount) ..._amountSection(c),
+                if (_phase == _Phase.generating) _status(c, checking: true),
+                if (_phase == _Phase.error) _status(c),
+                if (_phase == _Phase.invoice) ..._invoiceSection(c),
+                if (_phase == _Phase.invoice && _statusText.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _status(c, checking: _checkingManual),
+                ],
+                    if (_phase == _Phase.paid) _paidSection(c),
+                    const SizedBox(height: 20),
+                    _actions(c),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
-              if (_phase == _Phase.amount) ..._amountSection(c),
-              if (_phase == _Phase.generating) _status(c, checking: true),
-              if (_phase == _Phase.error) _status(c),
-              if (_phase == _Phase.invoice) ..._invoiceSection(c),
-              if (_phase == _Phase.paid) _paidSection(c),
-              const SizedBox(height: 20),
-              _actions(c),
+              // `.modal-close`: 32×32 glass ✕ chip, absolute top-right (14,14).
+              ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
             ],
           ),
         ),
@@ -265,51 +392,36 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   Widget _header(NymColors c) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            'SEND LIGHTNING ZAP',
-            style: TextStyle(
-              color: c.primary,
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.5,
-            ),
-          ),
+    // `.modal-header`: 22px, uppercase, --primary, ls1.5, with a hairline
+    // bottom border + 14px padding-bottom under the title. The close ✕ is the
+    // separate absolute chip (build) — not an inline Row child here.
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.glassBorder)),
+      ),
+      child: Text(
+        'SEND LIGHTNING ZAP',
+        style: TextStyle(
+          color: c.primary,
+          fontSize: 22,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.5,
         ),
-        InkWell(
-          onTap: () => Navigator.of(context).maybePop(),
-          borderRadius: const BorderRadius.all(Radius.circular(16)),
-          child: Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.white.withValues(alpha: 0.05),
-              border: Border.all(color: c.glassBorder),
-            ),
-            child: Icon(Icons.close, size: 16, color: c.textDim),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
   List<Widget> _amountSection(NymColors c) {
+    // `.zap-amounts` is a 3-col grid, collapsing to 2 cols under 768px
+    // (styles-themes-responsive.css @media).
+    final cols = MediaQuery.of(context).size.width < 768 ? 2 : 3;
     return [
-      Text(
-        'SELECT AMOUNT',
-        style: TextStyle(
-          color: c.textDim,
-          fontSize: 11,
-          letterSpacing: 1.2,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      const SizedBox(height: 12),
+      _formLabel(c, 'Select Amount'),
+      const SizedBox(height: 8),
       GridView.count(
-        crossAxisCount: 3,
+        crossAxisCount: cols,
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         mainAxisSpacing: 10,
@@ -324,25 +436,48 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         children: [
           Expanded(
             child: _input(c, _customController, 'Custom amount (sats)',
-                number: true, onChanged: (_) => setState(() => _selected = null)),
+                number: true,
+                focusNode: _customFocus,
+                onSubmitted: (_) => _triggerCustom()),
           ),
           const SizedBox(width: 10),
           _generateBtn(c),
         ],
       ),
       const SizedBox(height: 20),
-      Text(
-        'COMMENT (OPTIONAL)',
+      // `Comment <span class="nm-h-2">(optional)</span>` — "(optional)" is
+      // lowercase w400 ls0 (not uppercased with the rest of the label).
+      _formLabel(c, 'Comment', optional: true),
+      const SizedBox(height: 8),
+      _input(c, _commentController, 'Add a comment to your zap'),
+    ];
+  }
+
+  /// `.form-label` — 11px UPPERCASE ls1.2 w600 text-dim, with an optional
+  /// trailing `.nm-h-2` "(optional)" span (lowercase, w400, ls0).
+  Widget _formLabel(NymColors c, String text, {bool optional = false}) {
+    return Text.rich(
+      TextSpan(
+        text: text.toUpperCase(),
         style: TextStyle(
           color: c.textDim,
           fontSize: 11,
           letterSpacing: 1.2,
           fontWeight: FontWeight.w600,
         ),
+        children: optional
+            ? [
+                const TextSpan(
+                  text: ' (optional)',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w400,
+                    letterSpacing: 0,
+                  ),
+                ),
+              ]
+            : null,
       ),
-      const SizedBox(height: 8),
-      _input(c, _commentController, 'Add a comment to your zap'),
-    ];
+    );
   }
 
   Widget _amountBtn(NymColors c, int amt) {
@@ -362,14 +497,28 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           color: selected
               ? c.lightning.withValues(alpha: 0.12)
               : Colors.white.withValues(alpha: 0.04),
+          // `.zap-amount-btn` resting border = `--glass-border`; selected →
+          // lightning/0.5.
           border: Border.all(
-            color: c.lightning.withValues(alpha: selected ? 0.5 : 0.0),
+            color: selected
+                ? c.lightning.withValues(alpha: 0.5)
+                : c.glassBorder,
           ),
           borderRadius: NymRadius.rsm,
+          // `.zap-amount-btn.selected` → soft lightning glow.
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: c.lightning.withValues(alpha: 0.15),
+                    blurRadius: 15,
+                  ),
+                ]
+              : null,
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // `.zap-amount-btn .sats` — 18px bold lightning.
             Text(
               label,
               style: TextStyle(
@@ -378,7 +527,8 @@ class _ZapModalState extends ConsumerState<ZapModal> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            Text('sats', style: TextStyle(color: c.text, fontSize: 12)),
+            // bare "sats" text node inherits `.zap-amount-btn` (14px, --text).
+            Text('sats', style: TextStyle(color: c.text, fontSize: 14)),
           ],
         ),
       ),
@@ -387,7 +537,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
 
   Widget _generateBtn(NymColors c) {
     return InkWell(
-      onTap: _generate,
+      onTap: _triggerCustom,
       borderRadius: NymRadius.rsm,
       child: Container(
         height: 44,
@@ -415,12 +565,14 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     return [
       Container(
         alignment: Alignment.center,
-        margin: const EdgeInsets.symmetric(vertical: 8),
+        // `.zap-invoice-qr` — margin 20px 0.
+        margin: const EdgeInsets.symmetric(vertical: 20),
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: Colors.white,
-            border: Border.all(color: c.lightning.withValues(alpha: 0.3)),
+            // `.zap-invoice-qr` — 2px lightning/0.3 border.
+            border: Border.all(color: c.lightning.withValues(alpha: 0.3), width: 2),
             borderRadius: NymRadius.rsm,
           ),
           child: QrImageView(
@@ -432,7 +584,8 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       ),
       Container(
         padding: const EdgeInsets.all(15),
-        margin: const EdgeInsets.symmetric(vertical: 8),
+        // `.zap-invoice` — margin 20px 0.
+        margin: const EdgeInsets.symmetric(vertical: 20),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.03),
           border: Border.all(color: c.lightning.withValues(alpha: 0.3)),
@@ -440,18 +593,18 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         ),
         child: Text(
           pr,
-          style: TextStyle(
-            color: c.textDim,
-            fontSize: 12,
-            fontFamily: 'monospace',
-          ),
+          // `.zap-invoice` inherits --font-sans (no mono rule); 12px text-dim.
+          style: TextStyle(color: c.textDim, fontSize: 12),
         ),
       ),
+      // `.zap-invoice-actions` — Copy / Open Wallet `.icon-btn`s, intrinsic
+      // width, centered, gap 10 (not stretched).
       Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Expanded(child: _iconBtn(c, 'Copy Invoice', _copyInvoice)),
+          _iconBtn(c, 'Copy Invoice', _copyInvoice),
           const SizedBox(width: 10),
-          Expanded(child: _iconBtn(c, 'Open Wallet', _openWallet)),
+          _iconBtn(c, 'Open Wallet', _openWallet),
         ],
       ),
       // WebLN is not applicable on native — mirrors the PWA hiding the WebLN
@@ -460,7 +613,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   Widget _paidSection(NymColors c) {
-    return Container(
+    final card = Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.03),
@@ -471,13 +624,23 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         children: [
           const Text('⚡', style: TextStyle(fontSize: 40)),
           const SizedBox(height: 4),
-          Text('Zap sent successfully!',
-              style: TextStyle(color: c.primary)),
+          Text('Zap sent successfully!', style: TextStyle(color: c.primary)),
           const SizedBox(height: 4),
           Text('${_invoice?.amountSats ?? ''} sats',
               style: TextStyle(color: c.primary, fontSize: 12)),
         ],
       ),
+    );
+    // `@keyframes zapSuccess`: scale 1 → 1.05 → 1 over 0.5s.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 500),
+      builder: (_, t, child) {
+        // Triangle 0→1→0 in t, peaking at 0.05 extra scale halfway through.
+        final pop = 1 + 0.05 * (1 - (2 * t - 1).abs());
+        return Transform.scale(scale: pop, child: child);
+      },
+      child: card,
     );
   }
 
@@ -502,7 +665,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           ],
           Flexible(
             child: Text(
-              checking ? 'Generating invoice...' : _statusText,
+              _statusText.isNotEmpty
+                  ? _statusText
+                  : (checking ? 'Generating invoice...' : ''),
               textAlign: TextAlign.center,
               style: TextStyle(color: checking ? c.warning : c.text),
             ),
@@ -513,6 +678,19 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   Widget _actions(NymColors c) {
+    // On the invoice screen the PWA reveals a primary "I've paid" button beside
+    // Cancel (index.html `#zapPaidBtn`, zaps.js `displayZapInvoice`). Both keep
+    // intrinsic widths centered with a 10px gap (`.modal-actions`).
+    if (_phase == _Phase.invoice) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _iconBtn(c, 'Cancel', () => Navigator.of(context).maybePop()),
+          const SizedBox(width: 10),
+          _sendBtn(c, "I've paid", _checkingManual ? null : _manualCheck),
+        ],
+      );
+    }
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -521,25 +699,63 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     );
   }
 
-  Widget _iconBtn(NymColors c, String label, VoidCallback onTap) {
+  /// `.icon-btn` — bordered uppercase ghost pill (bg white/0.05, glass border,
+  /// radius 8, color `--text`, 12px w500 ls0.8, padding 7/14). Used for
+  /// Cancel / Copy Invoice / Open Wallet.
+  Widget _iconBtn(NymColors c, String label, VoidCallback? onTap) {
     return InkWell(
       onTap: onTap,
-      borderRadius: NymRadius.rsm,
+      borderRadius: NymRadius.rxs,
       child: Container(
-        height: 42,
-        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: c.primary.withValues(alpha: 0.1),
-          border: Border.all(color: c.primary.withValues(alpha: 0.3)),
-          borderRadius: NymRadius.rsm,
+          // `body.light-mode .icon-btn { background: rgba(0,0,0,0.03);
+          // color: var(--primary) }` (styles-themes-responsive.css:595-599);
+          // dark base white@0.05 + `--text`. `subtleFill` is exactly
+          // black@.03 light / white@.05 dark (nym_colors.dart:112).
+          color: c.subtleFill,
+          border: Border.all(color: c.glassBorder),
+          borderRadius: NymRadius.rxs,
         ),
         child: Text(
           label.toUpperCase(),
           style: TextStyle(
-            color: c.primary,
+            color: c.isLight ? c.primary : c.text,
             fontSize: 12,
-            letterSpacing: 1.5,
-            fontWeight: FontWeight.w600,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.8,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// `.send-btn` — translucent primary outline pill (bg primary/0.1, border
+  /// primary/0.3, text `--primary`, radius 12, h42, padding 22/10, 12px w600
+  /// ls1.5; disabled opacity 0.35). The PWA's "I've paid" call-to-action.
+  Widget _sendBtn(NymColors c, String label, VoidCallback? onTap) {
+    return Opacity(
+      opacity: onTap == null ? 0.35 : 1,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: NymRadius.rsm,
+        child: Container(
+          height: 42,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+          decoration: BoxDecoration(
+            color: c.primaryA(0.1),
+            border: Border.all(color: c.primaryA(0.3)),
+            borderRadius: NymRadius.rsm,
+          ),
+          child: Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              color: c.primary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.5,
+            ),
           ),
         ),
       ),
@@ -552,10 +768,14 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     String hint, {
     bool number = false,
     ValueChanged<String>? onChanged,
+    ValueChanged<String>? onSubmitted,
+    FocusNode? focusNode,
   }) {
     return TextField(
       controller: controller,
+      focusNode: focusNode,
       onChanged: onChanged,
+      onSubmitted: onSubmitted,
       keyboardType: number ? TextInputType.number : TextInputType.text,
       style: TextStyle(color: c.textBright, fontSize: 15),
       decoration: InputDecoration(

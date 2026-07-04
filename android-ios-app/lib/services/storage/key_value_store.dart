@@ -20,6 +20,12 @@ class KeyValueStore {
 
   Future<void> remove(String key) => _prefs.remove(key);
 
+  /// Drops EVERY stored key — the panic path's final
+  /// `localStorage.clear()` sweep (panic.js:136). Never used on sign-out,
+  /// which keeps device-level prefs like the theme (app.js `signOut` removes
+  /// only its explicit key list).
+  Future<void> clear() => _prefs.clear();
+
   bool contains(String key) => _prefs.containsKey(key);
 
   /// PWA semantics: `localStorage.getItem(k) === 'true'`.

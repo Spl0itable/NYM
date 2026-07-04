@@ -536,14 +536,29 @@ class ShopCatalog {
     'style-satoshi': MessageStyleVisual(
       color: Color(0xFFF7931A),
       glow: Color(0x33F7931A),
+      // .message.style-satoshi .message-content { background: rgba(247,147,26,.2) }
+      contentBackground: Color(0x33F7931A),
     ),
     'style-glitch': MessageStyleVisual(
       color: Color(0xFF00FF00),
       glow: Color(0x6600FFFF),
+      // text-shadow: -2px 0 #ff0000, 2px 0 #00ffff (styles-features.css:625-628).
+      glyphShadows: [
+        Shadow(color: Color(0xFFFF0000), offset: Offset(-2, 0)),
+        Shadow(color: Color(0xFF00FFFF), offset: Offset(2, 0)),
+      ],
     ),
     'style-aurora': MessageStyleVisual(
       color: Color(0xFF5B8CFF),
-      gradient: [Color(0xFF00FFD5), Color(0xFF5B8CFF), Color(0xFFFF00EA)],
+      // linear-gradient(120deg,#00ffd5,#5b8cff,#ff00ea,#00ffd5) — the trailing
+      // #00ffd5 closes the cyan wrap (was a 3-stop that dropped it). The 120°
+      // diagonal + blue glow are applied in message_row's ShaderMask.
+      gradient: [
+        Color(0xFF00FFD5),
+        Color(0xFF5B8CFF),
+        Color(0xFFFF00EA),
+        Color(0xFF00FFD5),
+      ],
     ),
     'style-neon': MessageStyleVisual(
       color: Color(0xFFFF00FF),
@@ -608,24 +623,44 @@ class ShopCatalog {
     'style-eclipse': MessageStyleVisual(
       color: Color(0xFFFFCAA0),
       glow: Color(0x8CFFAA5A),
+      // .message.style-eclipse .message-content { background: rgba(18,14,28,.72) }
+      contentBackground: Color(0xB8120E1C),
     ),
     'style-crt': MessageStyleVisual(
       color: Color(0xFFFFB000),
       glow: Color(0xD9FFB000),
       monospace: true,
+      // .message.style-crt .message-content { background: rgba(10,8,2,.82) }
+      contentBackground: Color(0xD10A0802),
     ),
   };
 
-  /// Aura accent + gradient per cosmetic (`.message.cosmetic-X`).
+  /// Aura accent + gradient + exact box-shadow layers per cosmetic
+  /// (`.message.cosmetic-X`, `styles-features.css:1099-1211`). The preview
+  /// bubble (and rendered message) compose [CosmeticVisual.boxShadows] onto the
+  /// bubble; legendary ring/sheen flagged via [ringGradient]/[sheenGradient].
   static const Map<String, CosmeticVisual> cosmeticVisuals = {
+    // inset 0 0 0 1px rgba(255,215,0,.35), 0 0 18px rgba(255,215,0,.18)
     'cosmetic-aura-gold': CosmeticVisual(
       accent: Color(0xFFFFD700),
       gradient: [Color(0x0DFFD700), Color(0x05FFD700)],
+      borderLeft: Color(0xFFFFD700),
+      boxShadows: [
+        BoxShadow(color: Color(0x59FFD700), blurRadius: 1, spreadRadius: 1),
+        BoxShadow(color: Color(0x2EFFD700), blurRadius: 18),
+      ],
     ),
+    // inset 0 0 0 1px rgba(0,229,255,.55), 0 0 22px rgba(0,229,255,.32)
     'cosmetic-aura-neon': CosmeticVisual(
       accent: Color(0xFF00E5FF),
       gradient: [Color(0x0F00E5FF), Color(0x0500E5FF)],
+      borderLeft: Color(0xFF00E5FF),
+      boxShadows: [
+        BoxShadow(color: Color(0x8C00E5FF), blurRadius: 1, spreadRadius: 1),
+        BoxShadow(color: Color(0x5200E5FF), blurRadius: 22),
+      ],
     ),
+    // conic prism ring + 0 0 16px rgba(150,100,255,.3)
     'cosmetic-aura-rainbow': CosmeticVisual(
       accent: Color(0xFF9664FF),
       gradient: [
@@ -634,19 +669,48 @@ class ShopCatalog {
         Color(0xFF00E5FF),
         Color(0xFF7AFFAA),
       ],
+      boxShadows: [BoxShadow(color: Color(0x4D9664FF), blurRadius: 16)],
+      ringGradient: [
+        Color(0xFFFF2D2D),
+        Color(0xFFFF8A00),
+        Color(0xFFFFE600),
+        Color(0xFF33DD00),
+        Color(0xFF00C3FF),
+        Color(0xFF2A5BFF),
+        Color(0xFFB13BFF),
+        Color(0xFFFF2D2D),
+      ],
     ),
+    // inset 0 0 0 1px rgba(255,160,0,.6), 0 0 26px rgba(255,110,0,.4)
     'cosmetic-aura-phoenix': CosmeticVisual(
       accent: Color(0xFFFF6A00),
       gradient: [Color(0x12FF6A00), Color(0x08FF0000)],
+      borderLeft: Color(0xFFFF6A00),
+      boxShadows: [
+        BoxShadow(color: Color(0x99FFA000), blurRadius: 1, spreadRadius: 1),
+        BoxShadow(color: Color(0x66FF6E00), blurRadius: 26),
+      ],
     ),
+    // inset 0 0 0 1px rgba(160,130,255,.6), 0 0 26px rgba(140,100,255,.45)
     'cosmetic-aura-cosmic': CosmeticVisual(
       accent: Color(0xFF7C5CFF),
       gradient: [Color(0x29462D8C), Color(0x0F0F0C23)],
+      borderLeft: Color(0xFF7C5CFF),
+      boxShadows: [
+        BoxShadow(color: Color(0x99A082FF), blurRadius: 1, spreadRadius: 1),
+        BoxShadow(color: Color(0x738C64FF), blurRadius: 26),
+      ],
     ),
+    // inset 0 0 0 1px rgba(225,246,255,.55), 0 0 10px rgba(150,210,255,.2)
     'cosmetic-frost': CosmeticVisual(
       accent: Color(0xFF68B8E6),
       gradient: [Color(0x29BEE6FF), Color(0x14BEE6FF)],
+      boxShadows: [
+        BoxShadow(color: Color(0x8CE1F6FF), blurRadius: 1, spreadRadius: 1),
+        BoxShadow(color: Color(0x3396D2FF), blurRadius: 10),
+      ],
     ),
+    // inset 0 0 0 1px rgba(255,255,255,.5), 0 0 18px rgba(150,180,255,.5)
     'cosmetic-bubble-hologram': CosmeticVisual(
       accent: Color(0xFF96B4FF),
       gradient: [
@@ -655,9 +719,70 @@ class ShopCatalog {
         Color(0x6678FFAA),
         Color(0x66FFE100),
       ],
+      boxShadows: [
+        BoxShadow(color: Color(0x80FFFFFF), blurRadius: 1, spreadRadius: 1),
+        BoxShadow(color: Color(0x8096B4FF), blurRadius: 18),
+      ],
+      sheenGradient: [
+        Color(0x66FF00C8),
+        Color(0x6600C8FF),
+        Color(0x6678FFAA),
+        Color(0x66FFE100),
+        Color(0x66FF00C8),
+      ],
     ),
     'cosmetic-redacted': CosmeticVisual(accent: Color(0xFFFFFFFF)),
   };
+
+  /// A representative repeating glyph for a textured style's watermark
+  /// (`--style-pattern`, `styles-features.css:946-990`). The PWA tiles a
+  /// per-style SVG behind the content; on native we approximate the highest-value
+  /// ones with a tiled character (satoshi `₿`, matrix `10`, gold `✦`, …). Styles
+  /// without a glyph return null and render with colour + glow only. CRT/eclipse
+  /// use dedicated painters (scanlines / radial), not a glyph.
+  static const Map<String, String> _stylePatternGlyphs = {
+    'style-satoshi': '₿',
+    'style-matrix': '10',
+    'style-gold': '✦',
+    'style-galaxy': '✦',
+    'style-toxic': '☢',
+    'style-royal': '♛',
+    'style-blood': '🩸',
+    'style-sakura': '✿',
+    'style-ocean': '〜',
+    'style-circuit': '⌁',
+    'style-vapor': '░',
+    'style-fire': '🔥',
+    'style-ice': '❄',
+    'style-ghost': '👻',
+    'style-rainbow': '◠',
+  };
+
+  /// The watermark glyph for [styleId], or null when the style has no tiled
+  /// pattern (see [_stylePatternGlyphs]).
+  static String? stylePatternGlyph(String styleId) =>
+      _stylePatternGlyphs[styleId];
+
+  /// The total value of a bundle's components — `sum(component.price)` — used to
+  /// render the "Save X% · N sats value" badge (`shop.js:896-902`). Returns 0
+  /// for non-bundles or empty bundles.
+  static int bundleValue(String id) {
+    var sum = 0;
+    for (final comp in bundleComponents(id)) {
+      sum += byId(comp)?.price ?? 0;
+    }
+    return sum;
+  }
+
+  /// The discount percent of a bundle vs its component value, rounded like the
+  /// PWA (`Math.round((1 - price/sum) * 100)`); 0 when there is no saving.
+  static int bundleSavePercent(String id) {
+    final item = byId(id);
+    if (item == null) return 0;
+    final sum = bundleValue(id);
+    if (sum <= item.price) return 0;
+    return ((1 - item.price / sum) * 100).round();
+  }
 
   // ===========================================================================
   // SVG icon constants (ported verbatim from js/app.js).

@@ -14,6 +14,8 @@ import 'package:nym_bar/features/nymbot/nymbot_service.dart';
 import 'package:nym_bar/features/zaps/lnurl.dart';
 import 'package:nym_bar/models/nostr_event.dart';
 import 'package:nym_bar/services/api/api_client.dart';
+import 'package:nym_bar/services/storage/key_value_store.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// A deterministic 32-byte test private key (non-zero, valid for bip340).
 final Uint8List _testPriv = Uint8List.fromList(
@@ -296,6 +298,90 @@ void main() {
       final a = ApiClient(baseUrl: 'https://web.nymchat.app/api/proxy');
       expect(a.storageUrl, 'https://web.nymchat.app/api/storage');
       expect(a.botUrl, 'https://web.nymchat.app/api/bot');
+    });
+  });
+
+  // ===========================================================================
+  // 4b. ShopController own-record load (shop-get) + active publish (shop-set-active)
+  // ===========================================================================
+  group('ShopController shop-get / shop-set-active', () {
+    late List<Map<String, dynamic>> bodies;
+
+    Future<ShopController> build(
+      Map<String, dynamic> Function(String action) reply,
+    ) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
+      final client = MockClient((req) async {
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        bodies.add(body);
+        return http.Response(
+          jsonEncode(reply(body['action'] as String)),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      return ShopController(
+        kv,
+        api: ApiClient(client: client, baseUrl: 'https://web.nymchat.app/api/proxy'),
+      );
+    }
+
+    final identity = ShopIdentity(pubkey: _testPub, privkey: _testPriv);
+
+    setUp(() => bodies = []);
+
+    test('loadFromServer fetches shop-get (auth) and applies owned/active',
+        () async {
+      final ctrl = await build((_) => {
+            'owned': {
+              'style-rainbow': {'at': 1700000000000, 'amountSats': 500},
+            },
+            'active': {
+              'style': 'style-rainbow',
+              'flair': ['flair-crown'],
+              'cosmetics': ['cosmetic-frost'],
+              'supporter': false,
+              'editions': {'flair-genesis': 9},
+            },
+            'updatedAt': 1700000000000,
+          });
+      await ctrl.loadFromServer(identity);
+      final b = bodies.single;
+      expect(b['action'], 'shop-get');
+      expect(b['pubkey'], _testPub);
+      expect((b['auth'] as Map)['kind'], 27235);
+      // Applied locally.
+      expect(ctrl.state.owns('style-rainbow'), isTrue);
+      expect(ctrl.state.active.style, 'style-rainbow');
+      expect(ctrl.state.active.flair, ['flair-crown']);
+      expect(ctrl.state.active.cosmetics, ['cosmetic-frost']);
+    });
+
+    test('publishActiveItems pushes shop-set-active with the active payload',
+        () async {
+      final ctrl = await build((_) => {
+            'active': {'style': 'style-rainbow', 'flair': [], 'cosmetics': []},
+            'updatedAt': 1,
+          });
+      // Seed an owned + active style so the publish has something to send.
+      await ctrl.applyOwnRecord({
+        'owned': {
+          'style-rainbow': {'at': 1, 'amountSats': 0},
+        },
+        'active': {'style': 'style-rainbow'},
+      });
+      bodies.clear();
+      await ctrl.publishActiveItems(identity);
+      final b = bodies.single;
+      expect(b['action'], 'shop-set-active');
+      expect(b['pubkey'], _testPub);
+      expect((b['auth'] as Map)['kind'], 27235);
+      final active = b['active'] as Map<String, dynamic>;
+      expect(active['style'], 'style-rainbow');
+      expect(active.containsKey('flair'), isTrue);
+      expect(active.containsKey('cosmetics'), isTrue);
+      expect(active['supporter'], isFalse); // not owned
     });
   });
 

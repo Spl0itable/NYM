@@ -98,6 +98,12 @@ class StorageKeys {
   static const friends = 'nym_friends';
   static const blockedKeywords = 'nym_blocked_keywords';
 
+  // Spam filter (heuristic content filter — PWA `spamFilterEnabled` /
+  // `spamFilterAggressive`, both default true; device-local, no UI in the PWA's
+  // settings modal). Distinct from the web-of-trust spam GATE.
+  static const spamFilterEnabled = 'nym_spam_filter_enabled';
+  static const spamFilterAggressive = 'nym_spam_filter_aggressive';
+
   // PMs / groups
   static const closedPms = 'nym_closed_pms';
   static const closedPmTimes = 'nym_closed_pm_times';
@@ -126,6 +132,10 @@ class StorageKeys {
   static const purchasesCache = 'nym_purchases_cache';
   static const activeStyle = 'nym_active_style';
   static const activeFlair = 'nym_active_flair';
+
+  // Sidebar layout (section collapse + order persistence)
+  static const sidebarSectionCollapsed = 'nym_sidebar_section_collapsed';
+  static const sidebarSectionOrder = 'nym_sidebar_section_order';
 
   // Misc
   static const tutorialSeen = 'nym_tutorial_seen';

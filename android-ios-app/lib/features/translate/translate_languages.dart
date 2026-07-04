@@ -56,3 +56,23 @@ List<MapEntry<String, String>> sortedTranslateLanguages() {
     ..sort((a, b) => a.value.compareTo(b.value));
   return list;
 }
+
+/// Languages with [favorites] pinned to the top (in fav-list order), the rest
+/// alphabetical — the in-composer translate dropdown order (translate.js
+/// `_sortedTranslateLanguages`, lines 112-122). The prompt keeps plain alpha.
+List<MapEntry<String, String>> sortedTranslateLanguagesWithFavorites(
+    List<String> favorites) {
+  final all = sortedTranslateLanguages();
+  if (favorites.isEmpty) return all;
+  final byCode = {for (final e in all) e.key: e};
+  final favList = <MapEntry<String, String>>[
+    for (final code in favorites)
+      if (byCode.containsKey(code)) byCode[code]!,
+  ];
+  final favSet = favorites.toSet();
+  final rest = all.where((e) => !favSet.contains(e.key)).toList();
+  return [...favList, ...rest];
+}
+
+/// localStorage key for the translate-dropdown favorites (translate.js:96/107).
+const String kTranslateFavoritesKey = 'nym_translate_favorites';

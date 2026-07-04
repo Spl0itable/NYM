@@ -3,6 +3,11 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
+    <!-- Geolocation for proximity channel sort (geolocator). Coarse + fine; the
+         fix is only read when the user enables "Sort by proximity". -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+
     <!-- WebRTC audio/video calls + screenshare (flutter_webrtc),
          camera (image_picker/mobile_scanner), microphone (calls/audio) -->
     <uses-permission android:name="android.permission.CAMERA"/>

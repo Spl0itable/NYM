@@ -1,20 +1,108 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 
+/// The element each tutorial step points at (the PWA step `selector`s, see
+/// `js/app.js` `buildSteps`). The shell + sidebar register a [GlobalKey] for
+/// each of these via [TutorialTargets] so the overlay can measure the target's
+/// on-screen rect and draw the spotlight ring around it.
+///
+/// CROSS-FILE NEED: `HomeShell` / the sidebar widgets must attach
+/// `TutorialTargets.keyFor(target)` to the matching widget (e.g.
+/// `key: TutorialTargets.keyFor(TutorialTarget.nymDisplay)`). When a target is
+/// not registered (key has no `RenderBox`) the step degrades gracefully to the
+/// centered card (same as the welcome/final steps).
+enum TutorialTarget {
+  nymDisplay, // `.nym-display`
+  statusIndicator, // `.status-indicator`
+  mainMenu, // `.header-actions` (>1024) / `.sidebar-actions` (<=1024)
+  channelList, // `#channelList`
+  discoverIcon, // `.discover-icon` (globe)
+  pmList, // `#pmList`
+  userList, // `#userList`
+  messagesContainer, // `#messagesContainer`
+  composer, // `.input-container`
+  shareButton, // `#shareChannelBtn`
+}
+
+/// A registry of [GlobalKey]s, one per [TutorialTarget], shared between the
+/// shell (which keys its widgets) and [TutorialOverlay] (which measures them).
+///
+/// Kept here (in the onboarding feature this overlay owns) so the cross-file
+/// contract is a single import. Keys are created lazily and are stable for the
+/// app lifetime.
+class TutorialTargets {
+  TutorialTargets._();
+
+  static final Map<TutorialTarget, GlobalKey> _keys = {};
+
+  /// The stable key the shell should attach to the widget for [target].
+  static GlobalKey keyFor(TutorialTarget target) =>
+      _keys.putIfAbsent(target, () => GlobalKey(debugLabel: 'tutorial_$target'));
+
+  /// Drop all registered keys so the next shell mount allocates fresh ones.
+  /// Called from `HomeShell.initState` — a single live shell never shares a
+  /// [GlobalKey] with a previously-disposed one (which would otherwise reparent
+  /// across sequential mounts, e.g. in widget tests, and corrupt teardown).
+  static void reset() => _keys.clear();
+
+  /// The global on-screen rect of [target]'s widget, or null when the target
+  /// isn't mounted/laid-out (mirrors the PWA's "no element" → center fallback).
+  static Rect? rectOf(TutorialTarget target) {
+    final ctx = _keys[target]?.currentContext;
+    final box = ctx?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    final topLeft = box.localToGlobal(Offset.zero);
+    return topLeft & box.size;
+  }
+}
+
+/// Drives the sidebar/drawer open/close per step on narrow layouts
+/// (`ensureSidebarOpenOnMobile` / `ensureSidebarClosedOnMobile`, app.js:97-175).
+///
+/// CROSS-FILE NEED: `HomeShell` supplies an implementation that toggles its
+/// drawer and resolves once the slide settles. When absent, sidebar-anchored
+/// steps simply rely on whatever is already on screen (desktop has no drawer).
+abstract class TutorialSidebarDriver {
+  /// Opens the drawer (narrow layouts) and resolves after the transition.
+  Future<void> openSidebar();
+
+  /// Closes the drawer (narrow layouts) and resolves after the transition.
+  Future<void> closeSidebar();
+
+  /// Restores the drawer to its pre-tour state (`restoreSidebarAfterTutorial`).
+  void restore();
+}
+
+/// What the overlay does to the sidebar before measuring a step.
+enum TutorialSidebarAction { open, close, none }
+
 /// One guided-tutorial step (`buildSteps()` in app.js IIFE).
 @immutable
 class TutorialStep {
-  const TutorialStep({required this.title, required this.body});
+  const TutorialStep({
+    required this.title,
+    required this.body,
+    this.target,
+    this.sidebar = TutorialSidebarAction.none,
+  });
+
   final String title;
   final String body;
+
+  /// The element this step spotlights, or null for a centered card
+  /// (welcome + "All set!" steps).
+  final TutorialTarget? target;
+
+  /// On narrow layouts, whether to open/close the sidebar before measuring.
+  final TutorialSidebarAction sidebar;
 }
 
-/// The 12 tutorial steps, text matching the PWA verbatim. The `selector`
-/// targets (which element each step highlights) are documented in the body but
-/// not yet positionally highlighted here — TODO(verify): port the highlight
-/// box that points at each target element. The card is shown centered for now.
+/// The 12 tutorial steps, text matching the PWA verbatim, each mapped to the
+/// [TutorialTarget] its PWA `selector` points at and the per-step sidebar
+/// action (`onBefore`).
 const List<TutorialStep> kTutorialSteps = [
   TutorialStep(
     title: 'Nymchat Tutorial',
@@ -34,6 +122,8 @@ const List<TutorialStep> kTutorialSteps = [
         'multiple throwaway Nyms, overwrite all data with junk, and logout '
         'immediately to make it difficult for anyone to access the data if you '
         'need to quickly hide and protect yourself.',
+    target: TutorialTarget.nymDisplay,
+    sidebar: TutorialSidebarAction.open,
   ),
   TutorialStep(
     title: 'Connection',
@@ -41,6 +131,8 @@ const List<TutorialStep> kTutorialSteps = [
         'The current relay connection status. Tap here to view network stats '
         'such as the average latency, number of received events, and bandwidth '
         'usage.',
+    target: TutorialTarget.statusIndicator,
+    sidebar: TutorialSidebarAction.open,
   ),
   TutorialStep(
     title: 'Main Menu',
@@ -50,6 +142,8 @@ const List<TutorialStep> kTutorialSteps = [
         'blocked users and keywords, sorting geohash channels by proximity, and '
         'much more. Logout to terminate the current session and start fresh '
         'with a new identity.',
+    target: TutorialTarget.mainMenu,
+    sidebar: TutorialSidebarAction.open,
   ),
   TutorialStep(
     title: 'Channels',
@@ -61,6 +155,8 @@ const List<TutorialStep> kTutorialSteps = [
         'location. Long-press a channel to favorite it to the top of the list '
         'for easy access, or to hide/block it from the list if you don\'t want '
         'to see it.',
+    target: TutorialTarget.channelList,
+    sidebar: TutorialSidebarAction.open,
   ),
   TutorialStep(
     title: 'Explore Geohash',
@@ -70,6 +166,8 @@ const List<TutorialStep> kTutorialSteps = [
         'are active, and view heatmap, day/night, and geohash grid layers '
         'showing where the most popular geohash channels are located around the '
         'world.',
+    target: TutorialTarget.discoverIcon,
+    sidebar: TutorialSidebarAction.open,
   ),
   TutorialStep(
     title: 'Private Messages',
@@ -78,6 +176,8 @@ const List<TutorialStep> kTutorialSteps = [
         'here. Tap the + symbol to start a new PM or group chat. Long-press an '
         'existing PM or group chat to view options such as blocking the user, '
         'or to close the conversation if you want to hide it from the list.',
+    target: TutorialTarget.pmList,
+    sidebar: TutorialSidebarAction.open,
   ),
   TutorialStep(
     title: 'Active Nyms',
@@ -86,6 +186,8 @@ const List<TutorialStep> kTutorialSteps = [
         'is based on recent activity and relay presence, not just who you '
         'follow. It\'s a great way to discover and connect with active people '
         'on the app!',
+    target: TutorialTarget.userList,
+    sidebar: TutorialSidebarAction.open,
   ),
   TutorialStep(
     title: 'Messages',
@@ -94,6 +196,8 @@ const List<TutorialStep> kTutorialSteps = [
         'nym\'s nickname for quick actions such as to react with emoji, '
         'edit/delete your own message, zap a Bitcoin tip, start a PM, mention, '
         'block and much more from the context menu.',
+    target: TutorialTarget.messagesContainer,
+    sidebar: TutorialSidebarAction.close,
   ),
   TutorialStep(
     title: 'Compose',
@@ -104,10 +208,12 @@ const List<TutorialStep> kTutorialSteps = [
         'creating an away message and many more. Check out all of the available '
         'commands by typing ?help to have our chat bot @Nymbot assist you or '
         'the /help command in any channel.',
+    target: TutorialTarget.composer,
   ),
   TutorialStep(
     title: 'Share',
     body: 'Invite others to a channel with a shareable link.',
+    target: TutorialTarget.shareButton,
   ),
   TutorialStep(
     title: 'All set!',
@@ -118,15 +224,30 @@ const List<TutorialStep> kTutorialSteps = [
   ),
 ];
 
-/// The guided tutorial overlay (`#tutorialOverlay`): a dim full-screen backdrop
-/// with a card carrying a title, body, "Step X of Y" progress, and Back / Next
-/// (→ Done on the last step) controls plus a header Skip button. Any dismissal
-/// path (Skip, Done, Escape) marks the tutorial seen via [onDismiss].
+/// The guided tutorial overlay (`#tutorialOverlay`).
+///
+/// For each step with a [TutorialStep.target] it measures the target widget's
+/// global rect (via [TutorialTargets]), inflates it 8px, paints a dim
+/// `rgba(0,0,0,0.5)` cut-out around it with a 2px `--secondary` (#00ffff
+/// default) highlight ring + 30px glow, and anchors the step card below (or
+/// above) the
+/// target — mirroring `positionStep` (app.js:206-283). Welcome + "All set!"
+/// steps (no target) show the card centered.
+///
+/// Keyboard (desktop): Esc ends the tour, →/Enter = Next, ← = Back
+/// (`keyHandler`, app.js:401-410). Steps whose target can't be measured are
+/// auto-skipped (`skipIfTargetMissingForward/Backward`, app.js:332-356).
+///
+/// Any dismissal path (Skip, Done, Escape) marks the tutorial seen via
+/// [onDismiss].
 class TutorialOverlay extends StatefulWidget {
-  const TutorialOverlay({super.key, required this.onDismiss});
+  const TutorialOverlay({super.key, required this.onDismiss, this.sidebar});
 
   /// Called when the tutorial is dismissed (always marks `nym_tutorial_seen`).
   final VoidCallback onDismiss;
+
+  /// Optional sidebar driver (narrow layouts open/close the drawer per step).
+  final TutorialSidebarDriver? sidebar;
 
   @override
   State<TutorialOverlay> createState() => _TutorialOverlayState();
@@ -134,117 +255,417 @@ class TutorialOverlay extends StatefulWidget {
 
 class _TutorialOverlayState extends State<TutorialOverlay> {
   int _index = 0;
+  final FocusNode _focus = FocusNode();
+
+  /// Measured target rect for the current step (null → centered card).
+  Rect? _targetRect;
+
+  /// Pass to re-measure the step once a frame has settled (sidebar slide, etc).
+  bool _measureScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focus.requestFocus();
+      _enterStep(_index);
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.sidebar?.restore();
+    _focus.dispose();
+    super.dispose();
+  }
 
   bool get _isFinal => _index >= kTutorialSteps.length - 1;
+
+  bool _narrow(BuildContext context) =>
+      MediaQuery.of(context).size.width < NymDimens.tabletBreakpoint;
+
+  /// Runs the step's `onBefore` (sidebar open/close on narrow), then measures.
+  Future<void> _enterStep(int index) async {
+    final step = kTutorialSteps[index];
+    final sidebar = widget.sidebar;
+    if (sidebar != null && _narrow(context)) {
+      if (step.sidebar == TutorialSidebarAction.open) {
+        await sidebar.openSidebar();
+      } else if (step.sidebar == TutorialSidebarAction.close) {
+        await sidebar.closeSidebar();
+      }
+    }
+    if (!mounted) return;
+    _remeasure();
+  }
+
+  /// Measures the active step's target rect and repaints **only when it
+  /// changed** (so the per-frame re-measure in `build` can't loop). Mirrors
+  /// `positionStep`'s resize/scroll re-positioning.
+  void _remeasure() {
+    if (!mounted) return;
+    final step = kTutorialSteps[_index];
+    final rect = step.target == null ? null : TutorialTargets.rectOf(step.target!);
+    if (rect != _targetRect) setState(() => _targetRect = rect);
+  }
+
+  /// Defers a single re-measure to the next frame (used after `setState` that
+  /// changes the index, so the freshly-shown layout is captured).
+  void _scheduleMeasure() {
+    if (_measureScheduled) return;
+    _measureScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measureScheduled = false;
+      if (mounted) _remeasure();
+    });
+  }
+
+  /// Whether [index]'s target is reachable (no selector → always reachable).
+  bool _reachable(int index) {
+    final step = kTutorialSteps[index];
+    return step.target == null || TutorialTargets.rectOf(step.target!) != null;
+  }
 
   void _next() {
     if (_isFinal) {
       widget.onDismiss();
-    } else {
-      setState(() => _index++);
+      return;
     }
+    var i = _index + 1;
+    // skipIfTargetMissingForward: advance to the next reachable step.
+    var guard = 0;
+    while (guard++ < kTutorialSteps.length &&
+        i < kTutorialSteps.length - 1 &&
+        !_reachable(i)) {
+      i++;
+    }
+    setState(() => _index = i);
+    _enterStep(i);
   }
 
   void _back() {
-    if (_index > 0) setState(() => _index--);
+    if (_index <= 0) return;
+    var i = _index - 1;
+    // skipIfTargetMissingBackward: retreat to the prior reachable step.
+    var guard = 0;
+    while (guard++ < kTutorialSteps.length && i > 0 && !_reachable(i)) {
+      i--;
+    }
+    setState(() => _index = i);
+    _enterStep(i);
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final k = event.logicalKey;
+    if (k == LogicalKeyboardKey.escape) {
+      widget.onDismiss();
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.arrowRight || k == LogicalKeyboardKey.enter) {
+      _next();
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.arrowLeft) {
+      _back();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final step = kTutorialSteps[_index];
+    final screen = MediaQuery.of(context).size;
 
-    return Material(
-      color: Colors.black.withValues(alpha: 0.7),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Container(
-              key: const Key('tutorialCard'),
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                borderRadius: NymRadius.rlg,
-                border: Border.all(color: c.glassBorder),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    blurRadius: 30,
-                    offset: const Offset(0, 16),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          step.title,
-                          style: TextStyle(
-                            color: c.textBright,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        key: const Key('tutorialSkipBtn'),
-                        onPressed: widget.onDismiss,
-                        child: Text('Skip',
-                            style: TextStyle(color: c.textDim, fontSize: 13)),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    step.body,
-                    style: TextStyle(
-                        color: c.text, fontSize: 13.5, height: 1.45),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Step ${_index + 1} of ${kTutorialSteps.length}',
-                    style: TextStyle(color: c.textDim, fontSize: 12),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      TextButton(
-                        key: const Key('tutorialPrevBtn'),
-                        onPressed: _index == 0 ? null : _back,
-                        child: Text(
-                          'Back',
-                          style: TextStyle(
-                            color: _index == 0 ? c.textDim : c.text,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                      FilledButton(
-                        key: const Key('tutorialNextBtn'),
-                        onPressed: _next,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: c.primary,
-                          foregroundColor: c.bg,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: NymRadius.rsm),
-                        ),
-                        child: Text(_isFinal ? 'Done' : 'Next'),
-                      ),
-                    ],
-                  ),
-                ],
+    // Re-measure when the layout (size) changes, like the PWA's resize/scroll
+    // re-position handlers.
+    _scheduleMeasure();
+
+    // Inflate the measured rect by 8px and clamp into the viewport (pad=8 →
+    // hlLeft/hlTop/hlWidth/hlHeight in positionStep).
+    Rect? ring;
+    final raw = _targetRect;
+    if (raw != null) {
+      final left = (raw.left - 8).clamp(8.0, screen.width);
+      final top = (raw.top - 8).clamp(8.0, screen.height);
+      final right = (raw.right + 8).clamp(left, screen.width - 8);
+      final bottom = (raw.bottom + 8).clamp(top, screen.height - 8);
+      if (right > left && bottom > top) {
+        ring = Rect.fromLTRB(left, top, right, bottom);
+      }
+    }
+
+    return Focus(
+      focusNode: _focus,
+      onKeyEvent: _onKey,
+      child: Stack(
+        children: [
+          // Dim backdrop. With a target → a black cut-out around the ring;
+          // otherwise a flat scrim (matches the welcome/final steps).
+          // `.tutorial-highlight` box-shadow spread: dark `rgba(0,0,0,0.5)` →
+          // `body.light-mode .tutorial-highlight { … rgba(0,0,0,0.3) }`
+          // (styles-themes-responsive.css:693-695).
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _SpotlightPainter(
+                  hole: ring,
+                  radius: NymRadius.md,
+                  dim: Colors.black.withValues(alpha: c.isLight ? 0.3 : 0.5),
+                ),
               ),
             ),
+          ),
+          // The highlight ring (2px secondary + 30px glow), drawn over the dim.
+          if (ring != null)
+            Positioned.fromRect(
+              rect: ring,
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: NymRadius.rmd,
+                    border: Border.all(color: c.secondary, width: 2),
+                    // `.tutorial-highlight` glow: dark `0 0 30px rgb(secondary
+                    // /0.3)` → `body.light-mode … 0 0 30px rgba(0,0,0,0.15)`
+                    // (styles-themes-responsive.css:693-695) — a neutral black
+                    // glow, not the saturated cyan, in light mode.
+                    boxShadow: [
+                      BoxShadow(
+                        color: c.isLight
+                            ? Colors.black.withValues(alpha: 0.15)
+                            : c.secondary.withValues(alpha: 0.3),
+                        blurRadius: 30,
+                        spreadRadius: 0,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          // The step card: anchored to the target, or centered.
+          _positionedCard(c, ring, screen),
+        ],
+      ),
+    );
+  }
+
+  /// Places the card below/above the ring (per the PWA algorithm) or centered.
+  Widget _positionedCard(NymColors c, Rect? ring, Size screen) {
+    const cardMax = 420.0;
+    final cardWidth =
+        (screen.width - 24).clamp(0.0, cardMax); // 12px margin each side
+    final card = ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: cardWidth),
+      child: _card(c),
+    );
+
+    if (ring == null) {
+      // Centered (welcome / "All set!").
+      return Center(
+        child: Padding(padding: const EdgeInsets.all(24), child: card),
+      );
+    }
+
+    // Anchor below if it fits, else above, else clamp into the bottom area.
+    // We don't know the card height ahead of layout, so estimate generously and
+    // let Align handle the vertical placement region.
+    final spaceBelow = screen.height - ring.bottom;
+    final spaceAbove = ring.top;
+    final below = spaceBelow >= spaceAbove;
+
+    // Horizontal: center the card on the target, clamped 12px from edges.
+    final targetCenterX = ring.center.dx;
+    var left = targetCenterX - cardWidth / 2;
+    left = left.clamp(12.0, (screen.width - cardWidth - 12).clamp(12.0, screen.width));
+
+    return Positioned(
+      left: left,
+      top: below ? ring.bottom + 12 : null,
+      bottom: below ? null : (screen.height - ring.top) + 12,
+      width: cardWidth,
+      child: card,
+    );
+  }
+
+  Widget _card(NymColors c) {
+    final step = kTutorialSteps[_index];
+    return Material(
+      type: MaterialType.transparency,
+      child: Container(
+        key: const Key('tutorialCard'),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: c.bgTertiary, // PWA `.tutorial-card` background
+          borderRadius: NymRadius.rlg, // --radius-lg (20)
+          border: Border.all(color: c.glassBorder),
+          // `--shadow-lg` = 0 8px 32px black@0.5 (styles-core.css:93);
+          // `body.light-mode .tutorial-card { box-shadow: 0 8px 32px
+          // rgba(0,0,0,0.12) }` (styles-themes-responsive.css:697-699).
+          boxShadow: [
+            BoxShadow(
+              color: c.isLight
+                  ? const Color(0x1F000000) // black @ 0.12
+                  : Colors.black.withValues(alpha: 0.5),
+              blurRadius: 32,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    step.title.toUpperCase(), // uppercase, --primary, ls1
+                    style: TextStyle(
+                      color: c.primary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _skipBtn(c),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              step.body,
+              style: TextStyle(color: c.text, fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Step ${_index + 1} of ${kTutorialSteps.length}',
+              style: TextStyle(color: c.textDim, fontSize: 11),
+            ),
+            const SizedBox(height: 12),
+            // Back + Next: two identical ghost pills, right-aligned (gap 8).
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                _ghostPill(
+                  c,
+                  'Back',
+                  key: const Key('tutorialPrevBtn'),
+                  enabled: _index != 0,
+                  onTap: _back,
+                ),
+                const SizedBox(width: 8),
+                _ghostPill(
+                  c,
+                  _isFinal ? 'Done' : 'Next',
+                  key: const Key('tutorialNextBtn'),
+                  enabled: true,
+                  onTap: _next,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// `.tutorial-skip` — an uppercase outlined pill (11px, padding 6/12).
+  Widget _skipBtn(NymColors c) {
+    return InkWell(
+      key: const Key('tutorialSkipBtn'),
+      onTap: widget.onDismiss,
+      borderRadius: NymRadius.rxs,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          // `.tutorial-skip { background: rgba(255,255,255,0.05) }`
+          // (styles-components.css:2030-2043) — no light-mode override.
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: NymRadius.rxs,
+          border: Border.all(color: c.glassBorder),
+        ),
+        child: Text(
+          'SKIP',
+          style: TextStyle(
+            color: c.textDim,
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1,
           ),
         ),
       ),
     );
   }
+
+  /// `.tutorial-btn` — `white@0.05` fill, glass border, radius 8, uppercase
+  /// 12px w500 ls1, `--text` color. Used for both Back and Next.
+  Widget _ghostPill(
+    NymColors c,
+    String label, {
+    required Key key,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      key: key,
+      onTap: enabled ? onTap : null,
+      borderRadius: NymRadius.rxs,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: NymRadius.rxs,
+          border: Border.all(color: c.glassBorder),
+        ),
+        child: Text(
+          label.toUpperCase(),
+          style: TextStyle(
+            color: enabled ? c.text : c.textDim,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Fills the screen with [dim], punching a rounded-rect [hole] clear so the
+/// highlighted element shows through — the Flutter analogue of the PWA's
+/// `box-shadow: 0 0 0 9999px rgba(0,0,0,0.5)` spread on `.tutorial-highlight`.
+class _SpotlightPainter extends CustomPainter {
+  const _SpotlightPainter({
+    required this.hole,
+    required this.radius,
+    required this.dim,
+  });
+
+  final Rect? hole;
+  final double radius;
+  final Color dim;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = dim;
+    final full = Offset.zero & size;
+    if (hole == null) {
+      canvas.drawRect(full, paint);
+      return;
+    }
+    final outer = Path()..addRect(full);
+    final inner = Path()
+      ..addRRect(RRect.fromRectAndRadius(hole!, Radius.circular(radius)));
+    canvas.drawPath(
+      Path.combine(PathOperation.difference, outer, inner),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SpotlightPainter old) =>
+      old.hole != hole || old.radius != radius || old.dim != dim;
 }

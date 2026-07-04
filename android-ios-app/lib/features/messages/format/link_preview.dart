@@ -127,8 +127,14 @@ class _Card extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final size = _baseTextSize(context);
+    // `.link-preview` is a horizontal flex card (`styles-features.css:4348`):
+    // a 120px left thumbnail + a right text column, max-width 400, radius 8.
+    // At ≤768px the card spans the full message width and the thumbnail
+    // shrinks to 80px (`styles-themes-responsive.css:1531-1539`).
+    final narrow = MediaQuery.of(context).size.width <= 768;
     return Padding(
-      padding: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.only(top: 8),
       child: InkWell(
         onTap: () {
           final uri = Uri.tryParse(data.url);
@@ -138,69 +144,82 @@ class _Card extends StatelessWidget {
         },
         borderRadius: NymRadius.rsm,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 320),
+          constraints:
+              BoxConstraints(maxWidth: narrow ? double.infinity : 400),
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.04),
+              color: Colors.white.withValues(alpha: 0.03),
               border: Border.all(color: c.glassBorder),
               borderRadius: NymRadius.rsm,
             ),
             clipBehavior: Clip.antiAlias,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (data.image != null)
-                  CachedNetworkImage(
-                    imageUrl: api.mediaProxyUrl(data.image!),
-                    width: double.infinity,
-                    height: 150,
-                    fit: BoxFit.cover,
-                    // The PWA hides a broken preview image (data-error-action
-                    // errorHideElement); mirror by collapsing it.
-                    errorWidget: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-                Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _siteRow(c),
-                      if (data.title.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          data.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: c.textBright,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            height: 1.3,
-                          ),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (data.image != null)
+                    SizedBox(
+                      // `.link-preview-image { width: 120px }`, 80px at ≤768px.
+                      width: narrow ? 80 : 120,
+                      child: CachedNetworkImage(
+                        imageUrl: api.mediaProxyUrl(data.image!),
+                        fit: BoxFit.cover,
+                        // The PWA hides a broken preview image; collapse it.
+                        errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                      ),
+                    ),
+                  Flexible(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 80),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _siteRow(c, size),
+                            if (data.title.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                data.title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  // `.link-preview-title { color: var(--text) }`
+                                  // (styles-features.css:4397-4405).
+                                  color: c.text,
+                                  fontSize: size * 0.9,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ],
+                            if (data.description.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                // PWA slices description to 200 chars.
+                                data.description.length > 200
+                                    ? data.description.substring(0, 200)
+                                    : data.description,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: c.textDim,
+                                  fontSize: size * 0.8,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
-                      ],
-                      if (data.description.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          // PWA slices description to 200 chars (ui-context.js:800).
-                          data.description.length > 200
-                              ? data.description.substring(0, 200)
-                              : data.description,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: c.textDim,
-                            fontSize: 12,
-                            height: 1.35,
-                          ),
-                        ),
-                      ],
-                    ],
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -208,7 +227,13 @@ class _Card extends StatelessWidget {
     );
   }
 
-  Widget _siteRow(NymColors c) {
+  /// The base body text size from settings (the link-preview ems are relative).
+  double _baseTextSize(BuildContext context) =>
+      DefaultTextStyle.of(context).style.fontSize ?? 15;
+
+  /// `.link-preview-site`: an UPPERCASE text-dim label with a 14×14 favicon and
+  /// `letter-spacing:0.3` (`styles-features.css:4390`).
+  Widget _siteRow(NymColors c, double size) {
     final favicon = data.favicon;
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -228,13 +253,14 @@ class _Card extends StatelessWidget {
         ],
         Flexible(
           child: Text(
-            data.host,
+            data.host.toUpperCase(),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: c.secondary,
-              fontSize: 11,
+              color: c.textDim,
+              fontSize: size * 0.75,
               fontWeight: FontWeight.w500,
+              letterSpacing: 0.3,
             ),
           ),
         ),

@@ -107,7 +107,22 @@ NymColors resolveNymColors({
     blue = _hex('#bbbbbb');
   }
 
+  // --- ghost LIGHT non-accent greys (`body.light-mode.theme-ghost`,
+  // styles-themes-responsive.css:652-675). The class wins over the generic
+  // `.light-mode` block above: warning is set to #666666 then overridden to
+  // #555555 (:673), danger #888888, purple #777777, blue #666666, border
+  // #999999. (primary/secondary/text/textDim/textBright/lightning already come
+  // from the correct ghost-light `_themeAccents` entry.)
+  if (theme == NymThemeKey.ghost && isLight) {
+    warning = _hex('#555555');
+    danger = _hex('#888888');
+    purple = _hex('#777777');
+    blue = _hex('#666666');
+    border = _hex('#999999');
+  }
+
   // --- solid-ui (opaque surfaces; default ON) ---
+  Color? bubbleSelfBg, bubbleOtherBg;
   if (solidUi) {
     if (isLight) {
       glassBg = _hex('#ffffff');
@@ -117,6 +132,20 @@ NymColors resolveNymColors({
       glassBg = _hex('#14141e');
       bgSecondary = _hex('#14141e');
       bgTertiary = _hex('#1c1c2c');
+    }
+    // Opaque chat-bubble plates (`body.solid-ui.chat-bubbles .message-content`
+    // / `.message.self .message-content`, styles-themes-responsive.css:
+    // 1660-1684): others `#2a2a3a` dark / `#e6e6e0` light, self the
+    // `color-mix(in srgb, var(--primary) 22%, <other>)` blend. Ghost repaints
+    // both with flat greys (`body.solid-ui.theme-ghost.chat-bubbles …`,
+    // :1686-1700). Glass mode leaves these null → the translucent
+    // `NymColors.bubbleSelfBg`/`bubbleOtherBg` getter fallbacks.
+    if (theme == NymThemeKey.ghost) {
+      bubbleOtherBg = isLight ? _hex('#dddddd') : _hex('#2a2a2a');
+      bubbleSelfBg = isLight ? _hex('#bbbbbb') : _hex('#444444');
+    } else {
+      bubbleOtherBg = isLight ? _hex('#e6e6e0') : _hex('#2a2a3a');
+      bubbleSelfBg = Color.lerp(bubbleOtherBg, _hex(a[0]), 0.22)!;
     }
   }
 
@@ -138,11 +167,49 @@ NymColors resolveNymColors({
     glassBg: glassBg,
     glassBorder: glassBorder,
     brightness: brightness,
+    solidUi: solidUi,
+    bubbleSelfBg: bubbleSelfBg,
+    bubbleOtherBg: bubbleOtherBg,
   );
 }
 
 /// The monospace stack the PWA uses (`--font-mono`).
 const String kMonoFont = 'monospace';
+
+/// The primary UI sans (`--font-sans`). BUNDLED as an asset (`pubspec.yaml`), so
+/// unlike the bare system name 'Roboto' it ALWAYS resolves — even on de-Googled
+/// images — which is what keeps line metrics correct. A null / unresolved primary
+/// lets Flutter promote the emoji fallback to primary, inflating every line and
+/// degrading Latin glyphs to boxes (the "all the text is fucked up" regression).
+const String kSansFont = 'Roboto';
+
+/// The color-emoji family for unicode emoji (😀 🔥 ❤ 🇺 …). NOT bundled — left to
+/// the OS native color-emoji font (Apple Color Emoji on iOS, Noto Color Emoji on
+/// Android), which is what the PWA renders too and avoids a ~11MB binary bump.
+/// Kept in the fallback chain as an (unresolved) hint; Flutter skips the unknown
+/// family and lands on the OS emoji font for these codepoints.
+const String kEmojiFont = 'Noto Color Emoji';
+
+/// Bundled broad text sans (`pubspec.yaml`): the catch-all for the codepoints
+/// Roboto lacks but which are NOT colour emoji — the bitcoin sign ₿ (U+20BF),
+/// extra currency / punctuation / dashes, Greek / Cyrillic — so they render
+/// instead of tofu. Deliberately a TEXT sans with NO emoji-range glyphs: a
+/// monochrome symbol font here (e.g. Noto Sans Symbols 2) would shadow the OS
+/// COLOUR emoji for codepoints like ⚡ ★ ☂ ❤ (they have both a text outline and
+/// an emoji presentation), rendering them as black outlines instead of colour.
+const String kSansSymFont = 'Noto Sans';
+
+/// The glyph-coverage fallback chain appended after the real [kSansFont] primary.
+/// Because the primary is a bundled, always-resolved sans, the line strut comes
+/// from IT — not these fallbacks — so Latin metrics stay correct. Order:
+/// [kEmojiFont] is an UNRESOLVED hint that Flutter skips, so colour-emoji
+/// codepoints fall through to the OS native emoji font (Apple Color Emoji on iOS),
+/// matching the PWA; [kSansSymFont] then catches the non-emoji text symbols Roboto
+/// lacks (₿). It carries NO emoji-range glyphs, so it never shadows colour emoji.
+const List<String> kEmojiFontFallback = [
+  kEmojiFont,
+  kSansSymFont,
+];
 
 /// Builds Flutter [ThemeData] wrapping a [NymColors]. Most custom widgets read
 /// tokens via `context.nym`; this provides sensible Material defaults +
@@ -162,14 +229,33 @@ ThemeData buildNymThemeData(NymColors c) {
     error: c.danger,
   );
 
+  // Every text style gets the bundled [kSansFont] primary + the emoji/symbol
+  // [kEmojiFontFallback]. The primary is a real, always-resolved sans, so the
+  // line strut is driven by Roboto (correct metrics) while emoji / enclosed
+  // letters / symbols in nyms, labels, and chrome still resolve to colour /
+  // symbol glyphs via the fallback — the PWA's `--font-sans` behaviour. This is
+  // a pure value assignment (no font is loaded here), so binding-less unit tests
+  // stay green.
+  final textTheme = base.textTheme
+      .apply(fontFamily: kSansFont, fontFamilyFallback: kEmojiFontFallback);
+  final primaryTextTheme = base.primaryTextTheme
+      .apply(fontFamily: kSansFont, fontFamilyFallback: kEmojiFontFallback);
+
   return base.copyWith(
     colorScheme: scheme,
     scaffoldBackgroundColor: c.bg,
     canvasColor: c.bg,
     dividerColor: c.glassBorder,
     splashFactory: InkRipple.splashFactory,
+    textTheme: textTheme,
+    primaryTextTheme: primaryTextTheme,
     textSelectionTheme: TextSelectionThemeData(
-      cursorColor: c.primary,
+      // The caret matches the input TEXT color (white on dark / black on light),
+      // exactly like the PWA — which sets no `caret-color`, so the browser draws
+      // the caret in the input's `--text-bright` color (#fff dark / #000 light).
+      // Using the accent (`c.primary`) instead left the caret low-contrast on a
+      // light field ("no visible cursor"); the text color is always legible.
+      cursorColor: c.isLight ? Colors.black : Colors.white,
       selectionColor: c.primary.withValues(alpha: 0.3),
       selectionHandleColor: c.primary,
     ),

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/models/nostr_event.dart';
 import 'package:nym_bar/core/crypto/keys.dart';
 import 'package:nym_bar/core/crypto/bech32_codec.dart' as b19;
+import 'package:nym_bar/core/crypto/isolate_verifier.dart';
 import 'package:nym_bar/core/crypto/schnorr.dart' as schnorr;
 import 'package:nym_bar/core/crypto/nip44.dart' as nip44;
 import 'package:nym_bar/core/crypto/bitchat.dart' as bitchat;
@@ -119,6 +120,90 @@ void main() {
     });
   });
 
+  group('isolate verifier (off-thread batch verification)', () {
+    NostrEvent signedEvent(String content) {
+      final sk = generatePrivateKey();
+      return schnorr.finalizeEvent(
+        UnsignedEvent(
+          pubkey: getPublicKeyHex(sk),
+          createdAt: 1700000000,
+          kind: 1,
+          content: content,
+        ),
+        sk,
+      );
+    }
+
+    NostrEvent forge(NostrEvent valid, String newContent) => NostrEvent(
+          id: valid.id, // stale id; no longer matches the tampered content
+          pubkey: valid.pubkey,
+          createdAt: valid.createdAt,
+          kind: valid.kind,
+          tags: valid.tags,
+          content: newContent,
+          sig: valid.sig,
+        );
+
+    test('verifyEventsBatch returns one positionally-aligned verdict per event',
+        () {
+      final good0 = signedEvent('zero');
+      final good2 = signedEvent('two');
+      final bad1 = forge(good0, 'tampered');
+      // Order: valid, INVALID, valid. The verdict list must line up exactly.
+      final results = verifyEventsBatch(
+        [good0.toJson(), bad1.toJson(), good2.toJson()],
+      );
+      expect(results, [true, false, true]);
+    });
+
+    test('verifyEventsBatch agrees with synchronous verifyEvent element-wise',
+        () {
+      final events = [
+        signedEvent('a'),
+        forge(signedEvent('b'), 'b!'),
+        signedEvent('c'),
+        signedEvent('d'),
+      ];
+      final batch = verifyEventsBatch([for (final e in events) e.toJson()]);
+      final sync = [for (final e in events) schnorr.verifyEvent(e)];
+      expect(batch, sync);
+    });
+
+    test('empty batch yields empty result (no drops, no spurious passes)', () {
+      expect(verifyEventsBatch(const []), isEmpty);
+    });
+
+    test(
+        'IsolateVerifier resolves each event to its own verdict across a burst',
+        () async {
+      final verifier = IsolateVerifier();
+      final good0 = signedEvent('keep-0');
+      final good1 = signedEvent('keep-1');
+      final bad = forge(good0, 'forged');
+      final good2 = signedEvent('keep-2');
+      // Submit all in the SAME synchronous turn so they coalesce into one
+      // isolate hop; each future must still get its own positional verdict.
+      final futures = <Future<bool>>[
+        verifier.verify(good0),
+        verifier.verify(bad),
+        verifier.verify(good1),
+        verifier.verify(good2),
+      ];
+      final results = await Future.wait(futures);
+      expect(results, [true, false, true, true]);
+    });
+
+    test('IsolateVerifier never drops a valid event in a large batch', () async {
+      final verifier = IsolateVerifier(maxBatch: 8);
+      // More events than maxBatch so the buffer flushes mid-turn; all valid.
+      final events = [for (var i = 0; i < 20; i++) signedEvent('e$i')];
+      final results =
+          await Future.wait([for (final e in events) verifier.verify(e)]);
+      expect(results.length, events.length);
+      expect(results.every((ok) => ok), isTrue);
+    });
+  });
+
   group('NIP-44 v2 official vectors', () {
     test('get_conversation_key vectors', () {
       const vectors = [
@@ -213,6 +298,51 @@ void main() {
       final pt = await bitchat.decryptBitchat(ct, pubA, skB);
       expect(pt, message);
     });
+
+    // Encrypt with A's key to B; B decrypts using A's pubkey. The bitchat ECDH
+    // shared point is the 33-byte COMPRESSED point, and `sk_A·lift02(P_B)` vs
+    // `sk_B·lift02(P_A)` share the same x but can differ in y-parity (02 vs 03),
+    // so decrypt must try BOTH lifts of the sender pubkey. Sweep many keypairs
+    // so the odd-parity branch is exercised (~50% of pairs).
+    test('cross-key round-trip exercises both 02/03 parity lifts', () async {
+      var ok = 0;
+      for (var i = 0; i < 24; i++) {
+        final skA = generatePrivateKey();
+        final skB = generatePrivateKey();
+        final pubA = getPublicKeyHex(skA);
+        final pubB = getPublicKeyHex(skB);
+        final msg = 'parity sweep #$i';
+        final ct = await bitchat.encryptBitchat(msg, skA, pubB);
+        final pt = await bitchat.decryptBitchat(ct, pubA, skB);
+        expect(pt, msg);
+        ok++;
+      }
+      expect(ok, 24);
+    });
+
+    test('decodeBitchatPacket extracts text + id from a bitchat1: packet', () {
+      const text = 'hi from the bitchat app';
+      const id = '07DFE7B7-151D-40D8-BA38-B93C7B0E0A11';
+      final packet = _encodeBitchatPrivateMessage(text, id);
+      expect(bitchat.isBitchatPacket(packet), isTrue);
+
+      final decoded = bitchat.decodeBitchatPacket(packet);
+      expect(decoded, isNotNull);
+      expect(decoded!.isPrivateMessage, isTrue);
+      expect(decoded.content, text);
+      expect(decoded.messageId, id);
+    });
+
+    test('decodeBitchatPacket handles content > 255 bytes (extended length)',
+        () {
+      final text = 'x' * 600; // forces the 0x80 extended-length TLV path
+      const id = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
+      final decoded =
+          bitchat.decodeBitchatPacket(_encodeBitchatPrivateMessage(text, id));
+      expect(decoded, isNotNull);
+      expect(decoded!.content, text);
+      expect(decoded.messageId, id);
+    });
   });
 
   group('gift wrap (NIP-59)', () {
@@ -303,6 +433,52 @@ void main() {
       expect(result.rumor['pubkey'], senderPub);
     });
 
+    // Full two-layer bitchat unwrap of a real-Bitchat-shaped PM: the rumor
+    // content is a `bitchat1:` BitchatPacket (not plain text). The wrap and seal
+    // are both `v2:` (raw-ECDH), the seal is signed by the sender's real key,
+    // and the wrap by a throwaway. After unwrap, decoding the packet must yield
+    // the original text + bitchat message id.
+    test('bitchat wrap with bitchat1: payload unwraps + decodes', () async {
+      final senderSk = generatePrivateKey();
+      final recipientSk = generatePrivateKey();
+      final senderPub = getPublicKeyHex(senderSk);
+      final recipientPub = getPublicKeyHex(recipientSk);
+
+      const text = 'message from a bitchat user';
+      const msgId = '12345678-90AB-CDEF-1234-567890ABCDEF';
+      final packet = _encodeBitchatPrivateMessage(text, msgId);
+
+      final wrap = await gw.bitchatWrap(
+        rumor: UnsignedEvent(
+          pubkey: senderPub,
+          createdAt: 1700000000,
+          kind: 14,
+          tags: [
+            ['p', recipientPub]
+          ],
+          content: packet,
+        ),
+        senderPrivkey: senderSk,
+        recipientPubkey: recipientPub,
+      );
+      expect(wrap.content.startsWith('v2:'), isTrue);
+
+      final result = await gw.unwrapGiftWrap(wrap, [
+        (sk: recipientSk, bitchat: true),
+      ]);
+      expect(result, isNotNull);
+      expect(result!.isBitchat, isTrue);
+      // The crypto layer recovers the raw bitchat1: envelope...
+      expect((result.rumor['content'] as String).startsWith('bitchat1:'),
+          isTrue);
+      // ...and the BitchatPacket decoder yields the human-readable text + id.
+      final decoded =
+          bitchat.decodeBitchatPacket(result.rumor['content'] as String);
+      expect(decoded, isNotNull);
+      expect(decoded!.content, text);
+      expect(decoded.messageId, msgId);
+    });
+
     test('unwrap returns null for wrong recipient', () async {
       final senderSk = generatePrivateKey();
       final recipientPub = getPublicKeyHex(generatePrivateKey());
@@ -365,4 +541,63 @@ void main() {
       expect(pow.validatePow(ev, 8), isFalse);
     });
   });
+}
+
+/// Builds a `bitchat1:` BitchatPacket carrying a PRIVATE_MESSAGE, mirroring the
+/// PWA `encodeBitchatMessage` (nostr-core.js): 14-byte header, 8-byte sender id,
+/// 8-byte recipient id (HAS_RECIPIENT), then NoisePayload = `0x01` +
+/// TLV[MESSAGE_ID=0x00] + TLV[CONTENT=0x01], padded to a 256/512/1024/2048
+/// block with 0xBE. Used to prove the Flutter decoder round-trips real packets.
+String _encodeBitchatPrivateMessage(String content, String messageId) {
+  final contentBytes = utf8.encode(content);
+  final idBytes = utf8.encode(messageId);
+
+  final tlv = <int>[];
+  void pushTlv(int type, List<int> value) {
+    if (value.length <= 0xFF) {
+      tlv
+        ..add(type)
+        ..add(value.length);
+    } else {
+      tlv
+        ..add(type | 0x80)
+        ..add((value.length >> 8) & 0xFF)
+        ..add(value.length & 0xFF);
+    }
+    tlv.addAll(value);
+  }
+
+  pushTlv(0x00, idBytes); // MESSAGE_ID
+  pushTlv(0x01, contentBytes); // CONTENT
+
+  final noisePayload = <int>[0x01, ...tlv]; // 0x01 = PRIVATE_MESSAGE
+
+  final parts = <int>[];
+  parts..add(0x01)..add(0x11)..add(0x07); // version, NOISE_ENCRYPTED, TTL
+  final ts = DateTime.now().millisecondsSinceEpoch;
+  for (var i = 7; i >= 0; i--) {
+    parts.add((ts >> (i * 8)) & 0xFF);
+  }
+  parts.add(0x01); // flags: HAS_RECIPIENT
+  parts..add((noisePayload.length >> 8) & 0xFF)..add(noisePayload.length & 0xFF);
+  for (var i = 0; i < 8; i++) {
+    parts.add(0x11); // sender id (arbitrary 8 bytes)
+  }
+  for (var i = 0; i < 8; i++) {
+    parts.add(0x22); // recipient id (arbitrary 8 bytes)
+  }
+  parts.addAll(noisePayload);
+
+  const blocks = [256, 512, 1024, 2048];
+  final target = blocks.firstWhere((s) => s >= parts.length, orElse: () => 2048);
+  while (parts.length < target) {
+    parts.add(0xBE);
+  }
+
+  final b64 = base64
+      .encode(Uint8List.fromList(parts))
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replaceAll('=', '');
+  return 'bitchat1:$b64';
 }

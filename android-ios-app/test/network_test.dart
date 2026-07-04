@@ -15,6 +15,7 @@ import 'package:nym_bar/services/nostr/nostr_service.dart';
 import 'package:nym_bar/services/relay/relay_message.dart';
 import 'package:nym_bar/services/relay/relay_pool.dart';
 import 'package:nym_bar/services/relay/relay_pool_proxy.dart';
+import 'package:nym_bar/services/relay/relay_stats.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 NostrEvent _ev({
@@ -341,6 +342,37 @@ void main() {
       await c.geoRelays();
       expect(hdrs!['User-Agent'], ApiConfig.userAgent);
     });
+
+    // The nym worker sends charset-less `application/json` / `x-ndjson`
+    // (storage.js:199/638); package:http's `res.body` then defaults to
+    // LATIN-1, turning each UTF-8 byte into one char ('ð£…' mojibake for
+    // '🅃…' nyms). The client must decode `bodyBytes` as UTF-8 like the
+    // PWA's `response.json()`/TextDecoder.
+    test('storage responses decode UTF-8 despite charset-less Content-Type',
+        () async {
+      const nym = '🅃🄾🄿🄶🄴🄰🅁 😀';
+      final mock = MockClient((req) async {
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        if (body['action'] == 'profile-get') {
+          // NDJSON stream, UTF-8 bytes, no charset in the header.
+          return http.Response.bytes(
+            utf8.encode('${jsonEncode({'name': nym})}\n'),
+            200,
+            headers: {'content-type': 'application/x-ndjson'},
+          );
+        }
+        return http.Response.bytes(
+          utf8.encode(jsonEncode({'name': nym})),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      final c = ApiClient(client: mock, baseUrl: 'https://h/api/proxy');
+      final stream = await c.storageStream({'action': 'profile-get'});
+      expect((stream.items.single as Map)['name'], nym);
+      final data = await c.storageAction({'action': 'shop-status'});
+      expect(data['name'], nym);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -607,9 +639,13 @@ class _NoopTransport implements PoolTransport {
   @override
   void connectAll() {}
   @override
+  void updateGeoRelays(List<String> geoRelayUrls) {}
+  @override
   Future<void> disconnectAll() async {}
   @override
   int get connectedCount => 0;
+  @override
+  RelayStats get stats => RelayStats();
   @override
   Future<int> publish(NostrEvent event) async => 0;
   @override
@@ -630,13 +666,19 @@ class _RecordingTransport implements PoolTransport {
   final List<NostrEvent> plainCalls = [];
   final List<NostrEvent> dmCalls = [];
   final List<(NostrEvent, List<String>)> geoCalls = [];
+  final List<List<String>> geoUpdates = [];
 
   @override
   void connectAll() {}
   @override
+  void updateGeoRelays(List<String> geoRelayUrls) =>
+      geoUpdates.add(geoRelayUrls);
+  @override
   Future<void> disconnectAll() async {}
   @override
   int get connectedCount => 0;
+  @override
+  RelayStats get stats => RelayStats();
   @override
   Future<int> publish(NostrEvent event) async {
     plainCalls.add(event);

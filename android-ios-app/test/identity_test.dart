@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,6 +10,7 @@ import 'package:nym_bar/features/identity/nym_identicon.dart';
 import 'package:nym_bar/features/identity/panic_wipe.dart';
 import 'package:nym_bar/features/shop/shop_controller.dart';
 import 'package:nym_bar/services/storage/key_value_store.dart';
+import 'package:nym_bar/widgets/chat/bitchat_user_color.dart';
 
 void main() {
   // ---------------------------------------------------------------------------
@@ -241,6 +243,54 @@ void main() {
       await vault.enable(method: 'pin', password: '1234');
       expect(await vault.verifyPassword('1234'), isTrue);
       expect(await vault.verifyPassword('0000'), isFalse);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // bitchatUserColor — per-user nym color (generateUniqueColor port, users.js:31).
+  // The bucket math has an int-width trap (the final djb2 accumulator exceeds
+  // 2^32 and Math.abs(hash)%1000 runs on the full value); these ground-truth
+  // vectors guard it. dark hsl: "0"*64 -> bucket 720 hsl(259,85%,80%);
+  // "f"*64 -> bucket 216 hsl(77,71%,76%). (C06-3.)
+  // ---------------------------------------------------------------------------
+  group('bitchatUserColor (generateUniqueColor port)', () {
+    Color hsl(double h, double s, double l) =>
+        HSLColor.fromAHSL(1, h, s / 100, l / 100).toColor();
+
+    test('"0"*64 -> dark hsl(259,85,80) / light hsl(259,75,25) [bucket 720]', () {
+      final pk = '0' * 64;
+      expect(bitchatUserColor(pk, isLight: false), hsl(259, 85, 80));
+      expect(bitchatUserColor(pk, isLight: true), hsl(259, 75, 25));
+    });
+
+    test('"f"*64 -> dark hsl(77,71,76) / light hsl(77,61,41) [bucket 216]', () {
+      final pk = 'f' * 64;
+      expect(bitchatUserColor(pk, isLight: false), hsl(77, 71, 76));
+      expect(bitchatUserColor(pk, isLight: true), hsl(77, 61, 41));
+    });
+
+    test('deterministic per pubkey', () {
+      const pk = '3bf0c63fa1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a459d';
+      expect(bitchatUserColor(pk, isLight: false),
+          bitchatUserColor(pk, isLight: false));
+    });
+
+    test('empty pubkey -> null (caller falls back to the theme color)', () {
+      expect(bitchatUserColor('', isLight: false), isNull);
+      expect(bitchatUserColor('', isLight: true), isNull);
+    });
+
+    test('spreads many pubkeys across distinct hues (not one flat color)', () {
+      final seen = <Color>{};
+      for (var i = 0; i < 100; i++) {
+        final pk = (i.toRadixString(16)).padLeft(64, '0');
+        final c = bitchatUserColor(pk, isLight: false);
+        expect(c, isNotNull);
+        seen.add(c!);
+      }
+      // The PWA assigns 1-of-1000 buckets; 100 distinct pubkeys must not
+      // collapse to a single color (the bug this guards against).
+      expect(seen.length, greaterThan(50));
     });
   });
 }

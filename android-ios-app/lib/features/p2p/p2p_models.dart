@@ -252,23 +252,39 @@ Map<String, dynamic> iceSignal({
 
 /// Builds the kind-25052 `unseeded` file-status event (`stopSeeding`,
 /// p2p.js:823): tags `['offer_id', id], ['status','unseeded'], ['x', hash]?,
-/// [wire.tag, geohash]?`; content `{offerId,name,status:'unseeded'}`.
+/// [wire.tag, channelKey]?`; content `{offerId,name,status:'unseeded'}`.
 class FileStatusPayload {
   const FileStatusPayload({required this.tags, required this.content});
   final List<List<String>> tags;
   final String content;
 }
 
+/// Builds the unseeded broadcast tags. The PWA appends the active channel's wire
+/// tag whenever a channel is open (p2p.js:828
+/// `[this.channelWire(this.currentGeohash).tag, this.currentGeohash]`):
+/// `channelWire` (channels.js:454) returns `'g'` for a geohash channel else
+/// `'d'` — and for a NAMED channel the PWA's `currentGeohash` holds the channel
+/// name (named channels are entered via `switchChannel(name, name)`,
+/// commands.js:575 / channels.js:488), so the named branch fires.
+///
+/// Mirror that here: pass [geohash] for a geohash channel (→ `['g', geohash]`)
+/// OR [channelName] for a named channel (→ `['d', channelName]`). At most one is
+/// emitted ([geohash] wins). Both null (PM/group, or no channel open) → no wire
+/// tag, exactly like the PWA when `currentGeohash` is falsy. The `'g' : 'd'`
+/// selection matches `buildChannelEditTags` (nostr_controller.dart:6239).
 FileStatusPayload buildUnseededPayload({
   required FileOffer offer,
   String? geohash,
+  String? channelName,
 }) {
   final tags = <List<String>>[
     ['offer_id', offer.offerId],
     ['status', 'unseeded'],
     if (offer.hash.isNotEmpty) ['x', offer.hash],
-    // Geohash channels carry a 'g' wire tag (channelWire); named channels 'd'.
-    if (geohash != null && geohash.isNotEmpty) ['g', geohash],
+    if (geohash != null && geohash.isNotEmpty)
+      ['g', geohash]
+    else if (channelName != null && channelName.isNotEmpty)
+      ['d', channelName],
   ];
   return FileStatusPayload(
     tags: tags,

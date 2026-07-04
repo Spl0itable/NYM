@@ -16,10 +16,15 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/api/api_client.dart';
+import '../../state/settings_provider.dart';
+import '../../widgets/nym_icons.dart';
+import '../messages/format/message_content.dart' show proxiedMedia;
+import 'modal_close_chip.dart';
 
 /// Giphy API key — same key the PWA uses (`this.giphyApiKey`, app.js:679).
 /// Requests are routed through the backend `/api/proxy?action=giphy` worker
@@ -127,11 +132,16 @@ class GifPicker extends ConsumerStatefulWidget {
     super.key,
     required this.favoritesStore,
     required this.onSelect,
+    this.onClose,
     this.proxyBase,
   });
 
   final FavoriteGifsStore favoritesStore;
   final ValueChanged<String> onSelect;
+
+  /// Dismisses the picker (`.gif-modal-close` ✕). When null the ✕ falls back to
+  /// `Navigator.maybePop` (dialog usage).
+  final VoidCallback? onClose;
 
   /// Optional media proxy base (unused on native — GIFs load directly).
   final String? proxyBase;
@@ -140,8 +150,10 @@ class GifPicker extends ConsumerStatefulWidget {
   ConsumerState<GifPicker> createState() => _GifPickerState();
 }
 
-class _GifPickerState extends ConsumerState<GifPicker> {
+class _GifPickerState extends ConsumerState<GifPicker>
+    with WidgetsBindingObserver {
   final _searchController = TextEditingController();
+  final _searchFocus = FocusNode();
   Timer? _debounce;
 
   List<GifItem> _favorites = const [];
@@ -149,20 +161,37 @@ class _GifPickerState extends ConsumerState<GifPicker> {
   bool _loading = true;
   bool _error = false;
   bool _showFavorites = true; // favorites only shown in trending view
+  bool _searchMode = false; // false = trending, true = active search
+  bool _searchFailed = false; // search errored (vs empty result set)
 
   @override
   void initState() {
     super.initState();
+    // The panel lifts above the keyboard by reading View.viewInsets (see
+    // build); that read establishes no rebuild dependency, so observe metrics
+    // changes to repaint as the keyboard animates in/out.
+    WidgetsBinding.instance.addObserver(this);
     _favorites = widget.favoritesStore.load();
+    // Rebuild on focus to apply the `.gif-search-input:focus` fill + glow ring.
+    _searchFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
     // Lazy: network only fires here, once the picker is mounted.
     _loadTrending();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _searchController.dispose();
+    _searchFocus.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadTrending() async {
@@ -170,6 +199,8 @@ class _GifPickerState extends ConsumerState<GifPicker> {
       _loading = true;
       _error = false;
       _showFavorites = true;
+      _searchMode = false;
+      _searchFailed = false;
     });
     try {
       final gifs = await ref.read(giphyServiceProvider).trending();
@@ -194,6 +225,8 @@ class _GifPickerState extends ConsumerState<GifPicker> {
       _loading = true;
       _error = false;
       _showFavorites = false;
+      _searchMode = true;
+      _searchFailed = false;
     });
     try {
       final gifs = await ref.read(giphyServiceProvider).search(query);
@@ -201,13 +234,15 @@ class _GifPickerState extends ConsumerState<GifPicker> {
       setState(() {
         _gifs = gifs;
         _loading = false;
-        _error = gifs.isEmpty;
+        _error = gifs.isEmpty; // empty result → "No GIFs found"
+        _searchFailed = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error = true;
+        _searchFailed = true; // network error → "Failed to search GIFs"
         _gifs = const [];
       });
     }
@@ -235,73 +270,162 @@ class _GifPickerState extends ConsumerState<GifPicker> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Container(
-      // .gif-picker: 350 wide, max 450 tall, glass, radius md, padding 12.
-      constraints: const BoxConstraints(maxWidth: 350, maxHeight: 450),
-      width: 350,
-      decoration: BoxDecoration(
-        color: c.glassBg,
-        border: Border.all(color: c.glassBorder),
-        borderRadius: NymRadius.rmd,
-        boxShadow: const [
-          BoxShadow(color: Color(0x66000000), blurRadius: 24, offset: Offset(0, 8)),
-        ],
-      ),
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _header(c),
-          const SizedBox(height: 10),
-          Flexible(child: _results(c)),
-          _attribution(c),
-        ],
+    final transparency =
+        ref.watch(settingsProvider.select((s) => s.transparencyEnabled));
+    // Keyboard-aware, like the PWA riding the visual viewport: overlay hosts
+    // anchor the panel to the SCREEN bottom, so the panel itself pads up by
+    // the keyboard height and shrinks to the space left above it — keeping
+    // the search field + results visible while typing. We read the inset from
+    // the raw FlutterView rather than MediaQuery: inside an OverlayPortal that
+    // sits under a resizing Scaffold, MediaQuery.viewInsets is already
+    // consumed (reports 0), so the panel would never lift. View.viewInsets is
+    // in physical px and is never consumed by an ancestor.
+    final view = View.of(context);
+    final keyboardInset = view.viewInsets.bottom / view.devicePixelRatio;
+    final maxPanelHeight = keyboardInset > 0
+        // Screen minus keyboard, status bar, and the 60px bottom-bar offset
+        // the phone popover anchors at (+8 breathing room).
+        ? (MediaQuery.sizeOf(context).height -
+                keyboardInset -
+                MediaQuery.paddingOf(context).top -
+                68)
+            .clamp(160.0, 450.0)
+            .toDouble()
+        : 450.0;
+    return Padding(
+      padding: EdgeInsets.only(bottom: keyboardInset),
+      child: Container(
+        // .gif-picker: 350 wide, max 450 tall, glass, radius md, padding 12.
+        constraints: BoxConstraints(maxWidth: 350, maxHeight: maxPanelHeight),
+        width: 350,
+        decoration: BoxDecoration(
+          // `.gif-picker` bg: with Transparency ON (no `solid-ui` body class) the
+          // PWA hardcodes rgba(20,20,35,0.9) dark (styles-features.css:1565) /
+          // rgba(255,255,255,0.92) light (styles-themes-responsive.css:1173-1177);
+          // with Transparency OFF (`solid-ui`, the default) it's the opaque
+          // `var(--glass-bg)` (#14141e dark / #ffffff light,
+          // styles-themes-responsive.css:1583-1600) — exactly `c.glassBg`.
+          color: transparency
+              ? (c.isLight
+                  ? const Color(0xEBFFFFFF) // rgba(255,255,255,0.92)
+                  : const Color(0xE6141423)) // rgba(20,20,35,0.9)
+              : c.glassBg,
+          border: Border.all(color: c.glassBorder),
+          borderRadius: NymRadius.rmd,
+          // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5); light mode redefines it to
+          // rgba(0,0,0,0.12) (styles-themes-responsive.css:537, and explicitly on
+          // `body.light-mode .gif-picker` at :1173-1177).
+          boxShadow: [
+            BoxShadow(
+              color:
+                  c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
+              blurRadius: 32,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _header(c),
+            const SizedBox(height: 10),
+            Flexible(child: _results(c)),
+            _attribution(c),
+          ],
+        ),
       ),
     );
   }
 
-  /// `.gif-modal-header` + `.gif-search-input` (styles-features.css:1582-1608).
+  /// `.gif-modal-header` (search input + close ✕, bottom-divider, gap 10) +
+  /// `.gif-search-input` (styles-features.css:1582-1608). On focus the input
+  /// fills `white@0.07`, border → primary@0.3, with a 3px primary@0.06 glow.
   Widget _header(NymColors c) {
-    return TextField(
-      controller: _searchController,
-      onChanged: _onSearchChanged,
-      style: TextStyle(color: c.textBright, fontSize: 12),
-      cursorColor: c.primary,
-      decoration: InputDecoration(
-        isDense: true,
-        hintText: 'Search GIFs...',
-        hintStyle: TextStyle(color: c.textDim, fontSize: 12),
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.05),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        border: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: c.glassBorder),
+    final focused = _searchFocus.hasFocus;
+    final field = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: NymRadius.rxs,
+        boxShadow: focused
+            ? [
+                BoxShadow(
+                    color: c.primaryA(0.06), blurRadius: 0, spreadRadius: 3),
+              ]
+            : null,
+      ),
+      child: TextField(
+        controller: _searchController,
+        focusNode: _searchFocus,
+        onChanged: _onSearchChanged,
+        // `color: var(--text-bright)`; light mode overrides it to `var(--text)`
+        // (`body.light-mode .gif-search-input { color: var(--text) !important }`,
+        // styles-themes-responsive.css:1063-1068 — more specific than the
+        // generic `body.light-mode input { color: #000000 !important }`).
+        style:
+            TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
+        cursorColor: c.isLight ? Colors.black : Colors.white,
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: 'Search GIFs...',
+          hintStyle: TextStyle(color: c.textDim, fontSize: 12),
+          filled: true,
+          fillColor: focused
+              ? Colors.white.withValues(alpha: 0.07)
+              : Colors.white.withValues(alpha: 0.05),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          border: OutlineInputBorder(
+            borderRadius: NymRadius.rxs,
+            borderSide: BorderSide(color: c.glassBorder),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: NymRadius.rxs,
+            borderSide: BorderSide(color: c.glassBorder),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: NymRadius.rxs,
+            borderSide: BorderSide(color: c.primaryA(0.3)),
+          ),
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: c.glassBorder),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: c.primaryA(0.3)),
-        ),
+      ),
+    );
+    return Container(
+      padding: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.glassBorder)),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: field),
+          const SizedBox(width: 10),
+          // `.modal-close.gif-modal-close` ✕ chip.
+          ModalCloseChip(
+            onTap: widget.onClose ?? () => Navigator.of(context).maybePop(),
+          ),
+        ],
       ),
     );
   }
 
   Widget _results(NymColors c) {
     if (_loading) {
-      return _centered(c, 'Loading GIFs...', isError: false);
+      // Per-mode loading copy: trending → "Loading trending GIFs..."
+      // (ui-context.js:2056); search → "Searching GIFs..." (:2073).
+      return _centered(
+        c,
+        _searchMode ? 'Searching GIFs...' : 'Loading trending GIFs...',
+        isError: false,
+      );
     }
     final showFavs = _showFavorites && _favorites.isNotEmpty;
     if (_error && !showFavs) {
-      return _centered(
-        c,
-        _showFavorites ? 'Failed to load GIFs' : 'No GIFs found',
-        isError: true,
-      );
+      // Trending fail → "Failed to load GIFs" (:2066); search empty → "No GIFs
+      // found" (:2079); search FAIL → "Failed to search GIFs" (:2084).
+      final msg = _searchMode
+          ? (_searchFailed ? 'Failed to search GIFs' : 'No GIFs found')
+          : 'Failed to load GIFs';
+      return _centered(c, msg, isError: true);
     }
 
     return SingleChildScrollView(
@@ -319,17 +443,18 @@ class _GifPickerState extends ConsumerState<GifPicker> {
     );
   }
 
-  /// `.gif-section-label` (styles-features.css:1674).
+  /// `.gif-section-label` (styles-features.css:1674-1683): 10/w700/upper/
+  /// ls0.06em/text-dim/opacity 0.8/padding 4px 2px 0.
   Widget _sectionLabel(NymColors c, String text) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(2, 4, 2, 4),
+      padding: const EdgeInsets.fromLTRB(2, 4, 2, 0),
       child: Text(
         text.toUpperCase(),
         style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.6,
-          color: c.textDim,
+          color: c.textDim.withValues(alpha: 0.8),
         ),
       ),
     );
@@ -342,6 +467,11 @@ class _GifPickerState extends ConsumerState<GifPicker> {
       crossAxisCount: 2,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
+      // Without an explicit padding, GridView absorbs the ambient
+      // MediaQuery.padding (the status-bar inset inside the overlay) as its
+      // default sliver padding — a phantom empty band above the GIFs. The
+      // PWA's `.gif-grid` has no padding.
+      padding: EdgeInsets.zero,
       mainAxisSpacing: 8,
       crossAxisSpacing: 8,
       children: [for (final g in gifs) _gifTile(g)],
@@ -350,54 +480,11 @@ class _GifPickerState extends ConsumerState<GifPicker> {
 
   /// `.gif-item` with image + `.gif-fav-btn` star (styles-features.css:1616).
   Widget _gifTile(GifItem gif) {
-    final c = context.nym;
-    final fav = _isFavorite(gif.url);
-    return InkWell(
-      onTap: () => widget.onSelect(gif.url),
-      borderRadius: NymRadius.rsm,
-      child: ClipRRect(
-        borderRadius: NymRadius.rsm,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.03),
-                border: Border.all(color: Colors.transparent, width: 2),
-                borderRadius: NymRadius.rsm,
-              ),
-              child: CachedNetworkImage(
-                imageUrl: gif.url,
-                fit: BoxFit.cover,
-                placeholder: (_, __) => const SizedBox.shrink(),
-                errorWidget: (_, __, ___) =>
-                    Icon(Icons.broken_image, size: 18, color: c.textDim),
-              ),
-            ),
-            Positioned(
-              top: 6,
-              right: 6,
-              child: Material(
-                color: const Color(0x73000000),
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () => _toggleFavorite(gif),
-                  child: SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: Icon(
-                      fav ? Icons.star : Icons.star_border,
-                      size: 14,
-                      color: fav ? c.warning : Colors.white.withValues(alpha: 0.85),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+    return _GifTile(
+      gif: gif,
+      favorite: _isFavorite(gif.url),
+      onSelect: () => widget.onSelect(gif.url),
+      onToggleFavorite: () => _toggleFavorite(gif),
     );
   }
 
@@ -415,7 +502,20 @@ class _GifPickerState extends ConsumerState<GifPicker> {
             text: 'Powered by ',
             style: TextStyle(color: c.textDim, fontSize: 10),
             children: [
-              TextSpan(text: 'GIPHY', style: TextStyle(color: c.primary)),
+              WidgetSpan(
+                alignment: PlaceholderAlignment.middle,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: () {
+                      final uri = Uri.parse('https://giphy.com');
+                      launchUrl(uri, mode: LaunchMode.externalApplication);
+                    },
+                    child: Text('GIPHY',
+                        style: TextStyle(color: c.primary, fontSize: 10)),
+                  ),
+                ),
+              ),
             ],
           ),
           textAlign: TextAlign.center,
@@ -434,6 +534,125 @@ class _GifPickerState extends ConsumerState<GifPicker> {
           style: TextStyle(
             color: isError ? c.danger : c.textDim,
             fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// `.gif-item`: a square thumbnail with a `.gif-fav-btn` star. On hover the
+/// border goes primary@0.3, a `--shadow-md` (0 4px 16px rgba(0,0,0,0.4)) lifts
+/// it, and it scales to 1.03 (styles-features.css:1616-1638).
+class _GifTile extends StatefulWidget {
+  const _GifTile({
+    required this.gif,
+    required this.favorite,
+    required this.onSelect,
+    required this.onToggleFavorite,
+  });
+
+  final GifItem gif;
+  final bool favorite;
+  final VoidCallback onSelect;
+  final VoidCallback onToggleFavorite;
+
+  @override
+  State<_GifTile> createState() => _GifTileState();
+}
+
+class _GifTileState extends State<_GifTile> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      // `.gif-item { transition: all var(--transition) }` — 0.25s
+      // cubic-bezier(0.4,0,0.2,1) (styles-core.css:95), which is exactly
+      // Flutter's [Curves.fastOutSlowIn].
+      child: AnimatedScale(
+        scale: _hover ? 1.03 : 1.0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.fastOutSlowIn,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.fastOutSlowIn,
+          decoration: BoxDecoration(
+            // `.gif-item`: 2px transparent border (→ primary@0.3 on hover).
+            border: Border.all(
+                color: _hover ? c.primaryA(0.3) : Colors.transparent, width: 2),
+            borderRadius: NymRadius.rsm,
+            boxShadow: _hover
+                ? const [
+                    // `--shadow-md`: 0 4px 16px rgba(0,0,0,0.4).
+                    BoxShadow(
+                        color: Color(0x66000000),
+                        blurRadius: 16,
+                        offset: Offset(0, 4)),
+                  ]
+                : null,
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            borderRadius: NymRadius.rsm,
+            child: InkWell(
+              onTap: widget.onSelect,
+              borderRadius: NymRadius.rsm,
+              child: ClipRRect(
+                borderRadius: NymRadius.rsm,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Container(
+                      color: Colors.white.withValues(alpha: 0.03),
+                      child: CachedNetworkImage(
+                        // Route Giphy GIFs through the media proxy so the user's
+                        // IP is never exposed to the CDN (PWA getProxiedMediaUrl).
+                        imageUrl: proxiedMedia(widget.gif.url),
+                        fit: BoxFit.cover,
+                        placeholder: (_, __) => const SizedBox.shrink(),
+                        errorWidget: (_, __, ___) => Icon(Icons.broken_image,
+                            size: 18, color: c.textDim),
+                      ),
+                    ),
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: Material(
+                        color: const Color(0x73000000),
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: widget.onToggleFavorite,
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            // `.gif-fav-btn` (ui-context.js:2133) — the custom
+                            // 5-point star: outline by default, filled gold
+                            // (`--warning`) when `.active`.
+                            child: Center(
+                              child: NymSvgIcon(
+                                widget.favorite
+                                    ? NymIcons.starFilled
+                                    : NymIcons.starOutline,
+                                size: 14,
+                                color: widget.favorite
+                                    ? c.warning
+                                    : Colors.white.withValues(alpha: 0.85),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),

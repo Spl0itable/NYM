@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../../core/constants/event_kinds.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/p2p/p2p_models.dart';
 import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../models/user.dart';
@@ -38,13 +39,20 @@ class EventMapper {
     if (isGeo && geohash == null) return null;
     if (!isGeo && channel == null) return null;
 
-    final baseNym = e.tagValue('n') ?? 'anon';
+    final baseNym = e.tagValue('n') ?? 'nym';
     final author = getNymFromPubkey(baseNym, e.pubkey);
     final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
 
     // Clamp future timestamps to now (mirrors the PWA).
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final createdAt = e.createdAt > nowSec + 60 ? nowSec : e.createdAt;
+
+    // A channel message can carry a P2P file offer on an `['offer', JSON]` tag
+    // (`shareP2PFile` → `publishFileOffer`). nostr-core.js:434/502 parses it off
+    // the inbound event and sets `isFileOffer`/`fileOffer` so the row renders a
+    // file-offer card. `parseFileOfferTag` binds the offer's seederPubkey to the
+    // actual sender (anti-spoof) and returns null when absent/mismatched.
+    final fileOffer = parseFileOfferTag(e.tags, e.pubkey);
 
     return Message(
       id: e.id,
@@ -59,6 +67,8 @@ class EventMapper {
       channel: channel,
       geohash: geohash,
       senderVerified: true,
+      isFileOffer: fileOffer != null,
+      fileOffer: fileOffer?.toJson(),
     );
   }
 

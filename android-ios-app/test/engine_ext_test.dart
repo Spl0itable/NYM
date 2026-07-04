@@ -1,12 +1,17 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/core/crypto/gift_wrap.dart' as giftwrap;
 import 'package:nym_bar/core/crypto/keys.dart' as keys;
 import 'package:nym_bar/core/crypto/schnorr.dart' as schnorr;
 import 'package:nym_bar/features/channels/channel_manager.dart';
+import 'package:nym_bar/features/p2p/p2p_models.dart';
 import 'package:nym_bar/features/polls/poll_logic.dart';
 import 'package:nym_bar/features/zaps/zap_logic.dart';
 import 'package:nym_bar/models/channel.dart';
 import 'package:nym_bar/models/nostr_event.dart';
+import 'package:nym_bar/models/user.dart';
 import 'package:nym_bar/state/app_state.dart';
 
 /// Pure engine-extension tests (no sockets): reactions, polls, channel sort,
@@ -362,6 +367,52 @@ void main() {
       expect(z.totalSats, 21);
       expect(z.zapperCount, 1);
     });
+
+    test('unverified zap tracks into unverifiedSats; verified does not', () {
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      n.recordMessageZap(
+        messageId: 'm',
+        zapperPubkey: 'z',
+        amountSats: 50,
+        dedupKey: 'b:lnbc1a',
+        verified: false,
+      );
+      n.recordMessageZap(
+        messageId: 'm',
+        zapperPubkey: 'z2',
+        amountSats: 30,
+        dedupKey: 'b:lnbc1b',
+      ); // verified default
+      final z = n.state.zaps['m']!;
+      expect(z.totalSats, 80);
+      expect(z.unverifiedSats, 50);
+    });
+
+    test('verified receipt upgrades a previously-unverified payment (no double count)', () {
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      // Gift-wrapped (unverified) announcement lands first.
+      n.recordMessageZap(
+        messageId: 'm',
+        zapperPubkey: 'z',
+        amountSats: 21,
+        dedupKey: 'b:lnbc1x',
+        verified: false,
+      );
+      expect(n.state.zaps['m']!.unverifiedSats, 21);
+      // The verified receipt for the SAME bolt11 arrives → clears unverified,
+      // does NOT add sats again (zaps.js:1617-1624).
+      final upgraded = n.recordMessageZap(
+        messageId: 'm',
+        zapperPubkey: 'z',
+        amountSats: 21,
+        dedupKey: 'b:lnbc1x',
+      );
+      expect(upgraded, isTrue);
+      final z = n.state.zaps['m']!;
+      expect(z.totalSats, 21);
+      expect(z.unverifiedSats, 0);
+      expect(z.zapperCount, 1);
+    });
   });
 
   group('call signaling', () {
@@ -398,6 +449,127 @@ void main() {
       expect(res.seal.pubkey, senderPub);
       expect(res.rumor['pubkey'], senderPub);
       expect(schnorr.verifyEvent(res.seal), isTrue);
+    });
+  });
+
+  // ===========================================================================
+  // Inbound P2P file offer → file-offer card (#84). nostr-core.js:434/502:
+  // parseFileOfferTag off a channel message sets isFileOffer/fileOffer so the
+  // row renders a FileOfferCard. Verified through the real ingest path.
+  // ===========================================================================
+  group('inbound file offer mapping', () {
+    // A legitimate share stamps seederPubkey == sender (p2p.js shareP2PFile);
+    // parseFileOfferTag then re-binds it to the actual sender on receipt.
+    final offer = FileOffer.fromBytes(
+      bytes: Uint8List.fromList(utf8.encode('hello p2p')),
+      name: 'doc.pdf',
+      type: 'application/pdf',
+      seederPubkey: 'peerpk',
+    );
+
+    NostrEvent geoMsgWithOffer(String sender, {bool withOffer = true}) =>
+        NostrEvent(
+          id: 'off_${sender}_$withOffer',
+          pubkey: sender,
+          createdAt: 2000,
+          kind: 20000,
+          tags: [
+            ['n', 'peer'],
+            if (withOffer) fileOfferTag(offer),
+            ['g', '9q8y'],
+          ],
+          content: 'Sharing file through Nymchat: doc.pdf',
+        );
+
+    test('a channel message carrying an offer tag maps to a file-offer card',
+        () {
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      n.ingestEvent(geoMsgWithOffer('peerpk'));
+
+      final list = n.state.messages['#9q8y']!;
+      final msg = list.single;
+      expect(msg.isFileOffer, isTrue);
+      expect(msg.fileOffer, isNotNull);
+      expect(msg.fileOffer!['name'], 'doc.pdf');
+      // seederPubkey is rebound to the actual sender (anti-spoof).
+      expect(msg.fileOffer!['seederPubkey'], 'peerpk');
+    });
+
+    test('a plain channel message is NOT a file offer', () {
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      n.ingestEvent(geoMsgWithOffer('peerpk', withOffer: false));
+      final msg = n.state.messages['#9q8y']!.single;
+      expect(msg.isFileOffer, isFalse);
+      expect(msg.fileOffer, isNull);
+    });
+
+    test('an offer whose seederPubkey ≠ sender is rejected (no card)', () {
+      // Spoof: a message from "attacker" claiming someone else seeds the file.
+      final spoofed = FileOffer.fromBytes(
+        bytes: Uint8List.fromList(utf8.encode('x')),
+        name: 'evil.bin',
+        type: '',
+        seederPubkey: 'victimpk',
+      );
+      final ev = NostrEvent(
+        pubkey: 'attackerpk',
+        createdAt: 3000,
+        kind: 20000,
+        tags: [
+          ['n', 'atk'],
+          fileOfferTag(spoofed),
+          ['g', '9q8y'],
+        ],
+        content: 'evil',
+      );
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      n.ingestEvent(ev);
+      final msg = n.state.messages['#9q8y']!.single;
+      expect(msg.isFileOffer, isFalse);
+    });
+  });
+
+  // Production initial / reset state — the PWA shows an EMPTY shell, never the
+  // demo seed (satoshi/neo/#bitcoin/#dev/flutter-rewrite). Guards the swap of
+  // the AppStateNotifier constructor + reset() to AppState.empty().
+  group('production initial state (no demo seed)', () {
+    void expectEmptyShell(AppState s) {
+      // Only the default channel, no fake users/PMs/groups/messages/reactions.
+      expect(s.channels.map((c) => c.key).toList(), [kDefaultChannel]);
+      expect(s.view, const ChatView.channel(kDefaultChannel));
+      expect(s.users, isEmpty);
+      expect(s.pmConversations, isEmpty);
+      expect(s.groups, isEmpty);
+      expect(s.messages, isEmpty);
+      expect(s.reactions, isEmpty);
+      expect(s.unreadCounts, isEmpty);
+      // Logged-out: no identity.
+      expect(s.selfPubkey, isEmpty);
+      expect(s.selfNym, isEmpty);
+    }
+
+    test('default AppStateNotifier() is the empty logged-out shell', () {
+      final n = AppStateNotifier();
+      expectEmptyShell(n.state);
+      // None of the seed authors/channels are present.
+      expect(n.state.users.values.any((u) => u.nym.startsWith('satoshi')),
+          isFalse);
+      expect(n.state.channels.any((c) => c.key == 'bitcoin'), isFalse);
+    });
+
+    test('reset() returns to the empty shell, not the demo seed', () {
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      // Mutate the live store, then reset.
+      n.setUserPresence(pubkey: 'a' * 64, status: UserStatus.online);
+      n.reset();
+      expectEmptyShell(n.state);
+    });
+
+    test('AppState.empty() matches AppState.live with no identity', () {
+      final e = AppState.empty();
+      expectEmptyShell(e);
+      expect(e.selfPubkey, '');
+      expect(e.selfNym, '');
     });
   });
 }

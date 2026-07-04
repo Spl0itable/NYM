@@ -1,41 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:async';
 
 import 'app.dart';
 import 'core/constants/storage_keys.dart';
 import 'core/theme/nym_theme.dart';
 import 'features/identity/vault_boot_unlock.dart';
 import 'services/storage/key_value_store.dart';
+import 'state/app_state.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Open the key/value store (mirrors the PWA's synchronous localStorage).
-  final kv = await KeyValueStore.open();
+  // The web-of-trust spam gate is safe to enable now that channel sends carry
+  // the NIP-13 PoW floor (so Nymchat-client messages self-attest) and the trust
+  // graph persists across launches. Enabled in the real app only — widget tests
+  // leave it off by default.
+  nymVouchSpamGateEnabled = true;
 
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('[FlutterError] ${details.exceptionAsString()}');
+    if (details.stack != null) debugPrint(details.stack.toString());
+  };
 
-  // Manual container so we can boot the Nostr controller (identity + relays)
-  // here in the real app only — widget tests construct their own ProviderScope
-  // and never touch networking / secure storage.
-  final container = ProviderContainer(
-    overrides: [keyValueStoreProvider.overrideWithValue(kv)],
-  );
+  // Catch otherwise-fatal async errors (e.g. WebSocket DNS failures when the
+  // emulator/device is offline) so they don’t terminate the app.
+  await runZonedGuarded(() async {
+    // Open the key/value store (mirrors the PWA's synchronous localStorage).
+    final kv = await KeyValueStore.open();
 
-  runApp(
-    UncontrolledProviderScope(
-      container: container,
-      // The boot-unlock gate mirrors `DOMContentLoaded → await
-      // nym.unlockVaultAtBoot() BEFORE initialize()`: when the vault is enabled
-      // it blocks until the user unlocks (decrypting the stored secrets) and
-      // only THEN boots the controller. When the vault is off it boots
-      // immediately, behaving exactly as before.
-      child: const _BootUnlockGate(),
-    ),
-  );
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    // Manual container so we can boot the Nostr controller (identity + relays)
+    // here in the real app only — widget tests construct their own ProviderScope
+    // and never touch networking / secure storage.
+    final container = ProviderContainer(
+      overrides: [keyValueStoreProvider.overrideWithValue(kv)],
+    );
+
+    runApp(
+      UncontrolledProviderScope(
+        container: container,
+        // The boot-unlock gate mirrors `DOMContentLoaded → await
+        // nym.unlockVaultAtBoot() BEFORE initialize()`: when the vault is enabled
+        // it blocks until the user unlocks (decrypting the stored secrets) and
+        // only THEN boots the controller. When the vault is off it boots
+        // immediately, behaving exactly as before.
+        child: const _BootUnlockGate(),
+      ),
+    );
+  }, (error, stack) {
+    debugPrint('[Zone] Unhandled async error: $error');
+    debugPrint(stack.toString());
+  });
 }
 
 /// Top-level gate enforcing the PWA's boot ordering: identity-vault unlock runs

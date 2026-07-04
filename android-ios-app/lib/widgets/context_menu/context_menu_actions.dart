@@ -1,4 +1,5 @@
 import '../../models/message.dart';
+import '../nym_icons.dart';
 
 /// The identity of a context-menu action (mirrors the `#ctxXxx` items in
 /// index.html's `#contextMenu`). Order matches the PWA's markup.
@@ -48,6 +49,7 @@ class CtxTarget {
     this.targetIsMember = false,
     this.targetIsOwner = false,
     this.targetIsMod = false,
+    this.backToGroupId,
   });
 
   final String pubkey;
@@ -74,6 +76,12 @@ class CtxTarget {
   final bool targetIsOwner;
   final bool targetIsMod;
 
+  /// When this profile was opened from a group's member list, the originating
+  /// group id — the user context menu then shows a top-left "back" chevron that
+  /// returns to that group's context menu (PWA `backToGroupId`,
+  /// ui-context.js:354/371). Null for every other entry point.
+  final String? backToGroupId;
+
   bool get iCanModerate => iAmOwner || iAmMod;
 }
 
@@ -91,10 +99,12 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
   final showGiftCredits = !t.isSelf && !t.isBot;
 
   // Profile-only mode (nyms sidebar): the PWA explicitly hides Mention,
-  // Translate, Slap, Hug, mod items and Edit; everything else stays subject to
-  // its own gate. With no messageId/content present, React/Zap/Quote/Copy/Edit/
-  // Delete fall away too — leaving PM, AddToGroup, GiftCredits, Friend, Report,
-  // Block (ui-context.js:640-654).
+  // Translate, Slap, Hug, mod items and Edit *Message* (`editOption`); everything
+  // else stays subject to its own gate. With no messageId/content present,
+  // React/Zap/Quote/Copy/Delete fall away too — leaving PM, AddToGroup,
+  // GiftCredits, Friend, Report, Block, and (for self) Edit *Profile*, which the
+  // PWA keeps visible (`ctxEditProfile` is shown when pubkey === self, and the
+  // profile-only block never hides it) (ui-context.js:586-594, 640-654).
   if (t.profileOnly) {
     return [
       if (!t.isSelf) CtxAction.privateMessage,
@@ -103,6 +113,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
       if (!t.isSelf) CtxAction.friend,
       if (!t.isSelf) CtxAction.report,
       if (!t.isSelf) CtxAction.block,
+      if (t.isSelf) CtxAction.editProfile,
     ];
   }
 
@@ -214,6 +225,59 @@ String ctxActionLabel(CtxAction a, CtxTarget t) {
       return t.isBlocked ? 'Unblock User' : 'Block User';
     case CtxAction.editProfile:
       return 'Edit Profile';
+  }
+}
+
+/// The leading 16px glyph (a [NymIcons] SVG string) for an action row,
+/// reproducing the PWA's per-item inline SVGs verbatim (index.html:94-266; the
+/// injected Slap/Hug glyphs at ui-context.js:504/524). Reused by the
+/// quick-context-menu (F3) for the shared items. Rendered through [NymSvgIcon].
+String ctxActionSvg(CtxAction a) {
+  switch (a) {
+    case CtxAction.react:
+      return NymIcons.ctxReact;
+    case CtxAction.mention:
+      return NymIcons.ctxMention;
+    case CtxAction.privateMessage:
+      return NymIcons.ctxPm;
+    case CtxAction.slap:
+      return NymIcons.ctxSlap;
+    case CtxAction.hug:
+      return NymIcons.ctxHug;
+    case CtxAction.addToGroup:
+      return NymIcons.ctxAddToGroup;
+    case CtxAction.zap:
+      return NymIcons.ctxZap;
+    case CtxAction.giftCredits:
+      return NymIcons.ctxGiftCredits;
+    case CtxAction.quote:
+      return NymIcons.ctxQuote;
+    case CtxAction.copyMessage:
+      return NymIcons.ctxCopy;
+    case CtxAction.translate:
+      return NymIcons.translate;
+    case CtxAction.friend:
+      return NymIcons.ctxFriend;
+    case CtxAction.report:
+      return NymIcons.ctxReport;
+    case CtxAction.edit:
+      return NymIcons.ctxEdit;
+    case CtxAction.delete:
+      return NymIcons.ctxDelete;
+    case CtxAction.makeMod:
+      return NymIcons.ctxMakeMod;
+    case CtxAction.revokeMod:
+      return NymIcons.ctxRevokeMod;
+    case CtxAction.transferOwner:
+      return NymIcons.ctxTransferOwner;
+    case CtxAction.kick:
+      return NymIcons.ctxKick;
+    case CtxAction.ban:
+      return NymIcons.ctxBan;
+    case CtxAction.block:
+      return NymIcons.ctxBlock;
+    case CtxAction.editProfile:
+      return NymIcons.ctxEditProfile;
   }
 }
 

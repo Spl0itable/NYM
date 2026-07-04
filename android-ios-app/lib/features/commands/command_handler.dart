@@ -13,6 +13,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../models/user.dart';
 import 'action_rate_limit.dart';
 import 'command_registry.dart';
+import 'help_output.dart';
 
 /// The effects a command can request. The controller supplies these; the
 /// handler never reaches into app_state directly (it is not an owner of it).
@@ -37,6 +38,10 @@ abstract class CommandEngine {
 
   // Direct engine actions (each maps to an existing controller method).
   void join(String channel);
+
+  /// `/clear` — `cmdClear` (commands.js:689-692): empties the rendered
+  /// conversation (`messagesContainer.innerHTML = ''`), THEN shows the
+  /// 'Chat cleared' system line.
   void clear();
   void leave();
   void quit();
@@ -58,6 +63,7 @@ class CommandHooks {
     this.openPm,
     this.openZap,
     this.invite,
+    this.openShare,
     this.createGroup,
     this.addMember,
     this.groupInfo,
@@ -67,6 +73,7 @@ class CommandHooks {
     this.addMod,
     this.removeMod,
     this.transferOwner,
+    this.openDevNsecChallenge,
   });
 
   /// `/poll` → open the poll editor modal (polls agent). TODO(verify): modal
@@ -82,6 +89,12 @@ class CommandHooks {
   /// `/invite <arg>` → channel-invite / startGroupFromPM / addMemberToGroup.
   /// TODO(verify): group/PM invite flow spans pms/groups agents.
   final void Function(String arg)? invite;
+
+  /// `/share` → `shareChannel()` (channels.js:411-427): opens the Share
+  /// Channel modal (`#shareModal`) with `origin+pathname#<channel||'nymchat'>`
+  /// in the readonly input, auto-selected. The modal is [ShareChannelModal]
+  /// (features/channels/channel_share.dart), owned by the channels UI.
+  final void Function()? openShare;
 
   /// `/group <@u1 @u2 [name]>` → resolve members + createGroup.
   final void Function(List<String> memberPubkeys, String name)? createGroup;
@@ -99,6 +112,15 @@ class CommandHooks {
   final void Function(String pubkey)? addMod;
   final void Function(String pubkey)? removeMod;
   final void Function(String pubkey)? transferOwner;
+
+  /// `/nick <reserved>` → the developer-nsec challenge modal
+  /// (`showDevNsecModal('nick')` → `applyDeveloperIdentity` on success,
+  /// commands.js:614-626). The hook owns the whole outcome: verify → switch
+  /// the running session to the developer identity + the "Identity verified…"
+  /// line, cancel → the PWA's 'Nickname change cancelled.' line. Unset
+  /// (headless/tests) → the engine's reserved gate aborts with the same
+  /// cancellation message.
+  final void Function()? openDevNsecChallenge;
 }
 
 /// Resolves a `@nym` / `nym#xxxx` / 64-hex target to a pubkey + display nym, or
@@ -205,9 +227,12 @@ class CommandDispatcher {
   void _dispatch(CommandSpec spec, String args) {
     switch (spec.id) {
       case 'help':
-        // Help renders the categorized palette (handled by the UI palette);
-        // the system-message form is informational here.
-        engine.systemMessage('Available commands');
+        // `showHelp()` (commands.js:522-546): the full categorized listing —
+        // title, per-category headers, "/name, /alias — desc" rows, and the
+        // five footer lines — posted as a system message. The styled
+        // `.help-output` rendering is [HelpOutputBlock] (help_output.dart);
+        // this emits the identical content through the plain-text sink.
+        engine.systemMessage(buildHelpMessageText());
       case 'join':
         if (args.isEmpty) {
           engine.systemMessage(
@@ -268,8 +293,20 @@ class CommandDispatcher {
         engine.clearAway();
       case 'zap':
         _zap(args);
+      case 'poll':
+        // `/poll` → the poll editor modal (polls agent). When no hook is wired
+        // (headless/tests) this degrades to nothing, matching the prior no-op.
+        hooks.openPoll?.call();
       case 'share':
-        engine.share();
+        // `cmdShare` → `shareChannel()` (channels.js:411-427) opens the Share
+        // Channel modal — works even in PM mode (URL falls back to the current
+        // channel or 'nymchat'). Prefer the modal hook; engine.share() is the
+        // headless fallback.
+        if (hooks.openShare != null) {
+          hooks.openShare!();
+        } else {
+          engine.share();
+        }
       case 'block':
         engine.block(args);
       case 'unblock':
@@ -338,6 +375,12 @@ class CommandDispatcher {
     final t = resolveTarget(args, engine.users);
     if (t == null) {
       engine.systemMessage('User ${args.trim()} not found');
+      return;
+    }
+    if (t.pubkey == engine.selfPubkey) {
+      // PWA cmdZap blocks self-zapping via the command (zaps.js:1947/2007).
+      // Self-zapping your own MESSAGE via the badge is still allowed elsewhere.
+      engine.systemMessage("You can't zap yourself");
       return;
     }
     hooks.openZap?.call(t.pubkey, t.nym);

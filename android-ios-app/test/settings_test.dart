@@ -139,6 +139,28 @@ void main() {
       expect(ctrl.hideNonPinned, true);
     });
 
+    test('landing channel persists, reads back, and is a SYNCED setting', () {
+      var synced = 0;
+      ctrl.onSyncedChange = () => synced++;
+
+      // Default: unset.
+      expect(ctrl.pinnedLandingChannelJson, isNull);
+
+      const json = '{"type":"geohash","geohash":"9q8y"}';
+      ctrl.setPinnedLandingChannel(json);
+      expect(kv.getString(StorageKeys.pinnedLandingChannel), json);
+      expect(ctrl.pinnedLandingChannelJson, json);
+      // It fires the synced-change hook (the PWA routes it through the
+      // channels sync section + nostrSettingsSave, settings.js:21,116).
+      expect(synced, 1);
+
+      // A blank value clears the override (boot then defaults to nymchat).
+      ctrl.setPinnedLandingChannel('   ');
+      expect(kv.getString(StorageKeys.pinnedLandingChannel), isNull);
+      expect(ctrl.pinnedLandingChannelJson, isNull);
+      expect(synced, 2);
+    });
+
     test('mobile gesture setters', () {
       ctrl.setGesturesEnabled(false);
       expect(reload().gesturesEnabled, false);
@@ -168,7 +190,10 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final kv = await KeyValueStore.open();
 
-    tester.view.physicalSize = const Size(900, 1400);
+    // Phone-width viewport (<=768 logical px) so the mobile-only "Mobile
+    // Gestures" section is rendered (it is width-gated like the PWA's
+    // `.mobile-only` reveal `@media (max-width:768px)`).
+    tester.view.physicalSize = const Size(700, 1400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);

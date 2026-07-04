@@ -18,6 +18,8 @@
 	<string>Nymchat needs camera access for video calls, taking photos to share, and scanning QR codes.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nymchat needs microphone access for voice and video calls.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Nymchat uses your location only to sort nearby geohash channels by proximity when you enable that setting.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Nymchat needs photo library access to select images and files to share.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

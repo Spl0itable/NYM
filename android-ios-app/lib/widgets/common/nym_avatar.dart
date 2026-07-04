@@ -1,7 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
-import '../../core/theme/nym_colors.dart';
 import '../../models/user.dart';
 import '../../services/api/api_client.dart';
 
@@ -80,39 +79,88 @@ class NymAvatar extends StatelessWidget {
     );
   }
 
-  /// The generated identicon fallback (unchanged behavior).
+  /// The generated identicon fallback — a 1:1 port of the PWA's
+  /// `generateAvatarSvg` (users.js:318): an FNV-1a hash of the seed seeds a
+  /// Mulberry32 PRNG that picks an HSL foreground + complementary dark
+  /// background and fills a 5×5 horizontally-mirrored cell grid. Deterministic
+  /// per seed, so it matches the PWA byte-for-byte and is clearly visible in
+  /// both light and dark themes (it carries its own opaque background).
   Widget _identicon(BuildContext context) {
-    final c = context.nym;
-    final hue = (seed.hashCode % 360).toDouble().abs();
-    final tint = HSLColor.fromAHSL(1, hue, 0.5, 0.5).toColor();
-    final glyph = (label ?? _initial(seed)).toUpperCase();
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: tint.withValues(alpha: 0.25),
-        shape: BoxShape.circle,
-        border: Border.all(color: c.glassBorder, width: 1),
-      ),
-      child: Text(
-        glyph,
-        style: TextStyle(
-          color: tint,
-          fontSize: size * 0.5,
-          fontWeight: FontWeight.w700,
-          height: 1,
-        ),
+    return ClipOval(
+      child: CustomPaint(
+        size: Size(size, size),
+        painter: _IdenticonPainter(seed),
       ),
     );
   }
+}
 
-  String _initial(String s) {
-    for (final ch in s.split('')) {
-      if (ch != '#' && ch.trim().isNotEmpty) return ch;
+/// Paints the deterministic identicon described by [NymAvatar._identicon].
+class _IdenticonPainter extends CustomPainter {
+  _IdenticonPainter(this.seed);
+
+  final String seed;
+
+  /// 32-bit truncated multiply (JS `Math.imul`). The low 32 bits survive Dart's
+  /// 64-bit wrap, so `& 0xFFFFFFFF` reproduces it exactly on native.
+  static int _imul(int a, int b) => (a * b) & 0xFFFFFFFF;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final key = seed;
+    // FNV-1a-ish 32-bit hash.
+    var h = 2166136261;
+    for (var i = 0; i < key.length; i++) {
+      h ^= key.codeUnitAt(i);
+      h = _imul(h, 16777619);
     }
-    return '?';
+    var s = h == 0 ? 1 : h;
+    double rand() {
+      s = (s + 0x6D2B79F5) & 0xFFFFFFFF;
+      var t = _imul(s ^ (s >>> 15), 1 | s);
+      t = ((t + _imul(t ^ (t >>> 7), 61 | t)) ^ t) & 0xFFFFFFFF;
+      return ((t ^ (t >>> 14)) & 0xFFFFFFFF) / 4294967296.0;
+    }
+
+    final hue = (rand() * 360).floor();
+    final sat = 60 + (rand() * 25).floor();
+    final light = 50 + (rand() * 15).floor();
+    final fg = HSLColor.fromAHSL(1, hue.toDouble(), sat / 100, light / 100)
+        .toColor();
+    final bgHue = (hue + 180) % 360;
+    final bg =
+        HSLColor.fromAHSL(1, bgHue.toDouble(), 0.25, 0.18).toColor();
+
+    // Background fill.
+    canvas.drawRect(Offset.zero & size, Paint()..color = bg);
+
+    // 5×5 grid, mirrored horizontally; the 80px SVG viewBox scales to [size].
+    const cols = 5;
+    const rows = 5;
+    const half = 3; // ceil(cols / 2)
+    final cell = size.width / cols;
+    final fgPaint = Paint()..color = fg;
+    for (var y = 0; y < rows; y++) {
+      for (var x = 0; x < half; x++) {
+        if (rand() < 0.5) {
+          canvas.drawRect(
+            Rect.fromLTWH(x * cell, y * cell, cell + 0.5, cell + 0.5),
+            fgPaint,
+          );
+          final mirror = cols - 1 - x;
+          if (mirror != x) {
+            canvas.drawRect(
+              Rect.fromLTWH(mirror * cell, y * cell, cell + 0.5, cell + 0.5),
+              fgPaint,
+            );
+          }
+        }
+      }
+    }
   }
+
+  @override
+  bool shouldRepaint(covariant _IdenticonPainter old) => old.seed != seed;
 }
 
 /// 6×6 round status dot (docs/specs/02 §5.3 user-item dot).

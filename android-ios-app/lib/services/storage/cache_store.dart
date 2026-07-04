@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -58,7 +59,23 @@ class CacheStore {
   static const String _dbName = 'nym_cache.db';
   static const int _dbVersion = 2;
 
+  /// Every logical store, mirroring persistence.js `STORES` + the unbounded
+  /// `meta` store.
+  static const List<String> _allTables = [
+    'meta',
+    'profiles',
+    'channels',
+    'pms',
+    'reactions',
+    'avatars',
+    'banners',
+  ];
+
   Database? _db;
+
+  /// On-disk path recorded by [open] so [panicWipe] can delete the database
+  /// FILE itself. Null for injected (test/in-memory) databases.
+  String? _path;
 
   Database get _database {
     final db = _db;
@@ -79,6 +96,7 @@ class CacheStore {
     if (_db != null) return;
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, _dbName);
+    _path = path;
     _db = await openDatabase(
       path,
       version: _dbVersion,
@@ -164,17 +182,19 @@ class CacheStore {
   /// Persist a channel's messages, keeping only the last [channelMessageLimit]
   /// (mirrors `persistChannelMessages`: `messages.slice(-limit)`). Stamps
   /// `lastTouched`. An empty list deletes the record, as in the PWA.
-  Future<void> saveChannelMessages(String key, List<Message> msgs) async {
+  Future<void> saveChannelMessages(String key, List<Message> msgs,
+      [DatabaseExecutor? executor]) async {
     if (key.isEmpty) return;
+    final db = executor ?? _database;
     if (msgs.isEmpty) {
-      await _database.delete('channels', where: 'key = ?', whereArgs: [key]);
+      await db.delete('channels', where: 'key = ?', whereArgs: [key]);
       return;
     }
     final trimmed = msgs.length > channelMessageLimit
         ? msgs.sublist(msgs.length - channelMessageLimit)
         : msgs;
     final json = jsonEncode(trimmed.map((m) => m.toJson()).toList());
-    await _database.insert(
+    await db.insert(
       'channels',
       {'key': key, 'json': json, 'lastTouched': _now()},
       conflictAlgorithm: ConflictAlgorithm.replace,
@@ -193,6 +213,12 @@ class CacheStore {
     return _decodeMessages(rows.first['json'] as String?);
   }
 
+  /// Load EVERY cached channel history, keyed by storage key — the boot
+  /// hydration read (persistence.js `hydrateFromCache` getAll over the
+  /// `channels` store, :427-433). Empty/corrupt records are skipped.
+  Future<Map<String, List<Message>>> loadAllChannelMessages() =>
+      _loadAllMessages('channels');
+
   // ---------------------------------------------------------------------------
   // PM / group messages (only persisted when caching enabled)
   // ---------------------------------------------------------------------------
@@ -205,18 +231,20 @@ class CacheStore {
     String key,
     List<Message> msgs, {
     required bool enabled,
+    DatabaseExecutor? executor,
   }) async {
     if (!enabled) return;
     if (key.isEmpty) return;
+    final db = executor ?? _database;
     if (msgs.isEmpty) {
-      await _database.delete('pms', where: 'key = ?', whereArgs: [key]);
+      await db.delete('pms', where: 'key = ?', whereArgs: [key]);
       return;
     }
     final trimmed = msgs.length > pmStorageLimit
         ? msgs.sublist(msgs.length - pmStorageLimit)
         : msgs;
     final json = jsonEncode(trimmed.map((m) => m.toJson()).toList());
-    await _database.insert(
+    await db.insert(
       'pms',
       {'key': key, 'json': json, 'lastTouched': _now()},
       conflictAlgorithm: ConflictAlgorithm.replace,
@@ -233,6 +261,30 @@ class CacheStore {
     );
     if (rows.isEmpty) return [];
     return _decodeMessages(rows.first['json'] as String?);
+  }
+
+  /// Load EVERY cached PM/group conversation, keyed by storage key — the boot
+  /// hydration read (persistence.js `hydrateFromCache` getAll over the `pms`
+  /// store, :455-461). The caller gates this on `settings.cachePMs` the way
+  /// the PWA does (`cachePMsAllowed`); disabled → it calls [clearPms] instead.
+  Future<Map<String, List<Message>>> loadAllPmMessages() =>
+      _loadAllMessages('pms');
+
+  Future<Map<String, List<Message>>> _loadAllMessages(String table) async {
+    final rows = await _database.query(table, columns: ['key', 'json']);
+    final out = <String, List<Message>>{};
+    for (final r in rows) {
+      final key = r['key'] as String?;
+      if (key == null || key.isEmpty) continue;
+      final List<Message> msgs;
+      try {
+        msgs = _decodeMessages(r['json'] as String?);
+      } catch (_) {
+        continue; // One corrupt record must not abort the whole hydration.
+      }
+      if (msgs.isNotEmpty) out[key] = msgs;
+    }
+    return out;
   }
 
   /// Wipe the `pms` table (`clearPMCache`). Used when the user disables PM
@@ -261,13 +313,14 @@ class CacheStore {
   /// Persist a kind-0 [UserProfile] keyed by pubkey, recording its `kind0Ts`
   /// alongside (mirrors `persistProfile`'s enriched snapshot). Stamps
   /// `lastTouched`.
-  Future<void> saveProfile(String pubkey, UserProfile profile) async {
+  Future<void> saveProfile(String pubkey, UserProfile profile,
+      [DatabaseExecutor? executor]) async {
     if (pubkey.isEmpty) return;
     final map = profile.toJson();
     // Persist kind0Ts inside the JSON too so it survives the round-trip even if
     // toJson() (which omits it today) ever changes.
     map['kind0Ts'] = profile.kind0Ts;
-    await _database.insert(
+    await (executor ?? _database).insert(
       'profiles',
       {
         'pubkey': pubkey,
@@ -399,14 +452,16 @@ class CacheStore {
   /// Persist a reaction record keyed by [messageId]. [entries] mirrors the
   /// PWA's `entries` shape: `[[emoji, [[reactor, value], ...]], ...]`. An empty
   /// list deletes the record (`persistReactions`).
-  Future<void> saveReactions(String messageId, List<dynamic> entries) async {
+  Future<void> saveReactions(String messageId, List<dynamic> entries,
+      [DatabaseExecutor? executor]) async {
     if (messageId.isEmpty) return;
+    final db = executor ?? _database;
     if (entries.isEmpty) {
-      await _database
+      await db
           .delete('reactions', where: 'messageId = ?', whereArgs: [messageId]);
       return;
     }
-    await _database.insert(
+    await db.insert(
       'reactions',
       {
         'messageId': messageId,
@@ -415,6 +470,17 @@ class CacheStore {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// Runs [body] inside a single SQLite transaction, passing the transaction
+  /// executor to thread into the `save*` methods. The whole flush thus commits
+  /// as ONE transaction instead of hundreds of individually-locked inserts —
+  /// which is what was tripping sqflite's "database locked for 10s" warning when
+  /// a busy channel re-persisted every profile/reaction on each 6s flush.
+  Future<void> runInTransaction(
+    Future<void> Function(DatabaseExecutor txn) body,
+  ) async {
+    await _database.transaction((txn) async => body(txn));
   }
 
   /// Load all reaction records, keyed by messageId. Each value is the decoded
@@ -569,17 +635,115 @@ class CacheStore {
 
   /// Wipe every cache table (`resetCache` — logout / nuke).
   Future<void> resetCache() async {
+    for (final table in _allTables) {
+      await _database.delete(table);
+    }
+  }
+
+  /// EMERGENCY destruction for the panic wipe (panic.js `_panicWipeDb`,
+  /// :237-277): overwrite a few junk records into every store, clear the
+  /// stores, then close the connection and delete the database FILE itself —
+  /// the sqflite analogue of the PWA's junk `put`s + `indexedDB.deleteDatabase`.
+  /// Every step is best-effort and isolated so a locked table can't block the
+  /// wipe. Injected (test/in-memory) databases have no file; for those the
+  /// junk-overwrite + clear + close is the whole wipe.
+  Future<void> panicWipe() async {
+    final db = _db;
+    if (db != null) {
+      final rng = Random.secure();
+      for (final table in _allTables) {
+        try {
+          final keyColumn = _keyColumnFor(table);
+          // 3 junk records per store, like the PWA's `__panic_<i>` puts.
+          for (var i = 0; i < 3; i++) {
+            final record = <String, Object?>{keyColumn: '__panic_$i'};
+            if (table == 'avatars' || table == 'banners') {
+              record['bytes'] = Uint8List.fromList(
+                List<int>.generate(2048, (_) => rng.nextInt(256)),
+              );
+            } else {
+              record['json'] = base64Encode(
+                List<int>.generate(2048, (_) => rng.nextInt(256)),
+              );
+            }
+            if (table != 'meta') record['lastTouched'] = _now();
+            await db.insert(
+              table,
+              record,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+          await db.delete(table);
+        } catch (_) {}
+      }
+    }
+    try {
+      await close();
+    } catch (_) {}
+    final path = _path;
+    if (path != null) {
+      try {
+        await deleteDatabase(path);
+      } catch (_) {}
+    }
+  }
+
+  /// Clears all cached **content** — channels / PMs / profiles / reactions
+  /// (plus their avatar/banner blobs) — leaving only the `meta` dedup/trust sets
+  /// intact, then reclaims the freed pages. This is the "Clear cache" data
+  /// control (settings.js `clearMessageCache`): a user wiping cached
+  /// conversations + profiles, NOT a full identity logout (which uses
+  /// [resetCache]). `meta` is preserved so processed-event dedup and the trust
+  /// roster survive the wipe (mirrors the PWA, which keeps the meta store when
+  /// clearing the message cache).
+  Future<void> wipe() async {
     for (final table in const [
-      'meta',
-      'profiles',
       'channels',
       'pms',
+      'profiles',
       'reactions',
       'avatars',
       'banners',
     ]) {
       await _database.delete(table);
     }
+    // Reclaim the pages the deleted rows held so the reported on-disk size drops
+    // (SQLite keeps freed pages by default). VACUUM can't run inside a txn; the
+    // deletes above are auto-committed, so this is safe.
+    try {
+      await _database.execute('VACUUM');
+    } catch (_) {
+      // VACUUM is best-effort (e.g. an in-memory DB or an open cursor); the rows
+      // are already gone regardless.
+    }
+  }
+
+  /// The real on-disk size of the cache database in bytes (settings.js
+  /// `estimateCacheSize` / the "Cache: N MB" data-control readout).
+  ///
+  /// Uses SQLite's own page accounting (`page_count * page_size`) rather than a
+  /// row-by-row estimate so it reflects the actual file footprint — including
+  /// index + free pages — and works for the injected in-memory test DB (where
+  /// there is no file to `stat`). Returns 0 if the pragmas are unavailable.
+  Future<int> totalBytes() async {
+    try {
+      final pageCountRows =
+          await _database.rawQuery('PRAGMA page_count');
+      final pageSizeRows = await _database.rawQuery('PRAGMA page_size');
+      final pageCount = _firstInt(pageCountRows);
+      final pageSize = _firstInt(pageSizeRows);
+      return pageCount * pageSize;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static int _firstInt(List<Map<String, Object?>> rows) {
+    if (rows.isEmpty) return 0;
+    final v = rows.first.values.first;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse('$v') ?? 0;
   }
 }
 

@@ -7,6 +7,7 @@
 // (splicing the chosen token back into the input) lives in the composer.
 
 import '../../core/utils/nym_utils.dart';
+import '../../features/globe/geo_projection.dart' show geohashBounds;
 import '../../models/channel.dart';
 import '../../models/user.dart';
 import '../emoji/custom_emoji.dart';
@@ -33,6 +34,7 @@ class MentionResult {
     required this.baseNym,
     required this.suffix,
     required this.status,
+    this.avatarUrl,
   });
 
   final String pubkey;
@@ -40,6 +42,10 @@ class MentionResult {
   final String baseNym;
   final String suffix;
   final UserStatus status;
+
+  /// Remote avatar URL (kind-0 `picture`) for the 18×18 row avatar
+  /// (`getAvatarUrl`, autocomplete.js:382). Null → identicon fallback.
+  final String? avatarUrl;
 
   /// The text inserted into the composer: `@base#suffix ` (note trailing space),
   /// matching `selectAutocomplete` (autocomplete.js:503).
@@ -54,11 +60,18 @@ class MentionResult {
 /// [currentChannelKey] is the active channel key (geohash or name). [priority]
 /// is the PM-peer / group-member set that should be treated as "in channel"
 /// (`_mentionPriorityPubkeys`).
+///
+/// [verifiedBots] is the verified-bot pubkey set (the host passes
+/// `kVerifiedBotPubkeys`); members are forced `online` for ordering via
+/// `effectiveStatus(isVerifiedBot:)`, matching the PWA's verified-bot
+/// always-online override in `getEffectiveUserStatus` (users.js:1112). Empty by
+/// default so the pure query layer needs no state-layer import (CC-2).
 List<MentionResult> queryMentions({
   required Map<String, User> users,
   required String search,
   required String currentChannelKey,
   Set<String> blocked = const {},
+  Set<String> verifiedBots = const {},
   Set<String>? priority,
   int? nowMs,
 }) {
@@ -79,13 +92,15 @@ List<MentionResult> queryMentions({
     final searchable = '$baseNym#$suffix';
     if (!searchable.toLowerCase().contains(needle)) return;
 
-    final status = user.effectiveStatus(nowMs: now);
+    final status = user.effectiveStatus(
+        nowMs: now, isVerifiedBot: verifiedBots.contains(pubkey));
     final entry = MentionResult(
       pubkey: pubkey,
       nym: user.nym,
       baseNym: baseNym,
       suffix: suffix,
       status: status,
+      avatarUrl: user.profile?.picture,
     );
 
     final inChannel = user.channels.contains(currentChannelKey) ||
@@ -147,6 +162,7 @@ class ChannelResult {
     required this.isJoined,
     required this.isCurrent,
     required this.isGeohash,
+    this.location = '',
   });
 
   final String name;
@@ -155,8 +171,27 @@ class ChannelResult {
   final bool isCurrent;
   final bool isGeohash;
 
+  /// Human-readable place for geohash channels — the decoded-center coordinate
+  /// string (`getGeohashLocation`, geohash-globe.js:1256). Empty for named
+  /// channels or when the geohash can't be decoded.
+  final String location;
+
   /// Inserted text: `#name ` (insertChannelReference, autocomplete.js:684).
   String get insertText => '#$name ';
+}
+
+/// Decoded-center coordinate label for a geohash channel, ported 1:1 from the
+/// PWA's `getGeohashLocation` (geohash-globe.js:1256-1269): the center of the
+/// geohash cell rendered as `"{lat}°{N|S}, {lng}°{E|W}"` (2 decimals).
+/// Returns `''` when [geohash] is not a decodable geohash.
+String geohashLocationLabel(String geohash) {
+  final b = geohashBounds(geohash);
+  if (b == null) return '';
+  final lat = (b.latLo + b.latHi) / 2;
+  final lng = (b.lngLo + b.lngHi) / 2;
+  final latStr = '${lat.abs().toStringAsFixed(2)}°${lat >= 0 ? 'N' : 'S'}';
+  final lngStr = '${lng.abs().toStringAsFixed(2)}°${lng >= 0 ? 'E' : 'W'}';
+  return '$latStr, $lngStr';
 }
 
 final RegExp _validChannelRe = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
@@ -177,13 +212,15 @@ List<ChannelResult> queryChannels({
 
   // From messages we have (keys are bare channel names here).
   messageChannelCounts.forEach((name, count) {
+    final geo = isValidGeohash(name);
     map[name] = ChannelResult(
       name: name,
       messageCount: count,
       isJoined: joinedKeys.contains(name) ||
           channels.any((c) => c.key == name),
       isCurrent: name == currentKey,
-      isGeohash: isValidGeohash(name),
+      isGeohash: geo,
+      location: geo ? geohashLocationLabel(name) : '',
     );
   });
 
@@ -197,18 +234,21 @@ List<ChannelResult> queryChannels({
       isJoined: true,
       isCurrent: key == currentKey,
       isGeohash: ch.isGeohash,
+      location: ch.isGeohash ? geohashLocationLabel(key) : '',
     );
   }
 
   // From the seed common geohashes.
   for (final g in kCommonGeohashes) {
     if (map.containsKey(g)) continue;
+    final geo = isValidGeohash(g);
     map[g] = ChannelResult(
       name: g,
       messageCount: messageChannelCounts[g] ?? 0,
       isJoined: joinedKeys.contains(g) || channels.any((c) => c.key == g),
       isCurrent: g == currentKey,
-      isGeohash: isValidGeohash(g),
+      isGeohash: geo,
+      location: geo ? geohashLocationLabel(g) : '',
     );
   }
 
@@ -302,9 +342,14 @@ List<EmojiResult> queryEmoji({
     kEmojiShortcodeMap.forEach((name, emoji) {
       emojiToNames.putIfAbsent(emoji, () => name);
     });
+    // Recents may include `:shortcode:` custom-emoji tokens. When the live
+    // custom-emoji map still has the code, emit `customUrl` so the dropdown
+    // renders the IMAGE (not the literal text); otherwise fall back to the
+    // unicode/text glyph (autocomplete.js:116-126). The label colons are
+    // stripped here because `name` renders as `:$name:` (autocomplete.js:129-131
+    // — `name.replace(/^:+|:+$/g,'')`).
     final result = <EmojiResult>[
-      for (final e in recents)
-        EmojiResult(name: emojiToNames[e] ?? e, emoji: e),
+      for (final e in recents) _recentEmojiResult(e, emojiToNames, custom),
       ...index
           .where((e) => !recentSet.contains(e.emoji))
           .take(10)
@@ -339,6 +384,31 @@ List<EmojiResult> queryEmoji({
       .map((e) =>
           EmojiResult(name: e.name, emoji: e.emoji, customUrl: e.customUrl))
       .toList();
+}
+
+/// `:` matches a custom-emoji shortcode token, e.g. `:partyparrot:`
+/// (autocomplete.js:116 `emoji.match(/^:([a-zA-Z0-9_]+):$/)`).
+final _customEmojiTokenRe = RegExp(r'^:([a-zA-Z0-9_]+):$');
+
+/// Builds the [EmojiResult] for a single recent. Custom-emoji recents (a
+/// `:shortcode:` token whose code is still in the live [custom] map) carry a
+/// [customUrl] so the dropdown renders the image; the label has its wrapping
+/// colons stripped because the row renders it as `:$name:` (autocomplete.js
+/// :116-131).
+EmojiResult _recentEmojiResult(
+    String e, Map<String, String> emojiToNames, CustomEmojiState custom) {
+  final cm = _customEmojiTokenRe.firstMatch(e);
+  if (cm != null) {
+    final code = cm.group(1)!;
+    final url = custom.codeToUrl[code];
+    if (url != null) {
+      // Image row: insert `:code:`, label `code` (rendered as `:code:`).
+      return EmojiResult(name: code, emoji: e, customUrl: url);
+    }
+  }
+  // Unicode / unknown token: strip any wrapping colons from the resolved name.
+  final name = emojiToNames[e] ?? e;
+  return EmojiResult(name: name.replaceAll(RegExp(r'^:+|:+$'), ''), emoji: e);
 }
 
 // ---------------------------------------------------------------------------

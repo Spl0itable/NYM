@@ -1,32 +1,39 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/nym_colors.dart';
-import '../../core/theme/nym_metrics.dart';
+import '../../core/constants/storage_keys.dart';
 import '../../models/channel.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../state/settings_provider.dart';
+import '../../widgets/common/app_dialog.dart';
+import '../../widgets/nym_icons.dart';
+import '../../widgets/sidebar/pm_context_menu.dart';
 
 /// One entry in the channel `.quick-context-menu` (sidebar-sections.js
 /// `_buildSidebarMenuItems`).
 class ChannelMenuAction {
   const ChannelMenuAction({
     required this.label,
-    required this.icon,
+    required this.svg,
     required this.onSelected,
     this.danger = false,
   });
   final String label;
-  final IconData icon;
+
+  /// The leading glyph as a [NymIcons] SVG string.
+  final String svg;
   final VoidCallback onSelected;
   final bool danger;
 }
 
-/// Builds the long-press / right-click action list for a channel row, mirroring
-/// the PWA's `_buildSidebarMenuItems` (Favorite/Hide/Block) and adding the
-/// task's Share + Copy link affordances. `#nymchat` (the default channel)
-/// returns no Block/Leave entries — the PWA gives it an empty menu — but Share
-/// and Copy link still apply.
+/// Builds the 500ms-hold action list for a channel row, mirroring the PWA's
+/// `_buildSidebarMenuItems` channel branch (sidebar-sections.js:167-200):
+/// Favorite/Unfavorite → Hide/Unhide → Block (danger). `#nymchat` (the default
+/// channel) returns an EMPTY menu (sidebar-sections.js:175).
 List<ChannelMenuAction> buildChannelMenuActions(
   BuildContext context,
   WidgetRef ref,
@@ -39,23 +46,32 @@ List<ChannelMenuAction> buildChannelMenuActions(
   final isPinned = state.pinnedChannels.contains(key);
   final isHidden = state.hiddenChannels.contains(key);
 
-  // The PWA's `_buildSidebarMenuItems` returns an EMPTY menu for #nymchat
-  // (sidebar-sections.js:175) and exactly Favorite / Hide / Block for any
-  // other public channel — no Share/Copy/Leave (those belong to group/PM rows).
   if (isDefault) return const <ChannelMenuAction>[];
 
   return <ChannelMenuAction>[
     ChannelMenuAction(
       label: isPinned ? 'Unfavorite channel' : 'Favorite channel',
-      icon: isPinned ? Icons.star : Icons.star_border,
+      // PWA uses the same filled-star `favSvg` for both states.
+      svg: NymIcons.sidebarFavorite,
       onSelected: () => controller.togglePin(key),
     ),
     ChannelMenuAction(
       label: isHidden ? 'Unhide channel' : 'Hide channel',
-      icon: isHidden ? Icons.visibility : Icons.visibility_off_outlined,
+      // PWA uses the same eye-off `hideSvg` for both states.
+      svg: NymIcons.sidebarHide,
       onSelected: () {
+        // `toggleHideChannel` (channels.js:790-806): toggle + ALWAYS persist
+        // `nym_hidden_channels`. The hide path persists inside
+        // `controller.hideChannel`; the unhide path must write the store
+        // itself — the notifier alone leaves the key hidden on disk, so the
+        // channel would come back hidden on the next launch.
         if (isHidden) {
           ref.read(appStateProvider.notifier).unhideChannel(key);
+          ref.read(keyValueStoreProvider).setString(
+                StorageKeys.hiddenChannels,
+                jsonEncode(
+                    ref.read(appStateProvider).hiddenChannels.toList()),
+              );
         } else {
           controller.hideChannel(key);
         }
@@ -63,63 +79,64 @@ List<ChannelMenuAction> buildChannelMenuActions(
     ),
     ChannelMenuAction(
       label: 'Block channel',
-      icon: Icons.block,
+      svg: NymIcons.sidebarBlock,
       danger: true,
-      onSelected: () => controller.blockChannel(key),
+      // PWA (sidebar-sections.js:187-198): confirm with a danger dialog
+      // first, then `blockChannel` + a `Blocked channel #name` system message
+      // (the settings blocked-channels list is reactive here, so no explicit
+      // `updateBlockedChannelsList` equivalent is needed).
+      onSelected: () async {
+        if (!context.mounted) return;
+        final ok = await showAppConfirm(
+          context,
+          'Block channel #$key? Messages to it will be dropped.',
+          danger: true,
+          okLabel: 'Block',
+        );
+        if (!ok || !context.mounted) return;
+        controller.blockChannel(key);
+        ref
+            .read(appStateProvider.notifier)
+            .addSystemMessage('Blocked channel #$key');
+      },
     ),
   ];
 }
 
-/// Shows the `.quick-context-menu` for [entry] at [globalPosition] (a small
-/// popup of [ChannelMenuAction]s). Mirrors the PWA's floating action menu.
+/// Fires the row's 500ms-hold `.quick-context-menu`, reporting whether it
+/// actually opened. `#nymchat` builds an empty item list and the PWA only sets
+/// its click-suppressing `fired` flag when `items.length > 0`
+/// (sidebar-sections.js:246-252) — so the caller lets the release-tap through
+/// when this returns false.
+bool maybeShowChannelContextMenu(
+  BuildContext context,
+  WidgetRef ref,
+  ChannelEntry entry,
+  Offset globalPosition,
+) {
+  final actions = buildChannelMenuActions(context, ref, entry);
+  if (actions.isEmpty) return false;
+  unawaited(showSidebarQuickMenu(context, globalPosition, [
+    for (final a in actions)
+      SidebarQuickMenuItem(
+        label: a.label,
+        svg: a.svg,
+        danger: a.danger,
+        onSelected: a.onSelected,
+      ),
+  ]));
+  return true;
+}
+
+/// Shows the channel `.quick-context-menu` for [entry] at [globalPosition],
+/// reusing the shared sidebar overlay ([showSidebarQuickMenu]) so the channel
+/// rows match the PM / group rows' look + entrance animation exactly. Mirrors
+/// the PWA's floating action menu (`_showSidebarActionMenu`).
 Future<void> showChannelContextMenu(
   BuildContext context,
   WidgetRef ref,
   ChannelEntry entry,
   Offset globalPosition,
 ) async {
-  final actions = buildChannelMenuActions(context, ref, entry);
-  if (actions.isEmpty) return;
-  final c = context.nym;
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
-  if (overlay == null) return;
-
-  final selected = await showMenu<ChannelMenuAction>(
-    context: context,
-    color: c.bgTertiary,
-    elevation: 8,
-    shape: RoundedRectangleBorder(
-      borderRadius: NymRadius.rsm,
-      side: BorderSide(color: c.glassBorder),
-    ),
-    position: RelativeRect.fromRect(
-      globalPosition & const Size(1, 1),
-      Offset.zero & overlay.size,
-    ),
-    items: [
-      for (final a in actions)
-        PopupMenuItem<ChannelMenuAction>(
-          value: a,
-          height: 40,
-          child: Row(
-            children: [
-              Icon(
-                a.icon,
-                size: 16,
-                color: a.danger ? c.danger : c.textDim,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                a.label,
-                style: TextStyle(
-                  color: a.danger ? c.danger : c.text,
-                  fontSize: 13,
-                ),
-              ),
-            ],
-          ),
-        ),
-    ],
-  );
-  selected?.onSelected();
+  maybeShowChannelContextMenu(context, ref, entry, globalPosition);
 }

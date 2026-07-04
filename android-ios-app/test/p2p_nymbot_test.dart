@@ -6,6 +6,42 @@ import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/features/nymbot/nymbot_providers.dart';
 import 'package:nym_bar/features/p2p/p2p_models.dart';
+import 'package:nym_bar/features/p2p/p2p_service.dart';
+
+/// In-memory [P2PTransport] for the headless service tests (no relays). Records
+/// published events and lets a test push inbound signaling/status events.
+class _FakeTransport implements P2PTransport {
+  _FakeTransport(this.selfPubkey);
+
+  @override
+  final String selfPubkey;
+
+  final List<({int kind, List<List<String>> tags, String content})> published =
+      [];
+  void Function(String senderPubkey, int kind, String content)? _onEvent;
+  int subscribeCount = 0;
+
+  @override
+  Future<void> publishP2P({
+    required int kind,
+    required List<List<String>> tags,
+    required String content,
+  }) async {
+    published.add((kind: kind, tags: tags, content: content));
+  }
+
+  @override
+  void Function() subscribeP2P(
+    void Function(String senderPubkey, int kind, String content) onEvent,
+  ) {
+    subscribeCount++;
+    _onEvent = onEvent;
+    return () => _onEvent = null;
+  }
+
+  void inbound(String sender, int kind, String content) =>
+      _onEvent?.call(sender, kind, content);
+}
 
 void main() {
   // ===========================================================================
@@ -272,6 +308,126 @@ void main() {
       expect(sanitizeDownloadFilename('a/b\\c.txt'), 'a_b_c.txt');
       expect(sanitizeDownloadFilename('...hidden'), 'hidden');
       expect(sanitizeDownloadFilename(''), 'download');
+    });
+  });
+
+  // ===========================================================================
+  // P2PService receiver-side flow (headless; the WebRTC plumbing is exercised
+  // on-device — these cover the registration/guard/signaling paths that don't
+  // require the plugin).
+  // ===========================================================================
+  group('P2PService receiver flow', () {
+    final bytes = Uint8List.fromList(utf8.encode('peer file contents'));
+    final self = '11' * 32;
+    final seeder = '22' * 32;
+
+    FileOffer peerOffer() => FileOffer.fromBytes(
+          bytes: bytes,
+          name: 'doc.pdf',
+          type: 'application/pdf',
+          seederPubkey: seeder,
+        );
+
+    test('registerOffer makes the offer requestable and starts signaling', () {
+      final t = _FakeTransport(self);
+      final svc = P2PService(t);
+      addTearDown(svc.dispose);
+      expect(t.subscribeCount, 0);
+
+      final offer = peerOffer();
+      svc.registerOffer(offer);
+
+      // Subscribed exactly once (idempotent) and the offer is known.
+      expect(t.subscribeCount, 1);
+      expect(svc.offer(offer.offerId)?.seederPubkey, seeder);
+      svc.registerOffer(offer); // idempotent start
+      expect(t.subscribeCount, 1);
+    });
+
+    test('requestFile on an unknown offer surfaces "not found", no transfer',
+        () {
+      final t = _FakeTransport(self);
+      final svc = P2PService(t);
+      addTearDown(svc.dispose);
+      final messages = <String>[];
+      svc.onSystemMessage = messages.add;
+
+      svc.requestFile('nope-123');
+      expect(messages, contains('File offer not found'));
+      expect(svc.transfers, isEmpty);
+    });
+
+    test('requestFile refuses your own file', () {
+      final t = _FakeTransport(self);
+      final svc = P2PService(t);
+      addTearDown(svc.dispose);
+      final messages = <String>[];
+      svc.onSystemMessage = messages.add;
+
+      final mine = FileOffer.fromBytes(
+        bytes: bytes,
+        name: 'mine.txt',
+        type: 'text/plain',
+        seederPubkey: self,
+      );
+      svc.registerOffer(mine);
+      svc.requestFile(mine.offerId);
+      expect(messages, contains('Cannot download your own file'));
+      expect(svc.transfers, isEmpty);
+    });
+
+    test('an inbound 25052 unseeded event marks the offer unavailable', () {
+      final t = _FakeTransport(self);
+      final svc = P2PService(t);
+      addTearDown(svc.dispose);
+      final offer = peerOffer();
+      svc.registerOffer(offer);
+      expect(svc.isUnseeded(offer.offerId), isFalse);
+
+      t.inbound(
+        seeder,
+        P2PConstants.fileStatusKind,
+        jsonEncode({'offerId': offer.offerId, 'status': 'unseeded'}),
+      );
+      expect(svc.isUnseeded(offer.offerId), isTrue);
+
+      // A request for an unseeded offer is refused.
+      final messages = <String>[];
+      svc.onSystemMessage = messages.add;
+      svc.requestFile(offer.offerId);
+      expect(messages,
+          contains('This file is no longer being seeded by the owner'));
+    });
+
+    test('shareFile registers + stores the file for seeding', () {
+      final t = _FakeTransport(self);
+      final svc = P2PService(t);
+      addTearDown(svc.dispose);
+      final offer =
+          svc.shareFile(bytes: bytes, name: 'share.bin', type: '');
+      expect(svc.seeding.containsKey(offer.offerId), isTrue);
+      expect(offer.seederPubkey, self);
+      expect(offer.type, 'application/octet-stream');
+    });
+
+    test('stopSeeding broadcasts a 25052 unseeded event + marks unseeded',
+        () async {
+      final t = _FakeTransport(self);
+      final svc = P2PService(t);
+      addTearDown(svc.dispose);
+      final offer =
+          svc.shareFile(bytes: bytes, name: 'share.bin', type: 'text/plain');
+      await svc.stopSeeding(offer.offerId, geohash: '9q8y');
+
+      expect(svc.isUnseeded(offer.offerId), isTrue);
+      expect(svc.seeding.containsKey(offer.offerId), isFalse);
+      final ev = t.published
+          .firstWhere((e) => e.kind == P2PConstants.fileStatusKind);
+      expect(ev.tags.any((x) => x[0] == 'offer_id' && x[1] == offer.offerId),
+          isTrue);
+      expect(ev.tags.any((x) => x[0] == 'status' && x[1] == 'unseeded'),
+          isTrue);
+      expect(ev.tags.any((x) => x[0] == 'g' && x[1] == '9q8y'), isTrue);
     });
   });
 }

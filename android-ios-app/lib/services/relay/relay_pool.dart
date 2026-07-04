@@ -5,6 +5,7 @@ import '../../core/constants/relays.dart';
 import '../../models/nostr_event.dart';
 import 'relay_connection.dart';
 import 'relay_message.dart';
+import 'relay_stats.dart';
 
 /// Tracks seen event ids so duplicate events arriving from multiple relays are
 /// only surfaced once. Pure and testable (no sockets).
@@ -68,6 +69,14 @@ abstract interface class PoolTransport {
   /// Connect every relay / shard socket.
   void connectAll();
 
+  /// Apply the latest geo-relay set so geohash-channel subscriptions reach the
+  /// closest geo relays. In proxy mode this re-shards the pool and pushes the
+  /// updated RELAYS config + opens geo shard sockets (mirrors
+  /// `_poolSendRelayConfigNow` / `connectToGeoRelays`, relays.js:2839); in direct
+  /// mode it opens a direct socket per geo url and back-fills active subs
+  /// (`connectToGeoRelays` legacy branch). No-op when [geoRelayUrls] is empty.
+  void updateGeoRelays(List<String> geoRelayUrls);
+
   /// Broadcast [event]; returns the number of relays/shards that accepted it.
   Future<int> publish(NostrEvent event);
 
@@ -85,6 +94,11 @@ abstract interface class PoolTransport {
 
   /// Relays currently reported as connected.
   int get connectedCount;
+
+  /// Live relay-traffic counters (bytes in/out, events, throughput history,
+  /// per-relay events + latency) for the Network Stats modal. Aggregated across
+  /// every relay/shard socket. Mirrors the PWA's `nym.relayStats`.
+  RelayStats get stats;
 
   /// Close every socket and subscription.
   Future<void> disconnectAll();
@@ -233,6 +247,15 @@ class RelayPool implements PoolTransport {
   /// subId -> active subscription.
   final Map<String, Subscription> _subscriptions = {};
 
+  /// Pool-level throughput history (last 60 per-second event counts). The
+  /// per-socket counters live on each [RelayConnection]; this aggregate list is
+  /// owned here and fed by [_sampler] (mirrors `startRelayStatsSampling`).
+  final List<int> _throughputHistory = [];
+
+  /// 1-second sampler: pushes the last second's aggregate event count onto
+  /// [_throughputHistory] (cap 60) and resets each socket's per-second counter.
+  Timer? _sampler;
+
   bool get _isWritable => true; // all relays are writable
   bool _isReadable(String url) => !_writeOnly.contains(url);
 
@@ -246,6 +269,62 @@ class RelayPool implements PoolTransport {
   /// Per-relay connected status snapshot.
   Map<String, bool> get connectionStatus =>
       {for (final e in _connections.entries) e.key: e.value.isConnected};
+
+  /// Aggregate live traffic counters across every relay socket (a fresh
+  /// snapshot each read). Sums each [RelayConnection]'s bytes/events and merges
+  /// its per-relay event + latency maps, then attaches the pool-owned
+  /// throughput history. Mirrors the PWA's single `nym.relayStats`.
+  @override
+  RelayStats get stats {
+    final agg = RelayStats(
+      throughputHistory: List<int>.from(_throughputHistory),
+    );
+    for (final conn in _connections.values) {
+      final s = conn.stats;
+      agg.bytesReceived += s.bytesReceived;
+      agg.bytesSent += s.bytesSent;
+      agg.totalEvents += s.totalEvents;
+      agg.eventsThisSecond += s.eventsThisSecond;
+      s.eventsPerRelay.forEach((url, n) {
+        agg.eventsPerRelay[url] = (agg.eventsPerRelay[url] ?? 0) + n;
+      });
+      // Last-measured REQ→EOSE latency per relay; one socket per url here, so
+      // assignment is a straight copy.
+      s.latencyPerRelay.forEach((url, ms) {
+        agg.latencyPerRelay[url] = ms;
+      });
+      // Per-relay, per-kind breakdown (one socket per url → straight copy).
+      s.kindStatsPerRelay.forEach((url, perKind) {
+        agg.kindStatsPerRelay[url] = {
+          for (final e in perKind.entries) e.key: e.value.copy(),
+        };
+      });
+    }
+    return agg;
+  }
+
+  /// Start the 1-second throughput sampler (idempotent). Sums the per-socket
+  /// `eventsThisSecond`, pushes it onto [_throughputHistory] (cap 60), then
+  /// resets each socket's counter. Mirrors `startRelayStatsSampling`.
+  void _startSampler() {
+    if (_sampler != null) return;
+    _sampler = Timer.periodic(const Duration(seconds: 1), (_) {
+      var events = 0;
+      for (final conn in _connections.values) {
+        events += conn.stats.eventsThisSecond;
+        conn.stats.eventsThisSecond = 0;
+      }
+      _throughputHistory.add(events);
+      while (_throughputHistory.length > RelayStats.throughputCap) {
+        _throughputHistory.removeAt(0);
+      }
+    });
+  }
+
+  void _stopSampler() {
+    _sampler?.cancel();
+    _sampler = null;
+  }
 
   void _addRelayInternal(String url) {
     if (_connections.containsKey(url)) return;
@@ -279,14 +358,31 @@ class RelayPool implements PoolTransport {
   /// Connect every relay in the pool.
   @override
   void connectAll() {
+    _startSampler();
     for (final conn in _connections.values) {
       conn.connect();
+    }
+  }
+
+  /// Direct-mode geo relay delivery: open a direct socket to each geo relay url
+  /// not already in the pool, so geohash-channel events reach them. Each newly
+  /// added relay is connected and back-filled with the active read subscriptions
+  /// (via [addRelay]), mirroring `connectToGeoRelays`'s legacy branch
+  /// (relays.js:220) + `ensureGeoRelayDelivery` (the geo relays then carry the
+  /// standing kind-20000 sub). No-op for urls already present or blocked.
+  @override
+  void updateGeoRelays(List<String> geoRelayUrls) {
+    for (final url in geoRelayUrls) {
+      if (!url.startsWith('wss://')) continue;
+      if (_connections.containsKey(url)) continue;
+      addRelay(url);
     }
   }
 
   /// Close every relay socket and all subscriptions.
   @override
   Future<void> disconnectAll() async {
+    _stopSampler();
     final subs = _subscriptions.values.toList();
     for (final s in subs) {
       await s.close();
@@ -344,6 +440,56 @@ class RelayPool implements PoolTransport {
       if (_isReadable(entry.key)) {
         entry.value.unsubscribe(sub.subId);
       }
+    }
+  }
+
+  /// Snapshot of the live subscriptions (subId → its `Subscription` + filters),
+  /// so [NostrService] can replay them onto a replacement pool after a swap
+  /// (e.g. when the proxy endpoint becomes reachable again and we swap back).
+  Map<String, ({Subscription sub, List<NostrFilter> filters})>
+      activeSubscriptions() => {
+            for (final e in _subscriptions.entries)
+              e.key: (
+                sub: e.value,
+                filters: _activeFilters[e.key] ?? const [],
+              ),
+          };
+
+  /// Adopt an EXISTING [sub] (created on a previous pool) onto this pool and
+  /// re-issue its REQ to every readable relay, so its live `events` stream keeps
+  /// flowing after a swap. The sub's internal dedup suppresses any events it
+  /// already delivered (seamless, no duplicates). Newly added relays back-fill
+  /// it via [addRelay]/[_subscriptions].
+  void replaySubscription(Subscription sub, List<NostrFilter> filters) {
+    final id = sub.subId;
+    _subscriptions[id] = sub;
+    _activeFilters[id] = filters;
+    for (final entry in _connections.entries) {
+      if (_isReadable(entry.key)) {
+        entry.value.subscribe(id, filters);
+      }
+    }
+  }
+
+  /// Tear down every relay socket WITHOUT closing the active [Subscription]
+  /// objects, so they can be re-driven on another pool (the direct↔proxy swap).
+  /// Mirrors [RelayPoolProxy.disconnectSocketsOnly].
+  Future<void> disconnectSocketsOnly() async {
+    _stopSampler();
+    _subscriptions.clear();
+    _activeFilters.clear();
+    for (final s in _msgSubs.values) {
+      await s.cancel();
+    }
+    for (final s in _statusSubs.values) {
+      await s.cancel();
+    }
+    _msgSubs.clear();
+    _statusSubs.clear();
+    final conns = _connections.values.toList();
+    _connections.clear();
+    for (final c in conns) {
+      await c.close();
     }
   }
 

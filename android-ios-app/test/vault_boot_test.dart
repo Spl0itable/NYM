@@ -58,9 +58,11 @@ void main() {
       ));
       await tester.pump();
 
-      expect(find.text('Unlock your identity'), findsOneWidget);
-      expect(find.text('Unlock'), findsOneWidget);
-      expect(find.text('Forget identity'), findsOneWidget);
+      // Modal chrome uppercases header + button labels (PWA `.modal-header` /
+      // `.send-btn` / `.icon-btn` are `text-transform:uppercase`).
+      expect(find.text('UNLOCK YOUR IDENTITY'), findsOneWidget);
+      expect(find.text('UNLOCK'), findsOneWidget);
+      expect(find.text('FORGET IDENTITY'), findsOneWidget);
       // Password method exposes a text field.
       expect(find.byType(TextField), findsOneWidget);
     });
@@ -112,7 +114,7 @@ void main() {
       await tester.pump();
 
       await tester.enterText(find.byType(TextField), 'hunter2');
-      await tester.tap(find.text('Unlock'));
+      await tester.tap(find.text('UNLOCK'));
       // On success the gate (in the real app) swaps this widget out, so it
       // intentionally leaves the busy spinner running — pump bounded frames
       // rather than pumpAndSettle (which would hang on that indefinite anim).
@@ -149,7 +151,7 @@ void main() {
       await tester.pump();
 
       await tester.enterText(find.byType(TextField), 'wrongpassword');
-      await tester.tap(find.text('Unlock'));
+      await tester.tap(find.text('UNLOCK'));
       await tester.pumpAndSettle();
 
       expect(unlocked, isFalse);
@@ -260,7 +262,9 @@ class _FakeVault extends IdentityVault {
   @override
   Future<Map<String, String>> unlock(String password) async {
     if (password != correct) {
-      throw StateError('Wrong password/PIN.');
+      // Same message as the production wrap in IdentityVault.unlock — the
+      // widget surfaces the thrown e.message verbatim.
+      throw StateError('Wrong password/PIN or unrecognised passkey.');
     }
     return {SecretKeys.sessionNsec: 'decrypted-nsec'};
   }

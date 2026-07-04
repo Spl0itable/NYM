@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/app_state.dart';
 import 'call_service.dart';
 import 'call_state.dart';
 
@@ -13,6 +14,17 @@ import 'call_state.dart';
 /// is mounted.
 final callServiceProvider = Provider<CallService>((ref) {
   final service = CallService(ref);
+  // Route every call status message (calls.js `displaySystemMessage`) to the
+  // centered in-chat `.system-message` pill, mirroring the PWA. Missed/declined
+  // calls additionally land in the notification history (handled inside the
+  // service via `notificationHistoryProvider`).
+  service.onSystemMessage = (message) {
+    try {
+      ref.read(appStateProvider.notifier).addSystemMessage(message);
+    } catch (_) {
+      // Best-effort; never throw from a status toast.
+    }
+  };
   ref.onDispose(service.dispose);
   return service;
 });

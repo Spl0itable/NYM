@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -7,16 +8,19 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/storage/key_value_store.dart';
 import '../../services/storage/secure_store.dart';
+import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart' show keyValueStoreProvider;
+import 'modal_chrome.dart';
 import 'nip46_service.dart';
 
 /// Login with Nostr (`#nostrLoginModal`, index.html:1017).
 ///
-/// Sections (verbatim order): a disabled NIP-07 browser-extension button (no
-/// extension on native), a NIP-46 remote-signer flow (build a
-/// `nostrconnect://` URI + QR, or paste a `bunker://` URI), then paste-nsec
-/// (validated via [decodeNsec]). Returns the entered nsec via `Navigator.pop`
-/// when the user logs in with a key.
+/// Sections (verbatim order, as rendered by the native NymchatApp shell — the
+/// browser-extension option + its divider are `display:none` on native, so they
+/// are NOT rendered): intro → NIP-46 remote-signer flow (build a
+/// `nostrconnect://` URI + QR; the signer scans and connects automatically) →
+/// one divider → paste-nsec (validated via [decodeNsec]). Returns the entered
+/// nsec via `Navigator.pop` when the user logs in with a key.
 class NostrLoginModal extends ConsumerStatefulWidget {
   const NostrLoginModal({super.key});
 
@@ -24,6 +28,8 @@ class NostrLoginModal extends ConsumerStatefulWidget {
     return showDialog<String>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.7),
+      // `.modal` has no backdrop close-action — only Cancel / ✕ dismiss it.
+      barrierDismissible: false,
       builder: (_) => const NostrLoginModal(),
     );
   }
@@ -58,19 +64,19 @@ class _Nip46KvAdapter implements Nip46KeyValueStore {
 
 class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
   final _nsecController = TextEditingController();
-  final _bunkerController = TextEditingController();
   String? _error;
   bool _remoteSignerOpen = false;
   String? _nostrConnectUri;
 
   Nip46Service? _nip46;
-  String _remoteStatus = 'Waiting for remote signer…';
-  bool _connecting = false;
+  String _remoteStatus = 'Waiting for remote signer...';
+
+  /// Guards the async nsec adopt so a double-tap can't re-enter login.
+  bool _loggingIn = false;
 
   @override
   void dispose() {
     _nsecController.dispose();
-    _bunkerController.dispose();
     _nip46?.dispose();
     super.dispose();
   }
@@ -82,57 +88,53 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 460),
+          // `.modal-content.nm-h-1`: max-width 440.
+          constraints: const BoxConstraints(maxWidth: 440),
           child: Material(
             color: Colors.transparent,
-            child: Container(
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                borderRadius: NymRadius.rxl,
-                border: Border.all(color: c.glassBorder),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    blurRadius: 40,
-                    offset: const Offset(0, 20),
-                  ),
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.9,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _header(c),
-                    Flexible(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              'Login with your Nostr identity to sync settings '
-                              'across devices.',
-                              style:
-                                  TextStyle(color: c.textDim, fontSize: 13),
-                            ),
-                            const SizedBox(height: 16),
-                            _extensionOption(c),
-                            _divider(c),
-                            _remoteSignerOption(c),
-                            _divider(c),
-                            _nsecOption(c),
-                          ],
-                        ),
-                      ),
+            child: Stack(
+              children: [
+                ModalChrome.box(
+                  c,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.9,
                     ),
-                    _actions(c),
-                  ],
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ModalChrome.header(c, 'Login with Nostr'),
+                        Flexible(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // `.nm-h-21`: 13px text-dim, mb18.
+                                Text(
+                                  'Login with your Nostr identity to sync '
+                                  'settings across devices.',
+                                  style: TextStyle(
+                                      color: c.textDim, fontSize: 13),
+                                ),
+                                const SizedBox(height: 18),
+                                _remoteSignerOption(c),
+                                ModalChrome.orDivider(c),
+                                _nsecOption(c),
+                                _actions(c),
+                                // `.nm-h-35` ToS / Privacy footer.
+                                const SizedBox(height: 16),
+                                _tosFooter(c),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+                ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
+              ],
             ),
           ),
         ),
@@ -140,78 +142,18 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
     );
   }
 
-  Widget _header(NymColors c) => Container(
-        padding: const EdgeInsets.fromLTRB(24, 20, 16, 16),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: c.glassBorder)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Login with Nostr',
-                style: TextStyle(
-                  color: c.text,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            IconButton(
-              icon: Icon(Icons.close, color: c.textDim),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ],
-        ),
-      );
-
-  Widget _divider(NymColors c) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        child: Row(
-          children: [
-            Expanded(child: Divider(color: c.glassBorder)),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Text('or', style: TextStyle(color: c.textDim)),
-            ),
-            Expanded(child: Divider(color: c.glassBorder)),
-          ],
-        ),
-      );
-
-  /// NIP-07 — web only. Native has no browser extension, so it's disabled.
-  Widget _extensionOption(NymColors c) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Opacity(
-          opacity: 0.4,
-          child: FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: c.primary),
-            onPressed: null,
-            child: const Text('Login with Browser Extension'),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Browser extensions (Alby, nos2x) are web-only — not available in '
-          'the native app.',
-          style: TextStyle(color: c.textDim, fontSize: 11),
-        ),
-      ],
-    );
-  }
-
   Widget _remoteSignerOption(NymColors c) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: c.primary),
-          onPressed: _startRemoteSigner,
-          child: const Text('Login with Remote Signer'),
+        ModalChrome.sendButton(
+          c,
+          'Login with Remote Signer',
+          _startRemoteSigner,
+          fullWidth: true,
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 5),
+        // `.form-hint`.
         Text(
           'Use Amber, or another NIP-46 compatible remote signer',
           style: TextStyle(color: c.textDim, fontSize: 11),
@@ -221,16 +163,21 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
           Center(
             child: Column(
               children: [
+                // `.nm-h-28`: 13px text-dim, mb12.
                 Text(_remoteStatus,
-                    style: TextStyle(color: c.textDim, fontSize: 12)),
-                const SizedBox(height: 10),
+                    style: TextStyle(color: c.textDim, fontSize: 13)),
+                const SizedBox(height: 12),
                 if (_nostrConnectUri != null)
+                  // `.nm-h-29`: white box, padding 12, radius 8; QR module 220.
                   Container(
-                    padding: const EdgeInsets.all(10),
-                    color: Colors.white,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: NymRadius.rxs,
+                    ),
                     child: QrImageView(
                       data: _nostrConnectUri!,
-                      size: 180,
+                      size: 220,
                       backgroundColor: Colors.white,
                     ),
                   ),
@@ -238,25 +185,42 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
             ),
           ),
           const SizedBox(height: 12),
-          Text('Connection String',
-              style: TextStyle(color: c.text, fontSize: 12)),
-          const SizedBox(height: 6),
-          // Paste a bunker:// URI from the signer.
-          TextField(
-            controller: _bunkerController,
-            style: TextStyle(color: c.text, fontSize: 13),
-            decoration: _decoration(c, 'bunker://… or scan above'),
-          ),
+          // `.form-label` "Connection String".
+          ModalChrome.formLabel(c, 'Connection String'),
           const SizedBox(height: 8),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: c.primary),
-            onPressed: _connecting ? null : _connectBunker,
-            child: Text(_connecting ? 'Connecting…' : 'Connect'),
+          // `.nm-h-31`: readonly connection-string field (font 11) + Copy.
+          Row(
+            children: [
+              Expanded(
+                // `.form-input` readonly box holding the `nostrconnect://` URI.
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: NymRadius.rsm,
+                    border: Border.all(color: c.glassBorder),
+                  ),
+                  child: SelectableText(
+                    _nostrConnectUri ?? '',
+                    maxLines: 1,
+                    style: TextStyle(color: c.textBright, fontSize: 11),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ModalChrome.iconButton(c, 'Copy', () {
+                final uri = _nostrConnectUri;
+                if (uri != null) {
+                  Clipboard.setData(ClipboardData(text: uri));
+                }
+              }),
+            ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 5),
           Text(
-            'Scan the QR with your remote signer, or paste a bunker:// '
-            'connection string here and tap Connect.',
+            'Scan the QR code or copy this connection string into your remote '
+            'signer app',
             style: TextStyle(color: c.textDim, fontSize: 11),
           ),
         ],
@@ -268,19 +232,23 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Paste your nsec', style: TextStyle(color: c.text, fontSize: 12)),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _nsecController,
-          obscureText: true,
-          style: TextStyle(color: c.text, fontSize: 13),
-          decoration: _decoration(c, 'nsec1...'),
+        ModalChrome.formLabel(c, 'Paste your nsec'),
+        const SizedBox(height: 8),
+        ModalChrome.focusRing(
+          c,
+          child: TextField(
+            controller: _nsecController,
+            obscureText: true,
+            style: TextStyle(color: c.textBright, fontSize: 15),
+            decoration: ModalChrome.inputDecoration(c, 'nsec1...'),
+          ),
         ),
         if (_error != null) ...[
-          const SizedBox(height: 6),
+          const SizedBox(height: 5),
+          // `.nm-h-20` error line.
           Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
         ],
-        const SizedBox(height: 6),
+        const SizedBox(height: 5),
         Text(
           'Your private key stays local and is never sent to any server',
           style: TextStyle(color: c.textDim, fontSize: 11),
@@ -290,50 +258,61 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
   }
 
   Widget _actions(NymColors c) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: c.glassBorder)),
-      ),
+    return Padding(
+      // `.modal-actions`: center, gap 10.
+      padding: const EdgeInsets.only(top: 24),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('Cancel', style: TextStyle(color: c.textDim)),
-          ),
-          const SizedBox(width: 8),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: c.primary),
-            onPressed: _loginWithNsec,
-            child: const Text('Login'),
+          ModalChrome.iconButton(
+              c, 'Cancel', () => Navigator.of(context).pop()),
+          const SizedBox(width: 10),
+          ModalChrome.sendButton(
+            c,
+            'Login',
+            _loggingIn ? null : () => _loginWithNsec(),
+            child: _loggingIn
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: c.primary),
+                  )
+                : null,
           ),
         ],
       ),
     );
   }
 
-  InputDecoration _decoration(NymColors c, String hint) => InputDecoration(
-        isDense: true,
-        hintText: hint,
-        hintStyle: TextStyle(color: c.textDim),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.05),
-        border: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: c.glassBorder),
+  /// `.nm-h-35` — centered "By logging in, you agree to our [ToS] and
+  /// [Privacy Policy]." with secondary-cyan links.
+  Widget _tosFooter(NymColors c) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Text.rich(
+        TextSpan(
+          style: TextStyle(color: c.textDim, fontSize: 12),
+          children: [
+            const TextSpan(text: 'By logging in, you agree to our '),
+            TextSpan(
+              text: 'Terms of Service',
+              style: TextStyle(color: c.secondary),
+              recognizer: ModalChrome.linkTap('static/tos.html'),
+            ),
+            const TextSpan(text: ' and '),
+            TextSpan(
+              text: 'Privacy Policy',
+              style: TextStyle(color: c.secondary),
+              recognizer: ModalChrome.linkTap('static/pp.html'),
+            ),
+            const TextSpan(text: '.'),
+          ],
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: c.glassBorder),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: c.primaryA(0.3)),
-        ),
-      );
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
 
   Nip46Service _makeService() => Nip46Service(
         kv: _Nip46KvAdapter(ref.read(keyValueStoreProvider)),
@@ -350,7 +329,7 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
       _nip46 = service;
       _remoteSignerOpen = true;
       _nostrConnectUri = uri;
-      _remoteStatus = 'Waiting for remote signer…';
+      _remoteStatus = 'Waiting for remote signer...';
       _error = null;
     });
     // Await the signer-initiated connect ack, then complete login.
@@ -358,7 +337,7 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
       try {
         await service.awaitConnect();
         if (!mounted) return;
-        setState(() => _remoteStatus = 'Connected! Fetching public key…');
+        setState(() => _remoteStatus = 'Connected! Fetching public key...');
         final result = await service.finishNostrConnect();
         if (!mounted) return;
         Navigator.of(context).pop(result.userPubkey);
@@ -369,53 +348,47 @@ class _NostrLoginModalState extends ConsumerState<NostrLoginModal> {
     }();
   }
 
-  /// Connects using a pasted `bunker://` (or `nostrconnect://`) URI: opens the
-  /// relay, performs the NIP-46 connect + get_public_key RPC, persists the
-  /// session, and pops the modal with the user pubkey.
-  Future<void> _connectBunker() async {
-    final input = _bunkerController.text.trim();
-    if (input.isEmpty) {
-      setState(() => _error = 'Paste a bunker:// connection string.');
-      return;
-    }
-    setState(() {
-      _connecting = true;
-      _error = null;
-      _remoteStatus = 'Connecting to remote signer…';
-    });
-    final service = _nip46 ?? _makeService();
-    _nip46 = service;
-    try {
-      final result = await service.connectViaUri(input);
-      if (!mounted) return;
-      Navigator.of(context).pop(result.userPubkey);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _connecting = false;
-        _remoteStatus = 'Connection failed: $e';
-        _error = 'Remote signer connection failed.';
-      });
-    }
-  }
-
-  /// Validate the pasted nsec via [decodeNsec] and return it to the caller.
-  void _loginWithNsec() {
+  /// Validate the pasted nsec via [decodeNsec], then ADOPT it as the running
+  /// identity (persist method+nsec, re-boot under the new pubkey, re-subscribe
+  /// relays) via [NostrController.loginWithNsec] — the native analogue of the
+  /// PWA's `nostrLoginWithNsec` → `applyNostrLogin` (app.js:5036-5074 / 5487).
+  /// Pops with the nsec so the setup caller advances the gate; the controller's
+  /// boot-epoch bump also remounts the gate onto the shell.
+  Future<void> _loginWithNsec() async {
+    if (_loggingIn) return;
     final input = _nsecController.text.trim();
     if (input.isEmpty) {
-      setState(() => _error = 'Enter your nsec.');
+      setState(() => _error = 'Please enter your nsec.');
       return;
     }
     try {
       final bytes = decodeNsec(input);
       if (bytes.length != 32) {
-        setState(() => _error = 'Invalid nsec.');
+        setState(() => _error = 'Invalid nsec key. Please check and try again.');
         return;
       }
     } catch (_) {
-      setState(() => _error = 'Invalid nsec — could not decode.');
+      setState(() => _error = 'Invalid nsec key. Please check and try again.');
       return;
     }
+    setState(() {
+      _loggingIn = true;
+      _error = null;
+    });
+    try {
+      // Persist + adopt the imported account at runtime (no app restart needed).
+      await ref.read(nostrControllerProvider).loginWithNsec(input);
+    } catch (_) {
+      // Defensive: validation above already rejects bad keys, but never strand
+      // the user on a half-login — surface the same error and let them retry.
+      if (!mounted) return;
+      setState(() {
+        _loggingIn = false;
+        _error = 'Invalid nsec key. Please check and try again.';
+      });
+      return;
+    }
+    if (!mounted) return;
     Navigator.of(context).pop(input);
   }
 }

@@ -375,3 +375,53 @@ class EmojiRecentsStore {
     return next;
   }
 }
+
+/// localStorage keys for the emoji-picker favorite stars (emoji.js lines 402,
+/// 464): `nym_emoji_category_favorites` (default-category keys) and
+/// `nym_emoji_pack_favorites` (custom-pack keys `${pubkey}:${identifier}`).
+const String kEmojiCategoryFavoritesKey = 'nym_emoji_category_favorites';
+const String kEmojiPackFavoritesKey = 'nym_emoji_pack_favorites';
+
+/// A simple JSON-string-array favorites store backed by SharedPreferences. Used
+/// for both the category-favorite and pack-favorite lists, which the PWA toggles
+/// + persists identically (`toggleEmojiCategoryFavorite` /
+/// `toggleEmojiPackFavorite`, emoji.js:395-478).
+class EmojiFavoritesStore {
+  EmojiFavoritesStore(this._prefs, this._key);
+
+  final SharedPreferences _prefs;
+  final String _key;
+
+  /// Current favorite keys in fav-list order (insertion order, like the PWA's
+  /// `push`/`splice` array). Tolerates corrupt JSON.
+  List<String> load() {
+    final raw = _prefs.getString(_key);
+    if (raw == null || raw.isEmpty) return <String>[];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) return decoded.whereType<String>().toList();
+    } catch (_) {}
+    return <String>[];
+  }
+
+  bool contains(String key) => load().contains(key);
+
+  /// Toggles [key] in the favorites list (append when absent, remove when
+  /// present), persists, and returns the new list. Mirrors the PWA toggles.
+  Future<List<String>> toggle(String key) async {
+    final list = load();
+    if (!list.remove(key)) list.add(key);
+    await _prefs.setString(_key, jsonEncode(list));
+    return list;
+  }
+}
+
+/// Orders the default emoji categories favorites-first (in fav-list order),
+/// then the remainder in their declared [kEmojiCategoryOrder]. Mirrors
+/// `_getOrderedDefaultEmojiEntries` (emoji.js:435-444).
+List<String> orderedEmojiCategories(List<String> favorites) {
+  final favSet = favorites.toSet();
+  final favored = favorites.where(kEmojiCategoryOrder.contains).toList();
+  final rest = kEmojiCategoryOrder.where((c) => !favSet.contains(c)).toList();
+  return [...favored, ...rest];
+}

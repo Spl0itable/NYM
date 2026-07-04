@@ -173,21 +173,71 @@ class MessageStyleVisual {
     this.glow,
     this.gradient,
     this.monospace = false,
+    this.glyphShadows,
+    this.contentBackground,
   });
 
   final Color color;
   final Color? glow;
   final List<Color>? gradient;
   final bool monospace;
+
+  /// Explicit multi-offset glyph shadows for styles whose look is a layered
+  /// `text-shadow` rather than a single soft glow — the glitch chromatic-split
+  /// (`-2px #f00 / +2px #0ff`, `styles-features.css:625-628`). When set these
+  /// replace the single [glow]-derived shadow in the preview bubble.
+  final List<Shadow>? glyphShadows;
+
+  /// Translucent `.message-content { background-color }` painted behind the
+  /// text by the styles that have one (satoshi / eclipse / crt). Mirrors the
+  /// verbatim alpha from `css/styles-features.css`; null = no background.
+  final Color? contentBackground;
 }
 
 /// Cosmetic aura visual: border + glow colour (from `.message.cosmetic-X`).
+///
+/// [boxShadows] are the exact `box-shadow` layers from `.message.cosmetic-X`
+/// (inset ring + outer glow) so the preview bubble matches the rendered
+/// message. [borderLeft] is the gold/cyan `border-left` accent some auras add.
+/// [ringGradient]/[sheenGradient] flag the legendary prism/hologram treatments
+/// so the preview can paint a conic ring / holographic sheen rather than a flat
+/// fill.
 class CosmeticVisual {
   const CosmeticVisual({
     required this.accent,
     this.gradient,
+    this.boxShadows,
+    this.borderLeft,
+    this.ringGradient,
+    this.sheenGradient,
   });
 
   final Color accent;
   final List<Color>? gradient;
+  final List<BoxShadow>? boxShadows;
+  final Color? borderLeft;
+
+  /// The 8-stop conic prism ring (`cosmetic-aura-rainbow`); when set the preview
+  /// paints a [SweepGradient] border ring instead of a flat gradient fill.
+  final List<Color>? ringGradient;
+
+  /// The holographic multi-colour sheen (`cosmetic-bubble-hologram`); when set
+  /// the preview layers a screen-blended gradient sheen over the bubble.
+  final List<Color>? sheenGradient;
+}
+
+/// The availability of a limited-drop item, computed from its
+/// `startsAt`/`endsAt`/`maxSupply` + live remaining supply
+/// (`shop.js:_shopItemAvailability`).
+enum ShopAvailabilityState { available, soon, ended, soldout }
+
+/// A resolved availability `{state, label}` for a limited item — the supply
+/// badge text + colour tier (`shop.js:813-830`).
+class ShopAvailability {
+  const ShopAvailability(this.state, this.label);
+
+  final ShopAvailabilityState state;
+  final String label;
+
+  bool get isAvailable => state == ShopAvailabilityState.available;
 }

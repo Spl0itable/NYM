@@ -8,8 +8,10 @@
 // `selectKaomoji`). Each trigger fires only on a contiguous run of allowed
 // characters immediately preceding the caret, and a space "closes" the token.
 
-/// Which dropdown is active.
-enum TriggerKind { none, mention, channel, emoji, kaomoji, command }
+/// Which dropdown is active. [command] is the `/` slash-command palette;
+/// [botCommand] is the `?` Nymbot command palette (same `#commandPalette`
+/// surface, different catalogue) — kept distinct from the `@#:\` token triggers.
+enum TriggerKind { none, mention, channel, emoji, kaomoji, command, botCommand }
 
 /// A detected trigger: its kind, the search needle (text after the trigger
 /// char), and the index of the trigger char in the source string (so the
@@ -45,9 +47,15 @@ final RegExp _emojiRe = RegExp(r'(?:^|\s):([a-z0-9_+\-]*)$', caseSensitive: fals
 ///
 /// The command palette wins when the WHOLE input is a `/…` line (the PWA shows
 /// the palette whenever the input starts with `/`), since slash commands are a
-/// line-level concept rather than a caret token. Otherwise we look at the run
-/// of characters ending at the caret and pick the nearest trigger.
-TriggerMatch detectTrigger(String text, {int? caret}) {
+/// line-level concept rather than a caret token. A `?…` line opens the Nymbot
+/// command palette the same way. Otherwise we look at the run of characters
+/// ending at the caret and pick the nearest trigger.
+/// [botPM] is true inside the private chat with the verified Nymbot. There the
+/// `?` palette carries the PM command set, which DOES have multi-step
+/// subcommands (`?model <name>`, `?git provider <host>`) — so the palette must
+/// stay live past a space, matching the PWA's line-level `value.startsWith('?')`
+/// (commands.js:436-468, `showBotCommandPalette` with `inBotPM`).
+TriggerMatch detectTrigger(String text, {int? caret, bool botPM = false}) {
   final c = (caret == null || caret < 0 || caret > text.length)
       ? text.length
       : caret;
@@ -59,6 +67,18 @@ TriggerMatch detectTrigger(String text, {int? caret}) {
   // appends the space + hides). We mirror "still typing the command token".
   if (before.startsWith('/') && !before.contains(' ')) {
     return TriggerMatch(TriggerKind.command, before, 0);
+  }
+
+  // Bot-command palette: input begins with '?' (line-level, like '/'). The PWA
+  // opens `showBotCommandPalette(value)` whenever `value.startsWith('?')`
+  // (ui-context.js:1718).
+  //  * PUBLIC channel set: no subcommands, so once a space is typed the `?cmd `
+  //    prefix matches nothing and the palette hides — fire only while still on
+  //    the command token.
+  //  * BOT PM set: `?model`/`?git` have deeper completions surfaced AFTER a
+  //    space (`_botPMSubcommands`), so keep firing for the whole `?…` line.
+  if (before.startsWith('?') && (botPM || !before.contains(' '))) {
+    return TriggerMatch(TriggerKind.botCommand, before, 0);
   }
 
   // Fixed precedence, matching the PWA's if/else chain in handleInputChange:

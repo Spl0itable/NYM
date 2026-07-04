@@ -8,6 +8,8 @@ import 'package:nym_bar/core/theme/nym_theme.dart';
 import 'package:nym_bar/features/emoji/custom_emoji.dart';
 import 'package:nym_bar/features/emoji/emoji_data.dart';
 import 'package:nym_bar/features/emoji/emoji_picker.dart';
+import 'package:nym_bar/services/storage/key_value_store.dart';
+import 'package:nym_bar/state/settings_provider.dart';
 
 void main() {
   group('emoji_data', () {
@@ -122,8 +124,11 @@ void main() {
       );
 
       String? captured;
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
       await tester.pumpWidget(
         ProviderScope(
+          overrides: [keyValueStoreProvider.overrideWithValue(kv)],
           child: MaterialApp(
             theme: buildNymThemeData(colors),
             home: Scaffold(
@@ -156,8 +161,11 @@ void main() {
         brightness: Brightness.dark,
         solidUi: true,
       );
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
       await tester.pumpWidget(
         ProviderScope(
+          overrides: [keyValueStoreProvider.overrideWithValue(kv)],
           child: MaterialApp(
             theme: buildNymThemeData(colors),
             home: Scaffold(

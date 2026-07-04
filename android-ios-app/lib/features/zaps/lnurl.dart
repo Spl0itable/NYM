@@ -3,10 +3,16 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../../models/nostr_event.dart';
+import '../../services/api/api_client.dart';
 
 /// Pure helpers + lazy HTTP for the LNURL-pay zap flow (zaps.js
 /// `fetchLightningInvoice`, lines 95-162). No network is touched until
 /// [fetchInvoice] is called.
+///
+/// Every fetch rides the `/api/proxy?action=json` privacy proxy
+/// ([ApiClient.proxiedJsonFetch], the PWA's `proxiedJsonFetch`,
+/// relays.js:3192) so the Lightning provider only ever sees Cloudflare IPs;
+/// the direct URL is fetched only when the proxy itself is unreachable.
 class Lnurl {
   Lnurl._();
 
@@ -47,21 +53,31 @@ class Lnurl {
     return base.replace(queryParameters: qp);
   }
 
-  /// Fetches the LNURL-pay metadata for [lightningAddress] (lazy network).
+  /// Builds the proxy-riding [ApiClient] for a call: an injected [api] wins;
+  /// otherwise one is wrapped around the (possibly injected) [http.Client] so
+  /// tests with a MockClient still intercept every request.
+  static ApiClient _api(ApiClient? api, http.Client client) =>
+      api ?? ApiClient(client: client);
+
+  /// Fetches the LNURL-pay metadata for [lightningAddress] (lazy network),
+  /// through the JSON privacy proxy (zaps.js:106).
   static Future<LnurlPayParams> fetchPayParams(String lightningAddress,
-      {http.Client? client}) async {
+      {http.Client? client, ApiClient? api}) async {
     final url = lnurlpUrl(lightningAddress);
     if (url == null) {
       throw const LnurlException('Invalid lightning address format');
     }
     final c = client ?? http.Client();
     try {
-      final resp = await c.get(url);
+      final resp = await _api(api, c).proxiedJsonFetch(url.toString());
       if (resp.statusCode != 200) {
         throw const LnurlException('Failed to fetch LNURL endpoint');
       }
+      // `allowMalformed` mirrors the PWA's `response.json()` / TextDecoder
+      // (U+FFFD replacement, never throwing) like `ApiClient._utf8Body`.
       return LnurlPayParams.fromJson(
-          jsonDecode(resp.body) as Map<String, dynamic>);
+          jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true))
+              as Map<String, dynamic>);
     } finally {
       if (client == null) c.close();
     }
@@ -76,6 +92,7 @@ class Lnurl {
     String comment = '',
     NostrEvent? zapRequest,
     http.Client? client,
+    ApiClient? api,
   }) async {
     final amountMillisats = amountSats * 1000;
     if (amountMillisats < params.minSendable ||
@@ -92,11 +109,14 @@ class Lnurl {
     );
     final c = client ?? http.Client();
     try {
-      final resp = await c.get(url);
+      // Invoice callback rides the privacy proxy too (zaps.js:140).
+      final resp = await _api(api, c).proxiedJsonFetch(url.toString());
       if (resp.statusCode != 200) {
         throw const LnurlException('Failed to fetch invoice');
       }
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final data =
+          jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true))
+              as Map<String, dynamic>;
       final pr = data['pr'] as String?;
       if (pr == null || pr.isEmpty) {
         throw const LnurlException('No payment request in response');
@@ -114,15 +134,18 @@ class Lnurl {
     }
   }
 
-  /// Polls the LUD-21 `verify` URL once; true when the invoice is settled
-  /// (zaps.js `_serverVerifyZapPaid` server-side equivalent — here we hit the
-  /// verify URL directly, which returns `{settled|paid: true}`).
-  static Future<bool> checkPaid(String verifyUrl, {http.Client? client}) async {
+  /// Polls the LUD-21 `verify` URL once (through the JSON privacy proxy, like
+  /// the PWA's proxied verify poll — shop.js:1264); true when the invoice is
+  /// settled (`{settled|paid: true}`).
+  static Future<bool> checkPaid(String verifyUrl,
+      {http.Client? client, ApiClient? api}) async {
     final c = client ?? http.Client();
     try {
-      final resp = await c.get(Uri.parse(verifyUrl));
+      final resp = await _api(api, c).proxiedJsonFetch(verifyUrl);
       if (resp.statusCode != 200) return false;
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final data =
+          jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true))
+              as Map<String, dynamic>;
       return data['settled'] == true || data['paid'] == true;
     } catch (_) {
       return false;

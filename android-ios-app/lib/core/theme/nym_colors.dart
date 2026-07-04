@@ -45,7 +45,11 @@ class NymColors extends ThemeExtension<NymColors> {
     required this.glassBg,
     required this.glassBorder,
     required this.brightness,
-  });
+    this.solidUi = false,
+    Color? bubbleSelfBg,
+    Color? bubbleOtherBg,
+  })  : _bubbleSelfBg = bubbleSelfBg,
+        _bubbleOtherBg = bubbleOtherBg;
 
   final Color primary; // accent / brand
   final Color secondary; // links, author names
@@ -65,11 +69,82 @@ class NymColors extends ThemeExtension<NymColors> {
   final Color glassBorder; // hairline border on glass
   final Brightness brightness;
 
+  /// Whether the "solid UI" override is active (`body.solid-ui`, the DEFAULT —
+  /// visual Transparency OFF). The PWA then repaints the glass surfaces with
+  /// opaque plates (styles-themes-responsive.css:1556-1843); widgets whose CSS
+  /// surface is targeted by that block branch on this.
+  final bool solidUi;
+
+  /// Resolved chat-bubble fills set by `resolveNymColors` for solid-ui (null in
+  /// glass mode → the getters below fall back to the translucent CSS bases).
+  final Color? _bubbleSelfBg;
+  final Color? _bubbleOtherBg;
+
   bool get isLight => brightness == Brightness.light;
+
+  /// SELF `.message-content` bubble fill. Glass: `rgb(from var(--primary) r g b
+  /// / 0.25)` dark / `0.20` light (styles-features.css:3642 / themes:1396).
+  /// Solid-ui: the opaque `color-mix(in srgb, var(--primary) 22%, #2a2a3a)` dark
+  /// / `#e6e6e0`-mix light (themes:1665/1678) — ghost `#444444`/`#bbbbbb`
+  /// (themes:1690/1698) — resolved by `resolveNymColors`.
+  Color get bubbleSelfBg =>
+      _bubbleSelfBg ?? primary.withValues(alpha: isLight ? 0.20 : 0.25);
+
+  /// OTHERS'/PM `.message-content` bubble fill. Glass: `rgba(255,255,255,0.14)`
+  /// dark / `rgba(0,0,0,0.10)` light (styles-features.css:3602 / themes:1392).
+  /// Solid-ui: opaque `#2a2a3a` dark / `#e6e6e0` light (themes:1660/1673) —
+  /// ghost `#2a2a2a`/`#dddddd` (themes:1686/1694).
+  Color get bubbleOtherBg =>
+      _bubbleOtherBg ??
+      (isLight
+          ? const Color(0x1A000000) // black @ 0.10
+          : const Color(0x24FFFFFF)); // white @ 0.14
 
   /// Recurring relative-color alphas off `--primary` in the CSS.
   Color primaryA(double alpha) => primary.withValues(alpha: alpha);
   Color secondaryA(double alpha) => secondary.withValues(alpha: alpha);
+
+  // --- Mode-aware "overlay" tokens -----------------------------------------
+  // The PWA layers translucent WHITE surfaces over the dark UI (hover fills,
+  // hairlines, inset blocks). In light mode those same surfaces flip to
+  // translucent BLACK (e.g. `body.light-mode .quick-context-item:hover`,
+  // `.context-menu-copy-pubkey:hover`, `.ctx-full-pubkey`, `.icon-btn`). These
+  // helpers return the correct value per mode so widgets stop hardcoding
+  // `Colors.white.withValues(...)` (which is invisible on a light surface).
+
+  /// Hover / selected fill for menu rows & list items
+  /// (dark `white@0.08` → light `black@0.06`).
+  Color get hoverOverlay => isLight
+      ? const Color(0x0F000000) // black @ 0.06
+      : const Color(0x14FFFFFF); // white @ 0.08
+
+  /// Danger hover fill — `rgba(255,68,68,0.12)` in both modes
+  /// (`.context-menu-item.danger:hover`).
+  Color get dangerHoverOverlay => const Color(0x1FFF4444);
+
+  /// A 1px hairline separator inside menus/cards
+  /// (dark `white@0.06` → light `black@0.06`).
+  Color get hairline => isLight
+      ? const Color(0x0F000000) // black @ 0.06
+      : const Color(0x0FFFFFFF); // white @ 0.06
+
+  /// Fill of an inset read-only block (pubkey / invite-link / file-offer)
+  /// (dark `white@0.04` → light `black@0.04`; `.ctx-full-pubkey`).
+  Color get insetFill => isLight
+      ? const Color(0x0A000000) // black @ 0.04
+      : const Color(0x0AFFFFFF); // white @ 0.04
+
+  /// Border of an inset read-only block
+  /// (dark `white@0.08` → light `black@0.1`; `.ctx-full-pubkey`).
+  Color get insetBorder => isLight
+      ? const Color(0x1A000000) // black @ 0.1
+      : const Color(0x14FFFFFF); // white @ 0.08
+
+  /// Subtle control surface fill (`.icon-btn` / `.file-offer-icon`)
+  /// (dark `white@0.05` → light `black@0.03`).
+  Color get subtleFill => isLight
+      ? const Color(0x08000000) // black @ 0.03
+      : const Color(0x0DFFFFFF); // white @ 0.05
 
   @override
   NymColors copyWith({
@@ -90,6 +165,9 @@ class NymColors extends ThemeExtension<NymColors> {
     Color? glassBg,
     Color? glassBorder,
     Brightness? brightness,
+    bool? solidUi,
+    Color? bubbleSelfBg,
+    Color? bubbleOtherBg,
   }) {
     return NymColors(
       primary: primary ?? this.primary,
@@ -109,6 +187,9 @@ class NymColors extends ThemeExtension<NymColors> {
       glassBg: glassBg ?? this.glassBg,
       glassBorder: glassBorder ?? this.glassBorder,
       brightness: brightness ?? this.brightness,
+      solidUi: solidUi ?? this.solidUi,
+      bubbleSelfBg: bubbleSelfBg ?? _bubbleSelfBg,
+      bubbleOtherBg: bubbleOtherBg ?? _bubbleOtherBg,
     );
   }
 
@@ -133,6 +214,9 @@ class NymColors extends ThemeExtension<NymColors> {
       glassBg: Color.lerp(glassBg, other.glassBg, t)!,
       glassBorder: Color.lerp(glassBorder, other.glassBorder, t)!,
       brightness: t < 0.5 ? brightness : other.brightness,
+      solidUi: t < 0.5 ? solidUi : other.solidUi,
+      bubbleSelfBg: t < 0.5 ? _bubbleSelfBg : other._bubbleSelfBg,
+      bubbleOtherBg: t < 0.5 ? _bubbleOtherBg : other._bubbleOtherBg,
     );
   }
 }

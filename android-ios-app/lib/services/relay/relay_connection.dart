@@ -1,11 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/constants/relays.dart';
 import '../../models/nostr_event.dart';
+import '../api/api_config.dart';
 import 'relay_message.dart';
+import 'relay_stats.dart';
 
 /// Connection status of a single relay socket.
 enum RelayStatus { disconnected, connecting, connected, failed }
@@ -40,8 +45,22 @@ Duration applyJitter(Duration d, Random rng, {double spread = 0.25}) {
 /// tests to avoid real sockets.
 typedef WebSocketChannelFactory = WebSocketChannel Function(Uri url);
 
-WebSocketChannel _defaultChannelFactory(Uri url) =>
-    WebSocketChannel.connect(url);
+/// The REAL/native channel factory used by every relay socket (direct relays,
+/// the relay-pool proxy shards, and the single-relay `/api/relay` path).
+///
+/// Routes through [IOWebSocketChannel] so we can attach a
+/// `User-Agent: ApiConfig.userAgent` header — the backend `isNymchatClient`
+/// gate (`_shared.js`: `/NymchatApp\//i`) recognizes the native client by it
+/// (e.g. the app-relay `nymchat_proxy` perk, relay-pool.js:1124). The
+/// headers-less `WebSocketChannel.connect` would send a default Dart UA.
+///
+/// Tests inject their own [WebSocketChannelFactory] (a fake channel), so this
+/// native path — and dart:io — never runs under `flutter test`.
+WebSocketChannel defaultRelayChannelFactory(Uri url) =>
+    IOWebSocketChannel.connect(
+      url,
+      headers: {'User-Agent': ApiConfig.userAgent},
+    );
 
 /// A single relay WebSocket connection with auto-reconnect, subscription
 /// re-sending, and publish acknowledgement tracking.
@@ -52,7 +71,7 @@ WebSocketChannel _defaultChannelFactory(Uri url) =>
 class RelayConnection {
   RelayConnection(
     this.url, {
-    WebSocketChannelFactory channelFactory = _defaultChannelFactory,
+    WebSocketChannelFactory channelFactory = defaultRelayChannelFactory,
     Random? random,
     this.publishTimeout = const Duration(seconds: 10),
     Duration? backoffBase,
@@ -94,6 +113,16 @@ class RelayConnection {
 
   /// Wall-clock time of the last inbound message, or null if none yet.
   DateTime? lastMessageAt;
+
+  /// Live traffic counters for this single socket (bytes in/out, events, and
+  /// REQ→EOSE latency). The pool aggregates these into one [RelayStats] for the
+  /// Network Stats modal. Mirrors the per-socket writes the PWA makes to
+  /// `nym.relayStats` in relays.js (ws.onmessage / `_safeWsSend`).
+  final RelayStats stats = RelayStats();
+
+  /// subId → epoch-ms the REQ was sent, so EOSE can be stamped as
+  /// `latencyPerRelay[url] = now - reqSentAt`. Cleared on EOSE / unsubscribe.
+  final Map<String, int> _reqSentAt = {};
 
   Stream<RelayMessage> get messages => _messages.stream;
   Stream<RelayStatus> get statusStream => _statusCtl.stream;
@@ -140,19 +169,51 @@ class RelayConnection {
 
   void _onData(dynamic data) {
     lastMessageAt = DateTime.now();
+    // Count every inbound frame's UTF-8 byte length (relays.js ws.onmessage:
+    // `relayStats.bytesReceived += dataLen`). Binary frames count their byte
+    // length directly; non-frame payloads are ignored below.
+    if (data is String) {
+      stats.bytesReceived += utf8.encode(data).length;
+    } else if (data is List<int>) {
+      stats.bytesReceived += data.length;
+    }
     if (data is! String) return;
     final msg = RelayMessage.parse(data);
     if (msg == null) return;
-    if (msg is OkMessage) {
-      final completer = _pendingPublishes.remove(msg.id);
-      if (completer != null && !completer.isCompleted) {
-        completer.complete(msg);
-      }
+    switch (msg) {
+      case EventMessage(:final event):
+        // Unique inbound EVENT: bump the total, the per-second counter, and the
+        // per-relay tally (relays.js handleRelayMessage:3738-3746). Dedup is the
+        // pool's job; per-connection a frame arrives once.
+        stats.totalEvents++;
+        stats.eventsThisSecond++;
+        stats.eventsPerRelay[url] = (stats.eventsPerRelay[url] ?? 0) + 1;
+        // Per-relay, per-kind breakdown for the expanded Network Stats row
+        // (`_trackRelayKindData`, relays.js:3750), sized by the event's frame
+        // length so the expanded view's bytes match what arrived.
+        stats.recordRelayKind(url, event.kind, utf8.encode(data).length);
+      case EoseMessage(:final subId):
+        // Stamp REQ→EOSE latency for this relay (ms). The REQ send time was
+        // recorded in [subscribe]; clear it so a later re-REQ re-measures.
+        final sentAt = _reqSentAt.remove(subId);
+        if (sentAt != null) {
+          final ms = DateTime.now().millisecondsSinceEpoch - sentAt;
+          if (ms >= 0) stats.latencyPerRelay[url] = ms;
+        }
+      case OkMessage():
+        final completer = _pendingPublishes.remove(msg.id);
+        if (completer != null && !completer.isCompleted) {
+          completer.complete(msg);
+        }
+      case ClosedMessage():
+      case NoticeMessage():
+        break;
     }
     if (!_messages.isClosed) _messages.add(msg);
   }
 
   void _onError(Object error) {
+    debugPrint('[RelayConnection] socket error for $url: $error');
     _setStatus(RelayStatus.failed);
     _cleanupSocket();
     _scheduleReconnect();
@@ -196,6 +257,8 @@ class RelayConnection {
 
   void _resendActiveSubs() {
     for (final entry in _activeSubs.entries) {
+      // Re-stamp the REQ time so the next EOSE measures this fresh round-trip.
+      _reqSentAt[entry.key] = DateTime.now().millisecondsSinceEpoch;
       _send(RelayFrame.req(entry.key, entry.value));
     }
   }
@@ -205,6 +268,9 @@ class RelayConnection {
     if (ch == null || _status != RelayStatus.connected) return false;
     try {
       ch.sink.add(frame);
+      // Count the outbound frame's UTF-8 byte length (relays.js `_safeWsSend`:
+      // `relayStats.bytesSent += msg.length`).
+      stats.bytesSent += utf8.encode(frame).length;
       return true;
     } catch (_) {
       return false;
@@ -215,11 +281,14 @@ class RelayConnection {
   /// re-sent automatically on reconnect.
   void subscribe(String subId, List<NostrFilter> filters) {
     _activeSubs[subId] = filters;
+    // Record the REQ send time so the matching EOSE can stamp REQ→EOSE latency.
+    _reqSentAt[subId] = DateTime.now().millisecondsSinceEpoch;
     _send(RelayFrame.req(subId, filters));
   }
 
   /// Close subscription [subId] (sends CLOSE) and stop tracking it.
   void unsubscribe(String subId) {
+    _reqSentAt.remove(subId);
     if (_activeSubs.remove(subId) != null) {
       _send(RelayFrame.close(subId));
     }

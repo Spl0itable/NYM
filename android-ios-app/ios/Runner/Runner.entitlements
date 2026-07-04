@@ -2,20 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.developer.associated-domains</key>
-	<array>
-		<string>applinks:app.nymchat.app</string>
-		<string>applinks:app.nym.bar</string>
-		<string>applinks:web.nymchat.app</string>
-		<string>applinks:nymchat.app</string>
-		<string>webcredentials:app.nymchat.app</string>
-		<string>webcredentials:web.nymchat.app</string>
-		<string>webcredentials:nymchat.app</string>
-	</array>
 	<!-- Keychain access group for flutter_secure_storage (Keychain-backed). -->
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.nym.bar</string>
 	</array>
+	<!-- NOTE: com.apple.developer.associated-domains (Universal Links) was
+	     removed because Dreamflow's automatic App Store provisioning profile
+	     does not include the Associated Domains capability. To re-enable
+	     Universal Links, the capability must first be added to the App ID in
+	     the Apple Developer portal and a matching provisioning profile used. -->
 </dict>
 </plist>

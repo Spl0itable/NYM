@@ -30,7 +30,10 @@ class User {
     this.shopStyle,
     this.shopFlair,
     this.isSupporter = false,
-  }) : channels = channels ?? <String>{};
+    List<String>? shopCosmetics,
+    this.shopEdition,
+  })  : channels = channels ?? <String>{},
+        shopCosmetics = shopCosmetics ?? const <String>[];
 
   final String pubkey;
   String nym;
@@ -52,9 +55,28 @@ class User {
   String? shopFlair; // active nickname-flair item id
   bool isSupporter; // owns the supporter badge
 
+  /// Active special-cosmetic item ids broadcast by this user (the
+  /// `active.cosmetics` array — `cosmetic-aura-gold`, `cosmetic-frost`, …).
+  /// Populated by presence / shop-status ingestion for OTHER users; the self
+  /// pubkey reads these live from the shop controller instead. (`shop.js:459`.)
+  List<String> shopCosmetics;
+
+  /// Active numbered-flair edition (`active.editions['flair-genesis']`), stamped
+  /// on the rendered flair badge for OTHER users. Null when unknown / unnumbered.
+  int? shopEdition;
+
   /// Effective status given the active threshold (docs/specs/03 §2.5).
-  UserStatus effectiveStatus({int? nowMs}) {
+  ///
+  /// [isVerifiedBot] mirrors the PWA's verified-bot always-online override
+  /// (`getEffectiveUserStatus`, users.js:1112: `verifiedBotPubkeys.has(pubkey)
+  /// -> 'online'`). It sits AFTER the `hidden` short-circuit and BEFORE the
+  /// away/recency checks, exactly as in the PWA (statusHidden at :1111 wins over
+  /// the bot override at :1112). Callers pass
+  /// `kVerifiedBotPubkeys.contains(pubkey)` so every call site inherits the
+  /// override without its own special-case.
+  UserStatus effectiveStatus({int? nowMs, bool isVerifiedBot = false}) {
     if (status == UserStatus.hidden) return UserStatus.hidden;
+    if (isVerifiedBot) return UserStatus.online;
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     if (awayMessage != null && awayMessage!.isNotEmpty) return UserStatus.away;
     if (status == UserStatus.away) return UserStatus.away;
@@ -67,6 +89,7 @@ class User {
 class UserProfile {
   UserProfile({
     this.name,
+    this.username,
     this.displayName,
     this.about,
     this.picture,
@@ -78,6 +101,12 @@ class UserProfile {
   });
 
   String? name;
+
+  /// The non-standard `username` field some clients publish — the middle link
+  /// of the PWA's display-name chain `name || username || display_name`
+  /// (nostr-core.js:697-698). Parsed so the boot profile-cache path resolves
+  /// the same nym as live kind-0 ingest.
+  String? username;
   String? displayName;
   String? about;
   String? picture;
@@ -93,6 +122,7 @@ class UserProfile {
 
   Map<String, dynamic> toJson() => {
         if (name != null) 'name': name,
+        if (username != null) 'username': username,
         if (displayName != null) 'display_name': displayName,
         if (about != null) 'about': about,
         if (picture != null) 'picture': picture,
@@ -105,6 +135,7 @@ class UserProfile {
   factory UserProfile.fromJson(Map<String, dynamic> j, {int kind0Ts = 0}) {
     return UserProfile(
       name: j['name'] as String?,
+      username: j['username'] as String?,
       displayName: j['display_name'] as String?,
       about: j['about'] as String?,
       picture: j['picture'] as String?,

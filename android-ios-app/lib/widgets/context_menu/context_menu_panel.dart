@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:math' as math;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,17 +9,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/autocomplete/pending_edit.dart';
+import '../../features/identity/nick_edit_modal.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/translate/translate_language_prompt.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../../models/group.dart';
 import '../../models/message.dart';
+import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
+import '../nym_icons.dart';
 import 'context_menu_actions.dart';
+import 'group_context_menu_panel.dart';
 import 'interaction_hooks.dart';
+import 'profile_badges.dart';
 import 'report_modal.dart';
 
 /// The right-side `#contextMenu` slide-in panel (styles `.context-menu`,
@@ -39,11 +48,16 @@ class ContextMenuPanel extends ConsumerWidget {
     this.message,
     this.onReact,
     this.onTranslateInline,
+    this.backToGroupId,
   });
 
   final CtxTarget target;
   final Animation<double> animation;
   final VoidCallback onClose;
+
+  /// When set (or carried on [target]), a top-left "back" chevron returns to
+  /// that group's context menu (PWA `ctxBackToGroup`, ui-context.js:369-373).
+  final String? backToGroupId;
 
   /// The originating message (used to infer kind for reactions/zaps).
   final Message? message;
@@ -57,13 +71,17 @@ class ContextMenuPanel extends ConsumerWidget {
   final ValueChanged<String?>? onTranslateInline;
 
   /// Presents the panel in the root overlay with the slide-in transition.
+  /// [backToGroupId] (or `target.backToGroupId`) makes the panel show a back
+  /// chevron that returns to that group's context menu.
   static Future<void> show(
     BuildContext context, {
     required CtxTarget target,
     Message? message,
     VoidCallback? onReact,
     ValueChanged<String?>? onTranslateInline,
+    String? backToGroupId,
   }) {
+    final backGroup = backToGroupId ?? target.backToGroupId;
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -81,6 +99,7 @@ class ContextMenuPanel extends ConsumerWidget {
               animation: anim,
               onReact: onReact,
               onTranslateInline: onTranslateInline,
+              backToGroupId: backGroup,
               onClose: () => Navigator.of(ctx).maybePop(),
             ),
           ),
@@ -119,6 +138,7 @@ class ContextMenuPanel extends ConsumerWidget {
       targetIsMember: targetIsMember,
       targetIsOwner: targetIsOwner,
       targetIsMod: targetIsMod,
+      backToGroupId: target.backToGroupId,
     );
   }
 
@@ -132,26 +152,74 @@ class ContextMenuPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
+    final controller = ref.read(nostrControllerProvider);
     final target = _enrichTarget(ref);
     final actions = buildContextMenuActions(target);
     final fullNym = '${target.nym}#${getPubkeySuffix(target.pubkey)}';
     final cosmetics = ref.watch(userCosmeticsProvider(target.pubkey));
+    final user = ref.watch(usersProvider)[target.pubkey];
+    final about = user?.profile?.about ?? '';
 
     final panel = Material(
-      color: c.bgTertiary,
+      // `.context-menu` is `var(--bg-tertiary)` by default, but `body.solid-ui`
+      // (default ON) overrides it to `var(--glass-bg)` — the same opaque surface
+      // as the sidebar / chat-header (#14141e dark, #ffffff light). The bg is
+      // painted on the full-height outer Container below so it fills the whole
+      // viewport (`.context-menu { height: 100vh }`); the Material itself stays
+      // transparent and only provides ink/scroll for the (content-height) body.
+      type: MaterialType.transparency,
       child: SafeArea(
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _header(context, c, fullNym, cosmetics),
-              Padding(
+              _header(
+                context,
+                c,
+                target,
+                fullNym,
+                cosmetics,
+                user,
+                controller,
+                () => ref
+                    .read(appStateProvider.notifier)
+                    .addSystemMessage('Copied pubkey to clipboard'),
+              ),
+              // Bio block (`.context-menu-bio`) — sibling below the header, its
+              // own bottom border; collapses when empty (:empty).
+              if (about.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(color: c.hairline),
+                    ),
+                  ),
+                  child: Text(
+                    about,
+                    style: TextStyle(
+                      color: c.textDim,
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              // `.context-menu-actions`: 6px padding + a 1px white@0.06 top
+              // hairline separating the list from the header/bio.
+              Container(
                 padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: c.hairline),
+                  ),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     for (final a in actions)
                       _ActionItem(
+                        svg: ctxActionSvg(a),
                         label: ctxActionLabel(a, target),
                         color: _colorFor(a, c),
                         onTap: () => _invoke(context, ref, a, target, fullNym),
@@ -165,6 +233,12 @@ class ContextMenuPanel extends ConsumerWidget {
       ),
     );
 
+    // Width 320, clamped to 85vw on very narrow screens (`max-width:85vw`,
+    // styles-shell.css:611). The active panel carries a `-4px 0 24px` drop
+    // shadow for edge separation (F11).
+    final screenW = MediaQuery.of(context).size.width;
+    final panelW = math.min(320.0, screenW * 0.85);
+
     // translateX(100%) → 0 over 150ms (linear).
     return SlideTransition(
       position: Tween<Offset>(
@@ -172,19 +246,40 @@ class ContextMenuPanel extends ConsumerWidget {
         end: Offset.zero,
       ).animate(CurvedAnimation(parent: animation, curve: Curves.linear)),
       child: SizedBox(
-        width: 320,
+        width: panelW,
         height: double.infinity,
         child: Container(
           decoration: BoxDecoration(
+            // Opaque solid-ui surface filling the FULL viewport height (not just
+            // the content), matching `.context-menu` + the normal sidebar.
+            color: c.glassBg,
             border: Border(left: BorderSide(color: c.glassBorder)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x66000000), // rgba(0,0,0,0.4)
+                blurRadius: 24,
+                offset: Offset(-4, 0),
+              ),
+            ],
           ),
           child: Stack(
             children: [
               panel,
+              // Back chevron (top-left) → return to the originating group menu
+              // (`.context-menu-back`, ui-context.js:369-373). Hidden otherwise.
+              // 28×28 at top/left 10, black 0.4 bg (hover 0.6), white chevron.
+              if (backToGroupId != null)
+                Positioned(
+                  top: 10,
+                  left: 10,
+                  child: _BackButton(
+                    onTap: () => _onBack(context, backToGroupId!),
+                  ),
+                ),
               Positioned(
                 top: 14,
                 right: 14,
-                child: _closeBtn(c),
+                child: CtxCloseButton(onTap: onClose),
               ),
             ],
           ),
@@ -196,33 +291,111 @@ class ContextMenuPanel extends ConsumerWidget {
   Widget _header(
     BuildContext context,
     NymColors c,
+    CtxTarget target,
     String fullNym,
     UserCosmetics cosmetics,
+    User? user,
+    NostrController controller,
+    VoidCallback onCopied,
   ) {
-    return Container(
+    final bannerUrl = proxiedAvatarUrl(user?.profile?.banner);
+    final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
+    final avatarUrl = user?.profile?.picture;
+    final status = user?.effectiveStatus() ?? UserStatus.offline;
+    final isDeveloper = controller.isVerifiedDeveloper(target.pubkey);
+    final isBot = controller.isVerifiedBot(target.pubkey);
+    final showFriendBadge = target.isFriend && !target.isSelf;
+    // Owner/Mod label, only when viewing the target's group (ui-context.js:422).
+    final String? ownerModLabel = target.inGroup
+        ? (target.targetIsOwner
+            ? 'Group Owner'
+            : (target.targetIsMod ? 'Moderator' : null))
+        : null;
+
+    // Avatar — real picture (proxied/cached) with identicon fallback. With a
+    // banner: a 3px rgba(20,20,35,0.95) ring, no glow (`.has-banner
+    // .avatar-context`). Without a banner: a 2px `--glass-border` ring + a cyan
+    // glow `0 0 15px rgba(0,255,255,0.15)` (`.avatar-context`,
+    // styles-features.css:2621-2628).
+    // With a banner: a 3px ring matching the surface (`rgba(20,20,35,0.95)`
+    // dark; `body.light-mode .has-banner .avatar-context` → `rgba(255,255,255,
+    // 0.95)`).
+    final bannerRing = c.isLight
+        ? const Color(0xF2FFFFFF) // rgba(255,255,255,0.95)
+        : const Color(0xF2141423); // rgba(20,20,35,0.95)
+    final avatar = Container(
+      decoration: hasBanner
+          ? BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.fromBorderSide(
+                BorderSide(color: bannerRing, width: 3),
+              ),
+            )
+          : BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: c.glassBorder, width: 2),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x2600FFFF), // rgba(0,255,255,0.15)
+                  blurRadius: 15,
+                ),
+              ],
+            ),
+      // The PWA avatar carries `data-action="expandImageFromSrcStop"` →
+      // `expandImage(getAvatarUrl)` + `closeContextMenu` (inline-bindings.js:244).
+      // Only a real (remote) picture is worth expanding; the identicon fallback
+      // (`avatarUrl` null/empty) stays inert.
+      child: _ExpandableProfileImage(
+        imageUrl: proxiedAvatarUrl(avatarUrl),
+        onClose: onClose,
+        child: NymAvatar(seed: target.pubkey, size: 64, imageUrl: avatarUrl),
+      ),
+    );
+
+    final header = Container(
       padding: const EdgeInsets.fromLTRB(14, 16, 14, 14),
       decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          bottom: BorderSide(color: c.hairline),
         ),
       ),
       child: Column(
         children: [
-          NymAvatar(seed: target.pubkey, size: 64),
-          const SizedBox(height: 6),
+          // Without a banner the avatar sits at the top of the header; with a
+          // banner it is hoisted into the Stack overlap below.
+          if (!hasBanner) ...[
+            avatar,
+            const SizedBox(height: 6),
+          ],
+          // Nym row: base#suffix + flair/supporter + verified ✓ + friend badge.
           Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              // base#suffix: base is secondary/13/w600; the `#suffix` is dimmed
+              // (`.context-menu-avatar-nym .nym-suffix`: 0.9em / w100 / opacity
+              // 0.7).
               Flexible(
-                child: Text(
-                  fullNym,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: c.secondary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                child: Text.rich(
+                  TextSpan(
+                    style: TextStyle(
+                      color: c.secondary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    children: [
+                      TextSpan(text: target.nym),
+                      TextSpan(
+                        text: '#${getPubkeySuffix(target.pubkey)}',
+                        style: TextStyle(
+                          color: c.secondary.withValues(alpha: 0.7),
+                          fontSize: 13 * 0.9,
+                          fontWeight: FontWeight.w100,
+                        ),
+                      ),
+                    ],
                   ),
+                  textAlign: TextAlign.center,
                 ),
               ),
               CosmeticNymBadges(
@@ -230,19 +403,76 @@ class ContextMenuPanel extends ConsumerWidget {
                 flairSize: 15,
                 supporterHeight: 15,
               ),
+              // Verified ✓ badge — 20px (`.verified-badge`), left gap 4px (nm-ctx-1).
+              if (isDeveloper || isBot) ...[
+                const SizedBox(width: 4),
+                const VerifiedBadge(size: 20),
+              ],
+              // Friend badge — 12px @ opacity 0.7, left gap 3px (nm-ctx-2 +
+              // inline width/height=12 overriding the 20px standalone rule).
+              if (showFriendBadge) ...[
+                const SizedBox(width: 3),
+                const Opacity(opacity: 0.7, child: FriendBadge(size: 12)),
+              ],
             ],
           ),
+          // Dev / Bot text label (`.context-menu-dev-label`).
+          if (isDeveloper || isBot)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                isDeveloper ? 'Nymchat Developer' : 'Nymchat Bot',
+                style: TextStyle(
+                  color: c.textDim,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          // Group Owner / Moderator label (`.context-menu-owner-label`).
+          if (ownerModLabel != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                ownerModLabel,
+                style: TextStyle(
+                  color: c.secondary.withValues(alpha: 0.8),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          // Status row (`.ctx-status-row`): dot + word, hidden when status is
+          // hidden (ui-context.js:445-464).
+          if (status != UserStatus.hidden) ...[
+            const SizedBox(height: 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                StatusDot(status: status, size: 8),
+                const SizedBox(width: 6),
+                Text(
+                  _statusLabel(status),
+                  style: TextStyle(color: c.textDim, fontSize: 12),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
-          // Full pubkey block + Copy Pubkey.
+          // Full pubkey block — tap-to-select-all mono text (`.ctx-full-pubkey`,
+          // user-select:all).
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.04),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              color: c.insetFill,
+              border: Border.all(color: c.insetBorder),
               borderRadius: const BorderRadius.all(Radius.circular(6)),
             ),
-            child: Text(
+            child: SelectableText(
               target.pubkey,
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -253,44 +483,90 @@ class ContextMenuPanel extends ConsumerWidget {
               ),
             ),
           ),
-          InkWell(
+          // Copy Pubkey — confirm + close (F12); hover tint (`.context-menu-copy-pubkey`).
+          _CopyPubkeyRow(
             onTap: () async {
               await Clipboard.setData(ClipboardData(text: target.pubkey));
+              // System-message confirmation (displaySystemMessage) + close.
+              onCopied();
+              onClose();
             },
-            borderRadius: const BorderRadius.all(Radius.circular(6)),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.copy, size: 12, color: c.textDim),
-                  const SizedBox(width: 4),
-                  Text('Copy Pubkey',
-                      style: TextStyle(color: c.textDim, fontSize: 11)),
-                ],
-              ),
-            ),
           ),
         ],
       ),
     );
+
+    if (!hasBanner) return header;
+
+    // Banner (`.context-menu-banner`: 140px, cover) with the avatar straddling
+    // its bottom edge (`margin-top:-36px`): the avatar is hoisted into a Stack
+    // so the header content below starts directly under it (no dead gap). The
+    // header carries extra top padding to clear the avatar's lower half.
+    const avatarBox = 70.0; // 64 + 3px ring on each side
+    final bannerHeader = Padding(
+      padding: EdgeInsets.only(top: avatarBox - 36),
+      child: header,
+    );
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The PWA banner also carries `expandImageFromSrcStop` → opens the
+            // banner fullscreen + closes the menu (index.html:74).
+            SizedBox(
+              height: 140,
+              width: double.infinity,
+              child: _ExpandableProfileImage(
+                imageUrl: bannerUrl,
+                onClose: onClose,
+                child: CachedNetworkImage(
+                  imageUrl: bannerUrl,
+                  fit: BoxFit.cover,
+                  errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+            bannerHeader,
+          ],
+        ),
+        // Avatar centered on the banner/header seam (140 - 36 from the top).
+        Positioned(
+          top: 140 - 36,
+          left: 0,
+          right: 0,
+          child: Center(child: avatar),
+        ),
+      ],
+    );
   }
 
-  Widget _closeBtn(NymColors c) {
-    return InkWell(
-      onTap: onClose,
-      borderRadius: const BorderRadius.all(Radius.circular(16)),
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.white.withValues(alpha: 0.05),
-          border: Border.all(color: c.glassBorder),
-        ),
-        child: Icon(Icons.close, size: 16, color: c.textDim),
-      ),
-    );
+  String _statusLabel(UserStatus status) {
+    switch (status) {
+      case UserStatus.online:
+        return 'Online';
+      case UserStatus.away:
+        return 'Away';
+      case UserStatus.offline:
+      case UserStatus.hidden:
+        return 'Offline';
+    }
+  }
+
+  /// `.context-menu-back` chevron — pops this panel and re-opens the originating
+  /// group context menu (PWA `ctxBackToGroup`: closeContextMenu →
+  /// showGroupContextMenu(groupId)).
+  void _onBack(BuildContext context, String groupId) {
+    // Capture the root navigator's (stable) context before popping — this
+    // panel's own context is defunct after onClose().
+    final rootContext = Navigator.of(context, rootNavigator: true).context;
+    onClose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (rootContext.mounted) {
+        GroupContextMenuPanel.show(rootContext, groupId);
+      }
+    });
   }
 
   Color _colorFor(CtxAction a, NymColors c) {
@@ -360,6 +636,16 @@ class ContextMenuPanel extends ConsumerWidget {
             context,
             targetNym: fullNym,
             hasMessage: t.messageId != null,
+            // Build + sign + publish the NIP-56 kind-1984 report (F2). When
+            // "report specific message" is checked we attach the `e` tag.
+            onSubmit: (type, details, reportMessage) {
+              controller.submitReport(
+                pubkey: t.pubkey,
+                messageId: reportMessage ? t.messageId : null,
+                type: type,
+                details: details,
+              );
+            },
           );
         }
         break;
@@ -399,18 +685,22 @@ class ContextMenuPanel extends ConsumerWidget {
         break;
       case CtxAction.giftCredits:
         // ui-context.js:102-107 "Gift Nymbot Credits" → showBotCreditsModal.
-        // The bot-credits modal is owned by another slice and has no controller
-        // entry point reachable here yet; close the menu (documented deferral in
-        // docs/audit/05-commands-format-interactions.md).
+        // Post the recipient to the gift-credits mailbox; the nymbot slice opens
+        // its gift-credit modal (CROSS-FILE NEED — see giftCreditsRequestProvider).
         onClose();
+        ref
+            .read(giftCreditsRequestProvider.notifier)
+            .request(pubkey: t.pubkey, nym: t.nym);
         break;
       case CtxAction.editProfile:
-        // ui-context.js:587-594 "Edit Profile" → editNick(). The profile editor
-        // is owned by another slice; close the menu (documented deferral).
+        // ui-context.js:587-594 "Edit Profile" → editNick(). Open the nick/
+        // profile editor modal directly (its public entry point).
         onClose();
+        if (context.mounted) await NickEditModal.open(context);
         break;
       case CtxAction.edit:
-        // Own message: prompt for the new content, then editMessage.
+        // Own message: seed the composer with the original content
+        // (startEditMessage) so the next send publishes the edit.
         await _edit(context, ref, t);
         break;
       case CtxAction.delete:
@@ -455,20 +745,22 @@ class ContextMenuPanel extends ConsumerWidget {
     return view.kind == ViewKind.group ? view.id : '';
   }
 
-  /// Edit own message — prompt for new content (seeded with the original) then
-  /// call editMessage. Mirrors startEditMessage populating the input.
+  /// Edit own message — seed the composer with the original content and enter
+  /// pending-edit mode: the amber "Editing message" chip shows above the input
+  /// and the NEXT send publishes the edit. Mirrors `ctxEditMessage` →
+  /// `startEditMessage` (ui-context.js:261-266, messages.js:1861-1919), which
+  /// populates `#messageInput` rather than opening a prompt. `startEditMessage`
+  /// bails without messageId/content or on someone else's message.
   Future<void> _edit(BuildContext context, WidgetRef ref, CtxTarget t) async {
     final messageId = t.messageId;
-    if (messageId == null) {
-      onClose();
-      return;
+    final content = t.content ?? '';
+    if (messageId != null && content.isNotEmpty && t.isSelf) {
+      ref.read(pendingEditProvider.notifier).request(
+            messageId: messageId,
+            content: content,
+          );
     }
-    final newText = await _promptEdit(context, t.content ?? '');
     onClose();
-    if (newText == null) return;
-    final trimmed = newText.trim();
-    if (trimmed.isEmpty || trimmed == (t.content ?? '')) return;
-    await ref.read(nostrControllerProvider).editMessage(messageId, trimmed);
   }
 
   /// Delete — own messages send a kind-5 deletion (confirm); a mod/owner
@@ -500,8 +792,10 @@ class ContextMenuPanel extends ConsumerWidget {
     }
   }
 
-  /// Shows a confirm dialog (showAppConfirm equivalent); on confirm, closes the
-  /// panel and runs [action].
+  /// Shows the `.app-dialog` confirm (the PWA routes all context-menu
+  /// confirmations through `showAppConfirm` with `{danger, okLabel}`,
+  /// inline-bindings.js:479-520); on confirm, closes the panel and runs
+  /// [action].
   Future<void> _confirmThen(
     BuildContext context,
     String message, {
@@ -509,60 +803,14 @@ class ContextMenuPanel extends ConsumerWidget {
     required bool danger,
     required FutureOr<void> Function() action,
   }) async {
-    final c = context.nym;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: c.bgTertiary,
-        content: Text(message, style: TextStyle(color: c.text, fontSize: 14)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text('Cancel', style: TextStyle(color: c.textDim)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(okLabel,
-                style: TextStyle(color: danger ? c.danger : c.text)),
-          ),
-        ],
-      ),
+    final ok = await showAppConfirm(
+      context,
+      message,
+      okLabel: okLabel,
+      danger: danger,
     );
     onClose();
-    if (ok == true) await action();
-  }
-
-  /// Prompts for edited message text, returning the new value or null on cancel.
-  Future<String?> _promptEdit(BuildContext context, String original) async {
-    final c = context.nym;
-    final controller = TextEditingController(text: original);
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: c.bgTertiary,
-        title: Text('Edit Message', style: TextStyle(color: c.text, fontSize: 16)),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: null,
-          style: TextStyle(color: c.text),
-          decoration: InputDecoration(
-            hintText: 'Edit your message…',
-            hintStyle: TextStyle(color: c.textDim),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('Cancel', style: TextStyle(color: c.textDim)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text),
-            child: Text('Save', style: TextStyle(color: c.text)),
-          ),
-        ],
-      ),
-    );
+    if (ok) await action();
   }
 
   Future<void> _translate(BuildContext context, WidgetRef ref) async {
@@ -581,9 +829,21 @@ class ContextMenuPanel extends ConsumerWidget {
   }
 
   Future<void> _zap(BuildContext context, WidgetRef ref) async {
-    final lnAddr = _lightningAddressFor(ref, target.pubkey);
+    // Fresh LN-address resolve (cache-first, then kind-0 fetch) so a target
+    // whose profile hasn't been ingested yet can still be zapped — consistent
+    // with the quick-zap (+) button (zap_badge.dart:209). PWA: cmdZap awaits
+    // fetchLightningAddressForUser (zaps.js:1955/2015) before deciding.
+    final lnAddr =
+        await ref.read(nostrControllerProvider).resolveLightningAddressForZap(
+              target.pubkey,
+            );
     if (lnAddr == null || lnAddr.isEmpty) {
-      // No lightning address — mirror the PWA's "cannot receive zaps" notice.
+      // No lightning address — mirror the PWA's "cannot receive zaps" notice
+      // (zaps.js:1960/2021); a bare return left the user with zero feedback.
+      ref.read(appStateProvider.notifier).addSystemMessage(
+            '@${stripPubkeySuffix(target.nym)} cannot receive zaps '
+            '(no lightning address set)',
+          );
       return;
     }
     if (!context.mounted) return;
@@ -599,20 +859,61 @@ class ContextMenuPanel extends ConsumerWidget {
       originalKind: kind,
     );
   }
+}
 
-  String? _lightningAddressFor(WidgetRef ref, String pubkey) {
-    final user = ref.read(usersProvider)[pubkey];
-    return user?.profile?.lightningAddress;
+/// `.context-menu-copy-pubkey`: 3×8 padding, radius 6, hover `rgba(255,255,255,
+/// 0.08)` bg + primary text; copy glyph + label. Confirms + closes on tap (F12).
+class _CopyPubkeyRow extends StatefulWidget {
+  const _CopyPubkeyRow({required this.onTap});
+  final Future<void> Function() onTap;
+
+  @override
+  State<_CopyPubkeyRow> createState() => _CopyPubkeyRowState();
+}
+
+class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final color = _hover ? c.primary : c.textDim;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => widget.onTap(),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: _hover ? c.hoverOverlay : null,
+            borderRadius: const BorderRadius.all(Radius.circular(6)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.copy, size: 12, color: color),
+              const SizedBox(width: 2),
+              Text('Copy Pubkey', style: TextStyle(color: color, fontSize: 11)),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
-/// `.context-menu-item`: 10×14 padding, radius 8, hover tint.
+/// `.context-menu-item`: 10×14 padding, radius 8, hover tint, leading 16px icon.
 class _ActionItem extends StatefulWidget {
   const _ActionItem({
+    required this.svg,
     required this.label,
     required this.color,
     required this.onTap,
   });
+  final String svg;
   final String label;
   final Color color;
   final VoidCallback onTap;
@@ -626,6 +927,17 @@ class _ActionItemState extends State<_ActionItem> {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.nym;
+    final isNeutral = widget.color == c.text;
+    // Neutral rows show a dimmed icon; colored rows (danger/lightning/warning)
+    // tint the icon to match the label (mirrors the PWA's `currentColor` SVGs).
+    // On hover, a neutral row's label + icon shift to `--primary`
+    // (`.context-menu-item:hover { color: var(--primary) }`); colored rows keep
+    // their resting tint.
+    final Color labelColor =
+        isNeutral && _hover ? c.primary : widget.color;
+    final Color iconColor =
+        isNeutral ? (_hover ? c.primary : c.textDim) : widget.color;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -635,18 +947,222 @@ class _ActionItemState extends State<_ActionItem> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: _hover ? Colors.white.withValues(alpha: 0.08) : null,
+            color: _hover
+                ? (widget.color == c.danger ? c.dangerHoverOverlay : c.hoverOverlay)
+                : null,
             borderRadius: NymRadius.rxs,
           ),
-          child: Text(
-            widget.label,
-            style: TextStyle(
-              color: widget.color,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
+          child: Row(
+            children: [
+              NymSvgIcon(widget.svg, size: 16, color: iconColor),
+              // `.nm-ico8` → margin-right:8px on the leading SVG.
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.label,
+                  style: TextStyle(
+                    color: labelColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The `.context-menu-close` ✕ button: 32×32 circle, white@0.05 bg + glassBorder
+/// at rest; on hover turns danger-red (bg `rgba(255,68,68,0.12)`, icon
+/// `--danger`, border `rgba(255,68,68,0.3)`) per styles-shell.css:674-678.
+/// Shared by the user + group context panels.
+class CtxCloseButton extends StatefulWidget {
+  const CtxCloseButton({super.key, required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  State<CtxCloseButton> createState() => _CtxCloseButtonState();
+}
+
+class _CtxCloseButtonState extends State<CtxCloseButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Container(
+          width: 32,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            // Light: `body.light-mode .context-menu-close` → black@0.05 fill,
+            // black@0.08 border, black@0.5 icon. Hover (both modes) → danger red.
+            color: _hover
+                ? const Color(0x1FFF4444) // rgba(255,68,68,0.12)
+                : (c.isLight
+                    ? const Color(0x0D000000) // black @ 0.05
+                    : Colors.white.withValues(alpha: 0.05)),
+            border: Border.all(
+              color: _hover
+                  ? const Color(0x4DFF4444) // rgba(255,68,68,0.3)
+                  : (c.isLight ? const Color(0x14000000) : c.glassBorder),
+            ),
+          ),
+          // `.context-menu-close` is a literal "✕" char (`&#x2715;`) — styled
+          // text, not an SVG glyph.
+          child: Text('✕',
+              style: TextStyle(
+                  fontSize: 16,
+                  height: 1,
+                  color: _hover
+                      ? c.danger
+                      : (c.isLight ? const Color(0x80000000) : c.textDim))),
+        ),
+      ),
+    );
+  }
+}
+
+/// The `.context-menu-back` chevron: 28×28 circle at top/left 10, black 0.4 bg
+/// (hover 0.6), border-none, white chevron (styles-features.css:5393-5411).
+class _BackButton extends StatefulWidget {
+  const _BackButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  State<_BackButton> createState() => _BackButtonState();
+}
+
+class _BackButtonState extends State<_BackButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Container(
+          width: 28,
+          height: 28,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _hover
+                ? const Color(0x99000000) // rgba(0,0,0,0.6)
+                : const Color(0x66000000), // rgba(0,0,0,0.4)
+          ),
+          // `.context-menu-back` — feather chevron-left (index.html:71).
+          child: const NymSvgIcon(NymIcons.chevronLeft,
+              size: 18, color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+/// Wraps the profile-card avatar / banner so a tap opens the image fullscreen
+/// and closes the context menu — the PWA's `data-action="expandImageFromSrcStop"`
+/// (inline-bindings.js:244 → `expandImage(src)` + `closeContextMenu()`).
+///
+/// When [imageUrl] is null/empty (e.g. the identicon-only avatar) the child is
+/// rendered inert, matching the PWA which only expands a real remote image.
+/// A self-contained fullscreen viewer is used here because the message-format
+/// viewer (`_FullscreenImageViewer`) is private to that file; the behavior
+/// (rootNavigator push, black@0.92 barrier, pinch-zoom, tap-to-close) mirrors it.
+class _ExpandableProfileImage extends StatelessWidget {
+  const _ExpandableProfileImage({
+    required this.imageUrl,
+    required this.onClose,
+    required this.child,
+  });
+
+  final String? imageUrl;
+  final VoidCallback onClose;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = imageUrl;
+    if (url == null || url.isEmpty) return child;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        // Capture the root navigator before closing this panel (its own context
+        // is defunct after onClose()).
+        final rootContext = Navigator.of(context, rootNavigator: true).context;
+        onClose();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (rootContext.mounted) _ProfileImageViewer.open(rootContext, url);
+        });
+      },
+      child: MouseRegion(cursor: SystemMouseCursors.click, child: child),
+    );
+  }
+}
+
+/// Self-contained fullscreen image viewer for the profile card's avatar/banner.
+/// Mirrors `_FullscreenImageViewer` (message_content.dart:1345 — `expandImage`):
+/// opaque:false route over the root navigator, black@0.92 barrier, pinch-zoom
+/// via [InteractiveViewer], tap the backdrop or the ✕ to close.
+class _ProfileImageViewer extends StatelessWidget {
+  const _ProfileImageViewer({required this.url});
+  final String url;
+
+  static Future<void> open(BuildContext context, String url) {
+    return Navigator.of(context, rootNavigator: true).push(
+      PageRouteBuilder<void>(
+        opaque: false,
+        barrierColor: Colors.black.withValues(alpha: 0.92),
+        pageBuilder: (_, __, ___) => _ProfileImageViewer(url: url),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          // Tap anywhere on the backdrop to dismiss.
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => Navigator.of(context).maybePop(),
+            ),
+          ),
+          Center(
+            child: InteractiveViewer(
+              minScale: 1,
+              maxScale: 4,
+              child: CachedNetworkImage(
+                imageUrl: url,
+                fit: BoxFit.contain,
+                errorWidget: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 14,
+            right: 14,
+            child: SafeArea(child: CtxCloseButton(onTap: () => Navigator.of(context).maybePop())),
+          ),
+        ],
       ),
     );
   }

@@ -49,6 +49,8 @@ class Settings {
     this.showStatus = 'true',
     this.wallpaperType = 'geometric',
     this.notificationsEnabled = true,
+    this.hideNonPinned = false,
+    this.columnsResetTick = 0,
   });
 
   final NymThemeKey theme;
@@ -84,6 +86,18 @@ class Settings {
   final String showStatus; // 'true' | 'false' | 'friends'
   final String wallpaperType;
   final bool notificationsEnabled;
+
+  /// Hide all non-favorited channels from the sidebar (`nym_hide_non_pinned`).
+  /// Device-local-only (never cross-device synced). Held in state so the sidebar
+  /// can `ref.watch(settingsProvider.select((s) => s.hideNonPinned))` and react
+  /// live to the Channels → "Hide All Non-Favorited Channels" toggle.
+  final bool hideNonPinned;
+
+  /// Runtime-only counter bumped by `SettingsController.resetColumns()` so a
+  /// mounted columns deck can observe the "Reset columns to defaults" action
+  /// and re-seed live (PWA `cvResetColumns`, columns.js:363-381, tears down and
+  /// re-seeds the deck immediately). Never persisted.
+  final int columnsResetTick;
 
   /// solid-ui is ON unless transparency is explicitly enabled.
   bool get solidUi => !transparencyEnabled;
@@ -138,6 +152,8 @@ class Settings {
     String? showStatus,
     String? wallpaperType,
     bool? notificationsEnabled,
+    bool? hideNonPinned,
+    int? columnsResetTick,
   }) {
     return Settings(
       theme: theme ?? this.theme,
@@ -175,7 +191,30 @@ class Settings {
       showStatus: showStatus ?? this.showStatus,
       wallpaperType: wallpaperType ?? this.wallpaperType,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+      hideNonPinned: hideNonPinned ?? this.hideNonPinned,
+      columnsResetTick: columnsResetTick ?? this.columnsResetTick,
     );
+  }
+
+  /// The five valid indicator-scope values (PWA `INDICATOR_SCOPES`,
+  /// settings.js:3).
+  static const List<String> indicatorScopes = [
+    'disabled',
+    'pms',
+    'groups',
+    'pms-groups',
+    'everywhere',
+  ];
+
+  /// Coerces a stored indicator-scope value to one of the five valid scopes
+  /// (PWA `_normalizeIndicatorScope`, settings.js:27-32): legacy booleans map
+  /// `'true'` → `'everywhere'` and `'false'` → `'disabled'`; anything else
+  /// out-of-enum falls back to [fallback].
+  static String normalizeIndicatorScope(String? value, {String fallback = 'pms-groups'}) {
+    if (value == 'true') return 'everywhere';
+    if (value == 'false') return 'disabled';
+    if (value != null && indicatorScopes.contains(value)) return value;
+    return fallback;
   }
 
   /// Loads settings from the key/value store, applying PWA defaults/coercions.
@@ -209,10 +248,22 @@ class Settings {
       dmForwardSecrecyEnabled:
           kv.getBool(StorageKeys.dmFwdSecEnabled, defaultValue: false),
       dmTtlSeconds: kv.getInt(StorageKeys.dmTtlSeconds, defaultValue: 86400),
-      readReceiptsScope:
-          kv.getString(StorageKeys.readReceiptsScope) ?? 'everywhere',
-      typingIndicatorsScope:
-          kv.getString(StorageKeys.typingIndicatorsScope) ?? 'everywhere',
+      // PWA loadSettings (settings.js:1105-1112): normalize the stored scope,
+      // deriving the fallback from the legacy enabled boolean ('false' →
+      // 'disabled', otherwise 'everywhere').
+      readReceiptsScope: normalizeIndicatorScope(
+        kv.getString(StorageKeys.readReceiptsScope),
+        fallback: kv.getString(StorageKeys.readReceiptsEnabled) == 'false'
+            ? 'disabled'
+            : 'everywhere',
+      ),
+      typingIndicatorsScope: normalizeIndicatorScope(
+        kv.getString(StorageKeys.typingIndicatorsScope),
+        fallback:
+            kv.getString(StorageKeys.typingIndicatorsEnabled) == 'false'
+                ? 'disabled'
+                : 'everywhere',
+      ),
       nickStyle: kv.getString(StorageKeys.nickStyle) ?? 'fancy',
       chatLayout: kv.getString(StorageKeys.chatLayout) ?? 'bubbles',
       chatViewMode: kv.getString(StorageKeys.chatViewMode) ?? 'single',
@@ -242,6 +293,8 @@ class Settings {
       notificationsEnabled: (kv.getString(StorageKeys.notificationsEnabled) ??
               'true') !=
           'false',
+      hideNonPinned:
+          kv.getBool(StorageKeys.hideNonPinned, defaultValue: false),
     );
   }
 }

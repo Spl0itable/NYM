@@ -139,3 +139,128 @@ BigInt _bytesToBigInt(Uint8List bytes) {
   }
   return r;
 }
+
+/// A decoded bitchat `bitchat1:` payload (a NoisePayload inside a BitchatPacket).
+///
+/// [type] is the NoisePayloadType: 0x01 = PRIVATE_MESSAGE, 0x02 = READ_RECEIPT,
+/// 0x03 = DELIVERED. For a private message, [content] is the decoded text and
+/// [messageId] the bitchat UUID; for receipts, [content] is null and
+/// [messageId] identifies the original message.
+class BitchatPacket {
+  const BitchatPacket({required this.type, this.content, this.messageId});
+
+  final int type;
+  final String? content;
+  final String? messageId;
+
+  bool get isPrivateMessage => type == privateMessage;
+
+  static const int privateMessage = 0x01;
+  static const int readReceipt = 0x02;
+  static const int delivered = 0x03;
+}
+
+/// True when [content] is a bitchat-app message envelope (`bitchat1:` prefix).
+/// The actual text/receipt is extracted with [decodeBitchatPacket]; without it
+/// a bitchat PM would render as the raw `bitchat1:…` blob.
+bool isBitchatPacket(String content) => content.startsWith('bitchat1:');
+
+/// Decodes a `bitchat1:<base64url>` BitchatPacket into its NoisePayload.
+///
+/// Mirrors the PWA `parseBitchatMessage` (pms.js): strip the prefix, base64url-
+/// decode, read the 14-byte header (version, type, TTL, 8-byte timestamp, flags,
+/// 2-byte payload length), skip the 8-byte sender id and optional 8-byte
+/// recipient id (HAS_RECIPIENT = flags & 0x01), then read the NoisePayloadType.
+///
+/// For PRIVATE_MESSAGE the payload is a TLV stream: `[type][len][value]` where
+/// a value > 255 bytes sets the high bit of the type byte (0x80) and uses a
+/// 2-byte big-endian length. Type 0x00 = MESSAGE_ID, 0x01 = CONTENT. For
+/// receipts (type != 0x01) the payload is `[type][raw UUID string]` (or a single
+/// `[0x00][len][id]` TLV). Trailing 0xBE padding is stripped before parsing.
+///
+/// Returns null when [content] is not `bitchat1:` or is too short/malformed.
+BitchatPacket? decodeBitchatPacket(String content) {
+  if (!isBitchatPacket(content)) return null;
+  Uint8List bytes;
+  try {
+    bytes = _b64UrlDecode(content.substring(9));
+  } catch (_) {
+    return null;
+  }
+  // Header(14) + senderId(8) at minimum; payload byte must exist.
+  if (bytes.length < 14) return null;
+  final flags = bytes[11];
+  final hasRecipient = (flags & 0x01) != 0;
+  final payloadStart = 14 + 8 + (hasRecipient ? 8 : 0);
+  if (payloadStart >= bytes.length) return null;
+  final type = bytes[payloadStart];
+
+  // Strip trailing 0xBE padding for bounds checking.
+  var end = bytes.length;
+  while (end > 0 && bytes[end - 1] == 0xBE) {
+    end--;
+  }
+
+  if (type != BitchatPacket.privateMessage) {
+    // Receipt: [type][raw UUID] or [type][0x00][len][id].
+    var pos = payloadStart + 1;
+    String? messageId;
+    if (pos < end && bytes[pos] == 0x00 && pos + 2 < end) {
+      final idLen = bytes[pos + 1];
+      if (pos + 2 + idLen <= end) {
+        messageId = _tryUtf8(bytes, pos + 2, pos + 2 + idLen);
+      }
+    } else if (pos < end) {
+      final raw = _tryUtf8(bytes, pos, pos + 36 <= end ? pos + 36 : end);
+      if (raw != null && _looksLikeUuid(raw)) messageId = raw;
+    }
+    return BitchatPacket(type: type, content: null, messageId: messageId);
+  }
+
+  // PRIVATE_MESSAGE: parse TLV fields after the NoisePayloadType byte.
+  var pos = payloadStart + 1;
+  String? messageContent;
+  String? messageId;
+  while (pos < end - 1) {
+    final rawType = bytes[pos];
+    final fieldType = rawType & 0x7F;
+    final isExtended = (rawType & 0x80) != 0;
+    int fieldLen;
+    int valueStart;
+    if (isExtended) {
+      if (pos + 3 > end) break;
+      fieldLen = (bytes[pos + 1] << 8) | bytes[pos + 2];
+      valueStart = pos + 3;
+    } else {
+      if (pos + 2 > end) break;
+      fieldLen = bytes[pos + 1];
+      valueStart = pos + 2;
+    }
+    if (valueStart + fieldLen > end) break;
+    if (fieldType == 0x00) {
+      messageId = _tryUtf8(bytes, valueStart, valueStart + fieldLen);
+    } else if (fieldType == 0x01) {
+      messageContent = _tryUtf8(bytes, valueStart, valueStart + fieldLen);
+    }
+    pos = valueStart + fieldLen;
+  }
+  return BitchatPacket(
+    type: type,
+    content: messageContent ?? '',
+    messageId: messageId,
+  );
+}
+
+String? _tryUtf8(Uint8List bytes, int start, int end) {
+  if (start < 0 || end > bytes.length || start >= end) return null;
+  try {
+    return utf8.decode(bytes.sublist(start, end));
+  } catch (_) {
+    return null;
+  }
+}
+
+bool _looksLikeUuid(String s) => RegExp(
+        r'^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$',
+        caseSensitive: false)
+    .hasMatch(s);

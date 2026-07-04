@@ -324,7 +324,11 @@ void main() {
     expect(find.text('🔥 2'), findsOneWidget);
     await tester.tap(find.text('🔥 2'), warnIfMissed: false);
     await tester.pump();
-    // Flush the reaction-burst overlay timer (Future.delayed ~900ms).
+    // `_toggleReaction` is async: it awaits the controller, THEN spawns the
+    // reaction-burst overlay (a ~900ms self-removal Future.delayed). The first
+    // time-advance resolves the await (scheduling the burst), the second drains
+    // the burst timer so fake-async doesn't report it pending at test end.
+    await tester.pump(const Duration(milliseconds: 1000));
     await tester.pump(const Duration(milliseconds: 1000));
 
     expect(fake.calls, hasLength(1));

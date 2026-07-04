@@ -4,6 +4,7 @@ import '../../core/constants/event_kinds.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../models/nostr_event.dart';
+import '../p2p/p2p_models.dart';
 
 /// Pure, socket-free logic for NIP-17 private messages: rumor construction,
 /// rumor→[Message] mapping, and receipt/typing parsing. Kept testable so the
@@ -28,11 +29,19 @@ class PmLogic {
   /// Builds the kind-14 PM rumor for [content] addressed to [recipientPubkey].
   /// Tags: `['p',recipient]`, `['x',nymMessageId]`, `['ms',ms]` (docs/specs/03
   /// §3.2). [nowSec]/[nowMs] are injectable for deterministic tests.
+  ///
+  /// [extraTags] threads the optional `['offer', JSON]` file-offer, NIP-30
+  /// custom-emoji (`customEmojiTagsForContent(content)`), and NIP-92 imeta
+  /// tags the PWA spreads into the rumor (`sendNIP17PM`, pms.js:306-315);
+  /// they are appended after `ms`, matching the PWA push order. The caller
+  /// builds them from provider/controller state (like
+  /// [GroupLogic.buildGroupMessageRumor]'s seam).
   static UnsignedEvent buildPmRumor({
     required String selfPubkey,
     required String recipientPubkey,
     required String content,
     required String nymMessageId,
+    List<List<String>> extraTags = const [],
     int? nowSec,
     int? nowMs,
   }) {
@@ -46,6 +55,7 @@ class PmLogic {
         ['p', recipientPubkey],
         ['x', nymMessageId],
         ['ms', '$ms'],
+        ...extraTags,
       ],
       content: content,
     );
@@ -84,6 +94,15 @@ class PmLogic {
     final nymMessageId = _tagValue(tags, 'x');
     final ms = int.tryParse(_tagValue(tags, 'ms') ?? '') ?? 0;
 
+    // A PM can carry a P2P file offer on an `['offer', JSON]` tag (pms.js:1270
+    // — `parseFileOfferTag(rumor.tags, senderPubkey)` sets isFileOffer/
+    // fileOffer so the bubble renders a file-offer card instead of plain
+    // text). `parseFileOfferTag` binds the offer's seederPubkey to the actual
+    // sender (anti-spoof) and returns null when absent/mismatched. The PWA's
+    // side effect of registering the offer into `p2pFileOffers` (p2p.js:187)
+    // is the ingest layer's job here — this mapper stays socket-free.
+    final fileOffer = parseFileOfferTag(tags, senderPubkey);
+
     // Guard against clock skew: cap at current time so PMs never appear in the
     // future (pms.js: `tsSec = Math.min(tsSec, nowSec)`).
     final createdAtRaw = (rumor['created_at'] as num?)?.toInt() ?? 0;
@@ -91,7 +110,10 @@ class PmLogic {
     final createdAt = createdAtRaw > nowSec ? nowSec : createdAtRaw;
 
     final isOwn = senderPubkey == selfPubkey;
-    final author = getNymFromPubkey('anon', senderPubkey);
+    // Pure-mapper fallback: `nym#xxxx` (the PWA's `getNymFromPubkey` default,
+    // users.js:1085 — never 'anon'). The controller re-resolves the author
+    // against the users map after mapping, like the PWA's `senderName`.
+    final author = getNymFromPubkey('nym', senderPubkey);
 
     return Message(
       id: wrapId.isNotEmpty ? wrapId : (nymMessageId ?? ''),
@@ -108,6 +130,8 @@ class PmLogic {
       eventKind: EventKind.giftWrap,
       nymMessageId: nymMessageId,
       senderVerified: senderVerified,
+      isFileOffer: fileOffer != null,
+      fileOffer: fileOffer?.toJson(),
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,
     );
   }

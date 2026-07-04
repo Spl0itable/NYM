@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/bech32_codec.dart' as bech32;
 import '../../core/crypto/keys.dart';
+import '../../core/utils/nym_utils.dart';
 import '../storage/key_value_store.dart';
 import '../storage/secure_store.dart';
 import 'nym_generator.dart';
@@ -25,6 +27,13 @@ class Identity {
   bool get canSign => privkey != null;
 }
 
+/// Vault-aware secret writer — the native analogue of the PWA's `nymSecretSet`
+/// → key-vault.js `secretSet` (lines 38-48), which wraps the value in an
+/// `enc:v1:` blob whenever the identity vault is enabled AND unlocked, so
+/// secrets written AFTER the vault was enabled keep the encryption-at-rest
+/// guarantee instead of landing as plaintext.
+typedef SecretWriter = Future<void> Function(String name, String value);
+
 /// Boots and persists the user identity. Mirrors the PWA's ephemeral-identity
 /// path (docs/specs/01 §2.1): reuse the saved session nsec if present, else
 /// generate a fresh keypair + random nym and persist them.
@@ -33,13 +42,29 @@ class IdentityService {
     required KeyValueStore kv,
     required SecureStore secure,
     NymGenerator? nymGenerator,
+    SecretWriter? secretWrite,
   })  : _kv = kv,
         _secure = secure,
-        _nymGen = nymGenerator ?? NymGenerator();
+        _nymGen = nymGenerator ?? NymGenerator(),
+        _secretWrite = secretWrite;
 
   final KeyValueStore _kv;
   final SecureStore _secure;
   final NymGenerator _nymGen;
+
+  /// Vault-aware writer injected by the caller (wired to the identity vault's
+  /// `secretSet`); null falls back to a plain [SecureStore.set] — key-vault.js
+  /// `secretSet`'s vault-disabled else-branch (line 45).
+  final SecretWriter? _secretWrite;
+
+  /// Writes a secret through the vault layer when one is wired, so a vault
+  /// that's enabled + unlocked stores the `enc:v1:` blob (key-vault.js:38-48
+  /// `secretSet`) instead of the plaintext.
+  Future<void> _secretSet(String name, String value) {
+    final write = _secretWrite;
+    if (write != null) return write(name, value);
+    return _secure.set(name, value);
+  }
 
   /// Reads a secret, preferring an in-memory [unlocked] value (from the vault
   /// boot unlock, the native analogue of `_vaultMem`) over the at-rest store —
@@ -49,6 +74,35 @@ class IdentityService {
     if (mem != null && mem.isNotEmpty) return mem;
     return _secure.get(name);
   }
+
+  /// The cached kind-0 profile name persisted for the durable login — the
+  /// PWA's `nym_nostr_login_profile` instant-restore cache (written by
+  /// `updateSidebarFromProfile`, app.js:5523-5527, whenever the SELF kind-0
+  /// resolves — the controller's `_syncSelfNymFromProfile` — and read on boot
+  /// BEFORE relays connect, app.js:4514-4522). Null when absent/corrupt.
+  /// Parsing matches the controller's `_cachedLoginProfileName` byte-for-byte.
+  String? _cachedLoginProfileName() {
+    final raw = _kv.getString(StorageKeys.nostrLoginProfile);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        final name = decoded['name'];
+        if (name is String && name.isNotEmpty) return name;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// A durable login's display nym: the cached kind-0 profile name (falling
+  /// back to `'nym'` until the live kind-0 resolves), suffixed via
+  /// [getNymFromPubkey] — exactly the seed the controller applies at init
+  /// (nostr_controller.dart `_cachedLoginProfileName(kv) ?? 'nym'`) and the
+  /// PWA's boot restore (app.js:4514-4522). NEVER the ephemeral
+  /// customNick / autoEphemeralNick — those belong to the ephemeral identity
+  /// and would mislabel the account until its profile fetch landed.
+  String _durableLoginNym(String pubkey) =>
+      getNymFromPubkey(_cachedLoginProfileName() ?? 'nym', pubkey);
 
   /// Boots the appropriate identity for the saved login method
   /// (`checkSavedConnection`, docs/specs/01 §7): an saved nsec account is
@@ -67,14 +121,10 @@ class IdentityService {
         try {
           final sk = bech32.decodeNsec(savedNsec);
           final pubkey = getPublicKeyHex(sk);
-          final nym = _kv.getString(StorageKeys.customNick) ??
-              _kv.getString(StorageKeys.autoEphemeralNick) ??
-              _nymGen.generate(pubkey,
-                  style: _kv.getString(StorageKeys.nickStyle) ?? 'fancy');
           return Identity(
             pubkey: pubkey,
             privkey: sk,
-            nym: nym,
+            nym: _durableLoginNym(pubkey),
             loginMethod: 'nsec',
           );
         } catch (_) {
@@ -83,6 +133,52 @@ class IdentityService {
       }
     }
     return bootEphemeral(unlockedSecrets: unlockedSecrets);
+  }
+
+  /// Imports a pasted [nsec] as the durable login identity and PERSISTS it so a
+  /// later [boot] restores the same account. Mirrors the PWA's
+  /// `nostrLoginWithNsec` (app.js:5036-5074) + the identity-switch half of
+  /// `applyNostrLogin` (app.js:5487-5504):
+  ///   * validate via [bech32.decodeNsec] (32 bytes) — throws [FormatException]
+  ///     on an invalid key (the caller shows "Invalid nsec key …"),
+  ///   * derive the pubkey ([getPublicKeyHex]),
+  ///   * persist `nostr_login_method='nsec'` + `nostr_login_pubkey` (KV),
+  ///     `nostr_login_npub` (KV), and the nsec in secure storage
+  ///     (`nym_nostr_login_nsec`, the PWA's `nymSecretSet`),
+  ///   * clear the ephemeral `nym_avatar_url`/`nym_banner_url` so they don't
+  ///     overwrite the persistent identity's profile (app.js:5494-5495).
+  ///
+  /// Returns the durable [Identity] (`loginMethod:'nsec'`) with its nym resolved
+  /// exactly like [boot] (cached kind-0 login-profile name → 'nym' fallback,
+  /// via [_durableLoginNym]).
+  Future<Identity> loginWithNsec(String nsec) async {
+    final input = nsec.trim();
+    final sk = bech32.decodeNsec(input); // throws on invalid (len-checked below)
+    if (sk.length != 32) {
+      throw const FormatException('nsec must decode to 32 bytes');
+    }
+    final pubkey = getPublicKeyHex(sk);
+
+    // Persist the durable login (KV) + the nsec (secure store), mirroring the
+    // PWA's localStorage + nymSecretSet writes.
+    await _kv.setString(StorageKeys.nostrLoginMethod, 'nsec');
+    await _kv.setString(StorageKeys.nostrLoginPubkey, pubkey);
+    await _secretSet(SecretKeys.nostrLoginNsec, input);
+    try {
+      await _kv.setString(StorageKeys.nostrLoginNpub, bech32.encodeNpub(pubkey));
+    } catch (_) {}
+
+    // Drop ephemeral profile data so it doesn't clobber the persistent identity
+    // (app.js:5494-5495 `removeItem nym_avatar_url / nym_banner_url`).
+    await _kv.remove(StorageKeys.avatarUrl);
+    await _kv.remove(StorageKeys.bannerUrl);
+
+    return Identity(
+      pubkey: pubkey,
+      privkey: sk,
+      nym: _durableLoginNym(pubkey),
+      loginMethod: 'nsec',
+    );
   }
 
   /// Loads the persisted ephemeral identity or creates a new one.
@@ -118,10 +214,47 @@ class IdentityService {
 
     if (!randomPerSession) {
       // Persist for reuse next session.
-      await _secure.set(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
+      await _secretSet(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
       if (savedNick == null || savedNick.isEmpty) {
         await _kv.setString(StorageKeys.autoEphemeralNick, nym);
       }
+    }
+
+    return Identity(pubkey: pubkey, privkey: sk, nym: nym);
+  }
+
+  /// Rotates the in-memory ephemeral identity: a brand-new keypair + a fresh
+  /// RANDOM nym, returned as a new ephemeral [Identity] (loginMethod=null).
+  ///
+  /// This is the "hardcore" keypair mode (messages.js:2392-2404): after every
+  /// sent message the PWA calls `generateKeypair()` then
+  /// `this.nym = this.generateRandomNym()`, so the durable ephemeral identity is
+  /// replaced wholesale and the nym is always freshly random (never the saved
+  /// nick). Only valid for an ephemeral [current] identity — a durable login
+  /// (nsec/extension/NIP-46, i.e. `loginMethod != null`) is returned unchanged,
+  /// so a key rotation can never clobber a real account.
+  ///
+  /// The new key is persisted exactly like [bootEphemeral] does (the
+  /// `nym_session_nsec` secret), so a same-session reconnect restores the
+  /// just-rotated identity rather than an older one — kept consistent with the
+  /// `randomKeypairPerSession` flag (hardcore sets it, so we skip persistence to
+  /// match `bootEphemeral`'s "fresh each session" behaviour).
+  Future<Identity> rotateEphemeral(Identity current) async {
+    if (current.loginMethod != null) return current;
+
+    final randomPerSession =
+        _kv.getBool(StorageKeys.randomKeypairPerSession, defaultValue: false);
+    final nickStyle = _kv.getString(StorageKeys.nickStyle) ?? 'fancy';
+
+    // Fresh keypair + always-fresh random nym (PWA `generateRandomNym`).
+    final sk = generatePrivateKey();
+    final pubkey = getPublicKeyHex(sk);
+    final nym = _nymGen.generate(pubkey, style: nickStyle);
+
+    if (!randomPerSession) {
+      // Persist for a same-session reconnect (mirrors [bootEphemeral]).
+      await _secretSet(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
+      await _kv.setString(StorageKeys.autoEphemeralNick, nym);
     }
 
     return Identity(pubkey: pubkey, privkey: sk, nym: nym);

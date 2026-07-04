@@ -37,7 +37,7 @@ StorageSync _syncWith(
     signer: _signer,
     pubkey: pubkey ?? _pub,
     durableIdentity: durable,
-  )..setAuthBuilder((action) => {
+  )..setAuthBuilder((action) async => {
         'kind': 27235,
         'pubkey': _pub,
         'id': 'auth-$action',
@@ -67,13 +67,24 @@ void main() {
       for (final b in bodies) {
         expect(b['action'], 'settings-set');
         expect(b['pubkey'], _pub);
-        expect(b['category'], startsWith('nymchat-settings-'));
+        // The D1 column is the opaque per-account hash
+        // `nymchat-<sha256(pubkey:d1:dTag)>` (settings.js:177-190), NOT the
+        // cleartext section d-tag.
+        expect(b['category'], matches(RegExp(r'^nymchat-[0-9a-f]{64}$')));
         expect(b['blob'], isA<String>());
         expect((b['blob'] as String).isNotEmpty, true);
         expect(b['contentHash'], isA<String>());
         expect(b['auth'], isA<Map>());
         expect((b['auth'] as Map)['kind'], 27235);
       }
+      // The appearance section rides under its hashed column, with the real
+      // category recoverable from `__cat` inside the encrypted blob.
+      final appearanceCat = sync.d1Category('nymchat-settings-appearance');
+      final appearance =
+          bodies.firstWhere((b) => b['category'] == appearanceCat);
+      final plain =
+          await _signer.nip44Decrypt(_pub, appearance['blob'] as String);
+      expect((jsonDecode(plain) as Map)['__cat'], 'nymchat-settings-appearance');
     });
 
     test('synced keys land in their PWA section; device-local keys never sync',
@@ -88,6 +99,8 @@ void main() {
       expect(sections['data']!.containsKey('cachePMs'), true);
       expect(sections['data']!.containsKey('lowDataMode'), true);
       expect(sections['channels']!.containsKey('sortByProximity'), true);
+      // Landing channel is threaded in by the caller; absent when not supplied.
+      expect(sections['channels']!.containsKey('pinnedLandingChannel'), false);
       // Each section carries the v:2 envelope.
       for (final s in sections.values) {
         expect(s['v'], 2);
@@ -97,6 +110,65 @@ void main() {
       for (final local in StorageSync.deviceLocalKeys) {
         expect(allKeys.contains(local), false, reason: 'leaked $local');
       }
+    });
+
+    test(
+        'pinnedLandingChannel rides the channels section as a {type,geohash} '
+        'object when supplied (settings.js:21,116)', () {
+      // Supplied JSON → emitted into channels as the same object the PWA syncs.
+      final sections = StorageSync.buildSectionPayloads(
+        const Settings(),
+        pinnedLandingChannelJson: '{"type":"geohash","geohash":"9q8y"}',
+      );
+      final landing = sections['channels']!['pinnedLandingChannel'];
+      expect(landing, isA<Map>());
+      expect((landing as Map)['type'], 'geohash');
+      expect(landing['geohash'], '9q8y');
+
+      // Missing `type` defaults to 'geohash' (mirrors LandingChannel.tryParse).
+      final defaulted = StorageSync.buildSectionPayloads(
+        const Settings(),
+        pinnedLandingChannelJson: '{"geohash":"dr5r"}',
+      );
+      expect(
+        (defaulted['channels']!['pinnedLandingChannel'] as Map)['type'],
+        'geohash',
+      );
+
+      // Blank / invalid JSON / missing geohash → omitted (no poisoning).
+      for (final bad in ['', '   ', 'not json', '{"type":"geohash"}', '{}']) {
+        final none = StorageSync.buildSectionPayloads(
+          const Settings(),
+          pinnedLandingChannelJson: bad,
+        );
+        expect(none['channels']!.containsKey('pinnedLandingChannel'), false,
+            reason: 'should omit for "$bad"');
+      }
+    });
+
+    test('a landing-channel change re-publishes the channels section', () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (200, jsonEncode({'ok': true}), const {}),
+      );
+      // First publish with a landing channel set.
+      final first = await sync.settingsSet(
+        const Settings(),
+        pinnedLandingChannelJson: '{"type":"geohash","geohash":"9q8y"}',
+      );
+      expect(first, contains('channels'));
+      bodies.clear();
+      // Changing it re-publishes channels (content hash differs).
+      final second = await sync.settingsSet(
+        const Settings(),
+        pinnedLandingChannelJson: '{"type":"geohash","geohash":"u4pr"}',
+      );
+      expect(second, contains('channels'));
+      expect(
+          bodies.any((b) =>
+              b['category'] == sync.d1Category('nymchat-settings-channels')),
+          true);
     });
 
     test('unchanged section (same content hash) skips the second write',
@@ -269,6 +341,74 @@ void main() {
       expect(ev.createdAt, greaterThan(relayTs));
     });
 
+    test('a fresh pubkey (within the TTL) skips the second network read',
+        () async {
+      var calls = 0;
+      final sync = _syncWith(
+        (_) => calls++,
+        respond: (_) => (
+          200,
+          '${jsonEncode([
+                pkA,
+                {
+                  'event': {
+                    'id': 'id-a',
+                    'pubkey': pkA,
+                    'kind': 0,
+                    'created_at': 100,
+                    'tags': [],
+                    'content': '{"name":"alice"}',
+                    'sig': 's'
+                  },
+                  'updatedAt': 1
+                }
+              ])}\n',
+          {'Content-Type': 'application/x-ndjson'},
+        ),
+      );
+      // First read fetches + caches pkA.
+      final first = await sync.profileGet([pkA]);
+      expect(calls, 1);
+      expect(first.containsKey(pkA), true);
+      // Second read within the 5-min TTL is served from cache (reported as a
+      // cache hit with an empty event payload) and makes NO network call.
+      final second = await sync.profileGet([pkA]);
+      expect(calls, 1, reason: 'cached pubkey should not refetch');
+      expect(second.containsKey(pkA), true);
+      expect(second[pkA], isEmpty, reason: 'cache hit carries no event');
+    });
+
+    test('markProfileCached suppresses a D1 read for that pubkey', () async {
+      var calls = 0;
+      final sync = _syncWith(
+        (_) => calls++,
+        respond: (_) => (200, '', {'Content-Type': 'application/x-ndjson'}),
+      );
+      // A live relay kind-0 arrived → controller marks it cached; the next
+      // profile-get must not re-read it (PWA `profileFetchedAt` freshness gate).
+      sync.markProfileCached(pkB);
+      final got = await sync.profileGet([pkB]);
+      expect(calls, 0, reason: 'pre-cached pubkey is not fetched');
+      expect(got.containsKey(pkB), true); // reported as found (cache hit)
+    });
+
+    test('batches at most 100 pubkeys per request', () async {
+      List<dynamic>? sentPubkeys;
+      final sync = _syncWith(
+        (b) => sentPubkeys = b['pubkeys'] as List<dynamic>,
+        respond: (_) => (200, '', {'Content-Type': 'application/x-ndjson'}),
+      );
+      // 150 distinct valid hex pubkeys; only the first 100 go in the batch
+      // (PWA `toFetch.slice(0, 100)`, nostr-core.js:236).
+      final many = List<String>.generate(
+        150,
+        (i) => i.toRadixString(16).padLeft(64, '0'),
+      );
+      await sync.profileGet(many);
+      expect(sentPubkeys, isNotNull);
+      expect(sentPubkeys!.length, 100);
+    });
+
     test('profile-set mirrors the signed kind-0 with auth', () async {
       final bodies = <Map<String, dynamic>>[];
       final sync = _syncWith(
@@ -402,6 +542,302 @@ void main() {
       expect(await sync.pmGet(), isEmpty);
       expect(await sync.pmRestoreFromD1(), isEmpty);
       expect(bodies, isEmpty, reason: 'ephemeral makes no PM-archive calls');
+    });
+  });
+
+  // ===========================================================================
+  // 5. channel-get archive backfill (public read, no auth) + ephemeral group
+  //    inbox (pm-get keyed by `pubkeys`, also public).
+  // ===========================================================================
+  group('channel-get', () {
+    Map<String, dynamic> chanEvent(String id, String d) => {
+          'id': id,
+          'pubkey': 'a' * 64,
+          'kind': 23333,
+          'created_at': 100,
+          'tags': [
+            ['d', d],
+          ],
+          'content': 'hi',
+          'sig': 's',
+        };
+
+    test('body carries action + lowercased channels, no pubkey/auth (public)',
+        () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (
+          200,
+          '${jsonEncode(chanEvent('m1', 'nymchat'))}\n',
+          {'Content-Type': 'application/x-ndjson'},
+        ),
+      );
+      final events = await sync.channelGet(['NymChat']);
+      expect(events.length, 1);
+      expect(events.first['id'], 'm1');
+      final b = bodies.single;
+      expect(b['action'], 'channel-get');
+      expect(b['channels'], ['nymchat']); // lowercased
+      expect(b.containsKey('auth'), isFalse, reason: 'public read');
+      expect(b.containsKey('pubkey'), isFalse, reason: 'public read');
+    });
+
+    test('throttles a re-fetch within 60s unless forced', () async {
+      var calls = 0;
+      final sync = _syncWith(
+        (_) => calls++,
+        respond: (_) => (200, '', {'Content-Type': 'application/x-ndjson'}),
+      );
+      await sync.channelGet(['9q8y']);
+      expect(calls, 1);
+      // Second open within the window is skipped (no request).
+      await sync.channelGet(['9q8y']);
+      expect(calls, 1);
+      // force bypasses the window.
+      await sync.channelGet(['9q8y'], force: true);
+      expect(calls, 2);
+    });
+
+    test('channelGet works for ephemeral identities (public read)', () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        durable: false,
+        respond: (_) => (
+          200,
+          '${jsonEncode(chanEvent('e1', 'nymchat'))}\n',
+          {'Content-Type': 'application/x-ndjson'},
+        ),
+      );
+      final events = await sync.channelGet(['nymchat']);
+      expect(events.length, 1);
+      expect(bodies.single['action'], 'channel-get');
+    });
+
+    test('pmGetByPubkeys posts a public pm-get keyed by pubkeys, oldest-first',
+        () async {
+      final ephA = 'b' * 64;
+      final older = {
+        'id': 'g-old',
+        'pubkey': 'c' * 64,
+        'kind': 1059,
+        'created_at': 100,
+        'tags': [
+          ['p', ephA],
+        ],
+        'content': 'x',
+        'sig': 's',
+      };
+      final newer = Map<String, dynamic>.from(older)
+        ..['id'] = 'g-new'
+        ..['created_at'] = 300;
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (
+          200,
+          '${jsonEncode(newer)}\n${jsonEncode(older)}\n',
+          {'Content-Type': 'application/x-ndjson'},
+        ),
+      );
+      final events = await sync.pmGetByPubkeys([ephA.toUpperCase()]);
+      expect(events.length, 2);
+      expect(events.first['id'], 'g-old'); // oldest-first
+      final b = bodies.single;
+      expect(b['action'], 'pm-get');
+      expect(b['pubkeys'], [ephA]); // lowercased
+      expect(b.containsKey('auth'), isFalse, reason: 'public read');
+      expect(b.containsKey('pubkey'), isFalse);
+    });
+  });
+
+  // ===========================================================================
+  // 6. channel activity discovery (channel-active / channel-active-named /
+  //    channel-activity) — all PUBLIC reads, no auth.
+  // ===========================================================================
+  group('channel activity discovery', () {
+    String activityBody(Map<String, dynamic> activity, Map<String, dynamic> last) =>
+        jsonEncode({'activity': activity, 'last': last});
+
+    test('channel-active body is public (no pubkey/auth) and parses buckets/last',
+        () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (
+          200,
+          activityBody({
+            '9q8y': List<int>.generate(24, (i) => i),
+          }, {
+            '9q8y': 1700000000,
+          }),
+          const {},
+        ),
+      );
+      final res = await sync.channelActive();
+      final b = bodies.single;
+      expect(b['action'], 'channel-active');
+      expect(b.containsKey('auth'), isFalse, reason: 'public read');
+      expect(b.containsKey('pubkey'), isFalse, reason: 'public read');
+      expect(res.activity['9q8y']!.length, 24);
+      expect(res.activity['9q8y']![5], 5);
+      expect(res.last['9q8y'], 1700000000);
+    });
+
+    test('channel-active-named issues the named-discovery action', () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (200, activityBody({}, {}), const {}),
+      );
+      await sync.channelActiveNamed();
+      expect(bodies.single['action'], 'channel-active-named');
+      expect(bodies.single.containsKey('auth'), isFalse);
+    });
+
+    test('channel-activity lowercases + de-dups names, public, parses result',
+        () async {
+      List<dynamic>? sentChannels;
+      final sync = _syncWith(
+        (b) => sentChannels = b['channels'] as List<dynamic>?,
+        respond: (b) => (
+          200,
+          activityBody({
+            'nymchat': List<int>.filled(24, 0)..[0] = 3,
+          }, {
+            'nymchat': 1700000123,
+          }),
+          const {},
+        ),
+      );
+      final res = await sync.channelActivity(['NymChat', 'nymchat', 'NYMCHAT']);
+      expect(sentChannels, ['nymchat']); // lowercased + de-duped
+      expect(res.activity['nymchat']![0], 3);
+      expect(res.last['nymchat'], 1700000123);
+    });
+
+    test('channel-activity caps the batch at 200 names', () async {
+      List<dynamic>? sent;
+      final sync = _syncWith(
+        (b) => sent = b['channels'] as List<dynamic>?,
+        respond: (_) => (200, activityBody({}, {}), const {}),
+      );
+      final many = List<String>.generate(250, (i) => 'chan$i');
+      await sync.channelActivity(many);
+      expect(sent!.length, 200);
+    });
+
+    test('channel-activity throttles a re-fetch within 30s unless forced',
+        () async {
+      var calls = 0;
+      final sync = _syncWith(
+        (_) => calls++,
+        respond: (_) => (200, activityBody({}, {}), const {}),
+      );
+      await sync.channelActivity(['9q8y']);
+      expect(calls, 1);
+      await sync.channelActivity(['9q8y']); // within 30s → skipped
+      expect(calls, 1);
+      await sync.channelActivity(['9q8y'], force: true); // forced
+      expect(calls, 2);
+    });
+
+    test('empty channel list makes no request', () async {
+      var calls = 0;
+      final sync = _syncWith(
+        (_) => calls++,
+        respond: (_) => (200, activityBody({}, {}), const {}),
+      );
+      final res = await sync.channelActivity(const []);
+      expect(calls, 0);
+      expect(res.isEmpty, isTrue);
+    });
+  });
+
+  // ===========================================================================
+  // 7. shop-status (other users' active cosmetics) — PUBLIC read, no auth.
+  // ===========================================================================
+  group('shop-status', () {
+    final pkA = 'a' * 64;
+    final pkB = 'b' * 64;
+
+    test('body is public (no auth/pubkey), batches valid pubkeys, parses active',
+        () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (
+          200,
+          jsonEncode({
+            'statuses': {
+              pkA: {
+                'active': {
+                  'style': 'style-satoshi',
+                  'flair': ['flair-crown', 'flair-genesis'],
+                  'cosmetics': ['cosmetic-frost'],
+                  'supporter': true,
+                  'editions': {'flair-genesis': 42},
+                },
+                'updatedAt': 1700000000,
+              },
+            },
+          }),
+          const {},
+        ),
+      );
+      final got = await sync.shopStatus([pkA, pkB]);
+      final b = bodies.single;
+      expect(b['action'], 'shop-status');
+      expect(b.containsKey('auth'), isFalse, reason: 'public read');
+      expect(b.containsKey('pubkey'), isFalse, reason: 'public read');
+      expect((b['pubkeys'] as List).length, 2);
+      // Parsed active record.
+      final st = got[pkA]!;
+      expect(st.active.style, 'style-satoshi');
+      expect(st.active.flair, ['flair-crown', 'flair-genesis']);
+      expect(st.active.cosmetics, ['cosmetic-frost']);
+      expect(st.active.supporter, isTrue);
+      expect(st.active.editions['flair-genesis'], 42);
+      expect(st.updatedAt, 1700000000);
+    });
+
+    test('drops invalid pubkeys and lowercases, caps at 100', () async {
+      List<dynamic>? sent;
+      final sync = _syncWith(
+        (b) => sent = b['pubkeys'] as List<dynamic>?,
+        respond: (_) => (200, jsonEncode({'statuses': {}}), const {}),
+      );
+      // 120 valid distinct hex + 1 invalid; only the first 100 valid go.
+      final many = [
+        'not-hex',
+        ...List<String>.generate(120, (i) => i.toRadixString(16).padLeft(64, '0')),
+      ];
+      await sync.shopStatus(many);
+      expect(sent!.length, 100);
+      expect(sent!.contains('not-hex'), isFalse);
+    });
+
+    test('forwards a fresh[] cache-bust list only for requested pubkeys',
+        () async {
+      Map<String, dynamic>? body;
+      final sync = _syncWith(
+        (b) => body = b,
+        respond: (_) => (200, jsonEncode({'statuses': {}}), const {}),
+      );
+      await sync.shopStatus([pkA, pkB], fresh: [pkA, 'c' * 64]);
+      expect(body!['fresh'], [pkA]); // pkA only (c… wasn't requested)
+    });
+
+    test('empty pubkey list makes no request', () async {
+      var calls = 0;
+      final sync = _syncWith(
+        (_) => calls++,
+        respond: (_) => (200, jsonEncode({'statuses': {}}), const {}),
+      );
+      final got = await sync.shopStatus(const []);
+      expect(calls, 0);
+      expect(got, isEmpty);
     });
   });
 }
