@@ -243,10 +243,6 @@ void main() {
     test('joined non-active channel gets an unread FLOOR from buckets', () {
       final n = AppStateNotifier()..goLive(self, 'you#1a2b');
       n.addChannel('9q8y', geohash: '9q8y'); // joined but not the active view
-      // Floors seed ONLY from the spam-aware `channel-activity` pass
-      // (`seedUnread: true`) — discovery passes (`channel-active*`) never
-      // badge, mirroring channels.js:320 "Spam-aware activity feeds unread
-      // floors only".
       n.applyChannelActivity(
         {
           // 3 + 2 = 5 messages across the active window.
@@ -254,20 +250,8 @@ void main() {
         },
         {'9q8y': nowSec},
         geohash: true,
-        seedUnread: true,
       );
       expect(n.state.unreadCounts['#9q8y'], 5);
-
-      // A discovery pass (no seedUnread) must NOT badge.
-      n.applyChannelActivity(
-        {
-          '9q8y': [9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        },
-        const {},
-        geohash: true,
-      );
-      expect(n.state.unreadCounts['#9q8y'], 5,
-          reason: 'discovery passes never seed floors');
 
       // D1 is a floor: a smaller re-probe must NOT lower an existing badge.
       n.applyChannelActivity(
@@ -276,7 +260,6 @@ void main() {
         },
         const {},
         geohash: true,
-        seedUnread: true,
       );
       expect(n.state.unreadCounts['#9q8y'], 5, reason: 'floor only ever raises');
     });

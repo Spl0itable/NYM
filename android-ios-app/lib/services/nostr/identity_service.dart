@@ -27,13 +27,6 @@ class Identity {
   bool get canSign => privkey != null;
 }
 
-/// Vault-aware secret writer — the native analogue of the PWA's `nymSecretSet`
-/// → key-vault.js `secretSet` (lines 38-48), which wraps the value in an
-/// `enc:v1:` blob whenever the identity vault is enabled AND unlocked, so
-/// secrets written AFTER the vault was enabled keep the encryption-at-rest
-/// guarantee instead of landing as plaintext.
-typedef SecretWriter = Future<void> Function(String name, String value);
-
 /// Boots and persists the user identity. Mirrors the PWA's ephemeral-identity
 /// path (docs/specs/01 §2.1): reuse the saved session nsec if present, else
 /// generate a fresh keypair + random nym and persist them.
@@ -42,29 +35,13 @@ class IdentityService {
     required KeyValueStore kv,
     required SecureStore secure,
     NymGenerator? nymGenerator,
-    SecretWriter? secretWrite,
   })  : _kv = kv,
         _secure = secure,
-        _nymGen = nymGenerator ?? NymGenerator(),
-        _secretWrite = secretWrite;
+        _nymGen = nymGenerator ?? NymGenerator();
 
   final KeyValueStore _kv;
   final SecureStore _secure;
   final NymGenerator _nymGen;
-
-  /// Vault-aware writer injected by the caller (wired to the identity vault's
-  /// `secretSet`); null falls back to a plain [SecureStore.set] — key-vault.js
-  /// `secretSet`'s vault-disabled else-branch (line 45).
-  final SecretWriter? _secretWrite;
-
-  /// Writes a secret through the vault layer when one is wired, so a vault
-  /// that's enabled + unlocked stores the `enc:v1:` blob (key-vault.js:38-48
-  /// `secretSet`) instead of the plaintext.
-  Future<void> _secretSet(String name, String value) {
-    final write = _secretWrite;
-    if (write != null) return write(name, value);
-    return _secure.set(name, value);
-  }
 
   /// Reads a secret, preferring an in-memory [unlocked] value (from the vault
   /// boot unlock, the native analogue of `_vaultMem`) over the at-rest store —
@@ -163,7 +140,7 @@ class IdentityService {
     // PWA's localStorage + nymSecretSet writes.
     await _kv.setString(StorageKeys.nostrLoginMethod, 'nsec');
     await _kv.setString(StorageKeys.nostrLoginPubkey, pubkey);
-    await _secretSet(SecretKeys.nostrLoginNsec, input);
+    await _secure.set(SecretKeys.nostrLoginNsec, input);
     try {
       await _kv.setString(StorageKeys.nostrLoginNpub, bech32.encodeNpub(pubkey));
     } catch (_) {}
@@ -214,7 +191,7 @@ class IdentityService {
 
     if (!randomPerSession) {
       // Persist for reuse next session.
-      await _secretSet(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
+      await _secure.set(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
       if (savedNick == null || savedNick.isEmpty) {
         await _kv.setString(StorageKeys.autoEphemeralNick, nym);
       }
@@ -253,7 +230,7 @@ class IdentityService {
 
     if (!randomPerSession) {
       // Persist for a same-session reconnect (mirrors [bootEphemeral]).
-      await _secretSet(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
+      await _secure.set(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
       await _kv.setString(StorageKeys.autoEphemeralNick, nym);
     }
 

@@ -27,13 +27,13 @@ import '../messages/format/message_content.dart';
 /// Opens the notifications history as a centered modal (the PWA renders it as a
 /// `.modal` overlay).
 ///
-/// Opening does NOT clear the badge. Entries are marked viewed per item, only
-/// as their row actually scrolls into view (≥60% visible in the modal body),
-/// deducting the badge one by one — the PWA's `_setupNotificationSeenObserver`
-/// (notifications.js:596-642, IntersectionObserver root=body threshold 0.6).
-/// Each entry's unread state is SNAPSHOTTED here (before `showDialog`) so the
-/// row list and its ordering stay frozen for the modal's lifetime while the
-/// live `viewed` flags flip underneath as rows are seen.
+/// The shell clears the unread badge right after this returns (`markAllViewed`,
+/// chat_pane), which mutates the live entries' `viewed` flags. To keep the cyan
+/// unread rule + "Mark all as read" visible while the modal is up (the PWA shows
+/// what was unread and only deducts the badge as items scroll past), we SNAPSHOT
+/// each entry's unread state HERE — synchronously, before `showDialog` and thus
+/// before the shell's `markAllViewed` runs — and hand the frozen rows to the
+/// panel. The badge itself still zeroes on open, matching the PWA.
 Future<void> showNotificationsPanel(BuildContext context) {
   // Read the store before showDialog so the snapshot precedes the shell's
   // on-open markAllViewed() (which flips the same entries' `viewed` bools).
@@ -82,8 +82,7 @@ class NotificationsPanel extends ConsumerStatefulWidget {
   final List<NotificationEntry> entries;
 
   /// Each entry's `viewed` state frozen at open, parallel to [entries] (see
-  /// [showNotificationsPanel]) — the rows start from this snapshot and flip
-  /// locally as they scroll into view / on "Mark all as read".
+  /// [showNotificationsPanel]) — used instead of the live (now-cleared) flags.
   final List<bool> viewedAtOpen;
 
   @override
@@ -99,12 +98,6 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
   /// Drives the "Mark all as read" button + per-row highlight locally so the modal
   /// reflects the action immediately without a provider round-trip.
   late bool _hasUnread = _rows.any((r) => !r.viewed);
-
-  /// The modal body's scroll viewport — the observer `root` the ≥60%
-  /// visibility is measured against (notifications.js:639 `{root: body,
-  /// threshold: 0.6}`).
-  final GlobalKey _bodyKey = GlobalKey();
-  final ScrollController _scroll = ScrollController();
 
   @override
   void initState() {
@@ -122,52 +115,6 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
     if (senders.isNotEmpty) {
       ref.read(nostrControllerProvider).ensureProfiles(senders);
     }
-    // Per-item scroll-into-view read semantics (`_setupNotificationSeenObserver`,
-    // notifications.js:596-642): rows ≥60% visible in the modal body are marked
-    // viewed as they appear, deducting the badge per item instead of zeroing on
-    // open. No IntersectionObserver natively — the scroll listener + a
-    // first-frame pass measure row geometry against the body viewport instead.
-    _scroll.addListener(_markVisibleSeen);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _markVisibleSeen());
-  }
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  /// Marks every unread row currently ≥60% visible in the modal body viewport
-  /// as viewed — the observer callback half of the PWA's per-item seen flow
-  /// (notifications.js:604-625: flip `viewed`, remember the seen-key, persist,
-  /// re-derive the badge, drop the unread styling, and hide "Mark all as read"
-  /// once nothing unread remains). [NotificationHistoryNotifier.markEntriesViewed]
-  /// owns the store-side half (persist + seen-keys + badge + cross-device sync).
-  void _markVisibleSeen() {
-    if (!mounted) return;
-    final bodyBox =
-        _bodyKey.currentContext?.findRenderObject() as RenderBox?;
-    if (bodyBox == null || !bodyBox.attached || !bodyBox.hasSize) return;
-    final bodyRect = bodyBox.localToGlobal(Offset.zero) & bodyBox.size;
-    final seen = <NotificationEntry>[];
-    for (final r in _rows) {
-      if (r.viewed) continue;
-      final ctx = r.key.currentContext;
-      final box = ctx?.findRenderObject() as RenderBox?;
-      // Off-screen rows aren't built (ListView.builder) or lie outside the
-      // viewport — both stay unread, exactly like unobserved PWA items.
-      if (box == null || !box.attached || !box.hasSize) continue;
-      final rect = box.localToGlobal(Offset.zero) & box.size;
-      if (rect.height <= 0) continue;
-      final overlap = rect.intersect(bodyRect);
-      if (overlap.height <= 0 || overlap.width <= 0) continue;
-      if (overlap.height / rect.height < 0.6) continue;
-      r.viewed = true;
-      seen.add(r.entry);
-    }
-    if (seen.isEmpty) return;
-    ref.read(notificationHistoryProvider.notifier).markEntriesViewed(seen);
-    setState(() => _hasUnread = _rows.any((r) => !r.viewed));
   }
 
   void _markAllRead() {
@@ -317,15 +264,10 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                             ),
                           )
                         : ListView.builder(
-                            key: _bodyKey,
-                            controller: _scroll,
                             shrinkWrap: true,
                             padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
                             itemCount: _rows.length,
                             itemBuilder: (ctx, i) => _NotificationRow(
-                              // Row geometry handle for the ≥60%-visible
-                              // per-item seen pass ([_markVisibleSeen]).
-                              key: _rows[i].key,
                               entry: _rows[i].entry,
                               viewed: _rows[i].viewed,
                               isLast: i == _rows.length - 1,
@@ -502,13 +444,10 @@ class _ToggleRow extends StatelessWidget {
 }
 
 /// A snapshotted notification row: the live [entry] plus its [viewed] state
-/// frozen at open (then locally flipped as the row scrolls into view / by
-/// "Mark all as read"). [key] anchors the built row's RenderBox for the
-/// visibility measurement.
+/// frozen at open (then locally toggled by "Mark all as read").
 class _NotifRow {
   _NotifRow(this.entry, this.viewed);
   final NotificationEntry entry;
-  final GlobalKey key = GlobalKey();
   bool viewed;
 }
 
@@ -557,7 +496,6 @@ class _MarkReadBtnState extends State<_MarkReadBtn> {
 
 class _NotificationRow extends ConsumerStatefulWidget {
   const _NotificationRow({
-    super.key,
     required this.entry,
     required this.viewed,
     required this.isLast,

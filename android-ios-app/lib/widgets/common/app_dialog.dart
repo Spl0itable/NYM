@@ -507,13 +507,11 @@ class _AppDialogState extends State<_AppDialog> {
     );
   }
 
-  /// `.icon-btn` Cancel — dark: bg white/0.05, glass border, `--text` label;
-  /// light mode overrides to bg black/0.03, border black/0.1, `--primary`
-  /// label (styles-themes-responsive.css:595-599). Radius 8 (`rxs`),
-  /// UPPERCASE 12px w500 ls0.8, padding 7/14. `.modal-actions` has no
-  /// `align-items`, so flex's default stretch sizes it to the 42px `.send-btn`
-  /// beside it, label centered (`.icon-btn` is `inline-flex; align-items:
-  /// center`).
+  /// `.icon-btn` Cancel — bg white/0.05, glass border, radius 8 (`rxs`),
+  /// color `--text`, UPPERCASE 12px w500 ls0.8, padding 7/14. `.modal-actions`
+  /// has no `align-items`, so flex's default stretch sizes it to the 42px
+  /// `.send-btn` beside it, label centered (`.icon-btn` is `inline-flex;
+  /// align-items: center`).
   Widget _cancelButton(NymColors c) {
     return InkWell(
       onTap: _cancel,
@@ -522,12 +520,8 @@ class _AppDialogState extends State<_AppDialog> {
         height: 42,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: c.subtleFill,
-          border: Border.all(
-            color: c.isLight
-                ? const Color(0x1A000000) // black @ 0.1
-                : c.glassBorder,
-          ),
+          color: Colors.white.withValues(alpha: 0.05),
+          border: Border.all(color: c.glassBorder),
           borderRadius: NymRadius.rxs,
         ),
         child: Center(
@@ -535,7 +529,7 @@ class _AppDialogState extends State<_AppDialog> {
           child: Text(
             widget.cancelLabel.toUpperCase(),
             style: TextStyle(
-              color: c.isLight ? c.primary : c.text,
+              color: c.text,
               fontSize: 12,
               fontWeight: FontWeight.w500,
               letterSpacing: 0.8,

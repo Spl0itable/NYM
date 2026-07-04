@@ -93,23 +93,16 @@ class ChatPane extends ConsumerWidget {
         (_, __) => scheduleCustomEmojiPrefetch(container));
     kickCustomEmojiPrefetch(container);
 
-    // Opening the Nymbot PM (sidebar row / profile "Message" / ?help / a
-    // focused bot column) lands on the dedicated paid-chat surface: its header
-    // carries the bot credit meta (`E2E encrypted · N credits left`,
-    // pms.js:2934-2938) and its engine owns the `?` command interception /
-    // welcome intro / thinking strip. This swap applies in BOTH view modes —
-    // the premium bot chat is an intentional native deviation and must be the
-    // surface for EVERY entry into the bot 1:1 (product decision; the deck
-    // returns as soon as another conversation is focused, its layout persists).
-    //
-    // The detection is the known bot-pubkey CONSTANT (`verifiedBot.pubkey`,
-    // app.js:1096) compared case-insensitively — never an async-loaded list —
-    // so a conversation restored from D1/cache before anything else has
-    // loaded, or a row whose stored id predates the lowercase-hex
-    // canonicalization in `switchView`, still routes here on every entry path
-    // (sidebar tap, new-PM, notification, deep link, boot restore).
+    // Opening the Nymbot PM (sidebar row / profile "Message" / ?help) lands on
+    // the dedicated paid-chat surface: its header carries the bot credit meta
+    // (`E2E encrypted · N credits left`, pms.js:2934-2938) and its engine owns
+    // the `?` command interception / welcome intro / thinking strip. Columns
+    // mode keeps the canonical pane (the deck renders the bot column; the
+    // engine still runs via the always-alive app-state observer).
     final view = ref.watch(currentViewProvider);
-    if (view.kind == ViewKind.pm && view.id.toLowerCase() == kNymbotPubkey) {
+    if (!useColumns &&
+        view.kind == ViewKind.pm &&
+        view.id == kNymbotPubkey) {
       return BotChatScreen(onOpenSidebar: onOpenSidebar);
     }
 
@@ -686,39 +679,12 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   Widget _locationLine(NymColors c, AppState app, ChatView view) {
     final loc = _locationFor(app, view);
     if (loc.text.isEmpty) return const SizedBox.shrink();
-    final style = TextStyle(color: c.textDim, fontSize: 12);
-    // `_fillLocationLink` (channels.js:1037-1055) splits the resolved place at
-    // its last ', ' into `.loc-city` (flex:0 1 auto — the only part that
-    // ellipsizes) and `.loc-country` (flex:0 0 auto — never shrinks,
-    // styles-shell.css:882-892), so a narrow header shows
-    // "Long City Na…, Country" rather than losing the country. The split only
-    // applies to the geohash link's place text; the PM/group/plain variants
-    // stay a single run.
-    final splitIdx = loc.url != null ? loc.text.lastIndexOf(', ') : -1;
-    final Widget placeText;
-    if (splitIdx > 0 && splitIdx < loc.text.length - 2) {
-      placeText = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              loc.text.substring(0, splitIdx),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: style,
-            ),
-          ),
-          Text(loc.text.substring(splitIdx), maxLines: 1, style: style),
-        ],
-      );
-    } else {
-      placeText = Text(
-        loc.text,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-    }
+    final placeText = Text(
+      loc.text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(color: c.textDim, fontSize: 12),
+    );
     // `.channel-location`: font-size 12, color --text-dim, margin-top 2px.
     return Padding(
       padding: const EdgeInsets.only(top: 2),
@@ -800,8 +766,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           place = cached;
         } else {
           _resolvePlaceName(ghKey);
-          // Three-dot literal, as the PWA writes it (channels.js:1006).
-          place = 'Loading location...';
+          place = 'Loading location…';
         }
         // ` (N.Nkm)` proximity, only with a known location + sortByProximity on.
         var dist = '';
@@ -904,11 +869,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   Widget _mobileActions() {
     final unread =
         ref.watch(notificationHistoryProvider.select((s) => s.unread));
-    // `_doUpdateNotificationBadge` force-hides the badge while notifications
-    // are disabled (`if (!this.notificationsEnabled) … add('nm-hidden')`,
-    // notifications.js:404-413) — the count is suppressed, not recomputed.
-    final notifEnabled =
-        ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
     return Padding(
       padding: const EdgeInsets.only(left: 12),
       child: Row(
@@ -920,7 +880,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           _MobileToggle(
             svg: NymIcons.bell,
             tooltip: 'Notifications',
-            badge: notifEnabled ? unread : 0,
+            badge: unread,
             onTap: _openNotifications,
           ),
           const SizedBox(width: 8),
@@ -1038,10 +998,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   Widget _headerActionPills() {
     final unread =
         ref.watch(notificationHistoryProvider.select((s) => s.unread));
-    // Badge suppressed while notifications are disabled (`_doUpdateNotification
-    // Badge`, notifications.js:404-413) — see [_mobileActions].
-    final notifEnabled =
-        ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
     return KeyedSubtree(
       key: TutorialTargets.keyFor(TutorialTarget.mainMenu),
       child: Wrap(
@@ -1058,7 +1014,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
             label: 'Notifications',
             iconOnly: true,
             iconSize: 16,
-            badge: notifEnabled ? unread : 0,
+            badge: unread,
             onTap: _openNotifications,
           ),
           _HeaderPill(
@@ -1102,16 +1058,12 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     await ref.read(nostrControllerProvider).signOut();
   }
 
-  /// Opens the notifications modal. Entries are NOT bulk-marked viewed here:
-  /// the PWA marks a notification viewed only as its row actually scrolls
-  /// ≥60% into the modal viewport (`_setupNotificationSeenObserver`,
-  /// notifications.js:596-642), deducting the badge per item — the bulk flip
-  /// is the modal's own "Mark all as read" action. Flipping everything on
-  /// open would also push every entry's seen-key into the synced read-state,
-  /// silencing notifications on the user's other devices without them ever
-  /// being seen.
+  /// Opens the notifications modal and marks history viewed. The modal UI is
+  /// owned by the calls/notifications slice; until it lands this clears the
+  /// unread badge and surfaces a lightweight summary so the bell is functional.
   void _openNotifications() {
     showNotificationsPanel(context);
+    ref.read(notificationHistoryProvider.notifier).markAllViewed();
   }
 
   void _startCall(ChatView view, {required bool video}) {

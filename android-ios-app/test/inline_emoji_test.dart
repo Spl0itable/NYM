@@ -9,7 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:nym_bar/core/theme/nym_colors.dart';
-import 'package:nym_bar/features/emoji/emoji_prefetch.dart';
 import 'package:nym_bar/core/theme/nym_theme.dart';
 import 'package:nym_bar/features/emoji/custom_emoji.dart';
 import 'package:nym_bar/features/messages/format/message_content.dart';
@@ -56,9 +55,6 @@ Future<void> _pump(
 }
 
 void main() {
-  // Custom-emoji ingest arms a module-global deferred prefetch Timer; cancel
-  // it so widget tests don't fail on a pending timer at teardown.
-  tearDown(resetCustomEmojiPrefetchForTest);
   testWidgets('a known :shortcode: reaction renders an inline image',
       (tester) async {
     await _pump(
@@ -69,7 +65,6 @@ void main() {
     // The shortcode resolves to an image; the count stays as text.
     expect(find.byType(InlineNetworkImage), findsOneWidget);
     expect(find.text(':partyblob: 3'), findsNothing);
-    resetCustomEmojiPrefetchForTest(); // pending-timer invariant runs pre-tearDown
   });
 
   testWidgets('a unicode reaction stays a plain Text (no image)',
@@ -88,7 +83,6 @@ void main() {
     // Unknown code → no image; whole string renders verbatim.
     expect(find.byType(InlineNetworkImage), findsNothing);
     expect(find.text(':mystery: 1'), findsOneWidget);
-    resetCustomEmojiPrefetchForTest(); // pending-timer invariant runs pre-tearDown
   });
 }
 

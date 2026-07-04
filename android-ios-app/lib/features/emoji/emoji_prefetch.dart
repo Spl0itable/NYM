@@ -7,7 +7,6 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/app_state.dart';
@@ -29,17 +28,6 @@ Timer? _prefetchTimer;
 final Set<String> _prefetchedUrls = <String>{};
 
 bool _kickedOff = false;
-
-/// Cancels any pending prefetch timer and re-arms the once-per-run kick.
-/// TEST-ONLY: surfaces that ingest custom emoji schedule the deferred 3s
-/// prefetch on a module-global timer, which widget tests would otherwise
-/// trip over as a pending timer at teardown.
-@visibleForTesting
-void resetCustomEmojiPrefetchForTest() {
-  _prefetchTimer?.cancel();
-  _prefetchTimer = null;
-  _kickedOff = false;
-}
 
 /// Build-time entry point: schedules the first prefetch once per app run (the
 /// PWA's first `registerCustomEmoji`/`_storeEmojiPack` after the cache

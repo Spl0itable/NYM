@@ -34,13 +34,6 @@ class SettingsController extends StateNotifier<Settings> {
     if (cb != null) cb();
   }
 
-  /// Public trigger for [onSyncedChange], for slices that persist a synced
-  /// setting straight to the KV store outside this controller's setters (the
-  /// columns deck's `nym_columns_layout` writes — `_cvSaveLayout`'s trailing
-  /// `nostrSettingsSave()`, columns.js:993-994) — so they schedule the
-  /// debounced cross-device publish without poking the hook field directly.
-  void notifySyncedChange() => _syncedChanged();
-
   /// Reloads settings from the (now-wiped) store back to first-run defaults —
   /// the panic path's analogue of the PWA's page reload re-reading empty
   /// localStorage. Called by [NostrController.resetAfterPanic] after the KV
@@ -129,14 +122,6 @@ class SettingsController extends StateNotifier<Settings> {
 
   void setWallpaperType(String type) {
     _kv.setString(StorageKeys.wallpaperType, type);
-    // Selecting a non-custom wallpaper clears the stored custom URL — the PWA's
-    // `saveWallpaper(type)` does `localStorage.removeItem('nym_wallpaper_custom_url')`
-    // for every preset type (users.js:901-909), so the stale URL neither
-    // lingers on-device nor keeps riding the outbound settings sync
-    // (`wallpaperCustomUrl`, settings.js:124 syncs '' once cleared).
-    if (type != 'custom') {
-      _kv.remove(StorageKeys.wallpaperCustomUrl);
-    }
     state = state.copyWith(wallpaperType: type);
     _syncedChanged();
   }

@@ -89,7 +89,6 @@ class User {
 class UserProfile {
   UserProfile({
     this.name,
-    this.username,
     this.displayName,
     this.about,
     this.picture,
@@ -101,12 +100,6 @@ class UserProfile {
   });
 
   String? name;
-
-  /// The non-standard `username` field some clients publish — the middle link
-  /// of the PWA's display-name chain `name || username || display_name`
-  /// (nostr-core.js:697-698). Parsed so the boot profile-cache path resolves
-  /// the same nym as live kind-0 ingest.
-  String? username;
   String? displayName;
   String? about;
   String? picture;
@@ -122,7 +115,6 @@ class UserProfile {
 
   Map<String, dynamic> toJson() => {
         if (name != null) 'name': name,
-        if (username != null) 'username': username,
         if (displayName != null) 'display_name': displayName,
         if (about != null) 'about': about,
         if (picture != null) 'picture': picture,
@@ -135,7 +127,6 @@ class UserProfile {
   factory UserProfile.fromJson(Map<String, dynamic> j, {int kind0Ts = 0}) {
     return UserProfile(
       name: j['name'] as String?,
-      username: j['username'] as String?,
       displayName: j['display_name'] as String?,
       about: j['about'] as String?,
       picture: j['picture'] as String?,

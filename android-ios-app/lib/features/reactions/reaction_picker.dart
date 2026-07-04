@@ -76,11 +76,11 @@ void showReactionPicker(
             // (reactions.js:968) — including picks from this enhanced picker.
             HapticFeedback.mediumImpact();
             if (context.mounted) {
-              // Anchor at the message's reaction badge for this emoji (it
-              // mounts this frame from the optimistic add) — the PWA's
-              // `_burstOnBadge(messageId, emoji, messageEl)` from the toggle
-              // path (reactions.js:977), not at the picker cell.
-              ReactionBurst.playAtBadge(context, message.id, emoji);
+              final box = context.findRenderObject() as RenderBox?;
+              if (box != null && box.hasSize) {
+                ReactionBurst.play(context,
+                    box.localToGlobal(box.size.center(Offset.zero)), emoji);
+              }
             }
           }
         },

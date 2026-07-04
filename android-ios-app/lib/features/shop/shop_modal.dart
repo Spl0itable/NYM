@@ -22,19 +22,12 @@ import 'shop_controller.dart';
 import 'shop_models.dart';
 import 'shop_widgets.dart';
 
-/// Reads the live [ShopIdentity] from the nostr controller: pubkey + the
-/// active [EventSigner] (local key OR NIP-46 remote signer — the PWA signs
-/// shop auth through the generic `signEvent` dispatch, pms.js:1649-1679) +
-/// the raw privkey as a signer-less fallback. Null when logged out.
+/// Reads the live [ShopIdentity] from the nostr controller (pubkey + signable
+/// privkey), or null when there is no live signer.
 ShopIdentity? _shopIdentity(WidgetRef ref) {
-  final controller = ref.read(nostrControllerProvider);
-  final id = controller.identity;
+  final id = ref.read(nostrControllerProvider).identity;
   if (id == null) return null;
-  return ShopIdentity(
-    pubkey: id.pubkey,
-    privkey: id.privkey,
-    signer: controller.signer,
-  );
+  return ShopIdentity(pubkey: id.pubkey, privkey: id.privkey);
 }
 
 /// The `nym#suffix` gifter tag attached to shop-claim / shop-transfer so the
@@ -1003,6 +996,21 @@ class _ShopItemCard extends StatelessWidget {
   /// (shop.js:704-719): price, then BUY, then GIFT — GIFT reuses the same
   /// orange `.shop-buy-btn` styling as BUY.
   List<Widget> _footerChildren(NymColors c) {
+    // Limited soon/ended/soldout: only the availability label, styled like the
+    // price (`<span class="shop-price-amount">${avail.label}</span>`,
+    // shop.js:871) — lightning orange 16px bold, no buttons.
+    if (_blockedByAvailability) {
+      return [
+        Text(
+          availability!.label,
+          style: const TextStyle(
+            color: Color(0xFFF7931A),
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+      ];
+    }
     // `.shop-price-amount`: ⚡ {price} sats — lightning, 16px bold
     // (styles-features.css:204-208). Flexible + scale-down so a long price
     // shrinks (the PWA flex row does the same) instead of overflowing.
@@ -1020,9 +1028,6 @@ class _ShopItemCard extends StatelessWidget {
         ),
       ),
     );
-    // Owned wins over the availability label — `_renderLimitedCard` checks
-    // `isPurchased` FIRST (shop.js:868-871), so an owner of an ended/sold-out
-    // drop still sees the owned price row, not 'Drop ended'/'Sold out'.
     if (owned && !_isBundle) {
       // `_shopItemOwnedHtml(item, allowGift)`: regular owned → price + GIFT
       // (allowGift true); limited owned → price only (allowGift false,
@@ -1030,21 +1035,6 @@ class _ShopItemCard extends StatelessWidget {
       return [
         price,
         if (availability == null) _OrangePillButton(label: 'GIFT', onTap: onGift),
-      ];
-    }
-    // Limited soon/ended/soldout (not owned): only the availability label,
-    // styled like the price (`<span class="shop-price-amount">${avail.label}
-    // </span>`, shop.js:871) — lightning orange 16px bold, no buttons.
-    if (_blockedByAvailability) {
-      return [
-        Text(
-          availability!.label,
-          style: const TextStyle(
-            color: Color(0xFFF7931A),
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          ),
-        ),
       ];
     }
     // Not owned (and every bundle): price, BUY, GIFT (`_shopItemActionsHtml`).
@@ -1207,17 +1197,12 @@ class _ActiveItemsPreview extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final supporter = active.supporter;
-    // The message div's cosmetic classes exclude `cosmetic-redacted`
-    // (shop.js:947 skips it) — redacted only dims the AUTHOR span
-    // (`authorExtra`, shop.js:950); the sample text stays readable.
     final cosmetics =
         active.cosmetics.where((x) => x != 'cosmetic-redacted').toList();
     final redacted = active.cosmetics.contains('cosmetic-redacted');
-    // `hasActive` counts EVERY active cosmetic, redacted included
-    // (shop.js:939-941 uses the unfiltered set).
     final hasActive = active.style != null ||
         supporter ||
-        active.cosmetics.isNotEmpty ||
+        cosmetics.isNotEmpty ||
         active.flair.isNotEmpty;
     if (!hasActive) return const SizedBox.shrink();
 
@@ -1276,13 +1261,14 @@ class _ActiveItemsPreview extends ConsumerWidget {
       ],
     );
 
-    // Content bubble: active style's text treatment + cosmetic auras. NOTE:
-    // `cosmetic-redacted` does NOT blank the preview — the PWA never puts
-    // `cosmetic-redacted-message` on the sample content (shop.js:962-964
-    // renders the readable "This is how your messages look." with the full
-    // style/supporter treatment; only the author span dims).
+    // Content bubble: active style's text treatment + cosmetic auras.
     Widget content;
-    if (active.style != null &&
+    if (redacted) {
+      content = ShopCosmeticBubblePreview(
+        cosmeticId: 'cosmetic-redacted',
+        bubble: bubble,
+      );
+    } else if (active.style != null &&
         ShopCatalog.styleVisuals.containsKey(active.style)) {
       content = ShopStyleBubblePreview(
         styleId: active.style!,
@@ -1315,12 +1301,7 @@ class _ActiveItemsPreview extends ConsumerWidget {
         auras: auras,
         bubble: bubble,
         // The style/supporter content already draws its own bubble surface.
-        defaultFill: active.style == null && !supporter,
-        // An active `style-…` class drops gold's bubble wash, frost's flat
-        // fill, the cosmic bubble starfield and the hologram fill/sheen
-        // (`:not([class*="style-"])`, styles-features.css:1165/1192/1203/
-        // 3700) — same gate the chat bubble applies via `_styleClassActive`.
-        styleActive: active.style?.startsWith('style-') ?? false,
+        defaultFill: active.style == null && !supporter && !redacted,
         padding: const EdgeInsets.all(2),
         child: content,
       );
@@ -1752,7 +1733,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
         widget.item,
         gift: widget.recipientPubkey != null,
       );
-      final zapRequest = await ShopController.buildShopZapRequest(
+      final zapRequest = ShopController.buildShopZapRequest(
         identity: identity,
         botPubkey: NostrController.nymbotPubkey,
         relays: RelayConfig.defaultRelays,
@@ -1842,24 +1823,21 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
     // Receipt mode (no verify, no serverVerify): subscribe to the bot's zap
     // receipts and auto-claim when one matches this invoice's bolt11
     // (shop.js `_listenForShopReceipt` → zaps.js:1181-1189 →
-    // `handleShopPaymentSuccess`); a timeout shows the PWA's receipt-timeout
-    // copy (shop.js:1499-1510). The matched kind-9735 receipt event MUST ride
-    // the claim: a `needsReceipt` invoice (verifyMethod nip57, no serverVerify
-    // — storage.js:356) is confirmed by the worker ONLY from `body.receipt`
-    // (storage.js:381), exactly like the PWA's
-    // `_claimShopPurchase(inv.invoiceId, inv.receipt)` (zaps.js:1187 +
-    // shop.js:1545).
+    // `handleShopPaymentSuccess`); false = the 180s timeout fired, then the
+    // PWA's receipt-timeout copy (shop.js:1499-1510).
+    //
+    // PARITY GAP (needs nostr_controller.dart): `listenForShopReceipt`
+    // completes with a bare bool, so the matched kind-9735 event can't be
+    // forwarded into `_claim(receipt: …)` the way the PWA sends `inv.receipt`
+    // with shop-claim (shop.js:1189 `currentShopInvoice.receipt = event`,
+    // :1545). Once it surfaces the event JSON, pass it here.
     unawaited(() async {
-      // `Object`-typed so this forwards the receipt whether the controller
-      // completes with the matched event JSON or (legacy) a bare `true`.
-      final Object detected = await ref
+      final detected = await ref
           .read(nostrControllerProvider)
           .listenForShopReceipt(inv.pr);
       if (!mounted || _settling) return;
-      final receipt =
-          detected is Map ? Map<String, dynamic>.from(detected) : null;
-      if (receipt != null || detected == true) {
-        await _claim(inv, identity, receipt: receipt);
+      if (detected) {
+        await _claim(inv, identity);
       } else {
         setState(() {
           _phase = _BuyPhase.error;

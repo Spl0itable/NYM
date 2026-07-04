@@ -308,13 +308,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
                       maxLines: 3,
                       showCounter: true,
                     ),
-                    const SizedBox(height: 5),
-                    // `.form-hint` under the bio char count (index.html:1332):
-                    // 11px textDim, margin-top 5.
-                    Text(
-                      'Short bio shown on your profile (max 150 characters)',
-                      style: TextStyle(color: c.textDim, fontSize: 11),
-                    ),
                     // (The PWA's `.nm-h-52` "NOTE: Nymchat is bridged with…"
                     // callout is intentionally absent in the native app —
                     // product decision. Bio `.form-group` margin-bottom 20 is
@@ -339,9 +332,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
                             : null,
                       ),
                     ),
-                    // `.modal-actions.nm-h-7` margin-bottom: 20px
-                    // (no-inline.css:25) — the Enter row → ToS footer gap.
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12),
                     // `.setup-modal-content>span` footer (index.html:1337-1340):
                     // centered `.nm-dim` line at the inherited 16px default;
                     // "Terms of Service"/"Privacy Policy" are `.nm-secondary`
@@ -441,11 +432,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     int maxLines = 1,
     bool showCounter = false,
   }) {
-    // Light mode forces `input/.form-input { background: rgba(0,0,0,0.04);
-    // border-color: rgba(0,0,0,0.1); color: #000 } !important`
-    // (styles-themes-responsive.css:561-592); dark keeps the `.form-input`
-    // white/0.05 fill + glass border.
-    final baseBorder = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     final field = TextField(
       controller: controller,
       maxLength: maxLength,
@@ -453,28 +439,23 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       onChanged: showCounter ? (_) => setState(() {}) : null,
       inputFormatters:
           maxLength == null ? null : [LengthLimitingTextInputFormatter(maxLength)],
-      style: TextStyle(
-        color: c.isLight ? const Color(0xFF000000) : c.textBright,
-        fontSize: 15,
-      ),
+      style: TextStyle(color: c.textBright, fontSize: 15),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: TextStyle(color: c.textDim, fontSize: 15),
         counterText: '',
         filled: true,
-        // `.form-input` fill white/0.05 (light: black/0.04).
-        fillColor: c.isLight
-            ? const Color(0x0A000000)
-            : Colors.white.withValues(alpha: 0.05),
+        // `.form-input` fill white/0.05.
+        fillColor: Colors.white.withValues(alpha: 0.05),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         enabledBorder: OutlineInputBorder(
           borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: baseBorder),
+          borderSide: BorderSide(color: c.glassBorder),
         ),
         border: OutlineInputBorder(
           borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: baseBorder),
+          borderSide: BorderSide(color: c.glassBorder),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: NymRadius.rsm,

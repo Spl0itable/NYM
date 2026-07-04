@@ -10,7 +10,6 @@ import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../models/nostr_event.dart';
 import '../../services/api/api_client.dart';
 import '../../services/api/storage_sync.dart' show ShopStatus, ShopStatusActive;
-import '../../services/nostr/event_signer.dart';
 import '../../services/storage/key_value_store.dart';
 import '../../state/settings_provider.dart';
 import 'shop_catalog.dart';
@@ -21,20 +20,14 @@ import 'shop_models.dart';
 /// nostr controller's [Identity]); kept out of [ShopController]'s constructor so
 /// the controller stays free of a nostr_controller dependency.
 class ShopIdentity {
-  const ShopIdentity({required this.pubkey, required this.privkey, this.signer});
+  const ShopIdentity({required this.pubkey, required this.privkey});
 
   /// 64-hex identity public key.
   final String pubkey;
 
-  /// 32-byte identity secret key (null when signing is delegated).
+  /// 32-byte identity secret key (null when signing is delegated — then the
+  /// mutating shop actions can't attach a NIP-98 auth event).
   final Uint8List? privkey;
-
-  /// The active [EventSigner] (local key OR NIP-46 remote signer). When set,
-  /// NIP-98 auth is signed through it — the PWA's `_signBotAuth` goes through
-  /// the generic `signEvent` dispatch (pms.js:1649-1679), so remote-signer
-  /// accounts authenticate shop writes exactly like a local key. [privkey]
-  /// remains as a fallback for callers without a signer (tests).
-  final EventSigner? signer;
 }
 
 /// Immutable snapshot of the user's shop state (owned items + active cosmetics).
@@ -292,34 +285,9 @@ class ShopController extends StateNotifier<ShopState> {
   // Purchase / claim / redeem / gift / transfer (real /api/storage, shop.js)
   // ---------------------------------------------------------------------------
 
-  /// Shop actions the worker treats as single-use money ops — signed FRESH
-  /// every time instead of reusing the 90s auth cache (`_signBotAuth`'s MONEY
-  /// set, pms.js:1654-1658; `shop-check`/`shop-get`/`shop-set-active` are
-  /// routine and cacheable).
-  static const Set<String> _sensitiveActions = {
-    'shop-buy-invoice',
-    'shop-claim',
-    'shop-transfer',
-    'shop-redeem',
-  };
-
   /// Builds the NIP-98 `auth` map for a mutating shop [action] bound to the
-  /// `/api/storage` URL. Signs through the identity's [EventSigner] when one is
-  /// present (the PWA's `_signBotAuth` → generic `signEvent` dispatch,
-  /// pms.js:1649-1679 — so NIP-46 remote signers authenticate too), falling
-  /// back to the raw privkey. Returns null only when neither can sign.
-  Future<Map<String, dynamic>?> _auth(
-      String action, ShopIdentity identity) async {
-    final signer = identity.signer;
-    if (signer != null) {
-      final auth = await Nip98Auth.buildSigned(
-        action: action,
-        url: _api.storageUrl,
-        signer: signer,
-        sensitive: _sensitiveActions.contains(action),
-      );
-      if (auth != null) return auth;
-    }
+  /// `/api/storage` URL. Returns null when [identity] has no signable privkey.
+  Map<String, dynamic>? _auth(String action, ShopIdentity identity) {
     final sk = identity.privkey;
     if (sk == null) return null;
     return Nip98Auth.build(
@@ -346,7 +314,7 @@ class ShopController extends StateNotifier<ShopState> {
     String? comment,
     Map<String, dynamic>? zapRequest,
   }) async {
-    final auth = await _auth('shop-buy-invoice', identity);
+    final auth = _auth('shop-buy-invoice', identity);
     final isGift = recipientPubkey != null &&
         recipientPubkey.isNotEmpty &&
         recipientPubkey != identity.pubkey;
@@ -390,7 +358,7 @@ class ShopController extends StateNotifier<ShopState> {
     required ShopIdentity identity,
   }) async {
     try {
-      final auth = await _auth('shop-check', identity);
+      final auth = _auth('shop-check', identity);
       final data = await _api.storageAction({
         'action': 'shop-check',
         'pubkey': identity.pubkey,
@@ -417,7 +385,7 @@ class ShopController extends StateNotifier<ShopState> {
     Map<String, dynamic>? data;
     for (var attempt = 0; attempt < 6; attempt++) {
       try {
-        final auth = await _auth('shop-claim', identity);
+        final auth = _auth('shop-claim', identity);
         data = await _api.storageAction({
           'action': 'shop-claim',
           'pubkey': identity.pubkey,
@@ -507,7 +475,7 @@ class ShopController extends StateNotifier<ShopState> {
   }) async {
     final trimmed = code.trim();
     if (trimmed.isEmpty) return null;
-    final auth = await _auth('shop-redeem', identity);
+    final auth = _auth('shop-redeem', identity);
     final data = await _api.storageAction({
       'action': 'shop-redeem',
       'pubkey': identity.pubkey,
@@ -527,7 +495,7 @@ class ShopController extends StateNotifier<ShopState> {
     required ShopIdentity identity,
     String? gifterNym,
   }) async {
-    final auth = await _auth('shop-transfer', identity);
+    final auth = _auth('shop-transfer', identity);
     final data = await _api.storageAction({
       'action': 'shop-transfer',
       'pubkey': identity.pubkey,
@@ -622,16 +590,16 @@ class ShopController extends StateNotifier<ShopState> {
   /// identity from D1 (`shop-get`, storage.js:283) and applies it via
   /// [applyOwnRecord], so the user's own purchased flairs/cosmetics/style render
   /// on a fresh device (or after switching identity). Mirrors shop.js
-  /// `loadShopFromServer` (shop.js:358) — an AUTHENTICATED read, signed via the
-  /// identity's signer (local OR NIP-46); when nothing can sign it no-ops and
-  /// the cached record stays. Best-effort: transport failure keeps local state.
+  /// `loadShopFromServer` (shop.js:358) — an AUTHENTICATED read; without a
+  /// signable [identity] (NIP-46 delegated signer) it no-ops and the cached
+  /// record stays. Best-effort: transport failure keeps the local state.
   ///
   /// Call this once the identity is known at boot (see the nostr_controller
   /// wiring in the task report). The PWA invokes it on login and on identity
   /// switch (`applyCachedShopItemsToNewIdentity`, shop.js:366).
   Future<void> loadFromServer(ShopIdentity identity) async {
-    final auth = await _auth('shop-get', identity);
-    if (auth == null) return; // nothing can sign; keep cached record.
+    final auth = _auth('shop-get', identity);
+    if (auth == null) return; // delegated signer can't auth; keep cached record.
     try {
       final data = await _api.storageAction({
         'action': 'shop-get',
@@ -651,10 +619,10 @@ class ShopController extends StateNotifier<ShopState> {
   /// toggle. The server filters the payload to owned items and echoes the
   /// authoritative `{active, updatedAt}`, which is re-applied locally. The PWA
   /// then also broadcasts a presence `shop-update` so others bust their cache
-  /// (wire that in the controller, see the task report). AUTHENTICATED (local
-  /// key or NIP-46 signer); no-ops only when nothing can sign. Best-effort.
+  /// (wire that in the controller, see the task report). AUTHENTICATED; no-ops
+  /// without a signable [identity]. Best-effort.
   Future<void> publishActiveItems(ShopIdentity identity) async {
-    final auth = await _auth('shop-set-active', identity);
+    final auth = _auth('shop-set-active', identity);
     if (auth == null) return;
     final a = state.active;
     final payload = <String, dynamic>{
@@ -920,19 +888,18 @@ class ShopController extends StateNotifier<ShopState> {
 
   /// Signs the NIP-57 kind-9734 zap request riding a shop purchase (shop.js
   /// `_buildShopZapRequest`): tags `['p', botPubkey]`, `['amount', msats]`,
-  /// `['relays', ...first5]`; content = the purchase comment. Signed through
-  /// the identity's [EventSigner] when present (the PWA signs via the generic
-  /// `signEvent` dispatch, shop.js:1475 — NIP-46 included), else the raw
-  /// privkey. Returns the signed event JSON, or null when signing is
-  /// unavailable/fails (the PWA likewise returns null and buys without a zap
-  /// request).
-  static Future<Map<String, dynamic>?> buildShopZapRequest({
+  /// `['relays', ...first5]`; content = the purchase comment. Returns the
+  /// signed event JSON, or null when signing is unavailable/fails (the PWA
+  /// likewise returns null and buys without a zap request).
+  static Map<String, dynamic>? buildShopZapRequest({
     required ShopIdentity identity,
     required String botPubkey,
     required List<String> relays,
     required int amountSats,
     required String comment,
-  }) async {
+  }) {
+    final sk = identity.privkey;
+    if (sk == null) return null;
     try {
       final unsigned = UnsignedEvent(
         pubkey: identity.pubkey,
@@ -945,10 +912,6 @@ class ShopController extends StateNotifier<ShopState> {
         ],
         content: comment,
       );
-      final signer = identity.signer;
-      if (signer != null) return (await signer.sign(unsigned)).toJson();
-      final sk = identity.privkey;
-      if (sk == null) return null;
       return schnorr.finalizeEvent(unsigned, sk).toJson();
     } catch (_) {
       return null;

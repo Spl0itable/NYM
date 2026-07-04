@@ -61,20 +61,8 @@ class WallpaperLayer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Watch the WHOLE settings state — not `.select((s) => s.wallpaperType)`.
-    // The custom URL lives KV-only (`nym_wallpaper_custom_url`), so a select
-    // on the type string would compare 'custom' == 'custom' and skip the
-    // rebuild when a NEW image arrives while custom is already active, leaving
-    // the old wallpaper on screen. Both URL writers fire `setWallpaperType`
-    // after persisting the URL (upload: settings `_uploadCustomWallpaper`;
-    // inbound settings sync: `str('wallpaperType', …)` alongside the URL KV
-    // mirror), and that setter always publishes a fresh Settings object even
-    // for an unchanged type — so a full watch re-reads the URL below exactly
-    // when the PWA re-applies (applyWallpaper on upload, app.js:4198; the
-    // sync path's same-type/different-URL `sameAsCurrent` check,
-    // app.js:6231-6238).
-    final settings = ref.watch(settingsProvider);
-    final pattern = WallpaperPattern.forType(settings.wallpaperType);
+    final type = ref.watch(settingsProvider.select((s) => s.wallpaperType));
+    final pattern = WallpaperPattern.forType(type);
     if (!pattern.paints) return const SizedBox.shrink();
 
     final c = context.nym;
@@ -219,15 +207,13 @@ class WallpaperPatternPainter extends CustomPainter {
   }
 
   // dots: one 1px-radius tinted dot per tile (`radial-gradient(circle, tint
-  // 1px, transparent 1px)`; 24×24 layer / 20×20 preview). The gradient
-  // defaults to `at center`, so the dot sits at the CENTER of each tile —
-  // (12,12) layer / (10,10) preview — not its corner.
+  // 1px, transparent 1px)`; 24×24 layer / 20×20 preview).
   void _paintDots(Canvas canvas, Size size) {
     final p = Paint()..color = _tint(_alpha);
     final step = preview ? 20.0 : 24.0;
     for (double y = 0; y < size.height; y += step) {
       for (double x = 0; x < size.width; x += step) {
-        canvas.drawCircle(Offset(x + step / 2, y + step / 2), 1, p);
+        canvas.drawCircle(Offset(x + 1, y + 1), 1, p);
       }
     }
   }

@@ -73,11 +73,8 @@ class Lnurl {
       if (resp.statusCode != 200) {
         throw const LnurlException('Failed to fetch LNURL endpoint');
       }
-      // `allowMalformed` mirrors the PWA's `response.json()` / TextDecoder
-      // (U+FFFD replacement, never throwing) like `ApiClient._utf8Body`.
       return LnurlPayParams.fromJson(
-          jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true))
-              as Map<String, dynamic>);
+          jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>);
     } finally {
       if (client == null) c.close();
     }
@@ -114,9 +111,7 @@ class Lnurl {
       if (resp.statusCode != 200) {
         throw const LnurlException('Failed to fetch invoice');
       }
-      final data =
-          jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true))
-              as Map<String, dynamic>;
+      final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
       final pr = data['pr'] as String?;
       if (pr == null || pr.isEmpty) {
         throw const LnurlException('No payment request in response');
@@ -143,9 +138,7 @@ class Lnurl {
     try {
       final resp = await _api(api, c).proxiedJsonFetch(verifyUrl);
       if (resp.statusCode != 200) return false;
-      final data =
-          jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true))
-              as Map<String, dynamic>;
+      final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
       return data['settled'] == true || data['paid'] == true;
     } catch (_) {
       return false;

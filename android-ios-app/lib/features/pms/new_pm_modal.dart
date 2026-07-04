@@ -153,14 +153,9 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     final query = raw.toLowerCase();
     final self = ref.read(appStateProvider).selfPubkey;
     final picked = _recipients.map((r) => r.pubkey).toSet();
-    final controller = ref.read(nostrControllerProvider);
     final out = <User>[];
     for (final u in ref.read(usersProvider).values) {
       if (u.pubkey == self || picked.contains(u.pubkey)) continue;
-      // Nymbot is never suggested (pms.js:3477 `if (this.isVerifiedBot(pubkey))
-      // return;`) — the bot is reachable via its sidebar row / direct paste,
-      // not via the recently-seen list.
-      if (controller.isVerifiedBot(u.pubkey)) continue;
       if (query.isEmpty ||
           u.nym.toLowerCase().contains(query) ||
           stripPubkeySuffix(u.nym).toLowerCase().contains(query)) {
@@ -171,32 +166,13 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     return out.take(10).toList();
   }
 
-  /// Inline guard line under the recipient box, standing in for the PWA's
-  /// `displaySystemMessage` (which lands in the chat behind the modal).
-  /// Cleared on the next successful add/remove.
-  String? _recipientError;
-
   void _addRecipient(String pubkey, String nym) {
     if (pubkey == ref.read(appStateProvider).selfPubkey) return;
     if (_recipients.any((r) => r.pubkey == pubkey)) {
       _recipientController.clear();
       return;
     }
-    // Nymbot can be messaged 1:1 but never added to a group chat — blocked in
-    // both directions (bot-after-others and others-after-bot), pms.js
-    // `addNewPMRecipient` (:3628-3636). The PWA keeps the input as-is on a
-    // guard trip, so don't clear the field here.
-    final controller = ref.read(nostrControllerProvider);
-    final isBot = controller.isVerifiedBot(pubkey);
-    if ((isBot && _recipients.isNotEmpty) ||
-        (!isBot &&
-            _recipients.any((r) => controller.isVerifiedBot(r.pubkey)))) {
-      setState(() => _recipientError =
-          'Nymbot can only be messaged 1:1, not added to a group chat.');
-      return;
-    }
     setState(() {
-      _recipientError = null;
       _recipients.add(PmRecipient(pubkey, nym));
       _recipientController.clear();
     });
@@ -212,20 +188,14 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   }
 
   void _remove(String pubkey) {
-    setState(() {
-      _recipientError = null;
-      _recipients.removeWhere((r) => r.pubkey == pubkey);
-    });
+    setState(() => _recipients.removeWhere((r) => r.pubkey == pubkey));
   }
 
   /// Backspace on an empty input removes the last chip (pms.js
   /// `onNewPMRecipientKeydown`).
   void _removeLast() {
     if (_recipientController.text.isNotEmpty || _recipients.isEmpty) return;
-    setState(() {
-      _recipientError = null;
-      _recipients.removeLast();
-    });
+    setState(() => _recipients.removeLast());
   }
 
   /// Per-surface upload caps, mirroring the PWA nick-edit avatar/banner guards
@@ -416,17 +386,6 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                           const SizedBox(height: 8),
                           // `.pm-recipient-box` — chips + inline input in one box.
                           _recipientBox(c),
-                          // "Nymbot can only be messaged 1:1…" guard line (the
-                          // PWA's displaySystemMessage lands in the chat behind
-                          // the modal; here it sits inline under the box).
-                          if (_recipientError != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Text(
-                                _recipientError!,
-                                style: TextStyle(color: c.danger, fontSize: 11),
-                              ),
-                            ),
                           _suggestionsList(c),
                       if (_groupMode) ...[
                         const SizedBox(height: 16),

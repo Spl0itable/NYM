@@ -122,7 +122,6 @@ NymColors resolveNymColors({
   }
 
   // --- solid-ui (opaque surfaces; default ON) ---
-  Color? bubbleSelfBg, bubbleOtherBg;
   if (solidUi) {
     if (isLight) {
       glassBg = _hex('#ffffff');
@@ -132,20 +131,6 @@ NymColors resolveNymColors({
       glassBg = _hex('#14141e');
       bgSecondary = _hex('#14141e');
       bgTertiary = _hex('#1c1c2c');
-    }
-    // Opaque chat-bubble plates (`body.solid-ui.chat-bubbles .message-content`
-    // / `.message.self .message-content`, styles-themes-responsive.css:
-    // 1660-1684): others `#2a2a3a` dark / `#e6e6e0` light, self the
-    // `color-mix(in srgb, var(--primary) 22%, <other>)` blend. Ghost repaints
-    // both with flat greys (`body.solid-ui.theme-ghost.chat-bubbles …`,
-    // :1686-1700). Glass mode leaves these null → the translucent
-    // `NymColors.bubbleSelfBg`/`bubbleOtherBg` getter fallbacks.
-    if (theme == NymThemeKey.ghost) {
-      bubbleOtherBg = isLight ? _hex('#dddddd') : _hex('#2a2a2a');
-      bubbleSelfBg = isLight ? _hex('#bbbbbb') : _hex('#444444');
-    } else {
-      bubbleOtherBg = isLight ? _hex('#e6e6e0') : _hex('#2a2a3a');
-      bubbleSelfBg = Color.lerp(bubbleOtherBg, _hex(a[0]), 0.22)!;
     }
   }
 
@@ -167,9 +152,6 @@ NymColors resolveNymColors({
     glassBg: glassBg,
     glassBorder: glassBorder,
     brightness: brightness,
-    solidUi: solidUi,
-    bubbleSelfBg: bubbleSelfBg,
-    bubbleOtherBg: bubbleOtherBg,
   );
 }
 

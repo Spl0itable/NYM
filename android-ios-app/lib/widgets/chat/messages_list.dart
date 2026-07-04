@@ -209,20 +209,13 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final mentionToken = '@${_baseNym(app.selfNym)}';
 
     // Merge messages + polls into one chronological list (oldest first), each
-    // message carrying its resolved reactions + mention flag. The fast probe
-    // mirrors the PWA gates: `.mentioned` never applies to self or PM/group
-    // rows (else-if class chain, messages.js:686-692), and `isMentioned`
-    // bails while the self nym is unknown (messages.js:400) — a bare '@'
-    // token at boot must not flag every '@'-containing message.
+    // message carrying its resolved reactions + mention flag.
     final merged = <_ListEntry>[
       for (final m in messages)
         _MsgEntry(MessageGroupEntry(
           message: m,
           reactions: reactions[m.id] ?? const [],
-          mentioned: mentionToken.length > 1 &&
-              !m.isOwn &&
-              !m.isPM &&
-              m.content.contains(mentionToken),
+          mentioned: !m.isOwn && m.content.contains(mentionToken),
         )),
       for (final p in polls) _PollEntry(p),
     ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
@@ -593,18 +586,9 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
     // (styles-themes-responsive.css:607-615). Dark hover takes the full
     // `:hover` set: primary@0.15 fill, primary@0.3 border, and the shadow
     // swaps to a `0 0 15px primary@0.15` glow (styles-chat.css:34-39).
-    //
-    // solid-ui pins the FILL to the opaque `--glass-bg` in both themes AND
-    // through hover: `body.solid-ui[.light-mode] .scroll-to-bottom-btn
-    // { background: var(--glass-bg) }` (styles-themes-responsive.css:
-    // 1582/1609) outranks the dark `:hover` (0,2,1 > 0,2,0) and, declared
-    // later in the same sheet, the equal-specificity light rest/hover rules —
-    // only the border/shadow/scale hover effects remain.
-    final fill = c.solidUi
-        ? c.glassBg
-        : _hover
-            ? (light ? c.primaryA(0.10) : c.primaryA(0.15))
-            : (light ? const Color(0xD9FFFFFF) /* white @ 0.85 */ : c.glassBg);
+    final fill = _hover
+        ? (light ? c.primaryA(0.10) : c.primaryA(0.15))
+        : (light ? const Color(0xD9FFFFFF) /* white @ 0.85 */ : c.glassBg);
     final border = light
         ? c.primaryA(0.20)
         : (_hover ? c.primaryA(0.30) : c.glassBorder);

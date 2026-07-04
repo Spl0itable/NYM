@@ -70,17 +70,6 @@ class IdentityVault {
   );
   static final _aes = AesGcm.with256bits();
 
-  /// The derived AES session key, retained after a successful [enable] /
-  /// [unlock] — the native analogue of the PWA's `this._vaultKey`
-  /// (key-vault.js `unlockVault`). Lets [secretSet] keep encrypting secrets
-  /// written AFTER boot (nsec login, NIP-46 session, key rotation) instead of
-  /// silently downgrading them to plaintext. Cleared by [disable] / [reset].
-  SecretKey? _sessionKey;
-
-  /// Whether the vault is enabled AND its session key is in memory (the PWA's
-  /// `vaultUnlocked()`, key-vault.js:26).
-  bool get isUnlocked => _sessionKey != null;
-
   Future<SecretKey> _deriveKey(String password, List<int> salt) {
     return _pbkdf2.deriveKey(
       secretKey: SecretKey(utf8.encode(password)),
@@ -152,10 +141,6 @@ class IdentityVault {
     await _kv.setBool(StorageKeys.vaultEnabled, true);
     await _kv.setBool(StorageKeys.encryptAtRestPref, true);
     await _kv.remove(StorageKeys.encryptAtRestPromptDismissed);
-    // Enabling leaves the vault unlocked for this session (key-vault.js
-    // `enableVault` sets `this._vaultKey = key`), so later [secretSet] writes
-    // stay encrypted.
-    _sessionKey = key;
   }
 
   /// Verify [password] against the stored check token without unlocking.
@@ -184,21 +169,11 @@ class IdentityVault {
 
     final check = _kv.getString(StorageKeys.vaultCheck);
     if (check != null && check.startsWith('enc:v1:')) {
-      // The PWA wraps any check-token failure (bad decrypt OR a mismatched
-      // plaintext) into one user-facing message (key-vault.js:262-274).
-      try {
-        final v = await _decrypt(key, check); // throws on wrong key
-        if (v != _checkPlaintext) {
-          throw StateError('Vault verification failed.');
-        }
-      } catch (_) {
-        throw StateError('Wrong password/PIN or unrecognised passkey.');
+      final v = await _decrypt(key, check); // throws on wrong key
+      if (v != _checkPlaintext) {
+        throw StateError('Wrong password/PIN.');
       }
     }
-    // Verified — retain the key for the session (`this._vaultKey = key`,
-    // key-vault.js `unlockVault`) so [secretSet] keeps encrypting post-boot
-    // secret writes.
-    _sessionKey = key;
     final out = <String, String>{};
     for (final name in vaultKeys) {
       final blob = await _secure.get(name);
@@ -227,33 +202,16 @@ class IdentityVault {
         await _secure.set(name, await _decrypt(key, blob));
       }
     }
-    _sessionKey = null; // Secrets are plaintext again (key-vault.js:307).
     await _clearMeta();
   }
 
   /// Discard the vault and its encrypted secrets entirely (forgotten-password
   /// escape hatch). Mirrors `resetVault`.
   Future<void> reset() async {
-    _sessionKey = null;
     for (final name in vaultKeys) {
       await _secure.remove(name);
     }
     await _clearMeta();
-  }
-
-  /// Vault-aware secret write — the PWA's `secretSet` (key-vault.js:38-48).
-  /// With the vault enabled AND unlocked ([_sessionKey] retained by [enable] /
-  /// [unlock]) the value is stored as an `enc:v1:` blob; otherwise it is
-  /// stored as-is (the vault-disabled else-branch). Wired into
-  /// `IdentityService(secretWrite: …)` so identity secrets persisted after
-  /// boot keep the encryption-at-rest guarantee.
-  Future<void> secretSet(String name, String value) async {
-    final key = _sessionKey;
-    if (isEnabled && key != null) {
-      await _secure.set(name, await _encrypt(key, value));
-    } else {
-      await _secure.set(name, value);
-    }
   }
 
   Future<void> _clearMeta() async {
