@@ -19,9 +19,9 @@ A feature-rich, ephemeral chat client built on the [Nostr](https://github.com/no
 
 ## Overview
 
-Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (PWA) chat messenger. It uses [Nostr](https://github.com/nostr-protocol/nostr) ephemeral events for channels (kind 20000 for geohash channels and kind 23333 for non-geohash, named channels) and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) gift-wrapped events (kind 1059) for private messages and group chats. No registration is required. Pick a nym and start chatting, or log in with an existing Nostr account if you want a persistent identity.
+Nymchat, also known as NYM (Nostr Ynstant Messenger), is a Progressive Web App (PWA) and native iOS/Android chat messenger. It uses [Nostr](https://github.com/nostr-protocol/nostr) ephemeral events for channels (kind 20000 for geohash channels and kind 23333 for non-geohash, named channels) and [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) gift-wrapped events (kind 1059) for private messages and group chats. No registration is required. Pick a nym and start chatting, or log in with an existing Nostr account if you want a persistent identity.
 
-The web app is served as static files plus a set of Cloudflare Pages Functions under `functions/api/`. The Functions act as a privacy proxy for relays and media, generate link previews, run the Nymbot, and store the flair shop and encrypted settings. The same PWA is also wrapped in a Flutter shell for iOS and Android.
+The web app is served as static files plus a set of Cloudflare Pages Functions under `functions/api/`. The Functions act as a privacy proxy for relays and media, generate link previews, run the Nymbot, and store the flair shop and encrypted settings.
 
 ![Nymchat Screenshot](https://nymchat.app/images/nymchat-app.png)
 
@@ -226,7 +226,7 @@ Quote-reply to any Nymbot response to continue the conversation. The bot carries
 
 ## Mobile App (iOS & Android)
 
-Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory.
+Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory. The Android APK can be downloaded directly from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).
 
 ## Verify Build
 
