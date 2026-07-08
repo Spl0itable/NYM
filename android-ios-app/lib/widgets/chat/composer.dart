@@ -1653,11 +1653,23 @@ class _ComposerState extends ConsumerState<Composer> {
       onKeyEvent: _onKey,
       child: _textField(context, inputEnabled),
     );
-    // Two nested OverlayPortals share the `_acAnchor` leader. The popout field
-    // is the OUTER portal (z-index:12); the autocomplete/palette is the INNER
-    // portal (z-index:20) so it paints ABOVE the floating field — nested
-    // children paint after their ancestors, matching the PWA stack order
+    // Three nested OverlayPortals share the composer leaders. The popout field
+    // is the OUTERMOST portal (z-index:12); the translate dropdown and the
+    // autocomplete/palette are nested INSIDE it (as `child`, NOT inside its
+    // overlay child) so they paint ABOVE the floating field — nested children
+    // paint after their ancestors, matching the PWA stack order
     // (styles-chat.css:1746/1749).
+    //
+    // The translate dropdown portal MUST live here in the main tree rather than
+    // inside the field's Stack: when the draft pops out, that Stack is
+    // reparented into `_popoutPortal`'s OVERLAY child, and a nested OverlayPortal
+    // whose widget sits inside another portal's overlay child never builds its
+    // own overlay child (its `overlayChildBuilder` is skipped even though
+    // `show()` flips `isShowing` true) — so the translate button went dead in
+    // popout. Hosting the portal in the always-mounted main tree and pointing
+    // its `_translateDropdown` follower at the `_translateAnchor` leader (the
+    // 26×26 button, which keeps its [CompositedTransformTarget] inside the
+    // field) lets the dropdown open in BOTH the flat and popout layouts.
     return CompositedTransformTarget(
       key: _inputKey,
       link: _acAnchor,
@@ -1665,17 +1677,21 @@ class _ComposerState extends ConsumerState<Composer> {
         controller: _popoutPortal,
         overlayChildBuilder: (ctx) => _popoutOverlay(ctx, focus),
         child: OverlayPortal(
-          controller: _acPortal,
-          overlayChildBuilder: _overlayChild,
-          // In-flow we reserve only the base row height while the field
-          // floats; flat (non-popout) the field stays in place. The [_fieldKey]
-          // GlobalKey on the TextField reparents the SAME element between the
-          // in-flow slot and the popout overlay, so the flip never tears down
-          // the EditableText (which would force-close the keyboard).
-          child: _popout
-              ? const SizedBox(
-                  height: _composerRowBase, width: double.infinity)
-              : focus,
+          controller: _translatePortal,
+          overlayChildBuilder: _translateDropdown,
+          child: OverlayPortal(
+            controller: _acPortal,
+            overlayChildBuilder: _overlayChild,
+            // In-flow we reserve only the base row height while the field
+            // floats; flat (non-popout) the field stays in place. The
+            // [_fieldKey] GlobalKey on the TextField reparents the SAME element
+            // between the in-flow slot and the popout overlay, so the flip never
+            // tears down the EditableText (which would force-close the keyboard).
+            child: _popout
+                ? const SizedBox(
+                    height: _composerRowBase, width: double.infinity)
+                : focus,
+          ),
         ),
       ),
     );
@@ -1978,20 +1994,18 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  /// `#translateInputBtn` (+ its dropdown). Disabled while empty; pulses while
-  /// translating. Anchors the 230px language dropdown above it.
+  /// `#translateInputBtn`. Disabled while empty; pulses while translating. Wears
+  /// the [_translateAnchor] leader so the 230px language dropdown (hosted by the
+  /// main-tree `_translatePortal` in [_input], NOT nested in the field's Stack —
+  /// see the note there) anchors above it in both the flat and popout layouts.
   Widget _translateButton(BuildContext context) {
     final hasText = _controller.text.trim().isNotEmpty;
     return CompositedTransformTarget(
       link: _translateAnchor,
-      child: OverlayPortal(
-        controller: _translatePortal,
-        overlayChildBuilder: _translateDropdown,
-        child: _TranslateInputButton(
-          enabled: hasText && !_translating,
-          translating: _translating,
-          onTap: _toggleTranslateDropdown,
-        ),
+      child: _TranslateInputButton(
+        enabled: hasText && !_translating,
+        translating: _translating,
+        onTap: _toggleTranslateDropdown,
       ),
     );
   }

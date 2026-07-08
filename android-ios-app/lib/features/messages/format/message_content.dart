@@ -67,6 +67,7 @@ class MessageContent extends ConsumerWidget {
     super.key,
     required this.content,
     this.hostMessageId,
+    this.scrollKey,
     this.baseColor,
     this.fontSize,
     this.blurImages = false,
@@ -82,6 +83,11 @@ class MessageContent extends ConsumerWidget {
   /// the PWA `hostKey` guard in `_scrollToQuotedMessage`, messages.js:2690). Null
   /// for surfaces without a backing message (e.g. the `/me` action preview).
   final String? hostMessageId;
+
+  /// Conversation `storageKey` of the list this content renders in — forwarded
+  /// to the tappable top-level blockquote so a columns column jumps its OWN
+  /// list. Null in the single-chat view (falls back to the active view).
+  final String? scrollKey;
 
   /// Body text color (defaults to `context.nym.text`).
   final Color? baseColor;
@@ -319,6 +325,7 @@ class MessageContent extends ConsumerWidget {
           size: size,
           topLevel: true,
           hostMessageId: hostMessageId,
+          scrollKey: scrollKey,
         );
       case MediaBlock(:final items):
         return _MediaGallery(items: items, blur: blurImages);
@@ -1537,6 +1544,7 @@ class _QuoteBox extends ConsumerWidget {
     required this.size,
     this.topLevel = false,
     this.hostMessageId,
+    this.scrollKey,
   });
   final QuoteBlock block;
   final Color color;
@@ -1550,6 +1558,11 @@ class _QuoteBox extends ConsumerWidget {
   /// The id of the host message (the one containing this quote), forwarded so a
   /// tap can exclude the host from the quoted-source search (PWA `hostKey`).
   final String? hostMessageId;
+
+  /// The conversation `storageKey` of the list this quote is rendered in. Set by
+  /// a columns-deck column so the jump resolves the RIGHT column's messages +
+  /// scroller; null in the single-chat view (falls back to the active view).
+  final String? scrollKey;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1671,14 +1684,25 @@ class _QuoteBox extends ConsumerWidget {
   /// suffix) and its quoted text, excluding the host message. No-ops gracefully
   /// when the source isn't in the loaded set (the PWA bails the same way).
   void _jumpToQuotedSource(WidgetRef ref) {
-    final messages = ref.read(messagesForCurrentViewProvider);
+    // In a column the quote belongs to [scrollKey]'s conversation, not the
+    // active single-view; resolve against that list + its scroller so the jump
+    // lands in the right column. Single view leaves [scrollKey] null and uses
+    // the active view exactly as before.
+    final key = scrollKey ?? ref.read(appStateProvider).view.storageKey;
+    // Resolve against the SAME filtered set the list renders + indexed, so a
+    // hit is actually scrollable. Columns pass their key through
+    // [visibleMessagesFor] (what the column drew); the single view keeps its
+    // existing provider.
+    final messages = scrollKey != null
+        ? visibleMessagesFor(ref.read(appStateProvider), scrollKey!)
+        : ref.read(messagesForCurrentViewProvider);
     final target = resolveQuotedMessage(
       block,
       messages,
       hostMessageId: hostMessageId,
     );
     if (target == null) return; // not in the loaded set → bail (PWA parity)
-    final scroller = ref.read(messageListScrollerProvider);
+    final scroller = ref.read(messageListScrollerProvider(key));
     if (scroller.scrollToMessage(target.id)) {
       ref.read(flashedMessageProvider.notifier).flash(target.id);
     }

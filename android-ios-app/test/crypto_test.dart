@@ -343,6 +343,61 @@ void main() {
       expect(decoded!.content, text);
       expect(decoded.messageId, id);
     });
+
+    test('encodeBitchatMessage -> decodeBitchatPacket round-trips', () {
+      final sender = getPublicKeyHex(generatePrivateKey());
+      final recipient = getPublicKeyHex(generatePrivateKey());
+      const text = 'sent from nym to the bitchat app 🛰️';
+      final encoded = bitchat.encodeBitchatMessage(
+        text,
+        sender,
+        recipientPubkey: recipient,
+      );
+      expect(encoded.content.startsWith('bitchat1:'), isTrue);
+      expect(encoded.messageId, hasLength(36)); // UUID v4
+
+      final decoded = bitchat.decodeBitchatPacket(encoded.content);
+      expect(decoded, isNotNull);
+      expect(decoded!.isPrivateMessage, isTrue);
+      expect(decoded.content, text);
+      expect(decoded.messageId, encoded.messageId);
+    });
+
+    test('encode -> bitchatWrap -> unwrap -> decode recovers the message',
+        () async {
+      final senderSk = generatePrivateKey();
+      final recipientSk = generatePrivateKey();
+      final senderPub = getPublicKeyHex(senderSk);
+      final recipientPub = getPublicKeyHex(recipientSk);
+
+      const text = 'full bitchat send path';
+      final encoded = bitchat.encodeBitchatMessage(text, senderPub,
+          recipientPubkey: recipientPub);
+      final rumor = UnsignedEvent(
+        pubkey: senderPub,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        kind: 14,
+        tags: const [
+          ['x', 'shared-nym-id']
+        ],
+        content: encoded.content,
+      );
+      final wrap = await gw.bitchatWrap(
+        rumor: rumor,
+        senderPrivkey: senderSk,
+        recipientPubkey: recipientPub,
+      );
+      expect(wrap.kind, 1059);
+
+      final res = await gw.unwrapGiftWrap(wrap, [(sk: recipientSk, bitchat: true)]);
+      expect(res, isNotNull);
+      expect(res!.isBitchat, isTrue);
+      expect(res.rumor['pubkey'], senderPub);
+      final decoded =
+          bitchat.decodeBitchatPacket(res.rumor['content'] as String);
+      expect(decoded, isNotNull);
+      expect(decoded!.content, text);
+    });
   });
 
   group('gift wrap (NIP-59)', () {

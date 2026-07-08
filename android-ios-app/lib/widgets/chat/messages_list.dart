@@ -67,11 +67,15 @@ class MessageListScroller {
   }
 }
 
-/// The shared [MessageListScroller] for the mounted message list. A plain
-/// `Provider` (single instance for the app's lifetime); [MessagesList] binds its
-/// controller into it on build.
+/// The [MessageListScroller] for a mounted message list, keyed by its
+/// conversation `storageKey`. The single-chat [MessagesList] binds under the
+/// active view's key; each columns-deck column binds under ITS key — so a quoted
+/// blockquote tap (in `message_content.dart`) resolves the scroller for the list
+/// it lives in, jumping the RIGHT column (not just the single view). A `.family`
+/// keeps a stable instance per key.
 final messageListScrollerProvider =
-    Provider<MessageListScroller>((ref) => MessageListScroller());
+    Provider.family<MessageListScroller, String>(
+        (ref, storageKey) => MessageListScroller());
 
 /// The scrolling message list (`.messages-container`, column-reverse). Renders
 /// `messagesForCurrentViewProvider` newest-at-bottom via a reversed ListView,
@@ -276,7 +280,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         }
       }
     }
-    ref.read(messageListScrollerProvider).bind(_itemScrollController, indexById);
+    ref
+        .read(messageListScrollerProvider(view.storageKey))
+        .bind(_itemScrollController, indexById);
 
     // Reversed list: index 0 = newest at the bottom; the typing row is pinned
     // below the newest message, above the composer (`.typing-indicator`).

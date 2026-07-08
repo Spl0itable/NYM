@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/crypto/bech32_codec.dart' as bech32;
+import '../core/crypto/bitchat.dart' as bitchat;
 import '../core/crypto/keys.dart' as keys;
 import '../core/crypto/pow.dart' as pow;
 import '../core/crypto/schnorr.dart' as schnorr;
@@ -493,6 +494,13 @@ class NostrController {
       // self pubkey, so without this group messages other members wrap to our
       // ephemeral keys never arrive live. No-op when no keys are known yet.
       _refreshEphemeralSubscriptions();
+
+      // Subscribe the INITIAL channel's typing/read-receipt feed (kinds
+      // 24420/24421). The boot view is a channel (default #nymchat / restored
+      // last channel) reached WITHOUT going through [switchChannel], so without
+      // this its typing indicators + reader avatars would never arrive until the
+      // user manually switches channels once.
+      _subscribeActiveChannelTyping();
 
       // Broadcast presence on connect. The PWA's presence is purely
       // event-driven (`recordOwnActivity` fires on send/react only — there is
@@ -1524,19 +1532,26 @@ class NostrController {
       // our visibility proxy (no scroll-position tracking on native).
       final self = _identity?.pubkey ?? '';
       final geohash = event.tagValue('g');
+      final isGeo = geohash != null && geohash.isNotEmpty;
+      // Raw channel-wire key (no `#`) for the receipt's `g`/`d` tag: the geohash
+      // for a geo channel, else the named channel's `d` value.
+      final wireKey = isGeo ? geohash : event.tagValue('d');
+      // `#`-prefixed storage key for the seen check / unread keying.
       final key = EventMapper.channelKeyOf(event);
       // In columns view the "visible" proxy is the deck's seen gate (focused +
       // at-bottom + app visible — the PWA sends the receipt only when
       // `_cvMarkColumnRead` returned true, messages.js:546-555); in single
-      // view it degrades to "is the active view".
+      // view it degrades to "is the active view". Works for geohash (`g`) and
+      // named (`d`) channels alike.
       if (event.pubkey != self &&
-          geohash != null &&
-          geohash.isNotEmpty &&
+          key != null &&
+          wireKey != null &&
+          wireKey.isNotEmpty &&
           _isChannelMessageId(event.id) &&
           !_isHistorical(event.createdAt) &&
-          key != null &&
           appState.isConversationSeen(key)) {
-        unawaited(sendChannelReadReceipt(event.id, event.pubkey, geohash));
+        unawaited(sendChannelReadReceipt(event.id, event.pubkey, wireKey,
+            isGeohash: isGeo));
       }
     }
   }
@@ -2323,6 +2338,18 @@ class NostrController {
     final kind = u.rumorKind;
     final self = _service?.selfPubkey ?? '';
 
+    // Track the peer's PM transport so replies go out in a format they can
+    // decrypt (PWA `handleGiftWrapDM`: bitchatUsers / nymUsers). A bitchat-
+    // encrypted wrap → bitchat; a NIP-17 wrap carrying an `['x', …]` id → nym.
+    final sender = rumor['pubkey'] as String?;
+    if (sender != null && sender.isNotEmpty && sender != self) {
+      if (u.isBitchat) {
+        _bitchatUsers.add(sender);
+      } else if (_tags(rumor).any((t) => t.length > 1 && t[0] == 'x')) {
+        _nymUsers.add(sender);
+      }
+    }
+
     switch (kind) {
       case EventKind.dmRumor: // 14 — PM or group message
         // Archive the durable DM wrap to D1 (PMs + group messages; the PWA
@@ -2695,6 +2722,12 @@ class NostrController {
           recipientPubkey: senderPubkey,
           encryptToPubkey: ek?.encryptionPubkeyFor(senderPubkey, self),
         );
+        // When the group is the active view, also send a READ receipt so the
+        // sender sees our reader avatar (PWA groups.js:1321). Group receipts show
+        // as stacked reader avatars, not a checkmark. Scope-gated + deduped.
+        if (_isActiveView(GroupLogic.groupStorageKey(groupId))) {
+          unawaited(sendGroupReadReceipt(m.nymMessageId!, senderPubkey, groupId));
+        }
       }
       return;
     }
@@ -2833,7 +2866,6 @@ class NostrController {
       // `created_at > leaveTime` (F04-H4, groups.js:719-722): a stale invite
       // older than our leave is rejected and the group stays gone.
       if (!appState.clearLeftGroup(groupId, createdAtSec: inviteTs)) return;
-      if (appState.groupById(groupId) != null) return;
       final members = tags
           .where((t) => t.length > 1 && t[0] == 'p')
           .map((t) => t[1])
@@ -2851,6 +2883,23 @@ class NostrController {
           .where((t) => t.length > 1 && t[0] == 'mod')
           .map((t) => t[1])
           .toList();
+      // A bare shell (learned via a group MESSAGE before this invite, planted by
+      // `mergeGroupFromMessage` with no owner/avatar) already exists: BACKFILL
+      // its owner + appearance from the invite bootstrap instead of dropping them
+      // — the custom-group-avatar-missing-in-sidebar bug — then stop (an existing
+      // group is not re-notified). Enriching a known group is safe; only CREATING
+      // one stays gated below.
+      if (appState.groupById(groupId) != null) {
+        appState.enrichGroupIdentity(groupId,
+            createdBy: owner,
+            name: name,
+            avatar: avatar,
+            banner: banner,
+            description: description,
+            members: members,
+            mods: mods);
+        return;
+      }
       appState.upsertGroup(Group(
         id: groupId,
         name: name,
@@ -2957,21 +3006,21 @@ class NostrController {
         // claimed owner IS the sender (`senderIsClaimedOwner`, groups.js:900-904)
         // so a non-owner can't conjure a group into the sidebar. Mirrors the
         // PWA's `trustBootstrap` create (groups.js:912-934).
+        final claimedOwner = _tagValue(tags, 'owner');
+        final members = tags
+            .where((t) => t.length > 1 && t[0] == 'p')
+            .map((t) => t[1])
+            .toList();
+        final name = _tagValue(tags, 'subject') ?? '';
+        final avatar = _tagValue(tags, 'avatar');
+        final banner = _tagValue(tags, 'banner');
+        final description = _tagValue(tags, 'description');
+        final mods = tags
+            .where((t) => t.length > 1 && t[0] == 'mod')
+            .map((t) => t[1])
+            .toList();
         if (appState.groupById(groupId) == null) {
-          final claimedOwner = _tagValue(tags, 'owner');
           if (claimedOwner != null && claimedOwner == senderPubkey) {
-            final members = tags
-                .where((t) => t.length > 1 && t[0] == 'p')
-                .map((t) => t[1])
-                .toList();
-            final name = _tagValue(tags, 'subject') ?? '';
-            final avatar = _tagValue(tags, 'avatar');
-            final banner = _tagValue(tags, 'banner');
-            final description = _tagValue(tags, 'description');
-            final mods = tags
-                .where((t) => t.length > 1 && t[0] == 'mod')
-                .map((t) => t[1])
-                .toList();
             final allowInv = _tagValue(tags, 'allow_invites');
             final inviteEnabledTag = _tagValue(tags, 'invite_enabled');
             final inviteEpochTag = _tagValue(tags, 'invite_epoch');
@@ -2994,6 +3043,20 @@ class NostrController {
                   : DateTime.now().millisecondsSinceEpoch,
             ));
           }
+        } else {
+          // The group is already known — possibly a bare message-shell with no
+          // owner/avatar (member added by a NON-owner never hit the create above,
+          // which stays owner-gated to block spoofed conjuring). Backfill its
+          // owner + appearance from the add-member bootstrap so the sidebar shows
+          // the custom avatar; enriching a group we're already in is safe.
+          appState.enrichGroupIdentity(groupId,
+              createdBy: claimedOwner,
+              name: name,
+              avatar: avatar,
+              banner: banner,
+              description: description,
+              members: members,
+              mods: mods);
         }
       }
     }
@@ -3654,6 +3717,71 @@ class NostrController {
   final Map<String, _PendingDm> _pendingDms = <String, _PendingDm>{};
   Timer? _dmRetryTimer;
 
+  /// Peers we've received a bitchat-format PM from (PWA `bitchatUsers`) — we
+  /// send them a parallel `bitchat1:` wrap so the bitchat app can decrypt us.
+  final Set<String> _bitchatUsers = <String>{};
+
+  /// Peers we've received a Nymchat-format PM/receipt from (PWA `nymUsers`) —
+  /// they get a NIP-17 wrap. An UNKNOWN peer (in neither set) gets BOTH.
+  final Set<String> _nymUsers = <String>{};
+
+  /// Publishes a 1:1 PM in the transport(s) the peer understands (PWA
+  /// `sendNIP17PM` dual-send, pms.js:326-372). A known-bitchat peer gets a
+  /// `bitchat1:` wrap, a known-nym peer a NIP-17 wrap, and an unknown peer BOTH.
+  /// The self-copy is always NIP-17 (handled inside [NostrService.publishPM]).
+  /// Used by the initial send and every auto-retry so the format decision stays
+  /// consistent as [_bitchatUsers] / [_nymUsers] learn the peer over time.
+  Future<void> _publishDualPm({
+    required UnsignedEvent rumor,
+    required String recipientPubkey,
+    void Function(NostrEvent wrap)? onWrap,
+  }) async {
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) return;
+
+    final isKnownBitchat = _bitchatUsers.contains(recipientPubkey);
+    final isKnownNym = _nymUsers.contains(recipientPubkey);
+    final isUnknown = !isKnownBitchat && !isKnownNym;
+
+    UnsignedEvent? bitchatRumor;
+    if (isKnownBitchat || isUnknown) {
+      // The bitchat rumor's content is a `bitchat1:` packet; it carries the SAME
+      // `nymMessageId` (`x` tag) as the nym rumor so a peer's reaction/receipt
+      // matches across both formats (pms.js:339-346).
+      String? nymMessageId;
+      for (final t in rumor.tags) {
+        if (t.length > 1 && t[0] == 'x') {
+          nymMessageId = t[1];
+          break;
+        }
+      }
+      final encoded = bitchat.encodeBitchatMessage(
+        rumor.content,
+        identity.pubkey,
+        recipientPubkey: recipientPubkey,
+      );
+      bitchatRumor = UnsignedEvent(
+        pubkey: identity.pubkey,
+        createdAt: rumor.createdAt,
+        kind: EventKind.dmRumor,
+        tags: [
+          if (nymMessageId != null) ['x', nymMessageId],
+        ],
+        content: encoded.content,
+      );
+    }
+
+    await service.publishPM(
+      rumor: rumor,
+      recipientPubkey: recipientPubkey,
+      settings: _msgSettings,
+      onWrap: onWrap,
+      bitchatRumor: bitchatRumor,
+      sendNymWrap: isKnownNym || isUnknown,
+    );
+  }
+
   /// Enqueues a freshly-sent PM for receipt-driven auto-retry and starts the
   /// retry checker if idle (pms.js:116-130 `trackPendingDM`).
   void _trackPendingDm({
@@ -3715,10 +3843,9 @@ class NostrController {
       pending.attempts++;
       pending.lastAttemptMs = now;
       if (service != null) {
-        unawaited(service.publishPM(
+        unawaited(_publishDualPm(
           rumor: pending.rumor,
           recipientPubkey: pending.recipientPubkey,
-          settings: _msgSettings,
         ));
       }
     });
@@ -3746,10 +3873,9 @@ class NostrController {
         return;
       }
       pending.lastAttemptMs = now;
-      unawaited(service.publishPM(
+      unawaited(_publishDualPm(
         rumor: pending.rumor,
         recipientPubkey: pending.recipientPubkey,
-        settings: _msgSettings,
       ));
     });
     for (final id in done) {
@@ -3867,10 +3993,9 @@ class NostrController {
               content: base.content,
             );
       try {
-        await service.publishPM(
+        await _publishDualPm(
           rumor: rumor,
           recipientPubkey: view.id,
-          settings: _msgSettings,
           onWrap: _archiveSentWrap,
         );
         // Queue for automatic re-send until a delivery receipt acks it
@@ -3919,10 +4044,15 @@ class NostrController {
         nymMessageId: nymMessageId,
         ephemeralPk: next.pk,
         // NIP-30 declarations for any known custom `:shortcode:` in the body
-        // (groups.js:1699 `tags.push(...customEmojiTagsForContent(content))`).
-        extraTags: _ref
-            .read(liveCustomEmojiProvider.notifier)
-            .emojiTagsForContent(trimmed),
+        // (groups.js:1699 `tags.push(...customEmojiTagsForContent(content))`),
+        // plus the owner's group-metadata piggyback (`_attachGroupMetaTags`) so
+        // members converge on the custom avatar/banner even from a D1 backfill.
+        extraTags: [
+          ..._ref
+              .read(liveCustomEmojiProvider.notifier)
+              .emojiTagsForContent(trimmed),
+          ...GroupLogic.groupMetaPiggybackTags(group, identity.pubkey),
+        ],
       );
       await service.publishGroupMessage(
         rumor: rumor,
@@ -5168,6 +5298,8 @@ class NostrController {
         content: trimmed,
         nymMessageId: GroupLogic.generateGroupId(),
         ephemeralPk: next.pk,
+        // Owner metadata piggyback, same as a fresh send.
+        extraTags: GroupLogic.groupMetaPiggybackTags(group, identity.pubkey),
       );
       await service.publishGroupMessage(
         rumor: _withEditTag(base, messageId),
@@ -5402,13 +5534,17 @@ class NostrController {
     _typingThrottle[key] = now;
 
     if (view.kind == ViewKind.channel) {
-      // Public channel typing (kind 24420) — only for geohash channels, exactly
-      // like the PWA `handleChannelTypingSignal` (gated on `currentGeohash`).
+      // Public channel typing (kind 24420). The channel wire tag is `g` for a
+      // geohash channel and `d` for a named channel (e.g. #nymchat); the PWA
+      // gates its send on `currentGeohash`, but the receive + subscribe sides
+      // already handle both tags, so we send for both to make named-channel
+      // typing work Flutter↔Flutter.
       final entry = state.channels.where((c) => c.key == view.id.toLowerCase());
-      if (entry.isEmpty || !entry.first.isGeohash) return;
+      if (entry.isEmpty) return;
       await service.publishChannelTyping(
         status: 'start',
-        geohash: entry.first.geohash,
+        channelKey: entry.first.key,
+        isGeohash: entry.first.isGeohash,
         nym: identity.nym,
       );
       return;
@@ -5514,13 +5650,15 @@ class NostrController {
           _ref.read(settingsProvider).readReceiptsScope, 'channel');
 
   /// Publishes a public channel read receipt (kind 24421) for [messageId] by
-  /// [authorPubkey] in [geohash], once per message. Scope-gated to the channel
-  /// context and geohash channels only (PWA `sendChannelReadReceipt`): never
-  /// receipts our own message, and dedupes via [_sentChannelReadReceipts].
+  /// [authorPubkey] in [channelKey], once per message. Scope-gated to the
+  /// channel context (PWA `sendChannelReadReceipt`): never receipts our own
+  /// message, and dedupes via [_sentChannelReadReceipts]. [isGeohash] selects
+  /// the `g` (geohash) vs `d` (named channel) wire tag.
   Future<void> sendChannelReadReceipt(
-      String messageId, String authorPubkey, String geohash) async {
+      String messageId, String authorPubkey, String channelKey,
+      {bool isGeohash = true}) async {
     if (!_channelReceiptAllowed()) return;
-    if (messageId.isEmpty || authorPubkey.isEmpty || geohash.isEmpty) return;
+    if (messageId.isEmpty || authorPubkey.isEmpty || channelKey.isEmpty) return;
     final identity = _identity;
     final service = _service;
     if (identity == null || service == null) return;
@@ -5537,7 +5675,8 @@ class NostrController {
     await service.publishChannelReceipt(
       messageId: messageId,
       authorPubkey: authorPubkey,
-      geohash: geohash,
+      channelKey: channelKey,
+      isGeohash: isGeohash,
       nym: identity.nym,
     );
   }
@@ -5555,8 +5694,9 @@ class NostrController {
     final view = state.view;
     if (view.kind != ViewKind.channel) return;
     final entry = state.channels.where((c) => c.key == view.id.toLowerCase());
-    if (entry.isEmpty || !entry.first.isGeohash) return;
-    final geohash = entry.first.geohash;
+    if (entry.isEmpty) return;
+    final channelKey = entry.first.key;
+    final isGeohash = entry.first.isGeohash;
     final messages = state.messages[view.storageKey];
     if (messages == null || messages.isEmpty) return;
     // Mirror the PWA's tail window (`messages.slice(-channelPageSize)`); 100 is
@@ -5567,8 +5707,13 @@ class NostrController {
     for (final m in tail) {
       if (m.isOwn || m.isHistorical) continue;
       if (!_isChannelMessageId(m.id)) continue;
-      final gh = (m.geohash ?? '').isNotEmpty ? m.geohash! : geohash;
-      unawaited(sendChannelReadReceipt(m.id, m.pubkey, gh));
+      // Geohash channels can carry a per-message geohash; named channels always
+      // use the channel key as the `d`-tag value.
+      final key = isGeohash
+          ? ((m.geohash ?? '').isNotEmpty ? m.geohash! : channelKey)
+          : channelKey;
+      unawaited(
+          sendChannelReadReceipt(m.id, m.pubkey, key, isGeohash: isGeohash));
     }
   }
 
@@ -5576,6 +5721,68 @@ class NostrController {
   /// a channel read receipt is sent).
   static final RegExp _channelMessageIdRe = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
   bool _isChannelMessageId(String id) => _channelMessageIdRe.hasMatch(id);
+
+  // --- Group read receipts (gift-wrapped kind-69420, shown as reader avatars) -
+  // Mirrors the PWA's group receipt path (groups.js `sendNymReceipt(..,'read',
+  // ..,'group',groupId)` + `_markVisibleGroupMessagesRead`). A group renders
+  // stacked reader avatars (like channels), NOT a delivery checkmark, so we only
+  // send/track the 'read' receipt; encryption targets the sender's ephemeral key.
+
+  /// nymMessageIds we've already published a group 'read' receipt for.
+  final Set<String> _sentGroupReadReceipts = <String>{};
+
+  /// Publishes a group read receipt (gift-wrapped kind 69420, `receipt:'read'`)
+  /// for [messageId] to its author [authorPubkey] in [groupId], encrypted to the
+  /// author's advertised ephemeral key. Scope-gated to the `group` context and
+  /// deduped once per message; never receipts our own message.
+  Future<void> sendGroupReadReceipt(
+      String messageId, String authorPubkey, String groupId) async {
+    if (!_indicatorScopeAllows(
+        _ref.read(settingsProvider).readReceiptsScope, 'group')) {
+      return;
+    }
+    if (messageId.isEmpty || authorPubkey.isEmpty) return;
+    final identity = _identity;
+    final service = _service;
+    if (identity == null || service == null) return;
+    if (authorPubkey == identity.pubkey) return;
+    if (!_sentGroupReadReceipts.add(messageId)) return;
+    if (_sentGroupReadReceipts.length > 2000) {
+      final keep = _sentGroupReadReceipts
+          .toList()
+          .sublist(_sentGroupReadReceipts.length - 1500);
+      _sentGroupReadReceipts
+        ..clear()
+        ..addAll(keep);
+    }
+    final ek = _groups?.keysFor(groupId);
+    await service.publishReceipt(
+      messageId: messageId,
+      receiptType: 'read',
+      recipientPubkey: authorPubkey,
+      encryptToPubkey: ek?.encryptionPubkeyFor(authorPubkey, identity.pubkey),
+    );
+  }
+
+  /// Catch-up: read-receipts every loaded, non-own message in the open group
+  /// [groupId] (PWA `_markVisibleGroupMessagesRead`). Called on opening / return
+  /// to a group so receipts fire for messages that piled up while away.
+  void markVisibleGroupMessagesRead(String groupId) {
+    if (groupId.isEmpty) return;
+    if (!_indicatorScopeAllows(
+        _ref.read(settingsProvider).readReceiptsScope, 'group')) {
+      return;
+    }
+    final messages =
+        _ref.read(appStateProvider).messages[GroupLogic.groupStorageKey(groupId)];
+    if (messages == null || messages.isEmpty) return;
+    for (final m in messages) {
+      if (m.isOwn || m.isHistorical) continue;
+      final id = m.nymMessageId;
+      if (id == null || id.isEmpty) continue;
+      unawaited(sendGroupReadReceipt(id, m.pubkey, groupId));
+    }
+  }
 
   /// Routes an inbound public channel typing indicator (kind 24420): a peer is
   /// typing in a geohash channel. Mirrors the PWA's `handleChannelTypingEvent`
@@ -5604,11 +5811,14 @@ class NostrController {
     // The typing store keys on the active view's storageKey; a geohash channel
     // view is `ChatView.channel(geohash)` → storageKey `'#<geohash>'`
     // (app_state.dart:94). `setTyping` removes the entry on `typing: false`,
-    // mirroring the PWA's `status === 'stop'` branch.
+    // mirroring the PWA's `status === 'stop'` branch. The `['n', nym]` tag lets
+    // the typing row show the real name for a sender we've never seen a message
+    // from (else it falls back to "Someone").
     appState.setTyping(
       storageKey: '#${geohash.toLowerCase()}',
       pubkey: event.pubkey,
       typing: status == 'start',
+      nym: event.tagValue('n'),
     );
   }
 
@@ -5692,9 +5902,14 @@ class NostrController {
     final service = _service;
     if (service == null || !service.canSign) return false;
 
-    // Private reactions (PM/group) are gift-wrapped to the conversation.
+    // Private reactions (PM/group) are gift-wrapped to the conversation. The
+    // PUBLISHED `e` tag must reference the SHARED `nymMessageId` — the local
+    // gift-wrap id is meaningless to the recipient's client (and the PWA), which
+    // correlate the reaction to their own copy by the shared id. The optimistic
+    // local update above stays keyed on the wrap `messageId`.
     if (kind == '1059' || kind == '14') {
-      return _sendPrivateReaction(messageId, emoji, target, remove);
+      final shareId = appState.messageById(messageId)?.nymMessageId ?? messageId;
+      return _sendPrivateReaction(shareId, emoji, target, remove);
     }
 
     // Public channel reaction. Resolve the channel context from the active view.
@@ -6453,8 +6668,9 @@ class NostrController {
     if (state.view.kind != ViewKind.channel) return;
     final entry =
         state.channels.where((c) => c.key == state.view.id.toLowerCase());
-    if (entry.isEmpty || !entry.first.isGeohash) return;
-    _service?.subscribeChannelTyping(entry.first.geohash);
+    if (entry.isEmpty) return;
+    _service?.subscribeChannelTyping(entry.first.key,
+        isGeohash: entry.first.isGeohash);
     // Receipt the messages that piled up here while we were away (PWA
     // `openChannel` → `markVisibleChannelMessagesRead`).
     markVisibleChannelMessagesRead();
@@ -6884,6 +7100,16 @@ class NostrController {
         .read(nymbotServiceProvider)
         .setApiSocketRequest(api.botSocketRequest);
     _storageSync = sync;
+    // Wire the relay-side NIP-59 `nym-sync` publisher so every synced category
+    // (settings sections, notifications, read-state, group conversations/keys/
+    // history) is BOTH written to D1 AND pushed live as a gift-wrapped event to
+    // our other devices — the PWA's dual sink (`_publishEncryptedSettings` calls
+    // `_saveSettingsBlobToD1` AND `_publishWrappedNostrEvent`). Without this the
+    // wrap half was dead: D1 held the truth but online devices only saw changes
+    // on their next boot/reconnect `settings-get`, never a live push.
+    sync.setSyncWrapPublisher((payload, dTag) async {
+      await _service?.publishNymSyncWrap(payload: payload, dTag: dTag);
+    });
     _zapArchive?.dispose();
     _zapArchive = ZapArchive(sync);
 
@@ -7043,6 +7269,9 @@ class NostrController {
         markVisibleChannelMessagesRead();
       case ViewKind.group:
         unawaited(_backfillGroupArchive());
+        // Catch up read receipts for the loaded group backlog (PWA
+        // `_markVisibleGroupMessagesRead`) so the sender sees our reader avatar.
+        markVisibleGroupMessagesRead(view.id);
         // PM-scope zap badges for the rendered group backlog (messages.js:3112
         // gathers the rendered ids → `_backfillZapReceipts`, pm scope).
         _backfillZapReceiptsFor(view.storageKey, scope: 'pm');

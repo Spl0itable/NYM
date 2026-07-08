@@ -1285,6 +1285,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _reactors.clear();
     _reactionLastAction.clear();
     _channelMessageReaders.clear();
+    _pendingPmReceipts.clear();
     _processedPollVoteIds.clear();
     _pendingPollVotes.clear();
     _pendingDeletions.clear();
@@ -1330,6 +1331,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _reactors.clear();
     _reactionLastAction.clear();
     _channelMessageReaders.clear();
+    _pendingPmReceipts.clear();
     _processedPollVoteIds.clear();
     _pendingPollVotes.clear();
     _pendingDeletions.clear();
@@ -1477,6 +1479,16 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// lands; [applyChannelReader] copies the live set onto `message.readers`
   /// (the avatar-row consumer) whenever either side updates.
   final Map<String, Map<String, String>> _channelMessageReaders = {};
+
+  /// Early PM/group delivery-read receipts (kind 69420) that arrived BEFORE the
+  /// own outgoing message they ack was indexed — the async cache/D1 restore
+  /// race. Keyed by lowercased `nymMessageId` → the highest-ranked
+  /// [DeliveryStatus] seen. Replayed the instant the own message lands
+  /// ([_indexMessage]), the PM/group analogue of [_channelMessageReaders].
+  /// Receipts are LIVE-ONLY (never archived), so without this a receipt that
+  /// wins the race against the restore is lost forever and the ✓✓ never advances
+  /// — the "receipts don't work, especially when backfilled" report.
+  final Map<String, DeliveryStatus> _pendingPmReceipts = {};
 
   /// Dedup set for poll-vote events (`processedPollVoteIds`, cap 3000).
   final Set<String> _processedPollVoteIds = {};
@@ -1667,8 +1679,24 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (nid != null && nid.isNotEmpty) {
       _msgByAnyId[nid] = m;
       _convKeyByAnyId[nid] = convKey;
+      // Replay a PM/group delivery-read receipt that arrived before this OWN
+      // message was indexed (the restore race — see [_pendingPmReceipts]). The
+      // caller emits after the ingest/restore, so no emit is needed here.
+      if (m.isOwn && _pendingPmReceipts.isNotEmpty) {
+        final pending = _pendingPmReceipts.remove(nid.toLowerCase());
+        if (pending != null &&
+            PmLogic.statusOrder(pending) >
+                PmLogic.statusOrder(m.deliveryStatus)) {
+          m.deliveryStatus = pending;
+        }
+      }
     }
   }
+
+  /// The stored [Message] for any id it is indexed under — its real event/
+  /// gift-wrap id OR its shared `nymMessageId` — or null. Public accessor over
+  /// the id-index (used e.g. to resolve a PM/group reaction's shared target id).
+  Message? messageById(String id) => id.isEmpty ? null : _msgByAnyId[id];
 
   /// Drops [m]'s index entries, but only those still pointing at [m] (guards
   /// against clobbering a re-used key).
@@ -2065,8 +2093,16 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // another Nostr app to a non-Nymchat note that merely shares an id space.
     if (kTag == null && !isKnownMessageId(r.messageId)) return;
 
+    // Canonicalize the target to the stored [Message.id]. A PM/group reaction's
+    // `e` tag references the shared `nymMessageId` (or rumor id), but the row
+    // renders reactions keyed by the gift-wrap `Message.id`; store the tally
+    // under that id (via the `_msgByAnyId` index which maps both) so it actually
+    // attaches (the PWA's `_migrateReactionKey` intent). Channels are unaffected
+    // — there the `e` tag already equals `Message.id`.
+    final canonicalId = _msgByAnyId[r.messageId]?.id ?? r.messageId;
+
     // Latest-by-timestamp wins on out-of-order delivery (reactions.js).
-    final actionKey = '${r.messageId}:${r.emoji}:${r.reactor}';
+    final actionKey = '$canonicalId:${r.emoji}:${r.reactor}';
     final last = _reactionLastAction[actionKey];
     if (last != null && last > r.ts) return;
     _reactionLastAction[actionKey] = r.ts;
@@ -2078,7 +2114,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
 
     applyReaction(
-      messageId: r.messageId,
+      messageId: canonicalId,
       emoji: r.emoji,
       reactor: r.reactor,
       removed: r.removed,
@@ -2522,6 +2558,74 @@ class AppStateNotifier extends StateNotifier<AppState> {
     onGroupStoreChanged?.call();
   }
 
+  /// Backfills identity/appearance onto an EXISTING group first learned as a
+  /// bare shell — [mergeGroupFromMessage] plants one (no `avatar`/`createdBy`)
+  /// for a member added by a NON-owner (the add-member create is owner-gated) or
+  /// reached by a group message before its invite. Adopts each field ONLY when
+  /// the group currently lacks it, so an owner's real metadata is never
+  /// clobbered. Setting `createdBy` also un-gates the owner's later
+  /// [GroupLogic] `_applyMetadata` avatar update. Safe by construction: it
+  /// enriches a group we ALREADY have (never conjures a new one, so the
+  /// anti-spoof create-gates are untouched). Emits if anything changed — the fix
+  /// for a custom group avatar not showing in the sidebar. Returns whether it
+  /// changed anything.
+  bool enrichGroupIdentity(
+    String groupId, {
+    String? createdBy,
+    String? name,
+    String? avatar,
+    String? banner,
+    String? description,
+    List<String>? members,
+    List<String>? mods,
+  }) {
+    final g = groupById(groupId);
+    if (g == null) return false;
+    bool has(String? v) => v != null && v.isNotEmpty;
+    var changed = false;
+    if (!has(g.createdBy) && has(createdBy)) {
+      g.createdBy = createdBy;
+      changed = true;
+    }
+    if (g.name.isEmpty && has(name)) {
+      g.name = name!;
+      changed = true;
+    }
+    if (!has(g.avatar) && has(avatar)) {
+      g.avatar = avatar;
+      changed = true;
+    }
+    if (!has(g.banner) && has(banner)) {
+      g.banner = banner;
+      changed = true;
+    }
+    if (!has(g.description) && has(description)) {
+      g.description = description;
+      changed = true;
+    }
+    if (members != null) {
+      for (final pk in members) {
+        if (pk.isNotEmpty && !g.members.contains(pk)) {
+          g.members.add(pk);
+          changed = true;
+        }
+      }
+    }
+    if (mods != null && g.mods.isEmpty) {
+      for (final pk in mods) {
+        if (pk.isNotEmpty && !g.mods.contains(pk)) {
+          g.mods.add(pk);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      _scheduleEmit();
+      onGroupStoreChanged?.call();
+    }
+    return changed;
+  }
+
   /// Merges an inbound group MESSAGE's carried metadata into the group entry —
   /// the PWA's `addGroupConversation(groupId, groupName, memberPubkeys, ts)`
   /// call on every group message (groups.js:1292 → :2454). Existing group:
@@ -2878,14 +2982,47 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   /// Applies a parsed delivery/read [receipt] to our own outgoing message that
-  /// shares its `nymMessageId`. Only advances delivery status, never regresses.
+  /// shares its `nymMessageId`. For a 1:1 PM this advances the delivery status
+  /// (checkmark), never regressing; for a GROUP message a 'read' receipt instead
+  /// records the reader's avatar (groups show a reader row, not ticks — PWA
+  /// `pms.js:948-958`).
   void applyReceipt(ReceiptInfo receipt) {
     final target = receipt.messageId.toLowerCase();
     final next = PmLogic.deliveryFromReceipt(receipt.receiptType);
     // Delivery/read receipts reference our own message by its nymMessageId — an
     // O(1) index lookup replaces the former full-store scan.
     final m = _msgByAnyId[receipt.messageId] ?? _msgByAnyId[target];
-    if (m == null || !m.isOwn) return;
+
+    // GROUP read receipt → reader avatar. Own group messages are indexed on send
+    // (and hydrated on boot), so a 'read' receipt for one always resolves here —
+    // no early-buffer needed (a read receipt can't precede its own message).
+    final readerPk = receipt.readerPubkey;
+    if (m != null &&
+        m.isOwn &&
+        m.isGroup &&
+        receipt.receiptType == 'read' &&
+        readerPk != null &&
+        readerPk.isNotEmpty) {
+      final nid = m.nymMessageId;
+      if (nid != null && nid.toLowerCase() == target) {
+        final nym = state.users[readerPk]?.nym ?? getNymFromPubkey('nym', readerPk);
+        applyChannelReader(messageId: nid, readerPubkey: readerPk, readerNym: nym);
+      }
+      return;
+    }
+
+    if (m == null) {
+      // The own message this acks isn't indexed yet — a live receipt that beat
+      // the async cache/D1 restore. Buffer it (keeping the highest-ranked
+      // status) and replay when the message lands ([_indexMessage]); receipts
+      // are never archived, so dropping it here would lose it forever.
+      final cur = _pendingPmReceipts[target];
+      if (cur == null || PmLogic.statusOrder(next) > PmLogic.statusOrder(cur)) {
+        _pendingPmReceipts[target] = next;
+      }
+      return;
+    }
+    if (!m.isOwn) return;
     final nid = m.nymMessageId;
     if (nid == null || nid.toLowerCase() != target) return;
     if (PmLogic.statusOrder(next) > PmLogic.statusOrder(m.deliveryStatus)) {
@@ -2924,9 +3061,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
   bool _mirrorChannelReaders(String messageId) {
     final readers = _channelMessageReaders[messageId];
     if (readers == null) return false;
-    // Channel read receipts reference our own message by its event id — O(1).
     final m = _msgByAnyId[messageId];
-    if (m == null || !m.isOwn || m.id != messageId) return false;
+    if (m == null || !m.isOwn) return false;
+    // A public-channel receipt references the own message by its EVENT id; a
+    // group receipt references it by its nymMessageId (the wrap id differs).
+    // Accept either so the same reader store serves channels AND groups.
+    if (m.id != messageId && m.nymMessageId != messageId) return false;
     m.readers
       ..clear()
       ..addAll(readers);
@@ -2941,7 +3081,21 @@ class AppStateNotifier extends StateNotifier<AppState> {
     required String pubkey,
     required bool typing,
     int? expiresAtMs,
+    String? nym,
   }) {
+    // Record the sender's display nym from the typing event's `['n']` tag so the
+    // typing row resolves a name instead of falling back to "Someone" — the PWA
+    // stores the nym straight off the event (nostr-core.js
+    // `handleChannelTypingEvent`: `convTypers.set(pubkey, { nym: displayNym })`).
+    // We only SEED an unknown pubkey (mirroring the group memberProfiles seeding
+    // pattern); a live profile / message-derived nym still supersedes it.
+    if (typing &&
+        nym != null &&
+        nym.isNotEmpty &&
+        !state.users.containsKey(pubkey)) {
+      state.users[pubkey] =
+          User(pubkey: pubkey, nym: getNymFromPubkey(nym, pubkey));
+    }
     final k = '$storageKey|$pubkey';
     if (typing) {
       state.typing[k] =
@@ -4106,6 +4260,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
     );
     list.add(m);
     m.optimistic = true;
+    // Index the own optimistic echo so a live delivery/read receipt — which
+    // references it by `nymMessageId` and resolves through the O(1) id index in
+    // [applyReceipt] — can actually find it. Receipts are ephemeral (never
+    // re-delivered), so an unindexed echo leaves the PM checkmark stuck on ✓
+    // (and a group message's reader avatars empty) forever. Also replays any
+    // receipt that beat the echo (via [_indexMessage]'s pending-receipt hook).
+    // Channels are excluded: their own echo reconciles + indexes by event id via
+    // [replaceOptimistic], not by nymMessageId.
+    if (view.kind != ViewKind.channel) _indexMessage(view.storageKey, m);
     if (nymMessageId != null) _seenNymMessageIds.add(nymMessageId);
 
     // Own-message local-hide notices (messages.js:637-650). The message is still
@@ -4138,6 +4301,29 @@ class AppStateNotifier extends StateNotifier<AppState> {
             payload: trimmed,
           ),
         );
+      }
+    }
+
+    // Raise the conversation's sort key so the just-sent PM/group jumps to the
+    // TOP of the sidebar's PRIVATE MESSAGES list right away (the PWA's
+    // `insertPMInOrder` / `addGroupConversation` bump `lastMessageTime` on send).
+    // Inbound messages do this in their ingest; the optimistic own echo must too
+    // — otherwise your own send doesn't reorder the list until the self-copy
+    // round-trips back (and it's deduped by nymMessageId before the meta update,
+    // so it never does). No-op for a brand-new peer with no conversation row yet.
+    if (view.kind == ViewKind.pm) {
+      for (final conv in state.pmConversations) {
+        if (conv.pubkey == view.id) {
+          if (m.timestamp > conv.lastMessageTime) {
+            conv.lastMessageTime = m.timestamp;
+          }
+          break;
+        }
+      }
+    } else if (view.kind == ViewKind.group) {
+      final g = groupById(view.id);
+      if (g != null && m.timestamp > g.lastMessageTime) {
+        g.lastMessageTime = m.timestamp;
       }
     }
 

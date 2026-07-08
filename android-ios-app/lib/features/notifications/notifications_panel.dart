@@ -707,9 +707,15 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // .notification-item-author: `<base#suffix>` in primary,
-                      // w600. The angle brackets are literal (`.nym-bracket`,
-                      // inherits the primary author color).
-                      _Author(entry: entry, pubkey: pubkey),
+                      // w600. The `.nym-bracket` `<…>` show in IRC mode only
+                      // (the PWA CSS hides them under chat-bubbles), so gate on
+                      // the message style to match the in-chat author.
+                      _Author(
+                        entry: entry,
+                        pubkey: pubkey,
+                        brackets: !ref.watch(
+                            settingsProvider.select((s) => s.useBubbles)),
+                      ),
                       const SizedBox(height: 2),
                       // .notification-item-body: text 13, line-height 1.4,
                       // 2-line clamp. Routed through [InlineEmojiText] so a
@@ -757,11 +763,18 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
 /// (`.nym-bracket`, primary), with the decorated nym (base + dim `#suffix` +
 /// badges) inside. For non-pubkey entries the bare title is bracketed.
 class _Author extends StatelessWidget {
-  const _Author({required this.entry, required this.pubkey});
+  const _Author(
+      {required this.entry, required this.pubkey, required this.brackets});
   final NotificationEntry entry;
 
-  /// The sender pubkey to decorate (empty → render the bare bracketed title).
+  /// The sender pubkey to decorate (empty → render the bare title).
   final String pubkey;
+
+  /// Whether to wrap the nym in the IRC-style `<…>` `.nym-bracket` pair. The
+  /// PWA emits the brackets but its `.nym-bracket` CSS hides them in chat-bubble
+  /// mode, so they only show in IRC mode — mirror that by gating on the message
+  /// style (bubble → no brackets, matching the in-chat author).
+  final bool brackets;
 
   @override
   Widget build(BuildContext context) {
@@ -771,7 +784,7 @@ class _Author extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('<', style: bracket),
+        if (brackets) Text('<', style: bracket),
         Flexible(
           child: pubkey.isNotEmpty
               ? CallNym(
@@ -792,7 +805,7 @@ class _Author extends StatelessWidget {
                       fontWeight: FontWeight.w600),
                 ),
         ),
-        Text('>', style: bracket),
+        if (brackets) Text('>', style: bracket),
       ],
     );
   }

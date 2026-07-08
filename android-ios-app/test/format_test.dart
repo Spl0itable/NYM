@@ -100,6 +100,30 @@ void main() {
       expect(m.suffix, isNull);
     });
 
+    test('multi-word nym with suffix -> ONE mention chip (spaces allowed)', () {
+      final inlines = paraInlines('hey @John Doe#a1b2 how are you');
+      final mentions = inlines.whereType<MentionNode>().toList();
+      expect(mentions.length, 1);
+      expect(mentions.first.base, '@John Doe');
+      expect(mentions.first.suffix, 'a1b2');
+    });
+
+    test('two suffixed mentions on a line each resolve, spaces intact', () {
+      final inlines = paraInlines('@al pha#c3fa and @be ta#d15d done');
+      final mentions = inlines.whereType<MentionNode>().toList();
+      expect(mentions.map((m) => '${m.base}#${m.suffix}'),
+          ['@al pha#c3fa', '@be ta#d15d']);
+    });
+
+    test('a space right before the #suffix is not swallowed', () {
+      // "@John #a1b2" is NOT a suffixed mention (trailing space guard); the
+      // bare "@John" still chips as a simple mention.
+      final inlines = paraInlines('@John #a1b2');
+      final m = inlines.whereType<MentionNode>().first;
+      expect(m.base, '@John');
+      expect(m.suffix, isNull);
+    });
+
     test('#9q8y -> geohash channel ref', () {
       final inlines = paraInlines('see #9q8y now');
       final ch = inlines.whereType<ChannelRefNode>().first;

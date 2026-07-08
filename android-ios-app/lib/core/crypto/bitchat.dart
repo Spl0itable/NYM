@@ -264,3 +264,117 @@ bool _looksLikeUuid(String s) => RegExp(
         r'^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$',
         caseSensitive: false)
     .hasMatch(s);
+
+/// Encodes [content] as a bitchat `bitchat1:` PRIVATE_MESSAGE packet — the
+/// inverse of [decodeBitchatPacket] and a 1:1 port of the PWA's
+/// `encodeBitchatMessage` (nostr-core.js:1024). The returned `content` is an
+/// UNENCRYPTED BitchatPacket (base64url); the encryption to the recipient
+/// happens in the gift wrap ([bitchatWrap]). `messageId` is a fresh UUID used
+/// for bitchat-native delivery/read receipt matching.
+///
+/// [senderPubkey] / [recipientPubkey] are 64-hex. When [recipientPubkey] is
+/// non-empty the HAS_RECIPIENT flag is set and its first 8 bytes ride the
+/// header (bitchat routing). [messageId] and [nowMs] are injectable for tests.
+({String content, String messageId}) encodeBitchatMessage(
+  String content,
+  String senderPubkey, {
+  String? recipientPubkey,
+  String? messageId,
+  int? nowMs,
+}) {
+  final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+  final msgId = messageId ?? _uuidV4();
+  final messageBytes = utf8.encode(content);
+  final messageIdBytes = utf8.encode(msgId);
+
+  // TLV fields use a 1-byte length when value <= 255 bytes; longer values set
+  // the high bit of the type byte (0x80) and use a 2-byte big-endian length.
+  final tlv = <int>[];
+  void pushTlv(int type, List<int> value) {
+    if (value.length <= 0xFF) {
+      tlv
+        ..add(type)
+        ..add(value.length);
+    } else {
+      tlv
+        ..add(type | 0x80)
+        ..add((value.length >> 8) & 0xFF)
+        ..add(value.length & 0xFF);
+    }
+    tlv.addAll(value);
+  }
+
+  pushTlv(0x00, messageIdBytes); // MESSAGE_ID
+  pushTlv(0x01, messageBytes); // CONTENT
+
+  final noisePayload = <int>[0x01, ...tlv]; // 0x01 = PRIVATE_MESSAGE
+
+  final parts = <int>[
+    0x01, // version 1
+    0x11, // type = NOISE_ENCRYPTED
+    0x07, // TTL 7
+  ];
+
+  // Timestamp: 8 bytes big-endian milliseconds.
+  final ts = BigInt.from(now);
+  for (var i = 7; i >= 0; i--) {
+    parts.add(((ts >> (i * 8)) & BigInt.from(0xFF)).toInt());
+  }
+
+  final hasRecipient = recipientPubkey != null && recipientPubkey.isNotEmpty;
+  parts.add(hasRecipient ? 0x01 : 0x00); // flags: 0x01 = HAS_RECIPIENT
+
+  final payloadLen = noisePayload.length;
+  parts
+    ..add((payloadLen >> 8) & 0xFF)
+    ..add(payloadLen & 0xFF);
+
+  // Sender id: first 8 bytes of our pubkey.
+  for (var i = 0; i < 8; i++) {
+    parts.add(int.parse(senderPubkey.substring(i * 2, i * 2 + 2), radix: 16));
+  }
+  // Recipient id: first 8 bytes of their pubkey (when HAS_RECIPIENT).
+  if (hasRecipient) {
+    for (var i = 0; i < 8; i++) {
+      parts.add(
+          int.parse(recipientPubkey.substring(i * 2, i * 2 + 2), radix: 16));
+    }
+  }
+
+  parts.addAll(noisePayload);
+
+  // Pad to the next block size (256/512/1024/2048) with 0xBE.
+  const blockSizes = [256, 512, 1024, 2048];
+  var target = 2048;
+  for (final s in blockSizes) {
+    if (s >= parts.length) {
+      target = s;
+      break;
+    }
+  }
+  while (parts.length < target) {
+    parts.add(0xBE);
+  }
+
+  return (
+    content: 'bitchat1:${_b64UrlNoPad(Uint8List.fromList(parts))}',
+    messageId: msgId,
+  );
+}
+
+/// A random v4 UUID (bitchat message id). Uses [randomBytes] so no extra
+/// dependency is pulled into this crypto module.
+String _uuidV4() {
+  final b = randomBytes(16);
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variant 10
+  String hex(int start, int end) {
+    final sb = StringBuffer();
+    for (var i = start; i < end; i++) {
+      sb.write(b[i].toRadixString(16).padLeft(2, '0'));
+    }
+    return sb.toString();
+  }
+
+  return '${hex(0, 4)}-${hex(4, 6)}-${hex(6, 8)}-${hex(8, 10)}-${hex(10, 16)}';
+}

@@ -714,10 +714,15 @@ class NymFormat {
     tokens = _splitByRegex(tokens, RegExp(r'https?://[^\s]+'),
         (m) => _NodeTok(LinkNode(m[0]!)));
 
-    // Mentions with suffix: @name#xxxx
+    // Mentions with suffix: @name#xxxx. The name part allows SPACES (a nym can
+    // be multi-word), bounded by the `#xxxx` suffix — the PWA's
+    // `@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b` (message-format.js). `[^@#\n]*?` is
+    // non-greedy and stops at `@`/`#`/newline; the `(?<!\s)` lookbehind keeps a
+    // trailing space out of the name (so "@John #a1b2" isn't swallowed whole)
+    // and disambiguates when several suffixed mentions share a line.
     tokens = _splitByRegex(
         tokens,
-        RegExp(r'@([^@#\s]+)#([0-9a-f]{4})\b', caseSensitive: false),
+        RegExp(r'@([^@#\n]*?)(?<!\s)#([0-9a-f]{4})\b', caseSensitive: false),
         (m) => _NodeTok(MentionNode(base: '@${m[1]}', suffix: m[2])));
 
     // Simple mentions: @name

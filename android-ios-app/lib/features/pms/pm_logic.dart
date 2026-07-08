@@ -152,7 +152,11 @@ class PmLogic {
   static bool isTyping(Map<String, dynamic> rumor) =>
       _tags(rumor).any((t) => t.isNotEmpty && t[0] == 'typing');
 
-  /// Parses a receipt rumor → (messageId, receiptType), or null.
+  /// Parses a receipt rumor → (messageId, receiptType, reader), or null. The
+  /// reader (the rumor author — the peer who delivered/read our message) is
+  /// needed for GROUP read receipts, which render the reader's avatar rather
+  /// than a 1:1 checkmark. Group vs PM is decided by the matched own message's
+  /// `isGroup` flag on receive, so no wire `g` tag is required (matching the PWA).
   static ReceiptInfo? parseReceipt(Map<String, dynamic> rumor) {
     String? messageId;
     String? type;
@@ -162,7 +166,11 @@ class PmLogic {
       if (t[0] == 'receipt') type = t[1];
     }
     if (messageId == null || type == null) return null;
-    return ReceiptInfo(messageId: messageId, receiptType: type);
+    return ReceiptInfo(
+      messageId: messageId,
+      receiptType: type,
+      readerPubkey: rumor['pubkey'] as String?,
+    );
   }
 
   /// Parses a typing rumor → (status, groupId?), or null.
@@ -227,13 +235,21 @@ class PmLogic {
 
 /// A parsed delivery/read receipt from a kind-69420 rumor.
 class ReceiptInfo {
-  ReceiptInfo({required this.messageId, required this.receiptType});
+  ReceiptInfo({
+    required this.messageId,
+    required this.receiptType,
+    this.readerPubkey,
+  });
 
   /// The `['x', …]` nymMessageId of the original message.
   final String messageId;
 
   /// 'delivered' | 'read'.
   final String receiptType;
+
+  /// The rumor author — the peer who delivered/read our message. Used to attach
+  /// the reader avatar for GROUP read receipts.
+  final String? readerPubkey;
 }
 
 /// A parsed typing indicator from a kind-69420 rumor.

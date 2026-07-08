@@ -1,0 +1,89 @@
+# Zapstore publishing manifest for Nymchat (com.nym.bar)
+# Docs: https://zapstore.dev/docs/publish   CLI: https://github.com/zapstore/zsp
+#
+# Publish with:   SIGN_WITH=nsec1... zsp publish
+# (run from the repo root, after `flutter build apk --release`)
+#
+# zsp reads the version/versionCode straight out of the APK, so there is no
+# `version:` field here — bump `version:` in pubspec.yaml instead.
+
+# The signed, universal release APK produced by `flutter build apk --release`.
+# This is a LOCAL path, which also lets zsp use the local icon/screenshots
+# below (offline-friendly). Point it at a URL/GitHub release instead if you
+# ever want zsp to pull the artifact remotely.
+release_source: build/app/outputs/flutter-apk/app-release.apk
+
+# Source repository (shown on the listing).
+repository: https://github.com/Spl0itable/NYM
+
+# --- App metadata ---
+name: Nymchat
+summary: Ephemeral Nostr chat with E2E-encrypted DMs, group calls, and Lightning zaps — no registration required.
+description: |
+  Nymchat (NYM — Nostr Ynstant Messenger) is a feature-rich, ephemeral chat
+  client built on the Nostr protocol, bridged with Bitchat for pseudonymous,
+  temporary messaging. No registration required — pick a nym and start
+  chatting instantly, or log in with an existing Nostr account.
+
+  **Identity**
+  - Ephemeral sessions: generate a temporary keypair and pseudonym per session
+  - Log in with a persistent Nostr identity (NIP-07, NIP-46, or nsec)
+  - Optional identity encryption with password, PIN, passkey, or biometrics
+  - Panic wipe: press-and-hold to instantly destroy all local data
+
+  **Messaging**
+  - End-to-end encrypted 1:1 DMs via NIP-17 gift wraps (NIP-59)
+  - End-to-end encrypted group chats with rotating ephemeral keys and
+    post-compromise recovery — relays cannot correlate group membership
+  - Forward secrecy and configurable disappearing messages
+  - Read receipts and typing indicators (per-scope: everyone, friends, or off)
+  - Rich text (Markdown), emoji reactions (NIP-25), polls, and custom emoji
+  - Peer-to-peer file sharing over WebRTC data channels
+
+  **Channels**
+  - Location-based geohash channels (kind 20000)
+  - Named topic channels (kind 23333)
+  - Geohash Explorer: browse location channels on an interactive globe
+
+  **Voice & Video**
+  - 1:1 and group audio/video calls — signaling over NIP-17 gift wraps,
+    media peer-to-peer over WebRTC
+
+  **Lightning**
+  - Send and receive Lightning zaps on messages and profiles (NIP-57)
+  - In-app flair shop: buy cosmetic styles and badges with Bitcoin
+
+  **Privacy & Moderation**
+  - No Google Play Services, Firebase, or trackers
+  - User and keyword blocking, flood protection, image blur
+  - Group roles: owner, moderator, kick, ban, transfer ownership
+
+  **Customization**
+  - Themes: Bitchat, Matrix Green, Amber Terminal, Cyberpunk, Hacker Blue, Ghost
+  - IRC-style or bubble layout, adjustable text size, wallpapers
+
+tags:
+  - nostr
+  - messaging
+  - social
+  - bitcoin
+  - lightning
+
+website: https://nymchat.app
+
+# SPDX identifier. Add a LICENSE file to the repo, then set this to match
+# (e.g. MIT, Apache-2.0, GPL-3.0-only). Left commented until a license exists.
+# license: MIT
+
+# --- Media (local paths, relative to repo root) ---
+icon: assets/images/NYM-icon.png
+# Add real device screenshots (phone-sized PNGs) and list them here — the
+# listing looks much better with 2–5 of them.
+# images:
+#   - assets/store/screenshots/1-chats.png
+#   - assets/store/screenshots/2-call.png
+
+# --- Release notes ---
+# Point at a CHANGELOG.md (Keep a Changelog format lets zsp pull the section
+# that matches the APK version). Create one, then uncomment:
+# release_notes: CHANGELOG.md

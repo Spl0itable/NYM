@@ -235,6 +235,39 @@ class GroupLogic {
     );
   }
 
+  /// The owner's current group metadata as message tags — the PWA's
+  /// `_attachGroupMetaTags` piggyback (groups.js). Appended to outbound group
+  /// messages so a member who missed the ephemeral `group-metadata` control
+  /// event still converges on the custom name/avatar/banner/description + invite
+  /// policy. This is the ONLY carrier that reaches a DIFFERENT member: the
+  /// per-account `nymchat-groups` D1 sync restores your OWN devices' group state
+  /// but can never cross into another member's account, so in relay-proxy mode a
+  /// member who rehydrates the group backlog from the D1 gift-wrap archive gets
+  /// the custom avatar solely from these tags on the archived messages (their
+  /// absence is the reported "group avatar not coming from D1" symptom). The
+  /// inbound side already reads it ([_applyMetadata] via the `meta_ts`
+  /// piggyback handler). Only the OWNER attaches it, and only once metadata has
+  /// been set (`metaUpdatedAt > 0`); `meta_ts` is the group's real metadata
+  /// timestamp so the inbound monotonic guard makes re-application idempotent.
+  /// Rides EVERY owner message: the PWA gates on a `GROUP_META_PIGGYBACK_WINDOW`,
+  /// but that constant is never actually defined in the PWA source — so
+  /// `now - metaTs > undefined` is always false and the window is a dead no-op,
+  /// i.e. the PWA piggybacks unconditionally too (owner + metaTs). Tag order
+  /// mirrors `_attachGroupMetaTags` (groups.js:2135-2141): meta_ts, banner,
+  /// avatar, description, allow_invites, invite_enabled, invite_epoch.
+  static List<List<String>> groupMetaPiggybackTags(Group g, String selfPubkey) {
+    if (g.createdBy != selfPubkey || g.metaUpdatedAt <= 0) return const [];
+    return [
+      ['meta_ts', '${g.metaUpdatedAt}'],
+      ['banner', g.banner ?? ''],
+      ['avatar', g.avatar ?? ''],
+      ['description', g.description ?? ''],
+      ['allow_invites', g.allowMemberInvites ? '1' : '0'],
+      ['invite_enabled', g.inviteEnabled ? '1' : '0'],
+      ['invite_epoch', '${g.inviteEpoch}'],
+    ];
+  }
+
   /// Builds the bootstrap `group-invite` rumor for a freshly created group.
   ///
   /// The optional metadata tags (`avatar`, `banner`, `description`) are only

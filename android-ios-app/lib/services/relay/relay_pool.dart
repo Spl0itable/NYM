@@ -164,6 +164,11 @@ class Subscription {
   /// Completes when enough relays have signaled EOSE, or on timeout.
   Future<void> get eose => _eose.future;
 
+  /// True once [close] has run — the stream is closed and no more events will
+  /// arrive. Callers that cache a `Subscription` (e.g. the single channel-typing
+  /// sub) must re-create it rather than reuse a closed one.
+  bool get isClosed => _closed;
+
   void _start() => startEose();
 
   /// Arms the EOSE timeout. Public so the proxy transport can drive it.

@@ -16,7 +16,7 @@ android {
     namespace = "com.nym.bar"
     compileSdk = 36
     // Use NDK r27+ for 16 KB page-size support
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -40,12 +40,17 @@ android {
 
     defaultConfig {
         applicationId "com.nym.bar"
-        minSdk = 23
+        // Explicit floor (not flutter.minSdkVersion, which the AGP 8.9.1 upgrade
+        // switched to) so the minimum required by flutter_webrtc / local_auth
+        // (>=23) is pinned in-repo and can't silently drift with the Flutter SDK.
+        // 24 matches the current flutter.minSdkVersion, so runtime coverage is
+        // unchanged.
+        minSdk = 24
         targetSdk = 36
-        versionCode = 140
+        versionCode = 149
         versionName = flutter.versionName
         
-        // Support all ABIs - AGP 8.7.3 automatically handles 16 KB alignment
+        // Support all ABIs - AGP 8.9.1 automatically handles 16 KB alignment
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64'
         }

@@ -7,6 +7,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
@@ -25,6 +26,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../chat/message_row.dart';
+import '../chat/messages_list.dart' show messageListScrollerProvider;
 import '../chat/message_skeleton.dart';
 import '../chat/typing_indicator.dart';
 import '../common/app_dialog.dart';
@@ -1800,7 +1802,15 @@ class _DeckColumn extends ConsumerStatefulWidget {
 }
 
 class _DeckColumnState extends ConsumerState<_DeckColumn> {
-  final ScrollController _scroll = ScrollController();
+  /// Scroll-to-index controller so a quoted-blockquote tap can jump THIS column
+  /// to an off-screen source message (a plain ListView can't) — the columns
+  /// analogue of the single view's [messageListScrollerProvider] binding.
+  final ItemScrollController _itemScroll = ItemScrollController();
+  final ItemPositionsListener _positions = ItemPositionsListener.create();
+
+  /// Column viewport height (captured at build) — converts the normalized item
+  /// edges into the PWA's pixel at-bottom / scroll-button thresholds.
+  double _viewportHeight = 0;
   bool _atBottom = true;
   bool _showScrollButton = false;
 
@@ -1811,7 +1821,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   @override
   void initState() {
     super.initState();
-    _scroll.addListener(_onScroll);
+    _positions.itemPositions.addListener(_onPositionsChanged);
   }
 
   @override
@@ -1826,7 +1836,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       _showScrollButton = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (_scroll.hasClients && _scroll.offset != 0) _scroll.jumpTo(0);
+        if (_itemScroll.isAttached) _itemScroll.jumpTo(index: 0);
         widget.onAtBottomChanged?.call(true);
       });
     }
@@ -1834,18 +1844,36 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
 
   @override
   void dispose() {
-    _scroll.removeListener(_onScroll);
-    _scroll.dispose();
+    _positions.itemPositions.removeListener(_onPositionsChanged);
     super.dispose();
   }
 
-  void _onScroll() {
-    if (!_scroll.hasClients) return;
-    // Reversed list: offset 0 == newest at the bottom, so offset is the distance
-    // from the bottom. The PWA decouples the two thresholds
-    // (`_cvAttachColumnScroll`): at-bottom (autoscroll/mark-read) at <120, and
-    // the scroll-to-bottom button shows at >150.
-    final distanceFromBottom = _scroll.offset;
+  /// Recomputes at-bottom + scroll-button from the visible item positions — the
+  /// position-based analogue of the old offset gate (the single view's
+  /// `_onPositionsChanged`). In the `reverse:true` list index 0 is the newest at
+  /// the bottom; at rest its leading (bottom) edge sits `padding.bottom` (10px)
+  /// inside the viewport, so the pixel distance scrolled from the bottom is
+  /// `10 − itemLeadingEdge × viewportHeight`. The PWA decouples the thresholds:
+  /// at-bottom (autoscroll / mark-read) at <120, the button at >150.
+  void _onPositionsChanged() {
+    final positions = _positions.itemPositions.value;
+    if (positions.isEmpty) return;
+    ItemPosition? newest;
+    for (final p in positions) {
+      if (p.index == 0) {
+        newest = p;
+        break;
+      }
+    }
+    final double distanceFromBottom;
+    if (newest == null) {
+      // index 0 isn't laid out → well past both thresholds.
+      distanceFromBottom = 100000;
+    } else if (_viewportHeight <= 0) {
+      distanceFromBottom = 0;
+    } else {
+      distanceFromBottom = 10 - newest.itemLeadingEdge * _viewportHeight;
+    }
     final atBottom = distanceFromBottom < 120;
     final showButton = distanceFromBottom > 150;
     if (atBottom != _atBottom) widget.onAtBottomChanged?.call(atBottom);
@@ -1858,9 +1886,10 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   }
 
   void _scrollToBottom() {
-    if (!_scroll.hasClients) return;
-    _scroll.animateTo(
-      0,
+    if (!_itemScroll.isAttached) return;
+    _itemScroll.scrollTo(
+      index: 0,
+      alignment: 0,
       duration: NymMotion.transition,
       curve: NymMotion.curve,
     );
@@ -1908,8 +1937,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       _lastMessageCount = messages.length;
       if (added && settings.autoscroll && _atBottom) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _scroll.hasClients && _atBottom && _scroll.offset != 0) {
-            _scroll.jumpTo(0);
+          if (mounted && _atBottom && _itemScroll.isAttached) {
+            _itemScroll.jumpTo(index: 0);
           }
         });
       }
@@ -1996,14 +2025,33 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                               useBubbles: settings.useBubbles,
                               mentionToken: '@${_baseNym(app.selfNym)}',
                             );
-                            return ListView.builder(
-                              controller: _scroll,
-                              reverse: true,
-                              padding: const EdgeInsets.all(10),
-                              itemCount: groups.length,
-                              itemBuilder: (context, revIndex) {
-                                final entries =
-                                    groups[groups.length - 1 - revIndex];
+                            // message id → reversed render index, so a quoted
+                            // blockquote tap can jump THIS column to its source.
+                            // Every message in a group shares the group's unit
+                            // index (same as the single view's map).
+                            final indexById = <String, int>{};
+                            for (var f = 0; f < groups.length; f++) {
+                              final revIndex = groups.length - 1 - f;
+                              for (final e in groups[f]) {
+                                indexById[e.message.id] = revIndex;
+                              }
+                            }
+                            ref
+                                .read(messageListScrollerProvider(
+                                    widget.desc.storageKey))
+                                .bind(_itemScroll, indexById);
+                            return LayoutBuilder(
+                                builder: (context, constraints) {
+                              _viewportHeight = constraints.maxHeight;
+                              return ScrollablePositionedList.builder(
+                                itemScrollController: _itemScroll,
+                                itemPositionsListener: _positions,
+                                reverse: true,
+                                padding: const EdgeInsets.all(10),
+                                itemCount: groups.length,
+                                itemBuilder: (context, revIndex) {
+                                  final entries =
+                                      groups[groups.length - 1 - revIndex];
                                 // Per-row raster isolation (see the single-view
                                 // list in messages_list.dart): keeps a repaint
                                 // in one column's row from re-rasterizing every
@@ -2029,12 +2077,15 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                     // at 100%, and desktop self bubble groups
                                     // drop the 14px right padding.
                                     columnsMode: true,
+                                    // Jump within THIS column on a quote tap.
+                                    scrollKey: widget.desc.storageKey,
                                     onReactionPicker: (msg) =>
                                         showReactionPicker(context, ref, msg),
                                   ),
                                 );
-                              },
-                            );
+                                },
+                              );
+                            });
                           }),
                   ),
                   // .cv-scroll-bottom: 36×36 circle, bottom/right 16, shown when

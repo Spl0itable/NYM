@@ -445,6 +445,50 @@ void main() {
       await proxy.disconnectAll();
     });
 
+    test('delivers events tagged with a split-child sub id to the parent',
+        () async {
+      // The relay-pool worker splits a REQ carrying > 10 filters into child
+      // subscriptions whose ids are `<parent>~c<n>`, and forwards live EVENT
+      // frames verbatim carrying that CHILD id. The transport must normalize the
+      // child id back to the parent before matching the registered subscription,
+      // or every event on the (~18-filter) main critical REQ is silently dropped.
+      final fakes = <_FakeChannel>[];
+      final proxy = RelayPoolProxy(
+        relays: RelayConfig.defaultRelays,
+        dmRelays: RelayConfig.defaultRelays,
+        poolUrl: 'wss://h/api/relay-pool',
+        channelFactory: (uri) {
+          final f = _FakeChannel();
+          fakes.add(f);
+          return f;
+        },
+      );
+      proxy.connectAll();
+      final sub = proxy.subscribe([NostrFilter(kinds: [1059])]);
+      final got = <String>[];
+      sub.events.listen((e) => got.add(e.id));
+
+      // Event arrives under the worker's child sub id `<parent>~c1`.
+      fakes.first.inject(jsonEncode([
+        'EVENT',
+        '${sub.subId}~c1',
+        {
+          'id': 'child-evt',
+          'pubkey': 'pk',
+          'created_at': 1,
+          'kind': 1059,
+          'tags': [],
+          'content': 'x',
+          'sig': '',
+        },
+        'wss://relay.example.com',
+      ]));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(got, ['child-evt']);
+
+      await proxy.disconnectAll();
+    });
+
     test('publishDm sends a DM_EVENT frame to every shard', () async {
       final fakes = <_FakeChannel>[];
       final proxy = RelayPoolProxy(

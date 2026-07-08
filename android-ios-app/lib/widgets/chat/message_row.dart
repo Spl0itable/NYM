@@ -217,12 +217,18 @@ class MessageRow extends ConsumerStatefulWidget {
     this.onReactionPicker,
     this.bubbleAnchorKey,
     this.swipeAvatarDx,
+    this.scrollKey,
   });
 
   final Message message;
   final Settings settings;
   final List<MessageReaction> reactions;
   final bool mentioned;
+
+  /// Conversation `storageKey` of the list this row lives in — forwarded to the
+  /// message body's tappable blockquote so a columns column jumps its OWN list.
+  /// Null in the single-chat view (the quote falls back to the active view).
+  final String? scrollKey;
 
   /// This row renders inside a columns-deck `.cv-list` (`body.columns-mode`,
   /// styles-columns.css). IRC rows stack vertically (`.cv-list .message
@@ -2097,12 +2103,17 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       (message.isGroup || _isChannelMessage) &&
       message.readers.isNotEmpty;
 
-  /// A channel message: not a PM, not a group, with a geohash set and a
-  /// canonical 64-hex EVENT id (the PWA gate `message.geohash && message.id &&
-  /// /^[0-9a-f]{64}$/i.test(message.id)`, messages.js:826-828).
+  /// A public channel message: not a PM, not a group, with a canonical 64-hex
+  /// EVENT id. The PWA gate additionally requires `message.geohash`
+  /// (messages.js:826-828), but the native build also sends/receives read
+  /// receipts for NAMED channels (kind 23333, `d` tag), so accept a named
+  /// channel (`channel` set) as well — else a named-channel own message could
+  /// never show reader avatars even though its receipts arrive and store.
   bool get _isChannelMessage {
     if (message.isPM || message.isGroup) return false;
-    if ((message.geohash ?? '').isEmpty) return false;
+    if ((message.geohash ?? '').isEmpty && (message.channel ?? '').isEmpty) {
+      return false;
+    }
     return RegExp(r'^[0-9a-f]{64}$', caseSensitive: false)
         .hasMatch(message.id);
   }
@@ -2580,6 +2591,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       blurImages: blur,
       glyphShadows: deco?.textShadows,
       monospace: deco?.monospace ?? false,
+      // This message's own id, so a tapped top-level blockquote can EXCLUDE it
+      // when searching for the quoted source (PWA `hostKey`); without it the
+      // jump-to-quoted-source / flash resolves against the host itself.
+      hostMessageId: message.id,
+      // Which list to jump within (a columns column passes its storageKey).
+      scrollKey: widget.scrollKey,
     );
     final gradient = deco?.gradient;
     if (gradient != null && gradient.length >= 2) {
@@ -2600,6 +2617,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           baseColor: Colors.white,
           fontSize: fontSize,
           blurImages: blur,
+          hostMessageId: message.id,
+          scrollKey: widget.scrollKey,
         ),
       );
       final glow = deco?.gradientGlow;
@@ -4123,10 +4142,16 @@ class MessageGroup extends ConsumerStatefulWidget {
     required this.settings,
     this.columnsMode = false,
     this.onReactionPicker,
+    this.scrollKey,
   });
 
   final List<MessageGroupEntry> entries;
   final Settings settings;
+
+  /// Conversation `storageKey` of the list this group renders in — forwarded to
+  /// every [MessageRow] so a tapped blockquote jumps its OWN list (a columns
+  /// column sets it; the single-chat view leaves it null → active view).
+  final String? scrollKey;
 
   /// This group renders inside a columns-deck `.cv-list` (`body.columns-mode`).
   /// Forwarded to every [MessageRow] (IRC rows stack vertically, hover buttons
@@ -4180,6 +4205,7 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
               reactions: entries[i].reactions,
               mentioned: entries[i].mentioned,
               columnsMode: widget.columnsMode,
+              scrollKey: widget.scrollKey,
               grouped: useBubbles && i > 0,
               showName: !(useBubbles && i > 0),
               showAvatar: false,

@@ -1088,6 +1088,27 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
+  /// Normalizes a worker split-child subscription id back to its parent.
+  ///
+  /// The relay-pool worker SPLITS any REQ carrying more than
+  /// `MAX_FILTERS_PER_REQ` (= 10) filters into child subscriptions whose ids are
+  /// `<parent>~c<n>`, and subscribes the upstream relays with those child ids
+  /// (relay-pool.js:326-339). It remaps EOSE/CLOSED back to the parent, but live
+  /// EVENT frames are forwarded verbatim carrying the CHILD id
+  /// (relay-pool.js:1195). The PWA never notices because it routes events purely
+  /// by kind and ignores the sub id (`_dispatchRelayMessage` destructures
+  /// `subscriptionId` but never uses it). This transport, by contrast, matches
+  /// each event to its registered [Subscription] BY id — so without this
+  /// normalization every event on the ~18-filter main critical REQ (channel
+  /// messages 20000/23333, gift wraps 1059 = PMs/groups/receipts/typing,
+  /// reactions, zaps, presence, polls, deletions, profiles) is silently dropped,
+  /// leaving only the un-split auxiliary subs (channel typing, ephemeral group)
+  /// working. Idempotent for un-split ids (base36 sub ids never contain `~c`).
+  static String _parentSubId(String subId) {
+    final i = subId.indexOf('~c');
+    return i > 0 ? subId.substring(0, i) : subId;
+  }
+
   void _onShardMessage(_ShardSocket sock, PoolMessage msg) {
     // Reaching here means a parseable pool frame arrived, so the proxy endpoint
     // is reachable. Latch it so a later mid-session disconnect is NOT treated as
@@ -1102,6 +1123,8 @@ class RelayPoolProxy implements PoolTransport {
       case PoolEvent(:final subId, :final event, :final sourceRelay):
         // Cross-shard dedup: the first shard to deliver an id wins.
         if (!_deduper.add(event.id)) return;
+        // Normalize a split-child sub id back to its parent (see [_parentSubId]).
+        final eventSubId = _parentSubId(subId);
         // Post-dedup event accounting (relays.js handleRelayMessage:3738-3746):
         // bump the unique total + per-second counter, and the per-relay tally
         // attributed to the proxy-tagged sourceRelay when present.
@@ -1119,19 +1142,25 @@ class RelayPoolProxy implements PoolTransport {
           _stats.recordRelayKind(sourceRelay, event.kind,
               utf8.encode(jsonEncode(event.toJson())).length);
         }
-        final sub = _subscriptions[subId];
+        final sub = _subscriptions[eventSubId];
         if (sub != null) unawaited(sub.onEvent(sock.shard.id, event));
       case PoolEose(:final subId):
-        _stampShardLatency(subId, sock.shard.id);
-        _subscriptions[subId]?.onEose(sock.shard.id);
-      case PoolClosed(:final subId, :final reason, :final relayUrl):
-        // A kind-flavored CLOSED reason feeds the per-relay kind blacklist
-        // (relays.js:3877-3878).
-        if (_isUnsupportedKind(reason)) {
-          _recordUnsupportedKindRejection(relayUrl, subId, reason);
+        {
+          final id = _parentSubId(subId);
+          _stampShardLatency(id, sock.shard.id);
+          _subscriptions[id]?.onEose(sock.shard.id);
         }
-        _stampShardLatency(subId, sock.shard.id);
-        _subscriptions[subId]?.onEose(sock.shard.id);
+      case PoolClosed(:final subId, :final reason, :final relayUrl):
+        {
+          // A kind-flavored CLOSED reason feeds the per-relay kind blacklist
+          // (relays.js:3877-3878).
+          final id = _parentSubId(subId);
+          if (_isUnsupportedKind(reason)) {
+            _recordUnsupportedKindRejection(relayUrl, id, reason);
+          }
+          _stampShardLatency(id, sock.shard.id);
+          _subscriptions[id]?.onEose(sock.shard.id);
+        }
       case PoolOk(:final id, :final message, :final relayUrl):
         // Publish ACK; publish() does not await per-relay OK in proxy mode.
         // A kind-flavored reason feeds the per-relay kind blacklist

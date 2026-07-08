@@ -994,25 +994,36 @@ class NostrService {
   /// (docs/specs/03 §1.4) Returns the [Subscription].
   Subscription? _channelTypingSub;
   String? _channelTypingKey;
-  Subscription subscribeChannelTyping(String geohash, {bool isGeohash = true}) {
-    if (_channelTypingKey == geohash && _channelTypingSub != null) {
-      return _channelTypingSub!;
+  Subscription subscribeChannelTyping(String channelKey, {bool isGeohash = true}) {
+    // Dedup identity is (tag-kind, key) — a named channel whose name is a valid
+    // geohash string must NOT reuse the geohash sub, and vice versa. Only reuse
+    // the cached sub when it is STILL OPEN: after a proxy pool-swap or any close
+    // the old `Subscription` is dead, so returning it would silently stop the
+    // typing/receipt feed until the channel key changes.
+    final id = '${isGeohash ? 'g' : 'd'}:$channelKey';
+    final cached = _channelTypingSub;
+    if (_channelTypingKey == id && cached != null && !cached.isClosed) {
+      return cached;
     }
     _channelTypingSub?.close();
+    // 1h window: ephemeral kinds aren't stored, but a live event whose
+    // created_at is slightly in the past (sender clock skew) must not be dropped
+    // by a relay applying `since` to the live stream — so keep a safe margin
+    // rather than the PWA's tighter `since: now` (relays.js:1430).
     final since = DateTime.now().millisecondsSinceEpoch ~/ 1000 - 3600;
     final sub = pool.subscribe([
       NostrFilter(
         kinds: [EventKind.channelTyping, EventKind.channelReceipt],
         since: since,
         tags: {
-          if (isGeohash) 'g': [geohash] else 'd': [geohash],
+          if (isGeohash) 'g': [channelKey] else 'd': [channelKey],
         },
       ),
     ]);
     final s = sub.events.listen((e) => _handlers?.onEvent?.call(e));
     sub.eose.then((_) => null);
     _channelTypingSub = sub;
-    _channelTypingKey = geohash;
+    _channelTypingKey = id;
     // Route typing events through onEvent; cancellation handled on close.
     s.onError((_) {});
     return sub;
@@ -1592,6 +1603,28 @@ class NostrService {
     );
   }
 
+  /// Builds a signed kind-1059 **bitchat** gift wrap of [rumor] for
+  /// [recipientPubkey]. Both the seal and the wrap content are encrypted with
+  /// `encryptBitchat` (the `v2:` transport), so a bitchat-app peer can decrypt
+  /// our message. Bitchat sealing keys the seal content on the SENDER's local
+  /// key, so this is a local-key-only path — exactly like the PWA, whose
+  /// bitchat dual-send lives inside `if (this.privkey)` (pms.js:326). Returns
+  /// null for a remote (NIP-46) signer.
+  Future<NostrEvent?> _buildBitchatWrap(
+    UnsignedEvent rumor,
+    String recipientPubkey, {
+    int? expiration,
+  }) async {
+    final sig = signer;
+    if (sig is! LocalSigner) return null;
+    return giftwrap.bitchatWrap(
+      rumor: rumor,
+      senderPrivkey: sig.privkey,
+      recipientPubkey: recipientPubkey,
+      expiration: expiration,
+    );
+  }
+
   /// Gift-wraps [rumor] to [recipientPubkey] (NIP-59) and publishes it. Returns
   /// the wrap event, or null if we can't sign.
   Future<NostrEvent?> _wrapAndPublish(
@@ -1611,24 +1644,46 @@ class NostrService {
   /// Publishes a NIP-17 PM rumor to the recipient AND a self-copy (so own
   /// messages restore across devices). Honors TTL via [settings].
   /// (docs/specs/03 §3.1–§3.2)
+  ///
+  /// Bitchat interop (PWA `sendNIP17PM`, pms.js:326-372): when [bitchatRumor] is
+  /// non-null a parallel `bitchat1:`-encoded gift wrap is ALSO published so a
+  /// bitchat-app peer can decrypt us (sent for known-bitchat AND unknown peers).
+  /// [sendNymWrap] gates the NIP-17 recipient wrap (false for a known-bitchat-
+  /// only peer). The self-copy is ALWAYS NIP-17 so own messages restore across
+  /// devices, and only NIP-17 wraps are reported via [onWrap] for D1
+  /// archive/deposit — the PWA never deposits bitchat wraps (relay-only).
   Future<bool> publishPM({
     required UnsignedEvent rumor,
     required String recipientPubkey,
     MessagingSettings settings = const MessagingSettings(),
     void Function(NostrEvent wrap)? onWrap,
+    UnsignedEvent? bitchatRumor,
+    bool sendNymWrap = true,
   }) async {
     if (signer == null) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final expiration = settings.expirationFor(nowSec);
 
-    // Report each produced wrap so the controller can archive/deposit at SEND
-    // time like the PWA (`_depositPMEvent(nymWrapped)` + `_archivePMEvent(
+    // bitchat-format wrap for a known-bitchat / unknown peer. Relay-only (NOT
+    // passed to [onWrap], so never deposited to D1 — the PWA deposits only the
+    // nym wrap). Skipped for a self-copy and for remote signers (bitchat sealing
+    // needs a local key).
+    if (bitchatRumor != null && recipientPubkey != identity.pubkey) {
+      final bwrap = await _buildBitchatWrap(bitchatRumor, recipientPubkey,
+          expiration: expiration);
+      if (bwrap != null) await pool.publishDm(bwrap);
+    }
+
+    // Report each produced NIP-17 wrap so the controller can archive/deposit at
+    // SEND time like the PWA (`_depositPMEvent(nymWrapped)` + `_archivePMEvent(
     // selfWrapped)`, pms.js:365-378) — without the deposit an offline peer
     // never receives the wrap at all in pool mode (relays carry no history;
     // their next `pm-get` restore is the only delivery path).
-    final recipientWrap =
-        await _wrapAndPublish(rumor, recipientPubkey, expiration: expiration);
-    if (recipientWrap != null) onWrap?.call(recipientWrap);
+    if (sendNymWrap) {
+      final recipientWrap =
+          await _wrapAndPublish(rumor, recipientPubkey, expiration: expiration);
+      if (recipientWrap != null) onWrap?.call(recipientWrap);
+    }
     if (recipientPubkey != identity.pubkey) {
       final selfWrap =
           await _wrapAndPublish(rumor, identity.pubkey, expiration: expiration);
@@ -1739,12 +1794,15 @@ class NostrService {
     return any;
   }
 
-  /// Publishes a public channel typing indicator (kind 24420) for a geohash
-  /// channel. (docs/specs/03 §10)
+  /// Publishes a public channel typing indicator (kind 24420). The channel wire
+  /// tag is `['g', channelKey]` for a geohash channel and `['d', channelKey]`
+  /// for a named channel (e.g. `#nymchat`), mirroring the PWA's
+  /// `channelWire(channelKey)` (docs/specs/03 §10).
   Future<NostrEvent?> publishChannelTyping({
     required String status,
-    required String geohash,
+    required String channelKey,
     required String nym,
+    bool isGeohash = true,
   }) async {
     final sig = signer;
     if (sig == null) return null;
@@ -1756,7 +1814,7 @@ class NostrService {
         kind: EventKind.channelTyping,
         tags: [
           ['typing', status],
-          ['g', geohash],
+          [isGeohash ? 'g' : 'd', channelKey],
           ['n', nym],
         ],
         content: '',
@@ -1767,16 +1825,17 @@ class NostrService {
   }
 
   /// Publishes a public channel read receipt (kind 24421) for [messageId] by
-  /// [authorPubkey] in the geohash [geohash]. Mirrors the PWA's
-  /// `sendChannelReadReceipt` (nostr-core.js): tags are
-  /// `['e', messageId]`, `['p', authorPubkey]`, `['g', geohash]`, `['n', nym]`.
-  /// Ephemeral kind — relays don't store it, so it's fire-and-forget. Returns
-  /// the signed event (null when there is no signer).
+  /// [authorPubkey] in [channelKey]. Mirrors the PWA's `sendChannelReadReceipt`
+  /// (nostr-core.js): tags are `['e', messageId]`, `['p', authorPubkey]`, the
+  /// channel wire tag (`['g', channelKey]` geohash / `['d', channelKey]` named),
+  /// and `['n', nym]`. Ephemeral kind — relays don't store it, so it's
+  /// fire-and-forget. Returns the signed event (null when there is no signer).
   Future<NostrEvent?> publishChannelReceipt({
     required String messageId,
     required String authorPubkey,
-    required String geohash,
+    required String channelKey,
     required String nym,
+    bool isGeohash = true,
   }) async {
     final sig = signer;
     if (sig == null) return null;
@@ -1789,7 +1848,7 @@ class NostrService {
         tags: [
           ['e', messageId],
           ['p', authorPubkey],
-          ['g', geohash],
+          [isGeohash ? 'g' : 'd', channelKey],
           ['n', nym],
         ],
         content: '',
