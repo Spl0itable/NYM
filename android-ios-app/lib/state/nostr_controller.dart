@@ -194,6 +194,14 @@ class NostrController {
   /// `_debouncedNostrSettingsSave`, 5s).
   Timer? _settingsSyncTimer;
 
+  /// Debounce for the LOCAL SharedPreferences persist of the group store and
+  /// per-conversation read watermark. Both were previously rewritten on every
+  /// inbound group message / read-advance; because SharedPreferences serializes
+  /// the ENTIRE prefs file per write, that per-event churn was a background-I/O
+  /// contributor to the ANR. Coalesce a burst into one write.
+  Timer? _groupStorePersistTimer;
+  Timer? _channelLastReadPersistTimer;
+
   /// Throttle: pubkey/groupId-scoped last typing-start send time (ms).
   final Map<String, int> _typingThrottle = {};
 
@@ -210,6 +218,26 @@ class NostrController {
   /// debounce + on dispose). Null until [init].
   CacheStore? _cache;
   Timer? _flushTimer;
+
+  // --- live inbound coalescing (perf) --------------------------------------
+  // Live relay EVENTs arrive one per stream callback (separate event-loop
+  // turns), so a connect burst would fire one AppState rebuild — plus a re-run
+  // of the spam/flood render providers — PER event. Buffer a turn's worth and
+  // replay them through [_onEvent] inside a single [AppStateNotifier.runBatched]
+  // so the burst costs ~one rebuild. A zero-duration timer fires after the
+  // current microtask queue drains, so a whole verifier cohort (delivered as a
+  // microtask cascade in one turn) lands in one flush. `_onEvent` only reads raw
+  // `appStateProvider` state (mutated in place, so content stays fresh mid-batch)
+  // — never a cached derived provider — so deferring the emit changes nothing it
+  // sees. The D1 archive backfill is already batched at its own loops
+  // ([_runChannelBackfill] etc.); this covers the LIVE path.
+  final List<NostrEvent> _liveInboundBuffer = <NostrEvent>[];
+  Timer? _liveInboundTimer;
+
+  /// Hard cap so one turn's burst can't grow the buffer unbounded; reaching it
+  /// flushes immediately (an extra emit for a very large burst is acceptable).
+  static const int _kLiveInboundFlushCap = 512;
+
   final Set<String> _dirtyChannelKeys = {};
   final Set<String> _dirtyPmKeys = {};
   bool _flushScheduled = false;
@@ -448,7 +476,7 @@ class NostrController {
       final bootState = _ref.read(appStateProvider);
       await service.start(
         NostrHandlers(
-          onEvent: _onEvent,
+          onEvent: _enqueueLiveEvent,
           onConnectionChanged: _onConnectionChanged,
           onGiftWrap: _onGiftWrap,
         ),
@@ -692,29 +720,50 @@ class NostrController {
     } catch (_) {
       return;
     }
-    final valid = <NostrEvent>[];
+    final parsed = <NostrEvent>[];
     for (final raw in rows) {
       try {
         final ev = NostrEvent.fromJson(raw);
         if (ev.kind != EventKind.appData) continue;
-        if (schnorr.verifyEvent(ev)) valid.add(ev);
+        parsed.add(ev);
       } catch (_) {
         // Skip a malformed archived row.
       }
     }
-    if (valid.isEmpty) return;
-    var changed = true;
-    var guard = 0;
-    while (changed && guard++ < 20) {
-      final before = _ref.read(appStateProvider).nymchatPubkeys.length;
-      for (final ev in valid) {
-        try {
-          _ingestVouch(ev);
-        } catch (_) {}
+    if (parsed.isEmpty) return;
+    // Verify the whole archive cohort off the main isolate in ONE batched hop
+    // (this used to run `schnorr.verifyEvent` INLINE per row on the render
+    // thread). Build every future in this turn so IsolateVerifier coalesces
+    // them; fall back to the inline verify when the service isn't up yet.
+    final service = _service;
+    final valid = <NostrEvent>[];
+    if (service != null) {
+      final oks =
+          await Future.wait([for (final ev in parsed) service.verifyEvent(ev)]);
+      for (var i = 0; i < parsed.length; i++) {
+        if (oks[i]) valid.add(parsed[i]);
       }
-      changed =
-          _ref.read(appStateProvider).nymchatPubkeys.length != before;
+    } else {
+      for (final ev in parsed) {
+        if (schnorr.verifyEvent(ev)) valid.add(ev);
+      }
     }
+    if (valid.isEmpty) return;
+    // Coalesce the fixpoint expansion's per-vouch notifies into one rebuild.
+    _ref.read(appStateProvider.notifier).runBatched(() {
+      var changed = true;
+      var guard = 0;
+      while (changed && guard++ < 20) {
+        final before = _ref.read(appStateProvider).nymchatPubkeys.length;
+        for (final ev in valid) {
+          try {
+            _ingestVouch(ev);
+          } catch (_) {}
+        }
+        changed =
+            _ref.read(appStateProvider).nymchatPubkeys.length != before;
+      }
+    });
   }
 
   /// Max number of per-channel D1 archive restores in flight at once. The PWA
@@ -970,6 +1019,15 @@ class NostrController {
     // service. (Mirrors `cmdQuit` + the page reload dropping all in-memory NYM
     // state.)
     _flushTimer?.cancel();
+    // Drop any buffered live events (the session — and its AppState — is being
+    // torn down; they'd be re-fetched on the next connect).
+    _liveInboundTimer?.cancel();
+    _liveInboundTimer = null;
+    _liveInboundBuffer.clear();
+    // Drop any buffered unwrapped gift-wraps (the session is tearing down).
+    _giftWrapFlushTimer?.cancel();
+    _giftWrapFlushTimer = null;
+    _giftWrapInbound.clear();
     _settingsSyncTimer?.cancel();
     _vouchPublishTimer?.cancel();
     _vouchPublishTimer = null;
@@ -985,6 +1043,9 @@ class NostrController {
     if (!_settingsHydratedC.isCompleted) _settingsHydratedC.complete();
     _deletedIdsPersistTimer?.cancel();
     _deletedIdsPersistTimer = null;
+    // Flush any pending debounced group-store / read-watermark writes before we
+    // drop the identity + app-state handles below (the persist reads both).
+    _flushDebouncedPersists();
     _ref.read(appStateProvider.notifier).onDeletedIdsChanged = null;
     _dmRetryTimer?.cancel();
     _dmRetryTimer = null;
@@ -1266,6 +1327,40 @@ class NostrController {
   // Inbound routing
   // ---------------------------------------------------------------------------
 
+  /// Relay-service handler (wired in place of a direct `onEvent: _onEvent`):
+  /// buffers the event and schedules a coalesced flush so a connect burst is
+  /// one rebuild, not N. See [_liveInboundBuffer].
+  void _enqueueLiveEvent(NostrEvent event) {
+    _liveInboundBuffer.add(event);
+    if (_liveInboundBuffer.length >= _kLiveInboundFlushCap) {
+      _flushLiveInbound();
+    } else {
+      _liveInboundTimer ??= Timer(Duration.zero, _flushLiveInbound);
+    }
+  }
+
+  /// Drains the live inbound buffer, replaying each event through [_onEvent]
+  /// inside one [AppStateNotifier.runBatched] so the whole cohort emits once.
+  /// Order is preserved; a throwing event is isolated to its own slot (the
+  /// service previously delivered one event per call, so a throw could only ever
+  /// affect that one event).
+  void _flushLiveInbound() {
+    _liveInboundTimer?.cancel();
+    _liveInboundTimer = null;
+    if (_liveInboundBuffer.isEmpty) return;
+    final batch = List<NostrEvent>.of(_liveInboundBuffer);
+    _liveInboundBuffer.clear();
+    _ref.read(appStateProvider.notifier).runBatched(() {
+      for (final event in batch) {
+        try {
+          _onEvent(event);
+        } catch (_) {
+          // Skip a single malformed/failed event; never abort the batch.
+        }
+      }
+    });
+  }
+
   void _onEvent(NostrEvent event) {
     final appState = _ref.read(appStateProvider.notifier);
     if (event.kind == EventKind.appData) {
@@ -1415,16 +1510,7 @@ class NostrController {
       //  (2) NIP-13 PoW meeting the Nymchat floor (16 bits) is a self-attestation
       //      that the sender runs Nymchat → add to the trust graph + our vouch
       //      list (`_markNymchatPubkey` + `_observeNymchatPubkey`).
-      final selfPk = _identity?.pubkey ?? '';
-      if (event.pubkey != selfPk) {
-        final earnedTrust = _ref
-            .read(appStateProvider.notifier)
-            .trackPubkeyMessage(event.pubkey, event.id);
-        if (earnedTrust) _scheduleTrustPersist();
-        if (pow.validatePow(event, _nymchatPowFloor)) {
-          _observeNymchatPubkey(event.pubkey);
-        }
-      }
+      _observeMessageTrust(event);
 
       // Hydrate the author's kind-0 from D1 if we don't have it (the PWA queues
       // a profile fetch for every message author it lacks a profile for —
@@ -2082,6 +2168,29 @@ class NostrController {
     _scheduleTrustPersist();
   }
 
+  /// Web-of-trust observation for a non-own message (nostr-core.js:383-392):
+  /// ≥2 distinct messages from a sender earns them session trust
+  /// ([AppStateNotifier.trackPubkeyMessage]); a message meeting the NIP-13 PoW
+  /// floor is a Nymchat-client self-attestation that adds the sender to the
+  /// trust graph + our vouch list ([_observeNymchatPubkey]).
+  ///
+  /// This MUST run on the D1 archive/backfill path as well as the live relay
+  /// path — otherwise, with the web-of-trust spam gate enabled (main.dart), a
+  /// channel's restored history from senders who aren't yet trusted is silently
+  /// filtered out of the visible list, so the channel "loads nothing" even
+  /// though `channel-get` returned the messages.
+  void _observeMessageTrust(NostrEvent event) {
+    final selfPk = _identity?.pubkey ?? '';
+    if (event.pubkey.isEmpty || event.pubkey == selfPk) return;
+    final earnedTrust = _ref
+        .read(appStateProvider.notifier)
+        .trackPubkeyMessage(event.pubkey, event.id);
+    if (earnedTrust) _scheduleTrustPersist();
+    if (pow.validatePow(event, _nymchatPowFloor)) {
+      _observeNymchatPubkey(event.pubkey);
+    }
+  }
+
   /// NIP-13 PoW floor (leading zero bits) a channel message must meet to be
   /// treated as a Nymchat-client self-attestation (`this.nymchatPowFloor = 16`,
   /// app.js:556).
@@ -2169,7 +2278,46 @@ class NostrController {
     service.updateCriticalInputs(vouchAuthors: authors);
   }
 
+  /// Buffer of unwrapped gift-wraps awaiting a coalesced ingest. The unwrap +
+  /// seal-verify run off-isolate and complete in bursts (one per crypto batch);
+  /// routing each completion straight into the store fired one Riverpod rebuild
+  /// PER wrap, so a first-load PM/group restore of hundreds of wraps caused a
+  /// rebuild storm on the main isolate even though the crypto itself was
+  /// off-thread. Coalesce a burst into ONE [AppStateNotifier.runBatched] emit,
+  /// mirroring [_flushLiveInbound] for channel events.
+  final List<GiftWrapUnwrapped> _giftWrapInbound = <GiftWrapUnwrapped>[];
+  Timer? _giftWrapFlushTimer;
+  static const int _kGiftWrapFlushCap = 256;
+
   void _onGiftWrap(GiftWrapUnwrapped u) {
+    _giftWrapInbound.add(u);
+    if (_giftWrapInbound.length >= _kGiftWrapFlushCap) {
+      _flushGiftWrapInbound();
+    } else {
+      _giftWrapFlushTimer ??= Timer(Duration.zero, _flushGiftWrapInbound);
+    }
+  }
+
+  /// Drains the unwrapped-gift-wrap buffer through one batched emit. Order is
+  /// preserved; a throwing wrap is isolated to its own slot.
+  void _flushGiftWrapInbound() {
+    _giftWrapFlushTimer?.cancel();
+    _giftWrapFlushTimer = null;
+    if (_giftWrapInbound.isEmpty) return;
+    final batch = List<GiftWrapUnwrapped>.of(_giftWrapInbound);
+    _giftWrapInbound.clear();
+    _ref.read(appStateProvider.notifier).runBatched(() {
+      for (final u in batch) {
+        try {
+          _processGiftWrap(u);
+        } catch (_) {
+          // Skip a single malformed/failed wrap; never abort the batch.
+        }
+      }
+    });
+  }
+
+  void _processGiftWrap(GiftWrapUnwrapped u) {
     final appState = _ref.read(appStateProvider.notifier);
     final rumor = u.rumor;
     final kind = u.rumorKind;
@@ -5840,13 +5988,17 @@ class NostrController {
       try {
         final found = await sync.profileGet(pubkeys);
         if (found.isNotEmpty) {
-          for (final entry in found.entries) {
-            final ev = entry.value;
-            if (ev.isEmpty) continue; // cache hit, no event payload
-            try {
-              appState.ingestEvent(NostrEvent.fromJson(ev));
-            } catch (_) {}
-          }
+          // One emit for the whole D1 profile batch (up to 100 rows) instead of
+          // one Riverpod rebuild per profile.
+          appState.runBatched(() {
+            for (final entry in found.entries) {
+              final ev = entry.value;
+              if (ev.isEmpty) continue; // cache hit, no event payload
+              try {
+                appState.ingestEvent(NostrEvent.fromJson(ev));
+              } catch (_) {}
+            }
+          });
           missing = pubkeys
               .where((pk) => !found.containsKey(pk.toLowerCase()))
               .toList();
@@ -6238,6 +6390,47 @@ class NostrController {
         );
   }
 
+  /// Debounced local persist of the group store (`onGroupStoreChanged` fires on
+  /// every group mutation, including each inbound message). Coalesces a burst of
+  /// group traffic into one prefs write. The cross-device publish stays on its
+  /// own 5s-debounced `syncSettings`.
+  void _scheduleGroupStorePersist() {
+    _groupStorePersistTimer?.cancel();
+    _groupStorePersistTimer = Timer(const Duration(seconds: 2), () {
+      _groupStorePersistTimer = null;
+      _persistGroupStore();
+      _persistLeftGroups();
+    });
+  }
+
+  /// Debounced local persist of the read watermark (`onChannelReadChanged` fires
+  /// on nearly every ingested message in columns mode). Coalesces the churn into
+  /// one prefs write.
+  void _scheduleChannelLastReadPersist() {
+    _channelLastReadPersistTimer?.cancel();
+    _channelLastReadPersistTimer = Timer(const Duration(seconds: 2), () {
+      _channelLastReadPersistTimer = null;
+      _persistChannelLastRead();
+    });
+  }
+
+  /// Flushes any pending debounced local-prefs writes immediately. Called from
+  /// teardown so a sign-out / identity switch never drops the most recent group
+  /// or read-state mutation.
+  void _flushDebouncedPersists() {
+    if (_groupStorePersistTimer != null) {
+      _groupStorePersistTimer!.cancel();
+      _groupStorePersistTimer = null;
+      _persistGroupStore();
+      _persistLeftGroups();
+    }
+    if (_channelLastReadPersistTimer != null) {
+      _channelLastReadPersistTimer!.cancel();
+      _channelLastReadPersistTimer = null;
+      _persistChannelLastRead();
+    }
+  }
+
   /// Restores the read watermark from KV at boot.
   void _hydrateChannelLastRead(AppStateNotifier appState) {
     final raw =
@@ -6471,6 +6664,26 @@ class NostrController {
       if (channelMsgs.isNotEmpty || pmMsgs.isNotEmpty) {
         appState.hydrateAllMessages({...channelMsgs, ...pmMsgs});
       }
+      // Seed the crypto skip-caches from what we just restored as PLAINTEXT, so
+      // the D1 archive/live replay after boot doesn't re-verify or re-unwrap
+      // history already on disk (the boot/resume CPU hammer). PM & group message
+      // ids ARE their gift-wrap ids (`_onGiftWrap` keys the row on `wrapId`), so
+      // they seed the unwrap skip; channel event ids seed the signature-verify
+      // skip. Both were signature-checked/decrypted when first received.
+      if (pmMsgs.isNotEmpty) {
+        NostrService.seedProcessedWraps([
+          for (final list in pmMsgs.values)
+            for (final m in list)
+              if (m.id.isNotEmpty) m.id,
+        ]);
+      }
+      if (channelMsgs.isNotEmpty) {
+        NostrService.seedVerifiedIds([
+          for (final list in channelMsgs.values)
+            for (final m in list)
+              if (m.id.isNotEmpty) m.id,
+        ]);
+      }
       if (!cachePms) unawaited(cache.clearPms());
       // Reactions hydrate AFTER messages so their tallies attach to rows that
       // now exist (same effective order as the PWA's single hydration pass).
@@ -6558,7 +6771,15 @@ class NostrController {
         for (final key in channelKeys) {
           final msgs = state.messages[key];
           if (msgs != null) {
-            await cache.saveChannelMessages(key, _capChannel(msgs), txn);
+            // Never persist an UNRECONCILED optimistic row (`_optim_*`): its id
+            // isn't the real event id, so on reload it re-hydrates as a stale
+            // placeholder that the merge loop can mis-pair (or that lingers if
+            // its real event has aged out of relay/D1 retention), re-injecting a
+            // duplicate. Only real, reconciled sends belong in the cache.
+            final persistable =
+                msgs.where((m) => !m.optimistic && !m.id.startsWith('_optim_'));
+            await cache.saveChannelMessages(
+                key, _capChannel(persistable.toList()), txn);
           }
         }
         for (final key in pmKeys) {
@@ -6567,9 +6788,12 @@ class NostrController {
             // Transient Nymbot info bubbles never persist (the PWA's
             // `_displayBotInfoMessage`/help/welcome rows are display-only —
             // pms.js persists real messages via `persistPMMessages` but never
-            // these synthetic ids).
+            // these synthetic ids). Unreconciled optimistic rows are excluded for
+            // the same reason as channels (above).
             final persistable = msgs
                 .where((m) =>
+                    !m.optimistic &&
+                    !m.id.startsWith('_optim_') &&
                     !m.id.startsWith('nymbot-info-') &&
                     !m.id.startsWith('nymbot-help-') &&
                     m.id != 'nymbot-welcome')
@@ -6721,7 +6945,7 @@ class NostrController {
     // its unread badge on our other devices (the PWA's `_syncReadStateToD1`
     // debounce, settings.js:774-775). `syncSettings` is 5s-debounced + gated.
     _ref.read(appStateProvider.notifier).onChannelReadChanged = () {
-      _persistChannelLastRead();
+      _scheduleChannelLastReadPersist();
       syncSettings();
     };
     // Reading a conversation (locally, or via a synced watermark from another
@@ -6756,8 +6980,7 @@ class NostrController {
     // alongside the settings sections, and content-hash dedup makes an
     // unchanged group a no-op.
     _ref.read(appStateProvider.notifier).onGroupStoreChanged = () {
-      _persistGroupStore();
-      _persistLeftGroups();
+      _scheduleGroupStorePersist();
       syncSettings();
     };
   }
@@ -6799,6 +7022,18 @@ class NostrController {
     _ref
         .read(notificationHistoryProvider.notifier)
         .markConversationSeen(view.id, tsSec: nowSec);
+    // Geo-relay keep-alive follows the ACTIVE view: run the 30s re-check only
+    // while a geohash channel is open, and stop it on any other view (named
+    // channel, PM, group, bot). This is the single-authority equivalent of the
+    // PWA's split wiring — `startGeoRelayKeepAlive` in switchChannel
+    // (channels.js:1303/1305) + `stopGeoRelayKeepAlive` on PM open
+    // (pms.js:3826). On resume [onAppResumed] re-runs this, so a geohash channel
+    // that was open when the app backgrounded gets its keep-alive restarted.
+    if (view.kind == ViewKind.channel && isChannelGeohash(view.id)) {
+      _service?.startGeoRelayKeepAlive(view.id);
+    } else {
+      _service?.stopGeoRelayKeepAlive();
+    }
     switch (view.kind) {
       case ViewKind.channel:
         unawaited(_backfillChannelArchive(view.id));
@@ -6873,6 +7108,14 @@ class NostrController {
     unawaited(_backfillFromD1OnReconnect());
     _ref.read(appStateProvider.notifier).markVisibleColumnsRead();
     unawaited(_reconcileShopPurchases());
+  }
+
+  /// App backgrounded / hidden: pause the geo-relay keep-alive so it doesn't
+  /// fire reconnect attempts while off-screen (the PWA's `document.hidden`
+  /// skip in `startGeoRelayKeepAlive`, relays.js:144). [onAppResumed] re-runs
+  /// `_onViewOpened`, which restarts it when a geohash channel is still active.
+  void onAppPaused() {
+    _service?.stopGeoRelayKeepAlive();
   }
 
   /// Per-channel in-flight backfill (channels.js `_channelD1FetchedAt`). The
@@ -7032,13 +7275,29 @@ class NostrController {
             onTimeout: () => const <Map<String, dynamic>>[],
           );
       final appState = _ref.read(appStateProvider.notifier);
-      for (final raw in events) {
-        try {
-          appState.ingestEvent(NostrEvent.fromJson(raw));
-        } catch (_) {
-          // Skip a malformed archived event (mirrors the PWA's per-event catch).
+      // One emit for the whole archive page instead of one Riverpod rebuild (+
+      // spam/flood re-run) per archived event — the D1-backfill freeze fix.
+      appState.runBatched(() {
+        for (final raw in events) {
+          try {
+            final ev = NostrEvent.fromJson(raw);
+            // Backlog restore: mark historical by provenance so an archived event
+            // that reads as ≈now isn't flood-dimmed or snap-in animated.
+            appState.ingestEvent(ev, historical: true);
+            // Observe web-of-trust for restored channel messages exactly like the
+            // live path (`_onEvent`) does — WITHOUT this, the spam gate hides
+            // backfilled history from not-yet-trusted senders and the channel
+            // renders empty. Only channel-message kinds carry the PoW
+            // self-attestation the gate keys on.
+            if (ev.kind == EventKind.geoChannel ||
+                ev.kind == EventKind.namedChannel) {
+              _observeMessageTrust(ev);
+            }
+          } catch (_) {
+            // Skip a malformed archived event (mirrors the PWA's per-event catch).
+          }
         }
-      }
+      });
       // Zap-badge backfill for the hydrated history (`_backfillZapReceipts`
       // with the rendered ids, messages.js:3112-3120; channel scope).
       // `channel-get` streams zaps rows only within the channel window — this
@@ -7112,9 +7371,11 @@ class NostrController {
       return;
     }
     // Arm the PWA's 10s hydration fallback so a hung/offline settings fetch
-    // can't suppress onboarding forever (app.js:5691-5692).
+    // can't suppress onboarding forever (app.js:5691-5692). It releases ONLY the
+    // onboarding gate — a hung load must not open the SAVE gate, or a pending
+    // save would clobber the account's unread D1 settings with default state.
     _settingsHydratedFallback ??=
-        Timer(const Duration(seconds: 10), _markSettingsHydrated);
+        Timer(const Duration(seconds: 10), _releaseOnboardingGate);
     // `_mergeRemoteSettings` marks hydration in its own `finally`.
     await _mergeRemoteSettings(sync);
     await _restorePmArchive(sync);
@@ -7261,7 +7522,15 @@ class NostrController {
     try {
       final result = await sync.settingsGet();
       if (result == null) {
+        // Load FAILED (offline / flaky /api/storage). Do NOT open the save gate:
+        // a pending outbound save would publish this device's local/default
+        // settings over the account's real D1 row that we never read — the
+        // cross-device clobber. The PWA returns false here and keeps the gate
+        // closed; the reconnect retry ([_backfillFromD1OnReconnect]) re-attempts
+        // and opens the gate only once a load succeeds. Release just the
+        // onboarding gate so the tutorial isn't blocked.
         _settingsGetFailed = true;
+        _releaseOnboardingGate();
         return;
       }
       _settingsGetFailed = false;
@@ -7307,16 +7576,17 @@ class NostrController {
       if (newestSec > lastTs) {
         kv.setString(StorageKeys.lastSettingsSyncTs, '$newestSec');
       }
-    } catch (_) {
-      // Best-effort — retried on the next reconnect edge.
-      _settingsGetFailed = true;
-    } finally {
-      // The boot restore attempt has settled — allow outbound settings saves.
-      // The PWA marks hydration after `settingsLoadFromD1` succeeds, or (on
-      // failure) at the relay-fallback load's EOSE (`_flushSettingsLoadBuffer`
-      // → `_markSettingsHydrated`, settings.js:272-295) — either way the gate
-      // holds only until the load attempt completes.
+      // Load SUCCEEDED — the account's existing settings have been read and
+      // merged (even an empty result means "nothing saved yet", so there is
+      // nothing to clobber). ONLY NOW open the outbound-save gate, matching the
+      // PWA's `_markSettingsHydrated` after `settingsLoadFromD1` succeeds.
       _markSettingsHydrated();
+    } catch (_) {
+      // Best-effort — retried on the next reconnect edge. As with the null
+      // result, leave the SAVE gate closed (don't clobber unread remote state);
+      // release only the onboarding gate.
+      _settingsGetFailed = true;
+      _releaseOnboardingGate();
     }
   }
 
@@ -7437,21 +7707,36 @@ class NostrController {
     _ephemeralSub = null;
     final pks = groups.allEphemeralPubkeys();
     if (pks.isEmpty) return;
-    // Filter split per relays.js:2711-2721: under an API host the REQ is
-    // real-time only (`limit: 1` — D1 supplies the history, so reconnects
-    // don't pull relay backlog through the id-deduped ingest); without one,
-    // a 7-day `since` + per-key limit recovers the relay backlog.
-    final hasApiHost = _storageSync != null;
+    // Filter split per relays.js:2711-2721: in PROXY/D1 mode the REQ is
+    // real-time only (`limit: 1` — D1 supplies the group history via
+    // `_backfillGroupArchive`, so reconnects don't pull a relay backlog through
+    // the expensive unwrap path); only in DIRECT mode (the proxy failed and we
+    // fell back to per-relay sockets) does a 7-day `since` + per-key limit
+    // recover the backlog from relays.
+    //
+    // Gate on the SAME live proxy-vs-direct signal the main critical filters use
+    // (`_d1Available` == `isProxyMode`, since the API host is always set), NOT on
+    // `_storageSync != null`: the latter is a durable-identity flag that is null
+    // for the first few boot frames (before `_initStorageSync`) and stays set
+    // after an auto-fallback to direct — both of which mis-selected the branch,
+    // so proxy-mode boots still backfilled a week of group gift wraps off relays
+    // (hundreds of kind-1059 events unwrapped on the main isolate at startup).
+    final d1Mode = service.isProxyMode;
     final sub = service.subscribeEphemeral(
       pks,
-      limit: hasApiHost ? 1 : 200 * pks.length,
-      since: hasApiHost
+      limit: d1Mode ? 1 : 200 * pks.length,
+      since: d1Mode
           ? null
           : DateTime.now().millisecondsSinceEpoch ~/ 1000 - 604800,
     );
-    // Route each wrap through the normal gift-wrap handler (the PWA's
-    // ephemeral REQ feeds `handleGiftWrapDM` like any other 1059).
-    sub.events.listen(service.unwrapArchivedWrap, onError: (_) {});
+    // Route each wrap through the LIVE gift-wrap handler (the PWA's ephemeral
+    // REQ feeds `handleGiftWrapDM` like any other live 1059, with `fromD1`
+    // unset). `unwrapLiveWrap` keeps `fromArchive: false` so a group message
+    // another member wrapped to our ephemeral key is archived to D1, notified,
+    // and shown real-time — NOT `unwrapArchivedWrap`, which would flag it
+    // `fromArchive` and skip the D1 upload, losing received group messages on
+    // relaunch.
+    sub.events.listen(service.unwrapLiveWrap, onError: (_) {});
     _ephemeralSub = sub;
   }
 
@@ -8219,15 +8504,29 @@ class NostrController {
   /// `_onHydratedCbs` (tutorial / bot welcome) from the same place
   /// (settings.js:247-252).
   void _markSettingsHydrated() {
-    _settingsHydratedFallback?.cancel();
-    _settingsHydratedFallback = null;
-    if (!_settingsHydratedC.isCompleted) _settingsHydratedC.complete();
+    _releaseOnboardingGate();
     if (_settingsHydrated) return;
     _settingsHydrated = true;
     if (_settingsSavePending) {
       _settingsSavePending = false;
       syncSettings();
     }
+  }
+
+  /// Releases ONLY the onboarding gate ([settingsHydrated] future) — the
+  /// tutorial / bot-welcome may proceed — WITHOUT opening the outbound-save gate
+  /// ([_settingsHydrated]). Used when the boot settings load FAILS or times out:
+  /// onboarding must not hang, but a device that never read the account's
+  /// existing D1 settings must NOT publish its local/default state over them (the
+  /// PWA keeps the save gate closed on a failed `settingsLoadFromD1` and only
+  /// opens it at a real load's completion — settings.js). The reconnect retry
+  /// ([_backfillFromD1OnReconnect] → [_mergeRemoteSettings]) opens the save gate
+  /// once a load actually succeeds, flushing any deferred save merged with the
+  /// restored remote state.
+  void _releaseOnboardingGate() {
+    _settingsHydratedFallback?.cancel();
+    _settingsHydratedFallback = null;
+    if (!_settingsHydratedC.isCompleted) _settingsHydratedC.complete();
   }
 
   /// Debounced encrypted-settings publish (`_debouncedNostrSettingsSave`, 5s).
@@ -8431,10 +8730,27 @@ class NostrController {
   Future<void> _restoreEmojiFromD1(StorageSync sync) async {
     try {
       final events = await sync.emojiGet();
+      final parsed = <NostrEvent>[];
       for (final raw in events) {
         try {
-          final event = NostrEvent.fromJson(raw);
-          if (!schnorr.verifyEvent(event)) continue;
+          parsed.add(NostrEvent.fromJson(raw));
+        } catch (_) {
+          // Skip a malformed archived pack.
+        }
+      }
+      if (parsed.isEmpty) return;
+      // Verify the whole emoji cohort off the main isolate in ONE batched hop
+      // (was inline `schnorr.verifyEvent` per pack on the render thread).
+      // Newest-wins dedup makes dispatch order irrelevant, so verify-all then
+      // dispatch is equivalent to the old interleaved loop.
+      final service = _service;
+      final oks = service != null
+          ? await Future.wait([for (final ev in parsed) service.verifyEvent(ev)])
+          : [for (final ev in parsed) schnorr.verifyEvent(ev)];
+      for (var i = 0; i < parsed.length; i++) {
+        if (!oks[i]) continue;
+        final event = parsed[i];
+        try {
           if (event.kind == EventKind.emojiPack) {
             _ingestEmojiPack(event);
           } else if (event.kind == EventKind.userEmojiList) {
@@ -9352,6 +9668,13 @@ class NostrController {
 
   Future<void> dispose() async {
     _flushTimer?.cancel();
+    _liveInboundTimer?.cancel();
+    _liveInboundTimer = null;
+    _liveInboundBuffer.clear();
+    // Drop any buffered unwrapped gift-wraps (the session is tearing down).
+    _giftWrapFlushTimer?.cancel();
+    _giftWrapFlushTimer = null;
+    _giftWrapInbound.clear();
     _settingsSyncTimer?.cancel();
     _profileBackfillTimer?.cancel();
     clearShopReceiptWait();

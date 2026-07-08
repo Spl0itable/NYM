@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
@@ -223,11 +224,61 @@ class NostrService {
   /// so one instance is safe.
   static final CryptoWorker _cryptoWorker = CryptoWorker.instance;
 
+  /// Wrap ids (kind-1059 event ids) we've ALREADY unwrapped this process.
+  ///
+  /// Unwrapping a gift wrap is a per-candidate secp256k1 ECDH + ChaCha20 +
+  /// HMAC decrypt plus a BIP340 seal verify — the single most expensive inbound
+  /// op. The D1 PM/group archive REPLAYS the very same wraps on every boot and
+  /// every resume (`_restorePmArchive` / `_backfillGroupArchive`), and the old
+  /// code re-did all that crypto for each one before the downstream id-dedup
+  /// discarded the duplicate rumor — a primary cause of the slow-to-open /
+  /// slow-after-background behavior. This set lets a replay skip the whole
+  /// unwrap. Process-wide (survives resume) and bounded (oldest-first eviction).
+  static final LinkedHashSet<String> _processedWrapIds = LinkedHashSet<String>();
+  static const int _processedWrapCap = 100000;
+
+  /// Seeds [ids] as already-verified signatures (e.g. channel message ids
+  /// restored from the local cache — verified when first received) so the
+  /// cold-boot archive/live replay of that history skips re-verification.
+  static void seedVerifiedIds(Iterable<String> ids) => _verifier.markVerified(ids);
+
+  /// Seeds [wrapIds] as already-unwrapped (e.g. cached PM message ids, which
+  /// ARE their wrap ids — see `_onGiftWrap`) so the cold-boot PM restore skips
+  /// re-unwrapping history already on disk.
+  static void seedProcessedWraps(Iterable<String> wrapIds) {
+    for (final id in wrapIds) {
+      if (id.isEmpty) continue;
+      _processedWrapIds.remove(id);
+      _processedWrapIds.add(id);
+    }
+    _evictProcessedWraps();
+  }
+
+  static void _rememberProcessedWrap(String id) {
+    if (id.isEmpty) return;
+    _processedWrapIds.remove(id);
+    _processedWrapIds.add(id);
+    _evictProcessedWraps();
+  }
+
+  static void _evictProcessedWraps() {
+    while (_processedWrapIds.length > _processedWrapCap) {
+      _processedWrapIds.remove(_processedWrapIds.first);
+    }
+  }
+
   /// The [EventVerifier] handed to every pool: verify each inbound event off
   /// the main thread (batched). Preserves the per-event keep/drop contract the
   /// relay layer relies on — see [IsolateVerifier].
   static Future<bool> _verifyOffThread(NostrEvent event) =>
       _verifier.verify(event);
+
+  /// Off-main-thread signature verification for the D1 archive-replay paths
+  /// (vouch / emoji rows) that previously ran `schnorr.verifyEvent` INLINE on
+  /// the main isolate during a boot backfill. Routes through the same batched
+  /// [IsolateVerifier] as the live pool, so a whole archive cohort verified in
+  /// one turn coalesces into a single isolate hop. Fail-closed like the pool.
+  Future<bool> verifyEvent(NostrEvent event) => _verifier.verify(event);
 
   /// Default constructor. [useProxy] selects the transport: when true (the
   /// native default per spec §4.2) the service runs over the multiplexed
@@ -1041,9 +1092,28 @@ class NostrService {
     unawaited(_handleGiftWrap(wrap, fromArchive: true));
   }
 
+  /// Unwraps a LIVE kind-1059 gift wrap that arrived on an auxiliary relay
+  /// subscription (the ephemeral group-key REQ, `_refreshEphemeralSubscriptions`)
+  /// through the SAME live path the main gift-wrap sub uses — i.e. `fromArchive:
+  /// false`, so a group message another member wrapped to our ephemeral key is
+  /// archived to D1, notified, and surfaced real-time exactly like a `#p:[self]`
+  /// wrap. This is NOT [unwrapArchivedWrap]: that flags the wrap `fromArchive`
+  /// and SKIPS the D1 archive (`_archiveGiftWrap`), which is correct only for
+  /// D1-replayed history — using it for live wraps means received group messages
+  /// are never persisted and vanish on relaunch. Mirrors the PWA, whose
+  /// ephemeral REQ feeds `handleGiftWrapDM` with `fromD1` unset (relays.js:2723).
+  void unwrapLiveWrap(NostrEvent wrap) {
+    if (wrap.kind != EventKind.giftWrap) return;
+    unawaited(_handleGiftWrap(wrap));
+  }
+
   Future<void> _handleGiftWrap(NostrEvent wrap, {bool fromArchive = false}) async {
     final handlers = _handlers;
     if (handlers?.onGiftWrap == null) return;
+    // Already unwrapped this process (a boot/resume archive replay, or the live
+    // wrap whose archived copy this is)? Skip the expensive ECDH+decrypt+verify
+    // — the produced rumor would only be discarded by the downstream id dedup.
+    if (wrap.id.isNotEmpty && _processedWrapIds.contains(wrap.id)) return;
     final candidates = _candidates();
 
     // Remote-signer (NIP-46) path: no local identity key is available, so the
@@ -1055,7 +1125,7 @@ class NostrService {
     if (sig != null && sig.isRemote && _isAddressedToSelf(wrap)) {
       final res = await _unwrapRemote(wrap, sig);
       if (res != null) {
-        _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
+        await _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
             isBitchat: false, fromArchive: fromArchive);
         return;
       }
@@ -1071,7 +1141,7 @@ class NostrService {
     final res = await _cryptoWorker.unwrap(wrap, candidates);
     if (res == null) return;
 
-    _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
+    await _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
         fromArchive: fromArchive,
         isBitchat: res.isBitchat);
   }
@@ -1108,14 +1178,18 @@ class NostrService {
 
   /// Verifies the seal authorship (NIP-59 sender auth) and emits the unwrapped
   /// rumor through [handlers]. Shared by the local + remote unwrap paths.
-  void _emitUnwrapped(
+  Future<void> _emitUnwrapped(
     NostrHandlers handlers,
     NostrEvent wrap,
     NostrEvent seal,
     Map<String, dynamic> rumor, {
     required bool isBitchat,
     bool fromArchive = false,
-  }) {
+  }) async {
+    // We successfully decrypted this wrap — record its id so a later archive
+    // replay (boot/resume) skips re-unwrapping it. Recorded here (not gated on
+    // seal validity) so a known-forged wrap isn't re-checked every resume.
+    _rememberProcessedWrap(wrap.id);
     final rumorPubkey = rumor['pubkey'] as String?;
     if (rumorPubkey == null || rumorPubkey.isEmpty) return;
 
@@ -1134,7 +1208,11 @@ class NostrService {
       if (decoded == null) return;
       emitRumor = decoded;
     } else {
-      if (seal.pubkey != rumorPubkey || !schnorr.verifyEvent(seal)) {
+      // NIP-59 sender auth off the main isolate, batched with the live pool's
+      // verifier. During a PM/group D1 backfill this is up to ~1000 seal
+      // verifies (sha256 + BIP340) that used to run INLINE on the render thread.
+      // The cheap pubkey check stays inline so a mismatch short-circuits the hop.
+      if (seal.pubkey != rumorPubkey || !(await _verifier.verify(seal))) {
         return; // forged
       }
     }
@@ -2001,6 +2079,11 @@ class NostrService {
   Future<void> connectGeoRelaysForGeohash(String geohash,
       {Future<String> Function(Uri url)? csvFetcher}) async {
     if (geohash.isEmpty) return;
+    // Skip geo-relay connections in group-chat/PM-only mode, exactly like the
+    // PWA (`if (this.settings.groupChatPMOnlyMode) return`, relays.js:185).
+    // `_channelMode` mirrors `!groupChatPMOnlyMode`, so no channel filters are
+    // in the critical REQ anyway — connecting geo relays would just be waste.
+    if (!_channelMode) return;
     if (geoRelays.isEmpty) {
       await fetchGeoRelays(csvFetcher: csvFetcher);
     }
@@ -2013,6 +2096,57 @@ class NostrService {
     // Re-shard whenever the channel introduced a new geo relay (or always in
     // low-data mode, where the pool otherwise carries no geo relays).
     if (changed || lowDataMode) applyGeoRelays();
+  }
+
+  // --- Geo-relay keep-alive (relays.js `startGeoRelayKeepAlive`, 135-176) -----
+
+  Timer? _geoKeepAliveTimer;
+  String? _geoKeepAliveGeohash;
+
+  /// Keep the active geohash channel's closest geo relays connected: every 30s,
+  /// re-check that each of the geohash's [RelayConfig.geoRelayCount] closest
+  /// relays is still in the pool's connected set and re-run
+  /// [connectGeoRelaysForGeohash] when any has dropped. Faithful port of
+  /// `startGeoRelayKeepAlive` (relays.js:135-168) — the transport owns per-socket
+  /// reconnection, but a geo relay the pool permanently dropped (or one whose
+  /// shard never came up) needs this channel-level nudge to be re-added, exactly
+  /// like the PWA's interval. Latest-wins: restarted with the new geohash on each
+  /// geohash-channel entry; [stopGeoRelayKeepAlive] cancels it on leaving.
+  ///
+  /// The `document.hidden` skip (relays.js:144) has no native analog here — the
+  /// controller stops the keep-alive when the app backgrounds — so the callback
+  /// only guards on the active geohash still matching and channel mode.
+  void startGeoRelayKeepAlive(String geohash) {
+    _geoKeepAliveTimer?.cancel();
+    _geoKeepAliveTimer = null;
+    if (geohash.isEmpty || !ch.isValidGeohash(geohash)) {
+      _geoKeepAliveGeohash = null;
+      return;
+    }
+    _geoKeepAliveGeohash = geohash;
+    _geoKeepAliveTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => _geoKeepAliveTick());
+  }
+
+  void _geoKeepAliveTick() {
+    final gh = _geoKeepAliveGeohash;
+    if (gh == null) return;
+    // groupChatPMOnlyMode → no channel filters are subscribed, skip
+    // (relays.js:145).
+    if (!_channelMode) return;
+    final closest = closestGeoRelays(gh);
+    if (closest.isEmpty) return;
+    final present = pool.connectedRelayUrls;
+    final anyMissing = closest.any((r) => !present.contains(r.url));
+    if (anyMissing) unawaited(connectGeoRelaysForGeohash(gh));
+  }
+
+  /// Stop the geo-relay keep-alive (`stopGeoRelayKeepAlive`, relays.js:170) —
+  /// on leaving a geohash channel, app teardown, or backgrounding.
+  void stopGeoRelayKeepAlive() {
+    _geoKeepAliveTimer?.cancel();
+    _geoKeepAliveTimer = null;
+    _geoKeepAliveGeohash = null;
   }
 
   /// Picks the [count] geo relays closest to [geohash]'s center using the
@@ -2049,6 +2183,7 @@ class NostrService {
     _statusTimer?.cancel();
     _criticalResubTimer?.cancel();
     _criticalResubTimer = null;
+    stopGeoRelayKeepAlive();
     _stopBgRestore();
     _poolFallbackActive = false;
     // Detach our api-stats sink if it's still the active one (avoid a stale

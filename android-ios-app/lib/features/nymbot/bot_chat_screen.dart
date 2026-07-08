@@ -177,7 +177,15 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       BuildContext context, NymColors c, BotChatState state) {
     final botUser = ref.watch(usersProvider)[kNymbotPubkey];
     return AppBar(
-      backgroundColor: c.bgSecondary,
+      // `.chat-header`: bg --glass-bg + a bottom hairline (chat_pane.dart:
+      // 330-334), NOT --bg-secondary (an opaque surface that reads differently
+      // from the rest of the app's headers in both themes). Kill Material's
+      // elevation/scroll tint so the header stays flat glass in light AND dark.
+      backgroundColor: c.glassBg,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      shape: Border(bottom: BorderSide(color: c.glassBorder)),
       foregroundColor: c.textBright,
       titleSpacing: 0,
       toolbarHeight: 68,
@@ -422,7 +430,13 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                 // A reasoning-bearing bot reply renders its collapsed
                 // "💭 Reasoning" section INSIDE the bubble content — the
                 // canonical MessageRow prepends it (messages.js:796-797).
+                //
+                // Keyed by the group's LEAD message id so appending a reply
+                // doesn't shift every reversed index and re-create still-visible
+                // rows (which would restart their `bubble-snap-in` from opacity
+                // 0). See messages_list.dart for the full rationale.
                 return MessageGroup(
+                  key: ValueKey('botgroup_${unit.first.message.id}'),
                   entries: unit,
                   settings: settings,
                   onReactionPicker: (msg) =>
@@ -2198,13 +2212,33 @@ class _BotIconBtnState extends State<_BotIconBtn> {
     final c = context.nym;
     final enabled = widget.enabled;
     final hovered = enabled && _hover;
+    // `.icon-btn.input-btn` carries the SAME mode-aware fill/border/hover as the
+    // canonical composer's `_IconBtn` (composer.dart:2463-2476) — NOT a flat
+    // `glassBg`/`hoverOverlay`, which reads too bright in dark and drops the
+    // primary hover treatment in light. SVG glyphs stay `--text` (→ primary on
+    // hover) in both themes; the GIF label follows `color:` (always primary in
+    // light).
+    final Color fill;
+    final Color borderColor;
+    final Color labelColor;
+    if (c.isLight) {
+      fill = hovered
+          ? Colors.black.withValues(alpha: 0.06)
+          : Colors.black.withValues(alpha: 0.03);
+      borderColor = hovered ? c.primary : Colors.black.withValues(alpha: 0.1);
+      labelColor = c.primary;
+    } else {
+      fill = hovered ? c.primaryA(0.12) : Colors.white.withValues(alpha: 0.05);
+      borderColor = hovered ? c.primaryA(0.30) : c.glassBorder;
+      labelColor = hovered ? c.primary : c.text;
+    }
     final glyphColor = hovered ? c.primary : c.text;
     final child = widget.svg != null
         ? NymSvgIcon(widget.svg!, size: 18, color: glyphColor)
         : Text(
             widget.label!,
             style: TextStyle(
-              color: glyphColor,
+              color: labelColor,
               fontSize: 12,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.5,
@@ -2219,14 +2253,19 @@ class _BotIconBtnState extends State<_BotIconBtn> {
           onTap: enabled ? widget.onTap : null,
           child: Opacity(
             opacity: enabled ? 1 : 0.35,
-            child: Container(
+            child: AnimatedContainer(
+              duration: NymMotion.transition,
+              curve: NymMotion.curve,
               height: 42,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: hovered ? c.hoverOverlay : c.glassBg,
-                border: Border.all(color: c.glassBorder),
+                color: fill,
+                border: Border.all(color: borderColor),
                 borderRadius: NymRadius.rsm,
+                boxShadow: hovered
+                    ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
+                    : null,
               ),
               child: widget.expand
                   ? Center(child: child)

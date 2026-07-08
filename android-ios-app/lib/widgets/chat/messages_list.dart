@@ -166,13 +166,19 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final settings = ref.watch(settingsProvider);
-    final app = ref.watch(appStateProvider);
+    // Watch only the slices this widget renders — NOT the whole AppState, which
+    // emits on every ambient change (typing/presence/unread) and rebuilt the
+    // entire message list. The message/reaction/poll providers below are now
+    // display-revision–scoped, so this widget rebuilds on message/reaction/poll
+    // changes, view switches, and self-nym changes only.
+    final view = ref.watch(appStateProvider.select((s) => s.view));
+    final selfNym = ref.watch(appStateProvider.select((s) => s.selfNym));
     final messages = ref.watch(messagesForCurrentViewProvider);
     final reactions = ref.watch(reactionsProvider);
     final polls = ref.watch(pollsForCurrentViewProvider);
     // The history-edge notice is channel-only (the PWA's PM back-pager never
     // prepends one).
-    final isChannel = app.view.kind == ViewKind.channel;
+    final isChannel = view.kind == ViewKind.channel;
 
     // `.messages-container`: bg rgba(0,0,0,0.15) dark; light-mode flips it to
     // rgba(255,255,255,0.3) (a light wash over the page), so it must be
@@ -196,9 +202,12 @@ class _MessagesListState extends ConsumerState<MessagesList> {
               // Keyed on the active view so re-entering a conversation re-runs
               // the shimmer-then-settle grace period.
               child: _EmptyOrLoading(
-                key: ValueKey(app.view),
+                key: ValueKey(view),
                 useBubbles: settings.useBubbles,
-                emptyNote: _emptyNoteText(app),
+                // Rare cosmetic path (only while a conversation is empty); a
+                // read is fine — an arriving message bumps the display revision
+                // and re-renders this whole branch anyway.
+                emptyNote: _emptyNoteText(ref.read(appStateProvider)),
               ),
             ),
             const TypingIndicatorRow(),
@@ -207,7 +216,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       );
     }
 
-    final mentionToken = '@${_baseNym(app.selfNym)}';
+    final mentionToken = '@${_baseNym(selfNym)}';
 
     // Merge messages + polls into one chronological list (oldest first), each
     // message carrying its resolved reactions + mention flag. The fast probe
@@ -318,15 +327,34 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                       final forward = units.length - 1 - revIndex;
                       final unit = units[forward];
                       final Widget child;
+                      // A STABLE per-unit key on the sliver child (the widget
+                      // this builder returns, which `SliverChildBuilderDelegate`
+                      // reconciles by). Without it the keyless children are
+                      // matched by index, so appending a new unit shifts every
+                      // existing unit's reversed index by one and reuses each
+                      // slot's element for a NEIGHBORING unit — tearing down and
+                      // re-creating still-visible `MessageRow`s (their
+                      // `ValueKey(message.id)` is local and can't migrate across
+                      // parent slots). That recreation restarts each row's
+                      // `bubble-snap-in` from opacity 0 on every append, so in a
+                      // busy channel recent grouped bubbles never finish the
+                      // 240ms entrance and sit semi-transparent with no visible
+                      // background. Keying by the group's LEAD message id (stable
+                      // as messages append to the group) pins each unit's element
+                      // so the snap-in plays exactly once per bubble.
+                      final Key unitKey;
                       if (unit is _PollUnit) {
                         child = PollCard(poll: unit.poll, settings: settings);
+                        unitKey = ValueKey('poll_${unit.poll.id}');
                       } else {
+                        final group = unit as _GroupUnit;
                         child = MessageGroup(
-                          entries: (unit as _GroupUnit).entries,
+                          entries: group.entries,
                           settings: settings,
                           onReactionPicker: (msg) =>
                               showReactionPicker(context, ref, msg),
                         );
+                        unitKey = ValueKey('group_${group.entries.first.message.id}');
                       }
                       // `.messages-list { gap: 3px }` (styles-chat.css:1-7):
                       // a 3px flex gap between EVERY adjacent pair of list
@@ -334,10 +362,22 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                       // of each row's own padding/margins. Driven from the top
                       // edge; the list's very first child (the oldest unit, or
                       // the history notice above it) opens no gap.
-                      return Padding(
-                        padding: EdgeInsets.only(
-                            top: (forward > 0 || isChannel) ? 3 : 0),
-                        child: child,
+                      //
+                      // RepaintBoundary isolates each row into its own raster
+                      // layer: message rows paint expensively (shadows,
+                      // gradients, cosmetic CustomPaint overlays), and without a
+                      // boundary any repaint in the message area — a typing-dots
+                      // tick, a reaction burst, a relative-time refresh — forced
+                      // the whole visible list to re-rasterize. That full-layer
+                      // re-raster was a major driver of the pegged raster thread
+                      // behind the ANR.
+                      return RepaintBoundary(
+                        key: unitKey,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                              top: (forward > 0 || isChannel) ? 3 : 0),
+                          child: child,
+                        ),
                       );
                     },
                   ),

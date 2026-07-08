@@ -44,8 +44,29 @@ class EventMapper {
     final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
 
     // Clamp future timestamps to now (mirrors the PWA).
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final nowSec = nowMs ~/ 1000;
     final createdAt = e.createdAt > nowSec + 60 ? nowSec : e.createdAt;
+
+    // Authoritative display/age timestamp (PWA `_extractEventMs` + `message.
+    // timestamp`): the `ms` tag is the sender's REAL millisecond send time and is
+    // preferred over `created_at`, capped at now to absorb clock skew. This is not
+    // just sub-second polish — a proxy/relay can re-stamp an ephemeral geohash
+    // event's top-level `created_at` FORWARD when it re-broadcasts cached history,
+    // so minutes-old backfill arrives reading `created_at ≈ now`. `created_at*1000`
+    // then renders every such row as "now" and — because they all collapse into
+    // one ~2s window — trips the per-pubkey RATE flood gate, dimming legit senders
+    // to opacity 0.2 (the reported bug, seen only in a very busy channel). The `ms`
+    // tag rides untouched in the event body, so it recovers the true time. Falls
+    // back to `created_at` seconds for non-Nymchat senders that carry no `ms` tag.
+    final effectiveMs = ms > 0 ? (ms < nowMs ? ms : nowMs) : createdAt * 1000;
+
+    // A replayed-backlog message (PWA `messageAge > 10000` / [_isHistorical]):
+    // older than 10s by its REAL send time. Marking it historical keeps D1/relay
+    // BACKFILL out of the live-only flood tracker and the bubble snap-in entrance,
+    // matching the PWA (which tracks/animates LIVE arrivals only); genuine live
+    // sends (<10s) are still tracked so real spam is caught.
+    final isHistorical = nowMs - effectiveMs > 10000;
 
     // A channel message can carry a P2P file offer on an `['offer', JSON]` tag
     // (`shareP2PFile` → `publishFileOffer`). nostr-core.js:434/502 parses it off
@@ -62,11 +83,16 @@ class EventMapper {
       createdAt: createdAt,
       originalCreatedAt: e.createdAt,
       ms: ms,
+      // Display + flood-tracker time. Sorting still keys on created_at (primary)
+      // with ms as the sub-second tiebreak via [compareMessages]; this only fixes
+      // what the row SHOWS and how "live" the flood gate considers it.
+      timestamp: effectiveMs,
       eventKind: e.kind,
       isOwn: e.pubkey == selfPubkey,
       channel: channel,
       geohash: geohash,
       senderVerified: true,
+      isHistorical: isHistorical,
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer?.toJson(),
     );

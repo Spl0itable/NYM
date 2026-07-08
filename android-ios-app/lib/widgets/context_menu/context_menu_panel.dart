@@ -1027,11 +1027,14 @@ class _CtxCloseButtonState extends State<CtxCloseButton> {
             ),
           ),
           // `.context-menu-close` is a literal "✕" char (`&#x2715;`) — styled
-          // text, not an SVG glyph.
+          // text, not an SVG glyph. This button floats in the Stack OUTSIDE the
+          // menu card's Material, so an explicit `decoration: none` is required
+          // or the raw Text paints Flutter's debug yellow underline.
           child: Text('✕',
               style: TextStyle(
                   fontSize: 16,
                   height: 1,
+                  decoration: TextDecoration.none,
                   color: _hover
                       ? c.danger
                       : (c.isLight ? const Color(0x80000000) : c.textDim))),

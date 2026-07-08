@@ -7,6 +7,7 @@
 // the same markdown subset, the same media/mention/emoji handling, and the same
 // ordering so that e.g. code spans shield their contents from later passes.
 
+import 'dart:collection';
 import 'dart:convert';
 
 import '../../../models/channel.dart' show isValidGeohash;
@@ -45,6 +46,49 @@ class FormatContext {
   final Set<String> knownChannels;
 
   static const empty = FormatContext();
+}
+
+/// Composite key for [NymFormat]'s parse-result cache: the raw content plus the
+/// [FormatContext] fields that actually change the parse output. The two
+/// collection fields ([customEmojis], [knownChannels]) are compared by identity
+/// — they are provider-owned snapshots whose instance is replaced (not mutated
+/// in place) when their contents change, so identity is a correct and cheap
+/// invalidation signal (a new emoji pack yields a new map → cache miss). The
+/// scalar channel/geohash/proxy fields are compared by value.
+class _ParseCacheKey {
+  _ParseCacheKey(this.content, FormatContext c)
+      : currentChannel = c.currentChannel,
+        currentGeohash = c.currentGeohash,
+        proxyBase = c.proxyBase,
+        customEmojis = c.customEmojis,
+        knownChannels = c.knownChannels;
+
+  final String content;
+  final String? currentChannel;
+  final String? currentGeohash;
+  final String? proxyBase;
+  final Map<String, String> customEmojis;
+  final Set<String> knownChannels;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ParseCacheKey &&
+      other.content == content &&
+      other.currentChannel == currentChannel &&
+      other.currentGeohash == currentGeohash &&
+      other.proxyBase == proxyBase &&
+      identical(other.customEmojis, customEmojis) &&
+      identical(other.knownChannels, knownChannels);
+
+  @override
+  int get hashCode => Object.hash(
+        content,
+        currentChannel,
+        currentGeohash,
+        proxyBase,
+        identityHashCode(customEmojis),
+        identityHashCode(knownChannels),
+      );
 }
 
 // ---------------------------------------------------------------------------
@@ -305,10 +349,42 @@ class NymFormat {
   /// avoid leaking a literal `[gc:…]` blob into the body.
   static final RegExp _rxGameToken = RegExp(r'\n\[gc:[A-Za-z0-9+/=]+\]');
 
+  /// Parse-result LRU cache. [format] is called for every visible message row
+  /// on every widget rebuild (a busy channel rebuilds the whole list on each
+  /// inbound event), and the tokenizer below is a heavy recursive multi-pass
+  /// regex parser — re-running it per rebuild was a primary UI-thread sink
+  /// behind the Android input-dispatch ANR. Because the parse is a pure function
+  /// of `(content, ctx)`, we memoize the immutable block tree and hand back the
+  /// SAME instance on a hit (blocks are `const`/final — the renderer only reads
+  /// them). Bounded to [_parseCacheCap] entries with plain LRU eviction so the
+  /// cache can never grow without bound.
+  static final LinkedHashMap<_ParseCacheKey, List<FormatBlock>> _parseCache =
+      LinkedHashMap<_ParseCacheKey, List<FormatBlock>>();
+  static const int _parseCacheCap = 800;
+
+  /// Test/diagnostic hook: drop every memoized parse.
+  static void clearParseCache() => _parseCache.clear();
+
   /// Parses [content] into block nodes per the active [ctx].
   static List<FormatBlock> format(String content, [FormatContext? ctx]) {
     final c = ctx ?? FormatContext.empty;
+    final key = _ParseCacheKey(content, c);
+    // `remove` + re-insert promotes the entry to most-recently-used (a
+    // LinkedHashMap preserves insertion order, so the oldest key is `keys.first`).
+    final hit = _parseCache.remove(key);
+    if (hit != null) {
+      _parseCache[key] = hit;
+      return hit;
+    }
+    final result = _formatUncached(content, c);
+    _parseCache[key] = result;
+    if (_parseCache.length > _parseCacheCap) {
+      _parseCache.remove(_parseCache.keys.first);
+    }
+    return result;
+  }
 
+  static List<FormatBlock> _formatUncached(String content, FormatContext c) {
     // Elide the hidden game-state token first (matches PWA `display:none`).
     if (content.contains('[gc:')) {
       content = content.replaceAll(_rxGameToken, '');

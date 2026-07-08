@@ -1036,11 +1036,17 @@ class _NymValueText extends StatelessWidget {
       TextSpan(
         children: [
           TextSpan(text: base),
-          // `.nym-value .nym-suffix { color: var(--text-dim) }` — same size
-          // and weight, only the colour dims.
+          // `.nym-value .nym-suffix` overrides only `color: var(--text-dim)`;
+          // the base `.nym-suffix` still applies (opacity 0.7, 0.9em, weight
+          // 100 — styles-chat.css:706-710). So the suffix dims AND thins, it is
+          // NOT bold like the base nym.
           TextSpan(
             text: '#$suffix',
-            style: TextStyle(color: c.textDim),
+            style: TextStyle(
+              color: c.textDim.withValues(alpha: 0.7),
+              fontSize: 15 * 0.9,
+              fontWeight: FontWeight.w100,
+            ),
           ),
         ],
       ),

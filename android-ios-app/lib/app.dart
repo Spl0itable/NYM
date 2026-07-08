@@ -101,6 +101,12 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       try {
         ref.read(nostrControllerProvider).onAppResumed();
       } catch (_) {}
+    } else {
+      // Backgrounded / hidden / inactive: pause the geo-relay keep-alive so it
+      // doesn't fire reconnects off-screen (the PWA's `document.hidden` skip).
+      try {
+        ref.read(nostrControllerProvider).onAppPaused();
+      } catch (_) {}
     }
   }
 

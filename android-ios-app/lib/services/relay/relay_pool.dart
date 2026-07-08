@@ -95,6 +95,12 @@ abstract interface class PoolTransport {
   /// Relays currently reported as connected.
   int get connectedCount;
 
+  /// The set of relay URLs currently reported as connected (proxy: the deduped
+  /// per-shard connected sets; direct: the open sockets). Used by the geo-relay
+  /// keep-alive to detect a dropped geo relay (`poolConnectedRelays` /
+  /// per-relay ws state in the PWA's `startGeoRelayKeepAlive`, relays.js:152/161).
+  Set<String> get connectedRelayUrls;
+
   /// Live relay-traffic counters (bytes in/out, events, throughput history,
   /// per-relay events + latency) for the Network Stats modal. Aggregated across
   /// every relay/shard socket. Mirrors the PWA's `nym.relayStats`.
@@ -269,6 +275,13 @@ class RelayPool implements PoolTransport {
   /// Per-relay connected status snapshot.
   Map<String, bool> get connectionStatus =>
       {for (final e in _connections.entries) e.key: e.value.isConnected};
+
+  /// The set of currently-connected relay URLs (open sockets).
+  @override
+  Set<String> get connectedRelayUrls => {
+        for (final e in _connections.entries)
+          if (e.value.isConnected) e.key,
+      };
 
   /// Aggregate live traffic counters across every relay socket (a fresh
   /// snapshot each read). Sums each [RelayConnection]'s bytes/events and merges

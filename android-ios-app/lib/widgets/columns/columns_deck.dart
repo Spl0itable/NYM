@@ -1872,8 +1872,13 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     final transparent = widget.transparent;
     final mobile = widget.mobile;
     final settings = ref.watch(settingsProvider);
-    final app = ref.watch(appStateProvider);
-    final reactions = ref.watch(reactionsProvider);
+    // Re-run this column on rendered changes (display revision) and self-nym
+    // edits — NOT on every ambient emit (typing/presence), which previously
+    // rebuilt and re-grouped EVERY open column. `reactions` rides the same
+    // in-place map the single view reads.
+    ref.watch(appStateProvider.select((s) => (s.displayRev, s.selfNym)));
+    final app = ref.read(appStateProvider);
+    final reactions = app.reactions;
     // Columns render the same FILTERED view as the single chat: the PWA's
     // columns draw via `renderMessagesWithVirtualScroll` → `getFilteredMessages`
     // / `getFilteredPMMessages` (columns.js:510 → messages.js:2934-2949), so
@@ -1999,17 +2004,34 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                               itemBuilder: (context, revIndex) {
                                 final entries =
                                     groups[groups.length - 1 - revIndex];
-                                return MessageGroup(
-                                  entries: entries,
-                                  settings: settings,
-                                  // `body.columns-mode` message-layout variants
-                                  // (styles-columns.css:27-82): IRC rows stack
-                                  // vertically, hover buttons stack, media caps
-                                  // at 100%, and desktop self bubble groups
-                                  // drop the 14px right padding.
-                                  columnsMode: true,
-                                  onReactionPicker: (msg) =>
-                                      showReactionPicker(context, ref, msg),
+                                // Per-row raster isolation (see the single-view
+                                // list in messages_list.dart): keeps a repaint
+                                // in one column's row from re-rasterizing every
+                                // other row across all open columns.
+                                //
+                                // Keyed by the group's LEAD message id (stable as
+                                // messages append to a group): without it the
+                                // keyless children reconcile by index, so a new
+                                // group shifts every reversed index and re-creates
+                                // still-visible rows, restarting their
+                                // `bubble-snap-in` from opacity 0 — the
+                                // semi-transparent grouped bubbles. See the single
+                                // view in messages_list.dart for the full rationale.
+                                return RepaintBoundary(
+                                  key: ValueKey(
+                                      'cvgroup_${entries.first.message.id}'),
+                                  child: MessageGroup(
+                                    entries: entries,
+                                    settings: settings,
+                                    // `body.columns-mode` message-layout variants
+                                    // (styles-columns.css:27-82): IRC rows stack
+                                    // vertically, hover buttons stack, media caps
+                                    // at 100%, and desktop self bubble groups
+                                    // drop the 14px right padding.
+                                    columnsMode: true,
+                                    onReactionPicker: (msg) =>
+                                        showReactionPicker(context, ref, msg),
+                                  ),
                                 );
                               },
                             );

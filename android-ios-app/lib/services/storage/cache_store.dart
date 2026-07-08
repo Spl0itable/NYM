@@ -300,7 +300,11 @@ class CacheStore {
     final out = <Message>[];
     for (final e in decoded) {
       if (e is Map) {
-        out.add(Message.fromJson(e.cast<String, dynamic>()));
+        // Anything restored from the on-disk cache is BACKLOG by provenance, no
+        // matter what timestamp it carries — mark it historical so it is never
+        // flood-dimmed or snap-in animated on rehydrate (matches the PWA restore
+        // path; a live message that was cached and reloaded is no longer "live").
+        out.add(Message.fromJson(e.cast<String, dynamic>())..isHistorical = true);
       }
     }
     return out;

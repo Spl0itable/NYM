@@ -158,9 +158,16 @@ class RelayConnection {
       );
       // web_socket_channel does not expose a discrete "open" event; the first
       // successful sink usage / inbound frame implies connectivity. Treat the
-      // listen as connected and reset the backoff once data flows.
+      // listen as connected and (re)send our REQs so the relay starts streaming.
+      //
+      // NOTE: the exponential-backoff counter is intentionally NOT reset here.
+      // `listen()` returns synchronously even for an unreachable relay — the
+      // failure only surfaces asynchronously via `_onDone`/`_onError`. Resetting
+      // the attempt count at listen time defeated the backoff entirely: a dead
+      // relay reconnected on the ~1s floor forever and `maxReconnectAttempts`
+      // was never reached. We now reset only once a frame actually arrives (see
+      // `_onData`), so backoff escalates and the attempt cap can trip.
       _setStatus(RelayStatus.connected);
-      _reconnectAttempt = 0;
       _resendActiveSubs();
     } catch (e) {
       _onError(e);
@@ -169,6 +176,9 @@ class RelayConnection {
 
   void _onData(dynamic data) {
     lastMessageAt = DateTime.now();
+    // First confirmed inbound frame proves the socket really connected — only
+    // now is it safe to clear the reconnect backoff (see `_openSocket`).
+    _reconnectAttempt = 0;
     // Count every inbound frame's UTF-8 byte length (relays.js ws.onmessage:
     // `relayStats.bytesReceived += dataLen`). Binary frames count their byte
     // length directly; non-frame payloads are ignored below.

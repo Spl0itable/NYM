@@ -399,8 +399,12 @@ class _ShardSocket {
       );
       // web_socket_channel has no discrete open event; treat listen as open and
       // immediately push the shard's RELAYS config (mirrors ws.onopen).
+      //
+      // The reconnect backoff is intentionally reset in `_onData` on a real
+      // inbound frame, NOT here: `listen()` returns even for an unreachable
+      // proxy, so resetting at listen time pinned reconnects to the ~3s floor
+      // forever instead of escalating toward the 60s cap.
       _open = true;
-      _reconnectAttempt = 0;
       send(PoolFrame.relays(shard.relays, shard.dmRelays));
       onConnected(this);
     } catch (e) {
@@ -420,6 +424,10 @@ class _ShardSocket {
     if (data is! String) return;
     final msg = PoolMessage.parse(data);
     if (msg == null) return;
+    // A real inbound frame proves the socket connected — clear the reconnect
+    // backoff so a later drop starts from the floor, while a never-connecting
+    // socket keeps escalating (see `connect`).
+    _reconnectAttempt = 0;
     // Any parseable inbound pool frame confirms the proxy endpoint is reachable
     // and speaking the protocol; clear the pre-connect failure streak so a later
     // mid-session blip is treated as a normal reconnect (not a host-unreachable
@@ -629,6 +637,7 @@ class RelayPoolProxy implements PoolTransport {
 
   /// The deduped set of relay URLs reported connected across all shards (for the
   /// Network Stats per-relay list). Same aggregation as [connectedCount].
+  @override
   Set<String> get connectedRelayUrls {
     final s = <String>{};
     for (final sock in _sockets) {

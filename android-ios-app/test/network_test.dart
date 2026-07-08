@@ -645,6 +645,8 @@ class _NoopTransport implements PoolTransport {
   @override
   int get connectedCount => 0;
   @override
+  Set<String> get connectedRelayUrls => const {};
+  @override
   RelayStats get stats => RelayStats();
   @override
   Future<int> publish(NostrEvent event) async => 0;
@@ -677,6 +679,8 @@ class _RecordingTransport implements PoolTransport {
   Future<void> disconnectAll() async {}
   @override
   int get connectedCount => 0;
+  @override
+  Set<String> get connectedRelayUrls => const {};
   @override
   RelayStats get stats => RelayStats();
   @override
