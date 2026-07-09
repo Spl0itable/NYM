@@ -336,6 +336,7 @@ window.nymHapticTap = function (ms) {
         // Nostr login
         'nostrLoginWithExtension':    function () { window.nostrLoginWithExtension(); },
         'nostrLoginStartRemoteSigner':function () { window.nostrLoginStartRemoteSigner(); },
+        'nostrLoginConnectBunker':    function () { window.nostrLoginConnectBunker(); },
         'nostrLoginCopyBunkerURI':    function () { window.nostrLoginCopyBunkerURI(); },
         'nostrLoginCancelRemoteSigner': function () { window.nostrLoginCancelRemoteSigner(); },
         'nostrLoginWithNsec':         function () { window.nostrLoginWithNsec(); },

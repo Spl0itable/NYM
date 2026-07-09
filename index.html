@@ -1297,7 +1297,7 @@
                                 </div>
                                 <div id="nostrLoginRemoteSignerQR" class="nm-h-29"></div>
                             </div>
-                            <div class="form-group nm-h-30">
+                            <div class="form-group nm-h-30" id="nostrLoginConnectStringGroup">
                                 <label class="form-label">Connection String</label>
                                 <div class="nm-h-31">
                                     <input type="text" class="form-input nm-h-32" id="nostrLoginBunkerURI" readonly>
@@ -1308,6 +1308,16 @@
                             <div class="nm-h-34">
                                 <button class="icon-btn nm-h-16" data-action="nostrLoginCancelRemoteSigner">Cancel</button>
                             </div>
+                        </div>
+
+                        <!-- Paste a bunker:// string (signer-initiated NIP-46) -->
+                        <div class="form-group nm-h-30" id="nostrLoginBunkerOption">
+                            <label class="form-label">Or paste a bunker string</label>
+                            <div class="nm-h-31">
+                                <input type="text" class="form-input nm-h-32" id="nostrLoginBunkerInput" placeholder="bunker://..." autocomplete="off" spellcheck="false">
+                                <button class="icon-btn nm-h-33" id="nostrLoginBunkerConnectBtn" data-action="nostrLoginConnectBunker">Connect</button>
+                            </div>
+                            <div class="form-hint">Paste a bunker:// string from Amber, nsecbunker, or nsec.app</div>
                         </div>
                     </div>
 

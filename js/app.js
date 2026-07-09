@@ -4226,7 +4226,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.517';
+const NYMCHAT_VERSION = 'v3.72.518';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -4987,6 +4987,14 @@ function prepareNostrLoginUI() {
         rsBtn.disabled = false;
         rsBtn.textContent = 'Login with Remote Signer';
     }
+    const bunkerInput = document.getElementById('nostrLoginBunkerInput');
+    if (bunkerInput) bunkerInput.value = '';
+    const bunkerBtn = document.getElementById('nostrLoginBunkerConnectBtn');
+    if (bunkerBtn) { bunkerBtn.disabled = false; bunkerBtn.textContent = 'Connect'; }
+    // The connection-string block is hidden by the bunker flow; restore it so a
+    // later nostrconnect (QR) attempt shows it again.
+    const connStringGroup = document.getElementById('nostrLoginConnectStringGroup');
+    if (connStringGroup) connStringGroup.style.display = '';
 }
 
 // Switch between the "Sign up" and "Login" tabs in the setup/welcome modal
@@ -5128,6 +5136,10 @@ function nostrLoginStartRemoteSigner() {
         const connectDiv = document.getElementById('nostrLoginRemoteSignerConnect');
         connectDiv.classList.remove('nm-hidden');
         connectDiv.style.display = '';
+        // Ensure the connection-string block is visible (a prior bunker attempt
+        // may have hidden it).
+        const connStringGroup = document.getElementById('nostrLoginConnectStringGroup');
+        if (connStringGroup) connStringGroup.style.display = '';
 
         // Set connection string
         document.getElementById('nostrLoginBunkerURI').value = connectURI;
@@ -5175,14 +5187,34 @@ function nostrLoginStartRemoteSigner() {
     }
 }
 
+// Resolve the WebSocket URL for the signer relay. In the default relay-proxy
+// pool mode the browser talks to relays through the app's proxy
+// (wss://<host>/api/relay?relay=...) rather than opening a raw connection, so
+// the NIP-46 socket must go through the same proxy or it may never connect in
+// deployments where direct relay connections are unavailable. Falls back to a
+// direct connection when the proxy isn't in use or a proxied attempt failed.
+function _nip46WsUrl(state) {
+    if (state && state._useDirectRelay) return state.relayUrl;
+    try {
+        if (typeof nym !== 'undefined' && typeof nym._getProxiedRelayUrl === 'function') {
+            return nym._getProxiedRelayUrl(state.relayUrl);
+        }
+    } catch (_) { }
+    return state.relayUrl;
+}
+
 function _nip46OpenRelay() {
     const state = _nip46State;
     if (!state) return;
 
-    const ws = new WebSocket(state.relayUrl);
+    const url = _nip46WsUrl(state);
+    const usingProxy = url !== state.relayUrl;
+    let opened = false;
+    const ws = new WebSocket(url);
     state.ws = ws;
 
     ws.onopen = () => {
+        opened = true;
         // Subscribe to kind 24133 events addressed to our client pubkey
         const filter = {
             kinds: [24133],
@@ -5207,15 +5239,37 @@ function _nip46OpenRelay() {
     };
 
     ws.onclose = () => {
-        // Reconnect if still waiting for signer
-        if (_nip46State && !_nip46State.connected) {
-            setTimeout(() => {
-                if (_nip46State && !_nip46State.connected) {
-                    _nip46OpenRelay();
-                }
-            }, 3000);
+        if (!_nip46State || _nip46State.connected) return;
+        // A proxied socket that never opened means the proxy couldn't reach the
+        // signer relay — retry once directly before the normal reconnect loop.
+        if (usingProxy && !opened && !_nip46State._useDirectRelay) {
+            _nip46State._useDirectRelay = true;
+            _nip46OpenRelay();
+            return;
         }
+        // Reconnect if still waiting for signer
+        setTimeout(() => {
+            if (_nip46State && !_nip46State.connected) {
+                _nip46OpenRelay();
+            }
+        }, 3000);
     };
+}
+
+// Throttle repeated "authorize in your signer app" prompts so a single group
+// send (which fans out one signer request per member) can't spam the timeline.
+let _nip46AuthPromptTs = 0;
+function _nip46NotifyAuthNeeded(url) {
+    try {
+        const now = Date.now();
+        if (now - _nip46AuthPromptTs < 30000) return;
+        _nip46AuthPromptTs = now;
+        const msg = 'Your remote signer needs authorization to continue. Approve the request in your signer app'
+            + (url ? ', or open the auth page it provided.' : '.');
+        if (typeof nym !== 'undefined' && typeof nym.displaySystemMessage === 'function') {
+            nym.displaySystemMessage(msg);
+        }
+    } catch (_) { }
 }
 
 async function _nip46HandleEvent(event) {
@@ -5230,10 +5284,24 @@ async function _nip46HandleEvent(event) {
         const response = JSON.parse(decrypted);
 
         if (response.result === 'auth_url') {
-            // Remote signer requires auth — show URL to user
+            // The signer needs the user to authorize this request before it will
+            // service it (common with Amber / nsecbunker the first time a given
+            // permission — sign_event, nip44_encrypt, nip44_decrypt — is used).
+            // The signer keeps the request queued on its side and sends the real
+            // result once approved, so we must NOT settle the pending promise
+            // here — just surface the auth URL and keep waiting.
+            const rawUrl = (response.error && /^https?:\/\//i.test(response.error)) ? response.error : null;
             const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
-            const safeUrl = (response.error && /^https?:\/\//i.test(response.error)) ? response.error.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' })[m]) : '#';
-            statusEl.innerHTML = `Signer requires authorization. <a href="${safeUrl}" target="_blank" rel="noopener" class="nm-secondary">Open auth page</a>`;
+            if (statusEl) {
+                const safeUrl = rawUrl ? rawUrl.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' })[m]) : '#';
+                statusEl.innerHTML = `Signer requires authorization. <a href="${safeUrl}" target="_blank" rel="noopener" class="nm-secondary">Open auth page</a>`;
+            } else {
+                // Post-login (e.g. sending a PM or group message) the login modal
+                // is gone, so there's no status element. Without a prompt the
+                // send would appear to hang until timeout — tell the user to
+                // approve the request in their signer app.
+                _nip46NotifyAuthNeeded(rawUrl);
+            }
             return;
         }
 
@@ -5245,9 +5313,18 @@ async function _nip46HandleEvent(event) {
             return;
         }
 
-        if (response.id && response.result !== undefined) {
-            // Handle response to connect or ack
+        if (response.id) {
+            // Before the session is established, the first inbound response is the
+            // connect ack. Only a successful result establishes the connection; an
+            // error here means the signer rejected the connect request.
             if (!state.remotePubkey) {
+                if (response.error) {
+                    const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
+                    if (statusEl) statusEl.textContent = 'Remote signer rejected the connection: ' + response.error;
+                    return;
+                }
+                if (response.result === undefined) return; // not a settled response
+
                 // First response — this is the connect ack
                 state.remotePubkey = event.pubkey;
 
@@ -5255,7 +5332,7 @@ async function _nip46HandleEvent(event) {
                 if (response.result && response.result !== 'ack' && response.result !== state.secret) {
                     // Secret mismatch; could be a replay
                     const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
-                    statusEl.textContent = 'Connection secret mismatch. Try again.';
+                    if (statusEl) statusEl.textContent = 'Connection secret mismatch. Try again.';
                     return;
                 }
 
@@ -5264,12 +5341,15 @@ async function _nip46HandleEvent(event) {
                 return;
             }
 
-            // Response to a pending request (sign_event, etc.)
+            // Response to a pending request (sign_event, nip44_encrypt/decrypt).
+            // Settle on either a result OR an error so callers fail fast instead
+            // of hanging until the 60s timeout — important for PM/group sends,
+            // which fan out one signer request per recipient.
             const pending = state.pendingRequests.get(response.id);
-            if (pending) {
+            if (pending && (response.result !== undefined || response.error)) {
                 state.pendingRequests.delete(response.id);
                 if (response.error) {
-                    pending.reject(new Error(response.error));
+                    pending.reject(new Error(typeof response.error === 'string' ? response.error : 'Remote signer returned an error'));
                 } else {
                     pending.resolve(response.result);
                 }
@@ -5285,7 +5365,7 @@ async function _nip46CompleteLogin(remotePubkey) {
     if (!state) return;
 
     const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
-    statusEl.textContent = 'Connected! Fetching public key...';
+    if (statusEl) statusEl.textContent = 'Connected! Fetching public key...';
 
     try {
         // Request the signer's public key via get_public_key
@@ -5325,15 +5405,39 @@ async function _nip46CompleteLogin(remotePubkey) {
 
         await finishNostrLogin('Logged in with remote signer (NIP-46).');
     } catch (err) {
-        statusEl.textContent = 'Login failed: ' + err.message;
+        if (statusEl) statusEl.textContent = 'Login failed: ' + err.message;
+        const errorEl = document.getElementById('nostrLoginError');
+        if (errorEl) { errorEl.textContent = 'Remote signer login failed: ' + err.message; errorEl.style.display = 'block'; }
         console.error('[NIP-46] Login failed:', err);
     }
 }
 
-function _nip46SendRequest(method, params) {
-    const state = _nip46State;
-    if (!state || !state.ws || state.ws.readyState !== WebSocket.OPEN || !state.remotePubkey) {
+// Wait (up to ~timeoutMs) for the signer WebSocket to be open and the remote
+// pubkey to be known. On a page reload the session is restored asynchronously,
+// so a PM/group action fired right away would otherwise fail instantly.
+async function _nip46WaitReady(timeoutMs = 8000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const state = _nip46State;
+        if (state && state.ws && state.ws.readyState === WebSocket.OPEN && state.remotePubkey) return true;
+        if (!state) return false;
+        await new Promise(r => setTimeout(r, 150));
+    }
+    return false;
+}
+
+async function _nip46SendRequest(method, params) {
+    let state = _nip46State;
+    if (!state || !state.remotePubkey) {
         return Promise.reject(new Error('NIP-46 remote signer not connected'));
+    }
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        // Socket may still be (re)connecting after a reload — give it a moment.
+        const ready = await _nip46WaitReady();
+        state = _nip46State;
+        if (!ready || !state || !state.ws || state.ws.readyState !== WebSocket.OPEN || !state.remotePubkey) {
+            return Promise.reject(new Error('NIP-46 remote signer not connected'));
+        }
     }
 
     const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -5424,6 +5528,106 @@ function nostrLoginCancelRemoteSigner() {
     document.getElementById('nostrLoginRemoteSignerBtn').textContent = 'Login with Remote Signer';
     document.getElementById('nostrLoginRemoteSignerQR').innerHTML = '';
     document.getElementById('nostrLoginRemoteSignerStatus').textContent = 'Waiting for remote signer...';
+    const connStringGroup = document.getElementById('nostrLoginConnectStringGroup');
+    if (connStringGroup) connStringGroup.style.display = '';
+}
+
+// Parse a bunker:// connection string (NIP-46, signer-initiated flow):
+//   bunker://<remote-signer-pubkey-hex>?relay=wss://...&relay=...&secret=...
+// Returns { remotePubkey, relays, secret } or null if malformed.
+function _parseBunkerUri(uri) {
+    if (typeof uri !== 'string' || !/^bunker:\/\//i.test(uri.trim())) return null;
+    const rest = uri.trim().slice('bunker://'.length);
+    const qIdx = rest.indexOf('?');
+    const remotePubkey = (qIdx === -1 ? rest : rest.slice(0, qIdx)).trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(remotePubkey)) return null;
+
+    const relays = [];
+    let secret = null;
+    if (qIdx !== -1) {
+        let params;
+        try { params = new URLSearchParams(rest.slice(qIdx + 1)); } catch (_) { return null; }
+        for (const r of params.getAll('relay')) {
+            if (r && /^wss?:\/\//i.test(r) && !relays.includes(r)) relays.push(r);
+        }
+        secret = params.get('secret');
+    }
+    if (relays.length === 0) return null;
+    return { remotePubkey, relays, secret };
+}
+
+// Connect to a signer via a pasted bunker:// string. Unlike the nostrconnect://
+// flow (where the signer initiates), here the client knows the signer's pubkey
+// and relay up front and sends the connect request itself.
+async function nostrLoginConnectBunker() {
+    const errorEl = document.getElementById('nostrLoginError');
+    if (errorEl) errorEl.style.display = 'none';
+
+    const input = document.getElementById('nostrLoginBunkerInput');
+    const parsed = _parseBunkerUri(input ? input.value : '');
+    if (!parsed) {
+        if (errorEl) {
+            errorEl.textContent = 'Enter a valid bunker:// connection string (from Amber, nsecbunker, nsec.app, etc.).';
+            errorEl.style.display = 'block';
+        }
+        return;
+    }
+
+    const btn = document.getElementById('nostrLoginBunkerConnectBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Connecting...'; }
+
+    try {
+        // Ephemeral client keypair for NIP-46 transport.
+        const clientSecretKey = window.NostrTools.generateSecretKey();
+        const clientPubkey = window.NostrTools.getPublicKey(clientSecretKey);
+
+        _nip46State = {
+            clientSecretKey,
+            clientPubkey,
+            relayUrl: parsed.relays[0],
+            secret: parsed.secret || null,
+            ws: null,
+            remotePubkey: parsed.remotePubkey, // known up front for bunker flow
+            subId: 'nip46-auth-' + Date.now(),
+            pendingRequests: new Map(),
+            connected: false,
+            isBunker: true
+        };
+
+        // Surface progress in the shared remote-signer status area. The bunker
+        // flow doesn't generate an outgoing connection string / QR, so hide that
+        // block and just show the status line.
+        const connectDiv = document.getElementById('nostrLoginRemoteSignerConnect');
+        if (connectDiv) { connectDiv.classList.remove('nm-hidden'); connectDiv.style.display = ''; }
+        const connStringGroup = document.getElementById('nostrLoginConnectStringGroup');
+        if (connStringGroup) connStringGroup.style.display = 'none';
+        const qr = document.getElementById('nostrLoginRemoteSignerQR');
+        if (qr) qr.innerHTML = '';
+        const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
+        if (statusEl) statusEl.textContent = 'Connecting to remote signer...';
+
+        // Open the (proxy-aware) relay socket and subscribe for responses.
+        _nip46OpenRelay();
+
+        // We initiate the handshake. _nip46SendRequest waits for the socket to be
+        // ready; the signer may respond with auth_url first (surfaced by the
+        // handler) and the real ack resolves this once the user approves.
+        await _nip46SendRequest('connect', [parsed.remotePubkey, parsed.secret || '']);
+
+        _nip46State.connected = true;
+        await _nip46CompleteLogin(parsed.remotePubkey);
+    } catch (err) {
+        if (errorEl) {
+            errorEl.textContent = 'Remote signer connection failed: ' + err.message;
+            errorEl.style.display = 'block';
+        }
+        if (_nip46State && !_nip46State.connected) {
+            if (_nip46State.ws) { try { _nip46State.ws.close(); } catch (_) { } }
+            _nip46State = null;
+        }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
+    }
 }
 
 // Restore NIP-46 session from localStorage on page reload
@@ -5450,8 +5654,9 @@ async function _nip46RestoreSession() {
             connected: true
         };
 
-        // Open WebSocket for ongoing signing requests
-        const ws = new WebSocket(relayUrl);
+        // Open WebSocket for ongoing signing requests — routed through the app
+        // relay proxy when pool mode is active (see _nip46WsUrl).
+        const ws = new WebSocket(_nip46WsUrl(_nip46State));
         _nip46State.ws = ws;
 
         ws.onopen = () => {
@@ -5476,7 +5681,7 @@ async function _nip46RestoreSession() {
             if (_nip46State && _nip46State.connected) {
                 setTimeout(() => {
                     if (_nip46State && _nip46State.connected) {
-                        const newWs = new WebSocket(_nip46State.relayUrl);
+                        const newWs = new WebSocket(_nip46WsUrl(_nip46State));
                         _nip46State.ws = newWs;
                         newWs.onopen = ws.onopen;
                         newWs.onmessage = ws.onmessage;
