@@ -1846,7 +1846,17 @@ Object.assign(NYM.prototype, {
         if (hashIdx >= 0) {
             const base = author.substring(0, hashIdx);
             const suffix = author.substring(hashIdx);
-            authorEl.innerHTML = `${this.escapeHtml(base)}<span class="nym-suffix">${this.escapeHtml(suffix)}</span>`;
+            // Prefix the quoted author's avatar and append their flair, matching
+            // how the quote renders in the message list.
+            const sfx = suffix.replace(/^#/, '').toLowerCase();
+            const pubkey = /^[0-9a-f]{4}$/.test(sfx) ? this._pubkeyForSuffix(sfx) : null;
+            let avatarHtml = '', flairHtml = '';
+            if (pubkey) {
+                const safePk = this._safePubkey(pubkey) || '';
+                avatarHtml = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
+                flairHtml = this.getFlairForUser(pubkey) || '';
+            }
+            authorEl.innerHTML = `${avatarHtml}${this.escapeHtml(base)}<span class="nym-suffix">${this.escapeHtml(suffix)}</span>${flairHtml}`;
         } else {
             authorEl.textContent = author;
         }

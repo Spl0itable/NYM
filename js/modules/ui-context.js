@@ -1764,6 +1764,48 @@ Object.assign(NYM.prototype, {
         return code ? ':' + code + ':' : (img.getAttribute('alt') || '');
     },
 
+    // The plain-text a single atomic inline input node serializes to, or null if
+    // the node isn't atomic. Atomic = a custom-emoji <img> (-> its shortcode) or
+    // a mention chip (-> the "@base#suffix" text it stands in for). Atomic nodes
+    // are treated as one indivisible unit by the caret/length math below, exactly
+    // like the emoji images already were.
+    _richAtomicToken(node) {
+        if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+        if (node.tagName === 'IMG') return this._emojiTokenForImg(node);
+        if (node.dataset && typeof node.dataset.mention === 'string') return node.dataset.mention;
+        return null;
+    },
+
+    // Build the contenteditable=false mention chip shown in the composer for an
+    // injected @base#suffix mention: avatar + @name + suffix + flair. It
+    // serializes back to its data-mention text ("@base#suffix") when the message
+    // is read for sending.
+    _buildInputMentionChip(base, sfx, pubkey, rawText) {
+        const span = document.createElement('span');
+        span.className = 'input-mention';
+        span.setAttribute('contenteditable', 'false');
+        span.dataset.mention = rawText;
+        const img = document.createElement('img');
+        img.className = 'avatar-message';
+        img.src = this.getAvatarUrl(pubkey);
+        img.setAttribute('data-avatar-pubkey', this._safePubkey(pubkey) || '');
+        img.alt = '';
+        img.draggable = false;
+        span.appendChild(img);
+        span.appendChild(document.createTextNode('@' + base));
+        const sfxSpan = document.createElement('span');
+        sfxSpan.className = 'nym-suffix';
+        sfxSpan.textContent = '#' + sfx;
+        span.appendChild(sfxSpan);
+        const flairHtml = this.getFlairForUser(pubkey) || '';
+        if (flairHtml) {
+            const tmpl = document.createElement('template');
+            tmpl.innerHTML = flairHtml;
+            span.appendChild(tmpl.content);
+        }
+        return span;
+    },
+
     _serializeRichInput(root) {
         let out = '';
         const nodes = root.childNodes;
@@ -1772,8 +1814,9 @@ Object.assign(NYM.prototype, {
             if (node.nodeType === Node.TEXT_NODE) {
                 out += node.nodeValue;
             } else if (node.nodeType === Node.ELEMENT_NODE) {
-                if (node.tagName === 'IMG') {
-                    out += this._emojiTokenForImg(node);
+                const atomTok = this._richAtomicToken(node);
+                if (atomTok != null) {
+                    out += atomTok;
                 } else if (node.tagName === 'BR') {
                     // A lone trailing <br> is browser filler — ignore it.
                     if (i !== nodes.length - 1) out += '\n';
@@ -1788,7 +1831,8 @@ Object.assign(NYM.prototype, {
     _richNodeLength(node) {
         if (node.nodeType === Node.TEXT_NODE) return node.nodeValue.length;
         if (node.nodeType === Node.ELEMENT_NODE) {
-            if (node.tagName === 'IMG') return this._emojiTokenForImg(node).length;
+            const atomTok = this._richAtomicToken(node);
+            if (atomTok != null) return atomTok.length;
             if (node.tagName === 'BR') return 1;
         }
         // Element wrappers and document fragments (from cloneContents) — sum children.
@@ -1803,22 +1847,35 @@ Object.assign(NYM.prototype, {
         if (!text) return;
         const frag = document.createDocumentFragment();
         const pushText = (s) => { if (s) frag.appendChild(document.createTextNode(s)); };
-        const re = /:([a-zA-Z0-9_]+):/g;
+        // Match either a custom-emoji shortcode (:code:) or an @base#suffix
+        // mention. Mentions become an avatar+flair chip; everything else stays
+        // plain text so the caret model matches the serialized value.
+        const re = /:([a-zA-Z0-9_]+):|@([^\s@#]+)#([0-9a-f]{4})/gi;
         let last = 0, m;
         while ((m = re.exec(text)) !== null) {
-            const code = m[1];
-            const url = this.customEmojis && this.customEmojis.get(code);
-            if (!url) continue;
-            pushText(text.slice(last, m.index));
-            const img = document.createElement('img');
-            img.className = 'custom-emoji';
-            img.src = this.getProxiedEmojiUrl(url);
-            img.alt = ':' + code + ':';
-            img.title = ':' + code + ':';
-            img.dataset.emojiCode = code;
-            img.draggable = false;
-            frag.appendChild(img);
-            last = re.lastIndex;
+            if (m[1] !== undefined) {
+                const code = m[1];
+                const url = this.customEmojis && this.customEmojis.get(code);
+                if (!url) continue;
+                pushText(text.slice(last, m.index));
+                const img = document.createElement('img');
+                img.className = 'custom-emoji';
+                img.src = this.getProxiedEmojiUrl(url);
+                img.alt = ':' + code + ':';
+                img.title = ':' + code + ':';
+                img.dataset.emojiCode = code;
+                img.draggable = false;
+                frag.appendChild(img);
+                last = re.lastIndex;
+            } else if (m[2] !== undefined) {
+                const base = m[2];
+                const sfx = m[3].toLowerCase();
+                const pubkey = this._pubkeyForSuffix ? this._pubkeyForSuffix(sfx) : null;
+                if (!pubkey) continue; // Unknown user — leave the mention as plain text
+                pushText(text.slice(last, m.index));
+                frag.appendChild(this._buildInputMentionChip(base, sfx, pubkey, m[0]));
+                last = re.lastIndex;
+            }
         }
         pushText(text.slice(last));
         el.appendChild(frag);
@@ -1842,12 +1899,13 @@ Object.assign(NYM.prototype, {
             const kids = parent.childNodes;
             for (let i = 0; i < kids.length; i++) {
                 const child = kids[i];
+                const atomTok = child.nodeType === Node.ELEMENT_NODE ? this._richAtomicToken(child) : null;
                 if (child.nodeType === Node.TEXT_NODE) {
                     const len = child.nodeValue.length;
                     if (target <= acc + len) return { node: child, offset: target - acc };
                     acc += len;
-                } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'IMG') {
-                    const len = this._emojiTokenForImg(child).length;
+                } else if (atomTok != null) {
+                    const len = atomTok.length;
                     if (target <= acc) return { node: parent, offset: i };
                     if (target < acc + len) return { node: parent, offset: i + 1 };
                     acc += len;

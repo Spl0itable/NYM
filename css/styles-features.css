@@ -2698,7 +2698,9 @@ body:not(.chat-bubbles) .message.supporter-style {
 }
 
 .nm-mention .avatar-message,
-.quote-author .avatar-message {
+.quote-author .avatar-message,
+#quotePreviewAuthor .avatar-message,
+.input-mention .avatar-message {
     display: inline-block;
     width: 20px;
     height: 20px;
@@ -2706,6 +2708,14 @@ body:not(.chat-bubbles) .message.supporter-style {
     border: none;
     border-radius: 50%;
     object-fit: cover;
+    vertical-align: middle;
+}
+
+.input-mention {
+    display: inline-flex;
+    align-items: center;
+    color: var(--secondary);
+    white-space: nowrap;
     vertical-align: middle;
 }
 
