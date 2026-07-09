@@ -6,10 +6,6 @@ html.nym-needs-setup #setupModal {
     display: flex;
 }
 
-#nostrLoginModal {
-    z-index: 10002;
-}
-
 #devNsecModal {
     z-index: 10002;
 }
@@ -86,6 +82,48 @@ html.nym-needs-setup #setupModal {
     max-width: 500px;
     width: 90%;
     text-align: center;
+}
+
+.setup-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.setup-tab {
+    flex: 1;
+    padding: 12px 10px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all var(--transition);
+    position: relative;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.setup-tab:hover {
+    color: var(--text);
+}
+
+.setup-tab.active {
+    color: var(--primary);
+    background: rgb(from var(--primary) r g b / 0.06);
+}
+
+.setup-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--primary);
+    border-radius: 2px 2px 0 0;
 }
 
 .modal-close {

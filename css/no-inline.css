@@ -96,6 +96,8 @@ html .nm-hidden { display: none; }
 .nm-h-78 { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); }
 .nm-h-79 { accent-color: var(--primary); cursor: pointer; }
 .nm-h-80 { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); margin-top: 6px; margin-left: 20px; }
+.nm-h-81 { margin: 40px auto 20px; }
+.nm-h-82 { flex: 0 1 auto; }
 
 /* app.js */
 .nm-app-1 { padding: 8px 12px; color: var(--text-dim); }

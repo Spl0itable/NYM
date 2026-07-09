@@ -334,7 +334,6 @@ window.nymHapticTap = function (ms) {
         'verifyDevNsec':              function () { window.verifyDevNsec(); },
 
         // Nostr login
-        'nostrLoginCloseAndCancel':   function () { window.nostrLoginCancelRemoteSigner(); window.closeModal('nostrLoginModal'); },
         'nostrLoginWithExtension':    function () { window.nostrLoginWithExtension(); },
         'nostrLoginStartRemoteSigner':function () { window.nostrLoginStartRemoteSigner(); },
         'nostrLoginCopyBunkerURI':    function () { window.nostrLoginCopyBunkerURI(); },
@@ -365,6 +364,7 @@ window.nymHapticTap = function (ms) {
         'removeSetupBanner':          function () { window.removeSetupBanner(); },
         'updateSetupBioCharCount':    function () { window.updateSetupBioCharCount(); },
         'initializeNym':              function () { window.initializeNym(); },
+        'switchSetupTab':             function (_e, t) { window.switchSetupTab(t.dataset.setupTab); },
 
         // Settings
         'selectWallpaper':            function (_e, t) { window.selectWallpaper(t.dataset.wallpaper); },

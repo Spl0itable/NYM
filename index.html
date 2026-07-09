@@ -1013,79 +1013,6 @@
         </div>
     </div>
 
-    <!-- Nostr Login Modal (easter egg via ASCII art click) -->
-    <div class="modal" id="nostrLoginModal">
-        <div class="modal-content nm-h-1">
-            <button class="modal-close" data-action="nostrLoginCloseAndCancel">&#x2715;</button>
-            <div class="modal-header">Login with Nostr</div>
-            <div class="modal-body">
-                <div class="nm-h-21">
-                    Login with your Nostr identity to sync settings across devices.
-                </div>
-
-                <!-- Browser Extension Option (hidden for NymchatApp shell) -->
-                <div id="nostrLoginExtensionOption" class="nm-h-22">
-                    <button class="send-btn nm-h-23" id="nostrLoginExtensionBtn" data-action="nostrLoginWithExtension">
-                        Login with Browser Extension
-                    </button>
-                    <div class="form-hint nm-h-24">Use Alby, nos2x, or another NIP-07 extension</div>
-                </div>
-
-                <div id="nostrLoginDivider" class="nm-h-25">
-                    or
-                </div>
-
-                <!-- Remote Signer Option (NIP-46 Nostr Connect) -->
-                <div id="nostrLoginRemoteSignerOption" class="nm-h-22">
-                    <button class="send-btn nm-h-23" id="nostrLoginRemoteSignerBtn" data-action="nostrLoginStartRemoteSigner">
-                        Login with Remote Signer
-                    </button>
-                    <div class="form-hint nm-h-24">Use Amber, or another NIP-46 compatible remote signer</div>
-
-                    <!-- Remote signer connection UI (hidden until initiated) -->
-                    <div id="nostrLoginRemoteSignerConnect" class="nm-hidden nm-h-26">
-                        <div class="nm-h-27">
-                            <div id="nostrLoginRemoteSignerStatus" class="nm-h-28">
-                                Waiting for remote signer...
-                            </div>
-                            <div id="nostrLoginRemoteSignerQR" class="nm-h-29"></div>
-                        </div>
-                        <div class="form-group nm-h-30">
-                            <label class="form-label">Connection String</label>
-                            <div class="nm-h-31">
-                                <input type="text" class="form-input nm-h-32" id="nostrLoginBunkerURI" readonly>
-                                <button class="icon-btn nm-h-33" data-action="nostrLoginCopyBunkerURI" title="Copy">Copy</button>
-                            </div>
-                            <div class="form-hint">Scan the QR code or copy this connection string into your remote signer app</div>
-                        </div>
-                        <div class="nm-h-34">
-                            <button class="icon-btn nm-h-16" data-action="nostrLoginCancelRemoteSigner">Cancel</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="nostrLoginDivider2" class="nm-h-25">
-                    or
-                </div>
-
-                <!-- Paste nsec Option -->
-                <div class="form-group nm-h-3">
-                    <label class="form-label">Paste your nsec</label>
-                    <input type="password" class="form-input" id="nostrLoginNsecInput" placeholder="nsec1..." autocomplete="off">
-                    <div id="nostrLoginError" class="nm-hidden nm-h-20"></div>
-                    <div class="form-hint">Your private key stays local and is never sent to any server</div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button class="icon-btn" data-action="nostrLoginCloseAndCancel">Cancel</button>
-                <button class="send-btn" id="nostrLoginSubmitBtn" data-action="nostrLoginWithNsec">Login</button>
-            </div><br/>
-            <div class="nm-h-35">
-                By logging in, you agree to our <a href="static/tos.html" target="_blank" rel="noopener" class="nm-secondary">Terms of Service</a> and <a href="static/pp.html" target="_blank" rel="noopener" class="nm-secondary">Privacy Policy</a>.
-            </div>
-        </div>
-    </div>
-
     <!-- Relay Stats Modal -->
     <div class="modal" id="relayStatsModal">
         <div class="modal-content relay-stats-content">
@@ -1256,6 +1183,7 @@
     <!-- Initial Setup Modal -->
     <div class="modal" id="setupModal">
         <div class="modal-content setup-modal-content">
+            <button class="modal-close nm-hidden" id="setupCloseBtn" data-action="closeModal" data-modal-id="setupModal">&#x2715;</button>
             <div class="modal-header setup-modal-header">
                 <pre class="logo-ascii setup-logo nm-pointer" data-action="openNostrLogin" title="Login with Nostr">
                                             ##\                  ##\
@@ -1273,8 +1201,12 @@
             </div>
             <div class="modal-body">
                 <div class="setup-invite-banner nm-hidden" id="setupInviteBanner"></div>
+                <div class="setup-tabs" id="setupTabs">
+                    <button type="button" class="setup-tab active" data-action="switchSetupTab" data-setup-tab="signup">Sign up</button>
+                    <button type="button" class="setup-tab" data-action="switchSetupTab" data-setup-tab="login">Login</button>
+                </div>
+                <div class="setup-tab-panel" id="setupSignupPanel">
                 <div class="form-group" id="nymGroup">
-                    <div data-action="openNostrLogin" class="nm-h-50">Login with nsec private key or extension? Click here</div><br/>
                     <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
                         maxlength="20" data-on-input="updateFieldCharCount" data-char-count="nymInputCharCount">
@@ -1330,11 +1262,79 @@
                     <div class="input-char-count" id="setupBioCharCount">0/150</div>
                     <div class="form-hint">Short bio shown on your profile (max 150 characters)</div>
                 </div>
+                </div>
+
+                <!-- Login panel (switches in place of the sign up fields) -->
+                <div class="setup-tab-panel nm-hidden" id="setupLoginPanel">
+                    <div class="nm-h-21">
+                        Login with your Nostr identity to sync settings across devices.
+                    </div>
+
+                    <!-- Browser Extension Option (hidden for NymchatApp shell) -->
+                    <div id="nostrLoginExtensionOption" class="nm-h-22">
+                        <button class="send-btn nm-h-23" id="nostrLoginExtensionBtn" data-action="nostrLoginWithExtension">
+                            Login with Browser Extension
+                        </button>
+                        <div class="form-hint nm-h-24">Use Alby, nos2x, or another NIP-07 extension</div>
+                    </div>
+
+                    <div id="nostrLoginDivider" class="nm-h-25">
+                        or
+                    </div>
+
+                    <!-- Remote Signer Option (NIP-46 Nostr Connect) -->
+                    <div id="nostrLoginRemoteSignerOption" class="nm-h-22">
+                        <button class="send-btn nm-h-23" id="nostrLoginRemoteSignerBtn" data-action="nostrLoginStartRemoteSigner">
+                            Login with Remote Signer
+                        </button>
+                        <div class="form-hint nm-h-24">Use Amber, or another NIP-46 compatible remote signer</div>
+
+                        <!-- Remote signer connection UI (hidden until initiated) -->
+                        <div id="nostrLoginRemoteSignerConnect" class="nm-hidden nm-h-26">
+                            <div class="nm-h-27">
+                                <div id="nostrLoginRemoteSignerStatus" class="nm-h-28">
+                                    Waiting for remote signer...
+                                </div>
+                                <div id="nostrLoginRemoteSignerQR" class="nm-h-29"></div>
+                            </div>
+                            <div class="form-group nm-h-30">
+                                <label class="form-label">Connection String</label>
+                                <div class="nm-h-31">
+                                    <input type="text" class="form-input nm-h-32" id="nostrLoginBunkerURI" readonly>
+                                    <button class="icon-btn nm-h-33" data-action="nostrLoginCopyBunkerURI" title="Copy">Copy</button>
+                                </div>
+                                <div class="form-hint">Scan the QR code or copy this connection string into your remote signer app</div>
+                            </div>
+                            <div class="nm-h-34">
+                                <button class="icon-btn nm-h-16" data-action="nostrLoginCancelRemoteSigner">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="nostrLoginDivider2" class="nm-h-25">
+                        or
+                    </div>
+
+                    <!-- Paste nsec Option -->
+                    <div class="form-group nm-h-3">
+                        <label class="form-label">Paste your nsec</label>
+                        <input type="password" class="form-input" id="nostrLoginNsecInput" placeholder="nsec1..." autocomplete="off">
+                        <div id="nostrLoginError" class="nm-hidden nm-h-20"></div>
+                        <div class="form-hint">Your private key stays local and is never sent to any server</div>
+                    </div>
+
+                    <div class="modal-actions nm-h-81">
+                        <button class="send-btn nm-h-82" id="nostrLoginSubmitBtn" data-action="nostrLoginWithNsec">Login</button>
+                    </div>
+                    <div class="nm-h-35">
+                        By logging in, you agree to our <a href="static/tos.html" target="_blank" rel="noopener" class="nm-secondary">Terms of Service</a> and <a href="static/pp.html" target="_blank" rel="noopener" class="nm-secondary">Privacy Policy</a>.
+                    </div>
+                </div>
             </div>
-            <div class="modal-actions nm-h-7">
+            <div class="modal-actions nm-h-7" id="setupSignupActions">
                 <button class="send-btn" id="enterNymBtn" data-action="initializeNym">Enter</button>
             </div>
-            <span class="nm-dim">By entering, you agree to our <a href="static/tos.html"
+            <span class="nm-dim" id="setupSignupTos">By entering, you agree to our <a href="static/tos.html"
                     target="_blank" rel="noopener" class="nm-secondary">Terms of Service</a> and <a
                     href="static/pp.html" target="_blank" rel="noopener" class="nm-secondary">Privacy
                     Policy</a>.</span>

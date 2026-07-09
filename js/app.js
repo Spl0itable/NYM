@@ -4961,6 +4961,51 @@ function isNostrLoggedIn() {
     return localStorage.getItem('nym_nostr_login_method') !== null;
 }
 
+// Reset the Nostr login form (extension visibility, inputs, remote signer UI)
+function prepareNostrLoginUI() {
+    // Hide extension option when inside the NymchatApp webview shell
+    const extOption = document.getElementById('nostrLoginExtensionOption');
+    const divider = document.getElementById('nostrLoginDivider');
+    if (isNymchatApp()) {
+        if (extOption) extOption.style.display = 'none';
+        if (divider) divider.style.display = 'none';
+    } else {
+        if (extOption) extOption.style.display = '';
+        if (divider) divider.style.display = '';
+    }
+    // Reset state
+    const nsecInput = document.getElementById('nostrLoginNsecInput');
+    if (nsecInput) nsecInput.value = '';
+    const errorEl = document.getElementById('nostrLoginError');
+    if (errorEl) errorEl.style.display = 'none';
+    // Reset remote signer UI
+    const rsConnect = document.getElementById('nostrLoginRemoteSignerConnect');
+    if (rsConnect) rsConnect.style.display = 'none';
+    const rsBtn = document.getElementById('nostrLoginRemoteSignerBtn');
+    if (rsBtn) {
+        rsBtn.style.display = '';
+        rsBtn.disabled = false;
+        rsBtn.textContent = 'Login with Remote Signer';
+    }
+}
+
+// Switch between the "Sign up" and "Login" tabs in the setup/welcome modal
+function switchSetupTab(tab) {
+    const isLogin = tab === 'login';
+    document.querySelectorAll('#setupTabs .setup-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.setupTab === tab);
+    });
+    const signupPanel = document.getElementById('setupSignupPanel');
+    const loginPanel = document.getElementById('setupLoginPanel');
+    const signupActions = document.getElementById('setupSignupActions');
+    const signupTos = document.getElementById('setupSignupTos');
+    if (signupPanel) signupPanel.classList.toggle('nm-hidden', isLogin);
+    if (loginPanel) loginPanel.classList.toggle('nm-hidden', !isLogin);
+    if (signupActions) signupActions.classList.toggle('nm-hidden', isLogin);
+    if (signupTos) signupTos.classList.toggle('nm-hidden', isLogin);
+    if (isLogin) prepareNostrLoginUI();
+}
+
 async function openNostrLogin() {
     if (isNostrLoggedIn()) {
         const method = localStorage.getItem('nym_nostr_login_method');
@@ -4970,25 +5015,14 @@ async function openNostrLogin() {
         }
         return;
     }
-    // Hide extension option when inside the NymchatApp webview shell
-    const extOption = document.getElementById('nostrLoginExtensionOption');
-    const divider = document.getElementById('nostrLoginDivider');
-    if (isNymchatApp()) {
-        extOption.style.display = 'none';
-        divider.style.display = 'none';
-    } else {
-        extOption.style.display = '';
-        divider.style.display = '';
+    // Post-setup (already connected): re-open the setup modal on the Login tab.
+    // Show a close button so the user isn't trapped in the welcome screen.
+    if (nym.connected) {
+        const closeBtn = document.getElementById('setupCloseBtn');
+        if (closeBtn) closeBtn.classList.remove('nm-hidden');
+        document.getElementById('setupModal').classList.add('active');
     }
-    // Reset state
-    document.getElementById('nostrLoginNsecInput').value = '';
-    document.getElementById('nostrLoginError').style.display = 'none';
-    // Reset remote signer UI
-    document.getElementById('nostrLoginRemoteSignerConnect').style.display = 'none';
-    document.getElementById('nostrLoginRemoteSignerBtn').style.display = '';
-    document.getElementById('nostrLoginRemoteSignerBtn').disabled = false;
-    document.getElementById('nostrLoginRemoteSignerBtn').textContent = 'Login with Remote Signer';
-    document.getElementById('nostrLoginModal').classList.add('active');
+    switchSetupTab('login');
 }
 
 async function nostrLoginWithExtension() {
@@ -5016,14 +5050,7 @@ async function nostrLoginWithExtension() {
         // Apply identity to current session
         applyNostrLogin(pubkey, null, 'extension');
 
-        closeModal('nostrLoginModal');
-
-        // If the setup modal is still showing, bypass it and connect
-        if (document.getElementById('setupModal')?.classList.contains('active')) {
-            await nostrLoginBypassSetup();
-        } else {
-            nym.displaySystemMessage('Logged in with Nostr extension.');
-        }
+        await finishNostrLogin('Logged in with Nostr extension.');
     } catch (err) {
         errorEl.textContent = err.message;
         errorEl.style.display = 'block';
@@ -5063,14 +5090,7 @@ async function nostrLoginWithNsec() {
 
     applyNostrLogin(pubkey, secretKey, 'nsec');
 
-    closeModal('nostrLoginModal');
-
-    // If the setup modal is still showing, bypass it and connect
-    if (document.getElementById('setupModal')?.classList.contains('active')) {
-        await nostrLoginBypassSetup();
-    } else {
-        nym.displaySystemMessage('Logged in with Nostr identity.');
-    }
+    await finishNostrLogin('Logged in with Nostr identity.');
 }
 
 // NIP-46 Remote Signer (Nostr Connect) Support
@@ -5303,14 +5323,7 @@ async function _nip46CompleteLogin(remotePubkey) {
         // Apply identity to current session (no local secret key)
         applyNostrLogin(pubkey, null, 'nip46');
 
-        closeModal('nostrLoginModal');
-
-        // If the setup modal is still showing, bypass it and connect
-        if (document.getElementById('setupModal')?.classList.contains('active')) {
-            await nostrLoginBypassSetup();
-        } else {
-            nym.displaySystemMessage('Logged in with remote signer (NIP-46).');
-        }
+        await finishNostrLogin('Logged in with remote signer (NIP-46).');
     } catch (err) {
         statusEl.textContent = 'Login failed: ' + err.message;
         console.error('[NIP-46] Login failed:', err);
@@ -5482,6 +5495,23 @@ async function _nip46RestoreSession() {
 
 async function nostrLoginBypassSetup() {
     await initializeNym();
+}
+
+// Shared completion after a successful Nostr login from the setup/welcome modal.
+// During the initial welcome flow (not yet connected) it runs the full setup
+// bypass; post-setup (sidebar easter egg) it just closes the modal.
+async function finishNostrLogin(message) {
+    const closeBtn = document.getElementById('setupCloseBtn');
+    if (closeBtn) closeBtn.classList.add('nm-hidden');
+    if (!nym.connected) {
+        // initializeNym() closes the setup modal once relays are connected
+        await nostrLoginBypassSetup();
+    } else {
+        closeModal('setupModal');
+        // Return the welcome modal to the Sign up tab for next time
+        switchSetupTab('signup');
+        nym.displaySystemMessage(message);
+    }
 }
 
 function applyNostrLogin(pubkey, secretKey, method) {
