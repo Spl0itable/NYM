@@ -29,7 +29,12 @@ self.onmessage = (e) => {
         const it = items[i];
         let html = null;
         try {
-            const ctx = it.quoteFlair ? Object.assign({}, shared, { quoteFlair: it.quoteFlair }) : shared;
+            let ctx = shared;
+            if (it.quoteInfo || it.mentionInfo) {
+                ctx = Object.assign({}, shared);
+                if (it.quoteInfo) ctx.quoteInfo = it.quoteInfo;
+                if (it.mentionInfo) ctx.mentionInfo = it.mentionInfo;
+            }
             html = self.NymFormat.formatWithQuotes(it.content, ctx, 0);
         } catch (_) { html = null; }
         results.push({ key: it.key, html });

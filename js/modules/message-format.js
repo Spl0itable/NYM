@@ -279,6 +279,21 @@
         formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
         formatted = formatted.replace(/\n/g, '<br>');
 
+        // Enrich @name#suffix mentions with the mentioned user's avatar (prefix)
+        // and flair (suffix) as a final pass, so this HTML isn't touched by the
+        // emoji/shortcode passes above. Both are resolved on the main thread into
+        // ctx.mentionInfo (keyed by suffix), mirroring how quoted authors render.
+        if (ctx.mentionInfo) {
+            formatted = formatted.replace(
+                /(<span class="nm-mention">)(@[^<]*?<span class="nym-suffix">#([0-9a-f]{4})<\/span>)(<\/span>)/gi,
+                (m, open, body, sfx, close) => {
+                    const info = ctx.mentionInfo[sfx.toLowerCase()];
+                    if (!info) return m;
+                    return open + (info.avatar || '') + body + (info.flair || '') + close;
+                }
+            );
+        }
+
         return formatted;
     }
 
@@ -315,10 +330,12 @@
 
                     const cleanAuthor = cleanQuoteAuthor(authorMatch[1].trim());
                     const suffixMatch = cleanAuthor.match(/^(.+)(#[0-9a-f]{4})$/i);
-                    const flairHtml = (ctx.quoteFlair && ctx.quoteFlair[cleanAuthor]) || '';
+                    const info = (ctx.quoteInfo && ctx.quoteInfo[cleanAuthor]) || null;
+                    const avatarHtml = (info && info.avatar) || '';
+                    const flairHtml = (info && info.flair) || '';
                     const displayAuthor = suffixMatch
-                        ? `${escapeHtml(suffixMatch[1])}<span class="nym-suffix">${escapeHtml(suffixMatch[2])}</span>${flairHtml}`
-                        : `${escapeHtml(cleanAuthor)}${flairHtml}`;
+                        ? `${avatarHtml}${escapeHtml(suffixMatch[1])}<span class="nym-suffix">${escapeHtml(suffixMatch[2])}</span>${flairHtml}`
+                        : `${avatarHtml}${escapeHtml(cleanAuthor)}${flairHtml}`;
 
                     html += `<blockquote><span class="quote-author">${displayAuthor}:</span> ${formatWithQuotes(quotedMessage, ctx, depth + 1)}</blockquote>`;
                 } else {
@@ -373,5 +390,20 @@
         return out;
     }
 
-    G.NymFormat = { format, formatWithQuotes, extractQuoteAuthors };
+    // Suffixes (the 4 hex chars of @name#xxxx mentions) whose flair must be
+    // resolved on the main thread, mirroring extractQuoteAuthors for quotes.
+    function extractMentions(content) {
+        if (!content || content.indexOf('@') === -1) return [];
+        const out = [];
+        const seen = new Set();
+        const rx = /@[^@#\n]*?(?<!\s)#([0-9a-f]{4})\b/gi;
+        let m;
+        while ((m = rx.exec(content)) !== null) {
+            const sfx = m[1].toLowerCase();
+            if (!seen.has(sfx)) { seen.add(sfx); out.push(sfx); }
+        }
+        return out;
+    }
+
+    G.NymFormat = { format, formatWithQuotes, extractQuoteAuthors, extractMentions };
 })();

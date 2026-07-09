@@ -677,8 +677,9 @@ Object.assign(NYM.prototype, {
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
 
-            // Format the action content but preserve any HTML in mentioned users
-            const formattedAction = this._enrichActionMentions(this.formatMessage(actionContent));
+            // Format the action content — mentions get avatar + flair from the
+            // formatter's ctx.mentionInfo pass, same as regular messages.
+            const formattedAction = this.formatMessage(actionContent);
 
             messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction} *`;
         } else {
@@ -1334,7 +1335,7 @@ Object.assign(NYM.prototype, {
             this._swapMessageContent(messageEl, message, html, content);
         };
         if (!this._getFormatWorker()) { finishInline(); return; }
-        const items = [{ key: content, content, quoteFlair: this._resolveQuoteFlair(content) }];
+        const items = [{ key: content, content, quoteInfo: this._resolveQuoteInfo(content), mentionInfo: this._resolveMentionInfo(content) }];
         this._workerFormatBatch(items, this._buildFormatCtx()).then(results => {
             const html = results && results[0] ? results[0].html : null;
             if (html != null) this._swapMessageContent(messageEl, message, html, content);
@@ -1366,8 +1367,10 @@ Object.assign(NYM.prototype, {
         return window.NymFormat.formatWithQuotes(content, this._mainFormatCtx(content), depth);
     },
 
-    _enrichActionMentions(html) {
-        if (!html || typeof html !== 'string') return html;
+    // Resolve a 4-hex nym suffix to a pubkey via a lazily-rebuilt index.
+    // Used by _resolveMentionInfo.
+    _pubkeyForSuffix(sfx) {
+        if (!sfx) return null;
         if (!this._suffixIndex) this._suffixIndex = new Map();
         // Rebuild the suffix index lazily — we want it fresh enough but not
         // every call. The Map size approximates user count; rebuild when it
@@ -1377,29 +1380,35 @@ Object.assign(NYM.prototype, {
             this._suffixIndex.clear();
             this.users.forEach((_, pubkey) => {
                 if (typeof pubkey === 'string' && pubkey.length >= 4) {
-                    const sfx = pubkey.slice(-4).toLowerCase();
-                    if (!this._suffixIndex.has(sfx)) this._suffixIndex.set(sfx, pubkey);
+                    const s = pubkey.slice(-4).toLowerCase();
+                    if (!this._suffixIndex.has(s)) this._suffixIndex.set(s, pubkey);
                 }
             });
         }
-        const escapeHtml = (s) => this.escapeHtml(s);
-        // Match the mention HTML produced by formatMessage:
-        //   <span class="nm-mention">@name<span class="nym-suffix">#abcd</span></span>
-        return html.replace(
-            /<span class="nm-mention">(@[^<]*?)<span class="nym-suffix">(#[0-9a-f]{4})<\/span><\/span>/gi,
-            (match, namePart, suffixPart) => {
-                const sfx = suffixPart.slice(1).toLowerCase();
-                const pubkey = this._suffixIndex.get(sfx);
-                if (!pubkey) return match; // No known user — keep plain rendering
-                const safePk = this._safePubkey(pubkey) || '';
-                const avatarSrc = this.getAvatarUrl(pubkey);
-                const flairHtml = this.getFlairForUser(pubkey) || '';
-                return `<span class="action-mention nm-mention">`
-                    + `<img src="${escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`
-                    + `${namePart}<span class="nym-suffix">${suffixPart}</span>${flairHtml}`
-                    + `</span>`;
-            }
-        );
+        return this._suffixIndex.get(sfx.toLowerCase()) || null;
+    },
+
+    // Resolve the mentioned user's avatar + flair HTML for @name#suffix mentions
+    // (needs this.users/getAvatarUrl, so it stays on the main thread); the result
+    // rides along in ctx.mentionInfo for the pure formatter, mirroring
+    // _resolveQuoteInfo for quoted authors. Keyed by suffix -> { avatar, flair }.
+    _resolveMentionInfo(content) {
+        if (!content || content.indexOf('@') === -1 || !window.NymFormat
+            || typeof window.NymFormat.extractMentions !== 'function') return null;
+        const suffixes = window.NymFormat.extractMentions(content);
+        if (!suffixes || !suffixes.length) return null;
+        const out = {};
+        for (const sfx of suffixes) {
+            const pubkey = this._pubkeyForSuffix(sfx);
+            if (!pubkey) { out[sfx] = { avatar: '', flair: '' }; continue; }
+            const safePk = this._safePubkey(pubkey) || '';
+            const avatarSrc = this.getAvatarUrl(pubkey);
+            out[sfx] = {
+                avatar: `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`,
+                flair: this.getFlairForUser(pubkey) || ''
+            };
+        }
+        return out;
     },
 
     _revokeNodeBlobs(node) {
@@ -3655,7 +3664,10 @@ Object.assign(NYM.prototype, {
         const ctx = this._buildFormatCtx();
         ctx.emojiMap = this.emojiMap;
         ctx.highlightCode = (rawCode, normLang, trimmed) => this._mainHighlightCode(rawCode, normLang, trimmed);
-        if (content != null) ctx.quoteFlair = this._resolveQuoteFlair(content);
+        if (content != null) {
+            ctx.quoteInfo = this._resolveQuoteInfo(content);
+            ctx.mentionInfo = this._resolveMentionInfo(content);
+        }
         return ctx;
     },
 
@@ -3670,9 +3682,10 @@ Object.assign(NYM.prototype, {
         return { codeHtml: trimmed, hlAttr: ` data-hl-id="${id}"` };
     },
 
-    // Resolve flair HTML for any quoted authors (needs this.users, so it stays on
-    // the main thread); the result rides along in ctx for the pure formatter.
-    _resolveQuoteFlair(content) {
+    // Resolve avatar + flair HTML for any quoted authors (needs this.users /
+    // getAvatarUrl, so it stays on the main thread); the result rides along in
+    // ctx.quoteInfo for the pure formatter. Keyed by author -> { avatar, flair }.
+    _resolveQuoteInfo(content) {
         if (!content || content.indexOf('>') === -1 || !window.NymFormat) return null;
         const authors = window.NymFormat.extractQuoteAuthors(content);
         if (!authors || !authors.length) return null;
@@ -3684,7 +3697,13 @@ Object.assign(NYM.prototype, {
                 const fullNym = `${userNym}#${this.getPubkeySuffix(pubkey)}`;
                 if (fullNym === cleanAuthor || userNym === cleanAuthor) authorPubkey = pubkey;
             });
-            out[cleanAuthor] = authorPubkey ? this.getFlairForUser(authorPubkey) : '';
+            if (!authorPubkey) { out[cleanAuthor] = { avatar: '', flair: '' }; continue; }
+            const safePk = this._safePubkey(authorPubkey) || '';
+            const avatarSrc = this.getAvatarUrl(authorPubkey);
+            out[cleanAuthor] = {
+                avatar: `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`,
+                flair: this.getFlairForUser(authorPubkey) || ''
+            };
         }
         return out;
     },
@@ -3778,7 +3797,7 @@ Object.assign(NYM.prototype, {
         const jobs = [];
         for (let i = 0; i < unique.length; i += CHUNK) {
             const slice = unique.slice(i, i + CHUNK);
-            const items = slice.map(c => ({ key: c, content: c, quoteFlair: this._resolveQuoteFlair(c) }));
+            const items = slice.map(c => ({ key: c, content: c, quoteInfo: this._resolveQuoteInfo(c), mentionInfo: this._resolveMentionInfo(c) }));
             jobs.push(this._workerFormatBatch(items, sharedCtx));
         }
         const batches = await Promise.all(jobs);
