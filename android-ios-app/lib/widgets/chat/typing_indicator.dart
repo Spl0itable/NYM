@@ -128,28 +128,44 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
         child: Row(
           children: [
-            // `.typing-indicator-avatars`: 18px round, overlapping by 6px, each
-            // ringed by a 1.5px `--bg` border.
-            for (var i = 0; i < visible.length; i++)
-              Transform.translate(
-                offset: Offset(-6.0 * i, 0),
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: c.bg, width: 1.5),
-                  ),
-                  child: NymAvatar(
-                    seed: visible[i],
-                    size: 18,
-                    imageUrl: app.users[visible[i]]?.profile?.picture,
-                  ),
+            // `.typing-indicator-avatars`: 18px round avatars overlapping by 6px
+            // (`img+img { margin-left: -6px }`, styles-features.css:4255-4265),
+            // each ringed by a 1.5px `--bg` border. Laid out in a FIXED-WIDTH
+            // Stack so the cluster collapses to its overlapped extent
+            // (18 + 12·(n−1)) exactly like the PWA's negative margin — a
+            // Transform-translate Row still reserves each avatar's full width
+            // (and the border box adds +3px), leaving the stack too wide. The
+            // border is a `foregroundDecoration` so it overlays the image edge
+            // (CSS border-box) rather than growing the 18px box.
+            if (visible.isNotEmpty) ...[
+              SizedBox(
+                width: 18 + (visible.length - 1) * 12.0,
+                height: 18,
+                child: Stack(
+                  children: [
+                    for (var i = 0; i < visible.length; i++)
+                      Positioned(
+                        left: i * 12.0,
+                        child: Container(
+                          width: 18,
+                          height: 18,
+                          foregroundDecoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: c.bg, width: 1.5),
+                          ),
+                          child: NymAvatar(
+                            seed: visible[i],
+                            size: 18,
+                            imageUrl:
+                                app.users[visible[i]]?.profile?.picture,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            // 8px gap after the avatar stack (less the cumulative overlap so the
-            // dots don't drift right).
-            if (visible.isNotEmpty)
-              SizedBox(
-                width: (8 - 6.0 * (visible.length - 1)).clamp(0, 8).toDouble()),
+              const SizedBox(width: 8), // `.typing-indicator { gap: 8px }`
+            ],
             // `.typing-indicator-dots`: three 5px dots bouncing in sequence.
             _TypingDots(color: c.textDim),
             const SizedBox(width: 8),

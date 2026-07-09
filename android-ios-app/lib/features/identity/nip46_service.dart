@@ -10,6 +10,8 @@ import '../../core/crypto/keys.dart';
 import '../../core/crypto/nip44.dart' as nip44;
 import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../models/nostr_event.dart';
+import '../../services/relay/relay_message.dart';
+import '../../services/relay/relay_pool.dart';
 
 /// NIP-46 remote-signer (bunker / nostrconnect) transport.
 ///
@@ -115,6 +117,109 @@ Nip46Socket _defaultSocketFactory(String relayUrl) {
   }
 }
 
+/// Builds the production socket factory: for a relay the shared pool already
+/// covers (the default [RelayConfig.nip46Relay], which is in
+/// [RelayConfig.defaultRelays]) it routes NIP-46 through the pool
+/// ([_PoolNip46Socket]) so the transport inherits proxy-mode IP privacy, the
+/// direct fallback, and the pool's reconnect + active-sub replay — the relays
+/// are already connected in the background, so we just listen there. An
+/// arbitrary `bunker://` relay not in the pool (and the no-pool case) falls back
+/// to a dedicated raw WebSocket.
+Nip46SocketFactory _makeDefaultFactory(PoolTransport? Function()? poolProvider) {
+  return (relayUrl) {
+    final pool = poolProvider?.call();
+    if (pool != null &&
+        RelayConfig.defaultRelays.contains(_canonicalRelayUrl(relayUrl))) {
+      return _PoolNip46Socket(pool);
+    }
+    return _defaultSocketFactory(relayUrl);
+  };
+}
+
+/// Canonicalizes a relay URL for pool matching: trims whitespace and drops a
+/// single trailing `/`. Amber emits `bunker://…?relay=wss://relay.primal.net/`
+/// (trailing slash); without this that wouldn't match the pool's
+/// `wss://relay.primal.net` and would fall to a proxy-bypassing raw socket that
+/// fails in proxy mode.
+String _canonicalRelayUrl(String url) {
+  final t = url.trim();
+  return t.endsWith('/') ? t.substring(0, t.length - 1) : t;
+}
+
+/// A [Nip46Socket] backed by the app's shared relay [PoolTransport] instead of a
+/// dedicated raw WebSocket. Translates the service's raw `REQ`/`EVENT`/`CLOSE`
+/// text frames into pool `subscribe`/`publish`/`close` calls, and synthesizes
+/// `["EVENT", subId, event]` frames back so [Nip46Service._onSocketMessage]
+/// matches them against `_subId` unchanged. Reconnect + resubscribe are handled
+/// by the pool, so this stream stays open across relay drops (it only closes on
+/// [close]).
+class _PoolNip46Socket implements Nip46Socket {
+  _PoolNip46Socket(this._pool);
+
+  final PoolTransport _pool;
+  final StreamController<String> _incoming =
+      StreamController<String>.broadcast();
+  final Map<String, Subscription> _subs = {};
+  final Map<String, StreamSubscription<NostrEvent>> _streams = {};
+
+  @override
+  Stream<String> get messages => _incoming.stream;
+
+  @override
+  void send(String data) {
+    dynamic frame;
+    try {
+      frame = jsonDecode(data);
+    } catch (_) {
+      return;
+    }
+    if (frame is! List || frame.isEmpty) return;
+    switch (frame[0]) {
+      case 'REQ':
+        final subId = frame[1] as String;
+        final filters = <NostrFilter>[
+          for (var i = 2; i < frame.length; i++)
+            NostrFilter.fromJson(Map<String, dynamic>.from(frame[i] as Map)),
+        ];
+        // Reuse the caller's subId so the synthesized EVENT frames match the
+        // service's `_subId` filter in `_onSocketMessage`.
+        final sub = _pool.subscribe(filters, subId: subId);
+        _subs[subId] = sub;
+        _streams[subId] = sub.events.listen((ev) {
+          if (!_incoming.isClosed) {
+            _incoming.add(jsonEncode(['EVENT', subId, ev.toJson()]));
+          }
+        });
+        break;
+      case 'CLOSE':
+        final subId = frame[1] as String;
+        unawaited(_streams.remove(subId)?.cancel());
+        unawaited(_subs.remove(subId)?.close());
+        break;
+      case 'EVENT':
+        final ev =
+            NostrEvent.fromJson(Map<String, dynamic>.from(frame[1] as Map));
+        // Plain ["EVENT",e] to all relays; the signer only reads its own relay
+        // (which is in the pool), so a broadcast is harmless for ephemeral 24133.
+        unawaited(_pool.publish(ev));
+        break;
+    }
+  }
+
+  @override
+  Future<void> close() async {
+    for (final s in _streams.values) {
+      await s.cancel();
+    }
+    for (final s in _subs.values) {
+      await s.close();
+    }
+    _streams.clear();
+    _subs.clear();
+    if (!_incoming.isClosed) await _incoming.close();
+  }
+}
+
 /// Parsed `nostrconnect://` or `bunker://` connection string.
 class Nip46ConnectionUri {
   Nip46ConnectionUri({
@@ -177,11 +282,14 @@ class Nip46Service implements Nip46Signer {
   Nip46Service({
     required Nip46KeyValueStore kv,
     required Nip46SecureStore secure,
-    Nip46SocketFactory socketFactory = _defaultSocketFactory,
+    Nip46SocketFactory? socketFactory,
+    PoolTransport? Function()? poolProvider,
     Duration requestTimeout = kNip46RequestTimeout,
   })  : _kv = kv,
         _secure = secure,
-        _socketFactory = socketFactory,
+        // Explicit factory (tests inject a fake) wins; otherwise route through
+        // the shared pool when it covers the relay, else a dedicated socket.
+        _socketFactory = socketFactory ?? _makeDefaultFactory(poolProvider),
         _requestTimeout = requestTimeout;
 
   final Nip46KeyValueStore _kv;
@@ -295,7 +403,9 @@ class Nip46Service implements Nip46Signer {
     return Nip46ConnectionUri(
       scheme: scheme,
       pubkey: host.toLowerCase(),
-      relay: relay ?? RelayConfig.nip46Relay,
+      // Canonicalize so a trailing-slash relay (Amber's bunker URIs) matches the
+      // pool and persists/restores consistently.
+      relay: relay != null ? _canonicalRelayUrl(relay) : RelayConfig.nip46Relay,
       secret: secret,
       metadataName: metadataName,
     );
@@ -453,6 +563,9 @@ class Nip46Service implements Nip46Signer {
 
   void _openRelay({bool persistent = false}) {
     final relay = _relayUrl!;
+    // Tear down any prior socket (reconnect path) before opening a new one.
+    _socketSub?.cancel();
+    _socketSub = null;
     final socket = _socketFactory(relay);
     if (socket is _FailingNip46Socket) {
       debugPrint('[NIP46] Socket open failed; skipping subscribe. error=${socket.error}');
@@ -467,6 +580,20 @@ class Nip46Service implements Nip46Signer {
       _onSocketMessage,
       onError: (_) {},
       cancelOnError: false,
+      // If the relay drops the socket while we're still waiting for the signer,
+      // reconnect after 3s — parity with the PWA `ws.onclose` retry
+      // (app.js:5209-5218). The pool-backed socket handles its own reconnect,
+      // so its stream only ends on our own [close] (where `_socket` is nulled,
+      // making `identical` false and suppressing this retry).
+      onDone: () {
+        if (!_connected && identical(_socket, socket)) {
+          Timer(const Duration(seconds: 3), () {
+            if (!_connected && identical(_socket, socket)) {
+              _openRelay(persistent: persistent);
+            }
+          });
+        }
+      },
     );
 
     // Subscribe to kind-24133 addressed to our client pubkey.
@@ -685,6 +812,26 @@ class Nip46Service implements Nip46Signer {
     _socket = null;
     await _authUrlController?.close();
     _authUrlController = null;
+  }
+
+  /// Aborts an in-progress / idle connection but leaves the object REUSABLE
+  /// (unlike [dispose], which also tears down the auth-url stream). The login
+  /// modal calls this when it closes before a session is established, so the
+  /// shared [nip46ServiceProvider] instance can be re-used — and a SUCCESSFUL
+  /// session's live socket is never killed just because the modal disposed.
+  Future<void> cancelConnect() async {
+    for (final p in _pendingRequests.values) {
+      p.timer.cancel();
+      if (!p.completer.isCompleted) {
+        p.completer.completeError(StateError('NIP-46 connect cancelled'));
+      }
+    }
+    _pendingRequests.clear();
+    await _socketSub?.cancel();
+    _socketSub = null;
+    await _socket?.close();
+    _socket = null;
+    _connected = false;
   }
 
   // --- form-encoding helpers (URLSearchParams parity) -----------------------

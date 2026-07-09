@@ -237,6 +237,16 @@ class NostrService {
   static final LinkedHashSet<String> _processedWrapIds = LinkedHashSet<String>();
   static const int _processedWrapCap = 100000;
 
+  /// Bounds the number of in-flight remote-signer (NIP-46) `nip44_decrypt`
+  /// round-trips ([_unwrapRemote]). Inbound gift wraps are handled concurrently
+  /// (`unawaited(_handleGiftWrap(...))`), and a PM/D1 backfill replays hundreds
+  /// of self-addressed wraps at once — without a cap each fires two sequential
+  /// RPCs at the SINGLE signer socket, which bunkers rate-limit / prompt per-op,
+  /// producing mass 60s timeouts that read as "PMs won't load". A small cap
+  /// keeps the socket responsive while backfill drains. (Local-key unwraps run
+  /// off-isolate via the crypto worker and are unaffected.)
+  final _AsyncSemaphore _remoteUnwrapGate = _AsyncSemaphore(3);
+
   /// Seeds [ids] as already-verified signatures (e.g. channel message ids
   /// restored from the local cache — verified when first received) so the
   /// cold-boot archive/live replay of that history skips re-verification.
@@ -1134,7 +1144,15 @@ class NostrService {
     // ephemeral keys are still local and handled by [candidates] above.
     final sig = signer;
     if (sig != null && sig.isRemote && _isAddressedToSelf(wrap)) {
-      final res = await _unwrapRemote(wrap, sig);
+      // Cap concurrent remote decrypts so a backfill burst can't flood the one
+      // signer socket (see [_remoteUnwrapGate]); gate only the RPC round-trips.
+      await _remoteUnwrapGate.acquire();
+      ({NostrEvent seal, Map<String, dynamic> rumor})? res;
+      try {
+        res = await _unwrapRemote(wrap, sig);
+      } finally {
+        _remoteUnwrapGate.release();
+      }
       if (res != null) {
         await _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
             isBitchat: false, fromArchive: fromArchive);
@@ -2254,5 +2272,37 @@ class NostrService {
     await _channelTypingSub?.close();
     await _mainSub?.close();
     await pool.disconnectAll();
+  }
+}
+
+/// A minimal async semaphore (fair, FIFO) bounding concurrent async work.
+///
+/// Used to cap in-flight remote-signer `nip44_decrypt` RPCs during gift-wrap
+/// backfill so a single NIP-46 signer socket isn't flooded (see
+/// [NostrService._remoteUnwrapGate]). [acquire] resolves immediately while
+/// permits remain, else queues; [release] hands a permit to the next waiter (or
+/// returns it to the pool). Always pair `acquire()` with a `finally` `release()`.
+class _AsyncSemaphore {
+  _AsyncSemaphore(this._permits) : assert(_permits > 0);
+
+  int _permits;
+  final Queue<Completer<void>> _waiters = Queue<Completer<void>>();
+
+  Future<void> acquire() {
+    if (_permits > 0) {
+      _permits--;
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    _waiters.add(completer);
+    return completer.future;
+  }
+
+  void release() {
+    if (_waiters.isNotEmpty) {
+      _waiters.removeFirst().complete();
+    } else {
+      _permits++;
+    }
   }
 }

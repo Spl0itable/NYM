@@ -291,8 +291,11 @@ class _ShopModalState extends ConsumerState<ShopModal> {
 
   Widget _tabs(NymColors c) {
     // `.shop-tabs { display:flex; background: rgba(0,0,0,.1); padding: 6px 6px 0;
-    // gap: 4px }` with `.shop-tab { flex: 1 }` (styles-features.css:73-94) — the 5
-    // tabs share the row width equally (no horizontal scroll), each filling 1/5.
+    // gap: 4px }` (styles-features.css:73-94). The PWA's `flex:1` tabs fit at
+    // full 13px only because its shop modal is desktop-wide; on a phone-width
+    // modal that same equal split forces the font to shrink. So the tab row
+    // scrolls horizontally instead — each tab keeps its natural width and its
+    // full-size 13px label, and the row pans when the labels overflow.
     const tabs = ShopTab.values;
     return Container(
       decoration: BoxDecoration(
@@ -300,13 +303,20 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
       padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
-      child: Row(
-        children: [
-          for (var i = 0; i < tabs.length; i++) ...[
-            if (i > 0) const SizedBox(width: 4), // `gap: 4px`
-            Expanded(child: _tabButton(c, tabs[i])),
-          ],
-        ],
+      child: ScrollConfiguration(
+        // No scrollbar under the tabs (matches the PWA's clean tab strip).
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (var i = 0; i < tabs.length; i++) ...[
+                if (i > 0) const SizedBox(width: 4), // `gap: 4px`
+                _tabButton(c, tabs[i]),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -346,21 +356,17 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             ),
           ),
         ),
-        // Equal-width tabs, FULL label always visible: the PWA's `.shop-tab`
-        // has no ellipsis/nowrap, so the label is never truncated. Single-word
-        // labels can't wrap; scale the text down on a narrow modal instead
-        // (the native analogue of the full label staying readable).
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            t.label,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            style: TextStyle(
-              color: active ? c.primary : c.textDim,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
+        // FULL-size label, never truncated or scaled: the PWA's `.shop-tab` is
+        // a flat 13px/500 label. Since the row now scrolls horizontally the tab
+        // sizes to its natural width, so the font is never shrunk to fit.
+        child: Text(
+          t.label,
+          maxLines: 1,
+          softWrap: false,
+          style: TextStyle(
+            color: active ? c.primary : c.textDim,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ),

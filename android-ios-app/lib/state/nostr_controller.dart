@@ -256,6 +256,11 @@ class NostrController {
   /// boot. Every publish / gift-wrap path flows through this.
   EventSigner? get signer => _signer;
 
+  /// The live relay [PoolTransport] (proxy or direct), or null before boot.
+  /// Exposed so the NIP-46 remote-signer transport can ride the already-connected
+  /// pool instead of a dedicated raw socket ([nip46ServiceProvider]).
+  PoolTransport? get pool => _service?.pool;
+
   /// Per-relay connection status (url → connected) for the Network Stats modal
   /// (`relay_stats_modal.dart`). Direct mode reads [RelayPool.connectionStatus];
   /// proxy mode exposes its live connected set as `url → true`. Empty before boot.
@@ -911,8 +916,14 @@ class NostrController {
   Future<(Identity, EventSigner)?> _restoreNip46Signer(KeyValueStore kv) async {
     try {
       final svc = _ref.read(nip46ServiceProvider);
-      final ok = await svc.restoreSession();
-      if (!ok || svc.pubkey.length != 64) return null;
+      // If the login modal just connected this SHARED instance (runtime adopt
+      // via [loginWithNip46]), reuse the live socket as-is; only reconnect from
+      // persisted storage on a genuine cold boot. Re-`restoreSession`ing a
+      // connected instance would open a second socket and re-run the handshake.
+      if (!(svc.isConnected && svc.pubkey.length == 64)) {
+        final ok = await svc.restoreSession();
+        if (!ok || svc.pubkey.length != 64) return null;
+      }
       final pubkey = svc.pubkey;
       final nym = kv.getString(StorageKeys.customNick) ??
           kv.getString(StorageKeys.autoEphemeralNick) ??
@@ -1177,6 +1188,25 @@ class NostrController {
     // Remount the boot gate so it re-checks (now has a saved login) and tears
     // down the setup modal / shows the shell, mirroring the PWA's post-login
     // `nostrLoginBypassSetup` → `initializeNym` transition out of setup.
+    _ref.read(bootEpochProvider.notifier).state++;
+  }
+
+  /// Adopts a just-established NIP-46 remote-signer session at RUNTIME — the
+  /// native analogue of the PWA's `applyNostrLogin(pubkey, null, 'nip46')`
+  /// (app.js:5324). The login modal already ran the `nostrconnect://`
+  /// handshake on the shared [nip46ServiceProvider] (persisting the session and
+  /// keeping the socket LIVE via `finishNostrConnect`), so this just re-boots
+  /// the controller: tear down the ephemeral session, allow a fresh boot, and
+  /// `init()` — which now sees `nostrLoginMethod == 'nip46'` and installs a
+  /// [Nip46SignerAdapter] (reusing the already-connected instance) as the live
+  /// `_signer`. Without this, remote signing only engaged after an app restart.
+  Future<void> loginWithNip46() async {
+    // `_teardownLiveSession` nulls the ephemeral identity/signer/service but
+    // never touches `nip46ServiceProvider`, so the live socket survives into
+    // the re-boot below (where `_restoreNip46Signer` adopts it as-is).
+    await _teardownLiveSession();
+    _started = false;
+    await init();
     _ref.read(bootEpochProvider.notifier).state++;
   }
 
@@ -10191,6 +10221,10 @@ final nip46ServiceProvider = Provider<Nip46Service>((ref) {
   final svc = Nip46Service(
     kv: _Nip46KvAdapter(ref.read(keyValueStoreProvider)),
     secure: _Nip46SecureAdapter(SecureStore()),
+    // Route NIP-46 through the shared relay pool (proxy/direct, already
+    // connected to the default signer relay) when it covers the relay. Lazy —
+    // resolved at `_openRelay` time, by which point the controller/pool exist.
+    poolProvider: () => ref.read(nostrControllerProvider).pool,
   );
   ref.onDispose(svc.dispose);
   return svc;

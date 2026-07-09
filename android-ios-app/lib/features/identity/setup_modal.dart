@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants/storage_keys.dart';
+import '../../core/crypto/bech32_codec.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/platform/deep_links.dart';
@@ -16,7 +18,10 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import 'dev_nsec_modal.dart';
 import 'modal_chrome.dart';
-import 'nostr_login_modal.dart';
+import 'nip46_service.dart';
+
+/// Which auth tab the setup modal shows (`.setup-tab`, index.html:1204-1206).
+enum _SetupTab { signup, login }
 
 /// Opens an absolute [url] in the external browser (ToS/PP footer links).
 TapGestureRecognizer _linkTap(String url) {
@@ -48,6 +53,29 @@ class SetupModal extends ConsumerStatefulWidget {
 class _SetupModalState extends ConsumerState<SetupModal> {
   final _nymCtl = TextEditingController();
   final _bioCtl = TextEditingController();
+
+  /// Active auth tab — Sign up (default) or Login (`switchSetupTab`).
+  _SetupTab _tab = _SetupTab.signup;
+
+  // ---- Login tab state (inlined from the former Nostr-login popup) ----
+  final _nsecCtl = TextEditingController();
+
+  /// A pasted `bunker://` (or `nostrconnect://`) signer connection URI.
+  final _bunkerCtl = TextEditingController();
+  bool _connectingUri = false;
+
+  String? _loginError;
+  bool _remoteSignerOpen = false;
+  String? _nostrConnectUri;
+  Nip46Service? _nip46;
+  String _remoteStatus = 'Waiting for remote signer...';
+
+  /// Guards the async nsec adopt so a double-tap can't re-enter login.
+  bool _loggingIn = false;
+
+  /// Set once a remote-signer session is established + adopted, so [dispose]
+  /// won't cancel the (now live) session when the modal tears down.
+  bool _loginSucceeded = false;
 
   /// Local preview paths for the on-screen thumbnails only — the published
   /// value is always the HOSTED URL below (set after a pick-time upload).
@@ -89,6 +117,11 @@ class _SetupModalState extends ConsumerState<SetupModal> {
   void dispose() {
     _nymCtl.dispose();
     _bioCtl.dispose();
+    _nsecCtl.dispose();
+    _bunkerCtl.dispose();
+    // Only abort an INCOMPLETE handshake — a successful session is the shared
+    // [nip46ServiceProvider] instance the controller now signs with.
+    if (!_loginSucceeded) _nip46?.cancelConnect();
     super.dispose();
   }
 
@@ -232,26 +265,124 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     widget.onComplete();
   }
 
-  Future<void> _login() async {
-    final result = await NostrLoginModal.open(context);
-    if (!mounted) return;
-    // A non-null result means a login method was chosen, PERSISTED, and adopted:
-    //  * nsec — the modal awaited `NostrController.loginWithNsec`, which
-    //    persists the key, re-boots under the new pubkey, and bumps the boot
-    //    epoch (remounting the gate onto the shell). `onComplete()` here is
-    //    idempotent with that remount.
-    //  * NIP-46 — `finishNostrConnect` persisted the session; `onComplete()`
-    //    advances the gate so the shell shows (restored fully on next boot).
-    if (result != null) {
-      // NIP-46 persists the session but does not itself boot the controller
-      // (nsec re-boots inside loginWithNsec, where this is a no-op). At cold
-      // boot the background ephemeral session covers until relaunch; after a
-      // panic-wipe remount there is NO running session, so boot now —
-      // init() restores the just-persisted login (idempotent via _started).
-      await ref.read(nostrControllerProvider).init();
+  /// Starts the inline `nostrconnect://` remote-signer flow (Login tab). Drives
+  /// the SHARED [nip46ServiceProvider] so the live socket this handshake opens
+  /// is the exact instance the controller signs with after
+  /// [NostrController.loginWithNip46] adopts it — remote signing works
+  /// immediately, not only after an app restart.
+  void _startRemoteSigner() {
+    final service = ref.read(nip46ServiceProvider);
+    final uri = service.startNostrConnect();
+    setState(() {
+      _nip46 = service;
+      _remoteSignerOpen = true;
+      _nostrConnectUri = uri;
+      _remoteStatus = 'Waiting for remote signer...';
+      _loginError = null;
+    });
+    () async {
+      try {
+        await service.awaitConnect();
+        if (!mounted) return;
+        setState(() => _remoteStatus = 'Connected! Fetching public key...');
+        // Persists the session and keeps the socket live.
+        await service.finishNostrConnect();
+        if (!mounted) return;
+        _loginSucceeded = true;
+        // Adopt the remote signer at runtime, then advance the gate.
+        await ref.read(nostrControllerProvider).loginWithNip46();
+        if (!mounted) return;
+        widget.onComplete();
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _remoteStatus = 'Connection failed: $e');
+      }
+    }();
+  }
+
+  /// Aborts an in-progress remote-signer handshake and collapses its UI.
+  void _cancelRemoteSigner() {
+    _nip46?.cancelConnect();
+    setState(() {
+      _remoteSignerOpen = false;
+      _nostrConnectUri = null;
+      _remoteStatus = 'Waiting for remote signer...';
+    });
+  }
+
+  /// Connects to a signer from a pasted `bunker://` (or `nostrconnect://`) URI
+  /// via [Nip46Service.connectViaUri] — for a `bunker://` we send the explicit
+  /// `connect` RPC and adopt on the signer's ack; for a pasted `nostrconnect://`
+  /// we wait for the signer to initiate. Then adopts at runtime like the QR flow.
+  Future<void> _connectViaUri() async {
+    if (_connectingUri || _loggingIn) return;
+    final uri = _bunkerCtl.text.trim();
+    if (uri.isEmpty) {
+      setState(() => _loginError = 'Paste a bunker:// or nostrconnect:// URI.');
+      return;
+    }
+    final service = ref.read(nip46ServiceProvider);
+    setState(() {
+      _nip46 = service;
+      _connectingUri = true;
+      _loginError = null;
+      _remoteSignerOpen = false;
+    });
+    try {
+      await service.connectViaUri(uri);
+      if (!mounted) return;
+      _loginSucceeded = true;
+      await ref.read(nostrControllerProvider).loginWithNip46();
       if (!mounted) return;
       widget.onComplete();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _connectingUri = false;
+        _loginError = 'Signer connection failed. Check the URI and try again.';
+      });
     }
+  }
+
+  /// Validates the pasted nsec, then ADOPTS it as the running identity via
+  /// [NostrController.loginWithNsec] (persist + re-boot under the new pubkey +
+  /// bump the boot epoch, which remounts the gate onto the shell). Then advances
+  /// the gate via [onComplete] (idempotent with the boot-epoch remount).
+  Future<void> _loginWithNsec() async {
+    if (_loggingIn) return;
+    final input = _nsecCtl.text.trim();
+    if (input.isEmpty) {
+      setState(() => _loginError = 'Please enter your nsec.');
+      return;
+    }
+    try {
+      final bytes = decodeNsec(input);
+      if (bytes.length != 32) {
+        setState(() =>
+            _loginError = 'Invalid nsec key. Please check and try again.');
+        return;
+      }
+    } catch (_) {
+      setState(
+          () => _loginError = 'Invalid nsec key. Please check and try again.');
+      return;
+    }
+    setState(() {
+      _loggingIn = true;
+      _loginError = null;
+    });
+    try {
+      await ref.read(nostrControllerProvider).loginWithNsec(input);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loggingIn = false;
+        _loginError = 'Invalid nsec key. Please check and try again.';
+      });
+      return;
+    }
+    if (!mounted) return;
+    widget.onComplete();
   }
 
   @override
@@ -273,136 +404,347 @@ class _SetupModalState extends ConsumerState<SetupModal> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // (The "nymchat" wordmark was removed per request; the
-                    // "Login with nsec…" link below still carries the login tap.)
                     if (invite != null) ...[
                       _InviteBanner(text: invite, c: c),
                       const SizedBox(height: 16),
                     ],
-                    // `.nm-h-50`: text-dim 13px underline (offset 3).
-                    GestureDetector(
-                      onTap: _login,
-                      child: Text(
-                        'Login with nsec private key or extension? Click here',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: c.textDim,
-                          fontSize: 13,
-                          decoration: TextDecoration.underline,
-                          decorationColor: c.textDim,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    _label(c, 'Choose Your Nickname', optional: true),
-                    const SizedBox(height: 6),
-                    _field(
-                      c,
-                      controller: _nymCtl,
-                      hint: 'Leave empty for random nickname',
-                      maxLength: 20,
-                      showCounter: true,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Your ephemeral pseudonym nickname for this session',
-                      style: TextStyle(color: c.textDim, fontSize: 11),
-                    ),
-                    const SizedBox(height: 16),
-                    _label(c, 'Choose Your Avatar', optional: true),
-                    const SizedBox(height: 6),
-                    _avatarPicker(c),
-                    const SizedBox(height: 16),
-                    _label(c, 'Choose Your Banner', optional: true),
-                    const SizedBox(height: 6),
-                    _bannerPicker(c),
-                    const SizedBox(height: 16),
-                    _label(c, 'Bio', optional: true),
-                    const SizedBox(height: 6),
-                    _field(
-                      c,
-                      controller: _bioCtl,
-                      hint: 'Tell people a bit about yourself...',
-                      maxLength: 150,
-                      maxLines: 3,
-                      showCounter: true,
-                    ),
-                    const SizedBox(height: 5),
-                    // `.form-hint` under the bio char count (index.html:1332):
-                    // 11px textDim, margin-top 5.
-                    Text(
-                      'Short bio shown on your profile (max 150 characters)',
-                      style: TextStyle(color: c.textDim, fontSize: 11),
-                    ),
-                    // (The PWA's `.nm-h-52` "NOTE: Nymchat is bridged with…"
-                    // callout is intentionally absent in the native app —
-                    // product decision. Bio `.form-group` margin-bottom 20 is
-                    // the gap to the actions.)
-                    const SizedBox(height: 20),
-                    // `.send-btn` (translucent primary pill), h42.
-                    Padding(
-                      key: const Key('setupEnterBtn'),
-                      padding: EdgeInsets.zero,
-                      child: ModalChrome.sendButton(
-                        c,
-                        'Enter',
-                        _busy ? null : _enter,
-                        fullWidth: true,
-                        child: _busy
-                            ? SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: c.primary),
-                              )
-                            : null,
-                      ),
-                    ),
-                    // `.modal-actions.nm-h-7` margin-bottom: 20px
-                    // (no-inline.css:25) — the Enter row → ToS footer gap.
-                    const SizedBox(height: 20),
-                    // `.setup-modal-content>span` footer (index.html:1337-1340):
-                    // centered `.nm-dim` line at the inherited 16px default;
-                    // "Terms of Service"/"Privacy Policy" are `.nm-secondary`
-                    // anchors (secondary color, browser-default underline)
-                    // opening /static/tos.html / /static/pp.html externally.
-                    Text.rich(
-                      TextSpan(
-                        style: TextStyle(color: c.textDim, fontSize: 16),
-                        children: [
-                          const TextSpan(text: 'By entering, you agree to our '),
-                          TextSpan(
-                            text: 'Terms of Service',
-                            style: TextStyle(
-                              color: c.secondary,
-                              decoration: TextDecoration.underline,
-                              decorationColor: c.secondary,
-                            ),
-                            recognizer: _linkTap(
-                                'https://web.nymchat.app/static/tos.html'),
-                          ),
-                          const TextSpan(text: ' and '),
-                          TextSpan(
-                            text: 'Privacy Policy',
-                            style: TextStyle(
-                              color: c.secondary,
-                              decoration: TextDecoration.underline,
-                              decorationColor: c.secondary,
-                            ),
-                            recognizer: _linkTap(
-                                'https://web.nymchat.app/static/pp.html'),
-                          ),
-                          const TextSpan(text: '.'),
-                        ],
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                    // `.setup-tabs` (index.html:1204-1206): Sign up / Login —
+                    // replaces the old "Login with nsec…" link; the Login tab
+                    // swaps in the login fields inline (no popup).
+                    _setupTabs(c),
+                    if (_tab == _SetupTab.signup)
+                      ..._signupPanel(c)
+                    else
+                      ..._loginPanel(c),
                   ],
                 ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// `.setup-tabs` (styles-components.css:87-127): a flex row of two equal
+  /// `.setup-tab` buttons over a 1px glass-border baseline; the active tab is
+  /// primary-tinted with a 2px primary underline.
+  Widget _setupTabs(NymColors c) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.glassBorder)),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _setupTabBtn(c, _SetupTab.signup, 'Sign up')),
+          const SizedBox(width: 4), // `.setup-tabs { gap: 4px }`
+          Expanded(child: _setupTabBtn(c, _SetupTab.login, 'Login')),
+        ],
+      ),
+    );
+  }
+
+  Widget _setupTabBtn(NymColors c, _SetupTab tab, String label) {
+    final active = _tab == tab;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _tab = tab),
+      child: Container(
+        // `.setup-tab { padding: 12px 10px }`.
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        decoration: BoxDecoration(
+          color: active ? c.primaryA(0.06) : Colors.transparent,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(NymRadius.xs),
+            topRight: Radius.circular(NymRadius.xs),
+          ),
+          // `.setup-tab.active::after`: a 2px primary underline.
+          border: Border(
+            bottom: BorderSide(
+              color: active ? c.primary : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: active ? c.primary : c.textDim,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// `#setupSignupPanel` (index.html:1208-1267) + the shared Enter action / ToS
+  /// footer that live under the signup tab.
+  List<Widget> _signupPanel(NymColors c) {
+    return [
+      _label(c, 'Choose Your Nickname', optional: true),
+      const SizedBox(height: 6),
+      _field(
+        c,
+        controller: _nymCtl,
+        hint: 'Leave empty for random nickname',
+        maxLength: 20,
+        showCounter: true,
+      ),
+      const SizedBox(height: 4),
+      Text(
+        'Your ephemeral pseudonym nickname for this session',
+        style: TextStyle(color: c.textDim, fontSize: 11),
+      ),
+      const SizedBox(height: 16),
+      _label(c, 'Choose Your Avatar', optional: true),
+      const SizedBox(height: 6),
+      _avatarPicker(c),
+      const SizedBox(height: 16),
+      _label(c, 'Choose Your Banner', optional: true),
+      const SizedBox(height: 6),
+      _bannerPicker(c),
+      const SizedBox(height: 16),
+      _label(c, 'Bio', optional: true),
+      const SizedBox(height: 6),
+      _field(
+        c,
+        controller: _bioCtl,
+        hint: 'Tell people a bit about yourself...',
+        maxLength: 150,
+        maxLines: 3,
+        showCounter: true,
+      ),
+      const SizedBox(height: 5),
+      // `.form-hint` under the bio char count (index.html:1332).
+      Text(
+        'Short bio shown on your profile (max 150 characters)',
+        style: TextStyle(color: c.textDim, fontSize: 11),
+      ),
+      const SizedBox(height: 20),
+      // `.send-btn` (translucent primary pill), h42. `.modal-actions` is a
+      // centered flex and the button is `flex: 0 1 auto`, so it's content-width
+      // and centered — NOT full-bleed (index.html:1338, styles-chat.css:1920).
+      Align(
+        key: const Key('setupEnterBtn'),
+        alignment: Alignment.center,
+        child: ModalChrome.sendButton(
+          c,
+          'Enter',
+          _busy ? null : _enter,
+          child: _busy
+              ? SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: c.primary),
+                )
+              : null,
+        ),
+      ),
+      const SizedBox(height: 20),
+      // `#setupSignupTos` (index.html:1341): centered ToS/Privacy footer.
+      _tosText(c, 'By entering, you agree to our '),
+    ];
+  }
+
+  /// `#setupLoginPanel` (index.html:1268-1345): remote-signer + paste-nsec login
+  /// inline (the browser-extension option is native-hidden, as in the PWA).
+  List<Widget> _loginPanel(NymColors c) {
+    return [
+      // `.nm-h-21`: 13px text-dim.
+      Text(
+        'Login with your Nostr identity to sync settings across devices.',
+        style: TextStyle(color: c.textDim, fontSize: 13),
+      ),
+      const SizedBox(height: 18),
+      // `.send-btn` "Login with Remote Signer" + hint.
+      ModalChrome.sendButton(
+        c,
+        'Login with Remote Signer',
+        _startRemoteSigner,
+        fullWidth: true,
+      ),
+      const SizedBox(height: 5),
+      Text(
+        'Use Amber, or another NIP-46 compatible remote signer',
+        style: TextStyle(color: c.textDim, fontSize: 11),
+      ),
+      if (_remoteSignerOpen) ..._remoteSignerConnect(c),
+      const SizedBox(height: 14),
+      // Paste a signer connection URI (bunker:// or a nostrconnect:// string) —
+      // an alternative to scanning the QR, and the way to use a signer whose
+      // relay isn't the default (the URI carries its own relay).
+      _label(c, 'Or paste a signer URI'),
+      const SizedBox(height: 6),
+      Row(
+        children: [
+          Expanded(
+            child: _field(
+              c,
+              controller: _bunkerCtl,
+              hint: 'bunker://…  or  nostrconnect://…',
+            ),
+          ),
+          const SizedBox(width: 8),
+          _smallButton(
+            c,
+            _connectingUri ? 'Connecting…' : 'Connect',
+            _connectingUri ? () {} : _connectViaUri,
+          ),
+        ],
+      ),
+      const SizedBox(height: 5),
+      Text(
+        'Paste a bunker:// URI from your signer, or a nostrconnect:// string',
+        style: TextStyle(color: c.textDim, fontSize: 11),
+      ),
+      ModalChrome.orDivider(c),
+      // Paste-nsec option.
+      _label(c, 'Paste your nsec'),
+      const SizedBox(height: 6),
+      _field(
+        c,
+        controller: _nsecCtl,
+        hint: 'nsec1...',
+        obscureText: true,
+      ),
+      if (_loginError != null) ...[
+        const SizedBox(height: 5),
+        Text(_loginError!, style: TextStyle(color: c.danger, fontSize: 12)),
+      ],
+      const SizedBox(height: 5),
+      Text(
+        'Your private key stays local and is never sent to any server',
+        style: TextStyle(color: c.textDim, fontSize: 11),
+      ),
+      // `.modal-actions.nm-h-81 { margin: 40px auto 20px }`.
+      const SizedBox(height: 40),
+      // `.send-btn.nm-h-82 { flex: 0 1 auto }` in a centered `.modal-actions`:
+      // content-width, centered — not full-bleed.
+      Align(
+        alignment: Alignment.center,
+        child: ModalChrome.sendButton(
+          c,
+          'Login',
+          _loggingIn ? null : _loginWithNsec,
+          child: _loggingIn
+              ? SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: c.primary),
+                )
+              : null,
+        ),
+      ),
+      const SizedBox(height: 20),
+      _tosText(c, 'By logging in, you agree to our '),
+    ];
+  }
+
+  /// The remote-signer connection affordance (`#nostrLoginRemoteSignerConnect`,
+  /// index.html:1292-1311): status line, QR, readonly connection string + Copy,
+  /// hint, and a Cancel action.
+  List<Widget> _remoteSignerConnect(NymColors c) {
+    return [
+      const SizedBox(height: 12),
+      Center(
+        child: Column(
+          children: [
+            Text(_remoteStatus,
+                style: TextStyle(color: c.textDim, fontSize: 13)),
+            const SizedBox(height: 12),
+            if (_nostrConnectUri != null)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: NymRadius.rxs,
+                ),
+                child: QrImageView(
+                  data: _nostrConnectUri!,
+                  size: 220,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      _label(c, 'Connection String'),
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          Expanded(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: NymRadius.rsm,
+                border: Border.all(color: c.glassBorder),
+              ),
+              child: SelectableText(
+                _nostrConnectUri ?? '',
+                maxLines: 1,
+                style: TextStyle(color: c.textBright, fontSize: 11),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _smallButton(c, 'Copy', () {
+            final uri = _nostrConnectUri;
+            if (uri != null) Clipboard.setData(ClipboardData(text: uri));
+          }),
+        ],
+      ),
+      const SizedBox(height: 5),
+      Text(
+        'Scan the QR code or copy this connection string into your remote '
+        'signer app',
+        style: TextStyle(color: c.textDim, fontSize: 11),
+      ),
+      const SizedBox(height: 10),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: _smallButton(c, 'Cancel', _cancelRemoteSigner),
+      ),
+    ];
+  }
+
+  /// The centered `.nm-secondary` ToS / Privacy footer shared by both panels
+  /// (`#setupSignupTos` / `#setupLoginPanel .nm-h-35`), with the given lead-in.
+  Widget _tosText(NymColors c, String lead) {
+    return Text.rich(
+      TextSpan(
+        style: TextStyle(color: c.textDim, fontSize: 16),
+        children: [
+          TextSpan(text: lead),
+          TextSpan(
+            text: 'Terms of Service',
+            style: TextStyle(
+              color: c.secondary,
+              decoration: TextDecoration.underline,
+              decorationColor: c.secondary,
+            ),
+            recognizer: _linkTap('https://web.nymchat.app/static/tos.html'),
+          ),
+          const TextSpan(text: ' and '),
+          TextSpan(
+            text: 'Privacy Policy',
+            style: TextStyle(
+              color: c.secondary,
+              decoration: TextDecoration.underline,
+              decorationColor: c.secondary,
+            ),
+            recognizer: _linkTap('https://web.nymchat.app/static/pp.html'),
+          ),
+          const TextSpan(text: '.'),
+        ],
+      ),
+      textAlign: TextAlign.center,
     );
   }
 
@@ -459,6 +801,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     int? maxLength,
     int maxLines = 1,
     bool showCounter = false,
+    bool obscureText = false,
   }) {
     // Light mode forces `input/.form-input { background: rgba(0,0,0,0.04);
     // border-color: rgba(0,0,0,0.1); color: #000 } !important`
@@ -469,6 +812,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       controller: controller,
       maxLength: maxLength,
       maxLines: maxLines,
+      obscureText: obscureText,
       onChanged: showCounter ? (_) => setState(() {}) : null,
       inputFormatters:
           maxLength == null ? null : [LengthLimitingTextInputFormatter(maxLength)],
@@ -524,20 +868,25 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
   }
 
-  /// `setupAvatarPreview` (index.html:1285-1302) — 80×80 preview + Choose/Remove.
+  /// `setupAvatarPreview` (index.html:1220-1233) — 80×80 preview + Choose/Remove.
+  /// `.avatar-preview` (styles-features.css:2891) is a CIRCLE (border-radius 50%)
+  /// with a 2px glass border over a `white@0.04` fill; before a pick the PWA
+  /// shows a BLANK circle (a plain `#222` SVG), not a person glyph.
   Widget _avatarPicker(NymColors c) {
     return Row(
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            width: 80,
-            height: 80,
-            color: c.bg,
-            child: _avatarPath != null
-                ? Image.file(File(_avatarPath!), fit: BoxFit.cover)
-                : Icon(Icons.person_outline, color: c.textDim, size: 36),
+        Container(
+          width: 80,
+          height: 80,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.white.withValues(alpha: 0.04),
+            border: Border.all(color: c.glassBorder, width: 2),
           ),
+          child: _avatarPath != null
+              ? Image.file(File(_avatarPath!), fit: BoxFit.cover)
+              : null,
         ),
         const SizedBox(width: 12),
         Expanded(

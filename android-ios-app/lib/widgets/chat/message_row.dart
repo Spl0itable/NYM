@@ -2189,11 +2189,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         ),
     ];
     // Reuse the reactors modal as the "seen by" list (mirror the PWA's readers
-    // modal); the 👁 glyph in the header reads as "seen by N".
+    // modal `_showReadersModalFromMap`, groups.js:2850, whose
+    // `.reactors-modal-header` reads "Seen by <count>" — no eye glyph).
     showReactorsModal(
       context,
       anchorRect: _globalRectOfContext(context) ?? Rect.zero,
-      emoji: '👁',
+      emoji: '',
+      title: 'Seen by ${abbreviateNumber(reactors.length)}',
       reactors: reactors,
       // "Click user row to open their context menu" (`_showReadersModalFromMap`,
       // groups.js:2861-2869): close the modal, then

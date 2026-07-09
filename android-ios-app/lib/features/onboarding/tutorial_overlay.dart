@@ -57,6 +57,12 @@ class TutorialTargets {
     final topLeft = box.localToGlobal(Offset.zero);
     return topLeft & box.size;
   }
+
+  /// The live [BuildContext] of [target]'s widget (null when not mounted). Used
+  /// to scroll the target into view via [Scrollable.ensureVisible], the native
+  /// analogue of the PWA `positionStep`'s `target.scrollIntoView` (app.js:224).
+  static BuildContext? contextOf(TutorialTarget target) =>
+      _keys[target]?.currentContext;
 }
 
 /// Drives the sidebar/drawer open/close per step on narrow layouts
@@ -284,7 +290,8 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
   bool _narrow(BuildContext context) =>
       MediaQuery.of(context).size.width < NymDimens.tabletBreakpoint;
 
-  /// Runs the step's `onBefore` (sidebar open/close on narrow), then measures.
+  /// Runs the step's `onBefore` (sidebar open/close on narrow), scrolls the
+  /// target into view if it's off-screen, then measures.
   Future<void> _enterStep(int index) async {
     final step = kTutorialSteps[index];
     final sidebar = widget.sidebar;
@@ -296,7 +303,41 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
       }
     }
     if (!mounted) return;
+    await _ensureTargetVisible(step);
+    if (!mounted) return;
     _remeasure();
+  }
+
+  /// Scrolls the step's target into view when it's off-screen — the native
+  /// analogue of the PWA `positionStep`'s `scrollIntoView({block:'center'})`
+  /// (app.js:216-227). Without this, a sidebar-anchored step lower down the
+  /// scroll list (Private Messages, Active Nyms) never scrolls into view and
+  /// its spotlight lands off-screen, so the tour appears to skip that section.
+  /// Only fires when the target is fully off-screen (the PWA's
+  /// `fullyOutVert`/`fullyOutHorz` gate); a visible target is left where it is.
+  Future<void> _ensureTargetVisible(TutorialStep step) async {
+    final target = step.target;
+    if (target == null) return;
+    final ctx = TutorialTargets.contextOf(target);
+    if (ctx == null) return;
+    final screen = MediaQuery.of(context).size;
+    final rect = TutorialTargets.rectOf(target);
+    final offscreen = rect == null ||
+        rect.bottom <= 0 ||
+        rect.top >= screen.height ||
+        rect.right <= 0 ||
+        rect.left >= screen.width;
+    if (!offscreen) return;
+    try {
+      await Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5, // center, matching `block: 'center'`
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    } catch (_) {
+      // Header-anchored targets have no scrollable ancestor — nothing to do.
+    }
   }
 
   /// Measures the active step's target rect and repaints **only when it

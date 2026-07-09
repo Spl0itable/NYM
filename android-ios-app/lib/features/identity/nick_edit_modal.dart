@@ -372,8 +372,16 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         _label(c, 'Avatar'),
         Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+            // `.avatar-preview` (styles-features.css:2891): a CIRCLE
+            // (border-radius 50%) with a 2px glass border, not a rounded square.
+            Container(
+              width: 64,
+              height: 64,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: c.glassBorder, width: 2),
+              ),
               child: SizedBox(
                 width: 64,
                 height: 64,
