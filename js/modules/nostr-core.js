@@ -1742,6 +1742,96 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    // One-shot kind 0 fetch for the logged-in user's OWN profile, run at login
+    // (nsec / remote signer / extension). The batched profile path is D1-only
+    // when a storage host is reachable (relay proxy pool mode short-circuits
+    // relay REQs), so a Nostr user new to Nymchat — whose kind 0 lives on relays
+    // but not yet in D1 — would otherwise show the "nym" fallback and default
+    // avatar. This does D1 first and, on a miss, issues a direct relay REQ that
+    // works in both proxy pool and direct modes. handleEvent (invoked by the
+    // message dispatcher) applies the name/avatar and mirrors the profile to
+    // D1; here we just refresh the sidebar.
+    async fetchOwnProfileFromRelaysOneShot() {
+        const pubkey = this.pubkey;
+        if (!pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
+
+        // D1 first — a hit applies the profile via handleEvent inside the helper.
+        try {
+            const found = await this._fetchProfilesFromD1([pubkey]);
+            if (found && found.has(pubkey)) { this._updateOwnSidebarProfile(); return; }
+        } catch (_) { }
+
+        // Not in D1 yet — fetch from relays once connected. sendRequestToFewRelays
+        // routes through the pool in proxy mode and directly otherwise.
+        if (!this.connected) {
+            if (!this._ownProfileFetchRetries) this._ownProfileFetchRetries = 0;
+            if (this._ownProfileFetchRetries++ < 8) {
+                setTimeout(() => { this.fetchOwnProfileFromRelaysOneShot(); }, 1500);
+            }
+            return;
+        }
+
+        const subId = 'own-profile-' + Math.random().toString(36).slice(2);
+        if (!this._subscriptionHandlers) this._subscriptionHandlers = new Map();
+
+        let settled = false;
+        const cleanup = () => {
+            if (settled) return;
+            settled = true;
+            this._subscriptionHandlers.delete(subId);
+            try { this.closeFewRelaysSub(subId); } catch (_) { }
+            if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
+        };
+
+        const handler = (type, data) => {
+            if (type === 'EVENT' && data[0] === subId) {
+                const event = data[1];
+                if (event && event.kind === 0 && event.pubkey === pubkey) {
+                    // The dispatcher also passes this event to handleEvent (which
+                    // applies name/avatar and, in proxy mode, mirrors to D1). Refresh
+                    // the sidebar after that synchronous processing completes.
+                    setTimeout(() => this._updateOwnSidebarProfile(), 0);
+                    cleanup();
+                }
+            } else if (type === 'EOSE' && data[0] === subId) {
+                cleanup();
+            }
+        };
+        this._subscriptionHandlers.set(subId, handler);
+
+        const req = ['REQ', subId, { kinds: [0], authors: [pubkey], limit: 1 }];
+        const run = () => {
+            try { this.sendRequestToFewRelays(req); } catch (_) { }
+            setTimeout(cleanup, 3000);
+        };
+        if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(run);
+        else run();
+    },
+
+    // Refresh the sidebar (name, avatar, lightning address) from the applied
+    // own-profile data and cache it for instant restore on the next load.
+    _updateOwnSidebarProfile() {
+        const pubkey = this.pubkey;
+        if (!pubkey) return;
+        const user = this.users.get(pubkey);
+        if (user && user.nym) this.nym = user.nym;
+        if (this.nym) {
+            const el = document.getElementById('currentNym');
+            if (el) el.innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+        }
+        if (typeof this.updateSidebarAvatar === 'function') this.updateSidebarAvatar();
+        if (typeof this.loadLightningAddress === 'function') this.loadLightningAddress();
+        try {
+            const avatarUrl = this.userAvatars.get(pubkey);
+            if (this.nym || avatarUrl) {
+                localStorage.setItem('nym_nostr_login_profile', JSON.stringify({
+                    name: this.nym || null,
+                    avatar: avatarUrl || null
+                }));
+            }
+        } catch (_) { }
+    },
+
     // Resolve all pending profile callbacks for a pubkey (called from kind 0 handler)
     _resolveProfileCallbacks(pubkey) {
         const entries = this.pendingProfileResolvers.get(pubkey);

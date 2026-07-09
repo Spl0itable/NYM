@@ -5611,8 +5611,12 @@ async function nostrLoginConnectBunker() {
 
         // We initiate the handshake. _nip46SendRequest waits for the socket to be
         // ready; the signer may respond with auth_url first (surfaced by the
-        // handler) and the real ack resolves this once the user approves.
-        await _nip46SendRequest('connect', [parsed.remotePubkey, parsed.secret || '']);
+        // handler) and the real ack resolves this once the user approves. Only
+        // include the secret when the bunker URI carried one (Amber's bunker://
+        // string often omits it) — sending an empty string can read as a
+        // mismatched secret to some signers.
+        const connectParams = parsed.secret ? [parsed.remotePubkey, parsed.secret] : [parsed.remotePubkey];
+        await _nip46SendRequest('connect', connectParams);
 
         _nip46State.connected = true;
         await _nip46CompleteLogin(parsed.remotePubkey);
@@ -5786,6 +5790,15 @@ function applyNostrLogin(pubkey, secretKey, method) {
             });
         }, 3000);
     });
+
+    // The batched profile path above is D1-only in relay proxy pool mode, so a
+    // Nostr user new to Nymchat (kind 0 on relays but not yet in D1) wouldn't get
+    // their nickname/avatar. Do a one-shot relay fetch for our own profile that
+    // works in both modes and mirrors the result to D1.
+    if (typeof nym.fetchOwnProfileFromRelaysOneShot === 'function') {
+        nym._ownProfileFetchRetries = 0;
+        nym.fetchOwnProfileFromRelaysOneShot().catch(() => { });
+    }
 
     // Reload blur setting now that pubkey is known
     nym.blurOthersImages = nym.loadImageBlurSettings();
