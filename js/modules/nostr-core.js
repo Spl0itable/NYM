@@ -1654,8 +1654,13 @@ Object.assign(NYM.prototype, {
         }
         this.channelMessageReaders.get(messageId).set(event.pubkey, readerName);
 
-        if (!this.inPMMode && this.currentGeohash === geohash && typeof this.updateChannelReaderAvatars === 'function') {
-            this.updateChannelReaderAvatars(messageId);
+        // Invalidate the cached DOM for this channel so a later re-render (e.g.
+        // returning to a background channel/column) rebuilds the waterfalled
+        // avatars, then refresh any live DOM. Both are keyed by the receipt's own
+        // geohash so this works regardless of which channel is currently focused.
+        if (this.channelDOMCache) this.channelDOMCache.delete(`#${geohash}`);
+        if (typeof this.updateChannelReaderAvatars === 'function') {
+            this.updateChannelReaderAvatars(messageId, geohash);
         }
     },
 

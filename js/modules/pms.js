@@ -956,12 +956,12 @@ Object.assign(NYM.prototype, {
                                     }
                                     const readerNym = this.getNymFromPubkey(senderPubkey);
                                     this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
-                                    if (this.inPMMode && this.currentGroup &&
-                                        convKey === this.getGroupConversationKey(this.currentGroup)) {
-                                        this.updateGroupReaderAvatars(msg.nymMessageId);
-                                    } else {
-                                        this.channelDOMCache.delete(convKey);
-                                    }
+                                    // Invalidate the cached DOM so a later re-render rebuilds the
+                                    // waterfalled avatars, then refresh any live DOM. Both are keyed
+                                    // by this receipt's own conversation so it works regardless of
+                                    // which group is currently focused (e.g. in columns view).
+                                    if (this.channelDOMCache) this.channelDOMCache.delete(convKey);
+                                    this.updateGroupReaderAvatars(msg.nymMessageId, convKey);
                                 } else {
                                     const domId = msg.nymMessageId || msg.id;
                                     this._updateDeliveryStatusEl(domId, receiptType);

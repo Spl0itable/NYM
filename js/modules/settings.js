@@ -1167,6 +1167,9 @@ Object.assign(NYM.prototype, {
     reapplyImageBlur() {
         document.querySelectorAll('.message img').forEach(img => {
             if (img.classList.contains('custom-emoji')) return;
+            // Inline @mention / quoted-author avatars are UI chrome, not posted
+            // media — never blur them.
+            if (img.classList.contains('avatar-message')) return;
             const messageEl = img.closest('.message');
             if (!messageEl) return;
             const isSelfMessage = messageEl.classList.contains('self');

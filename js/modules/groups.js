@@ -2554,15 +2554,13 @@ Object.assign(NYM.prototype, {
     // Update the stacked reader avatars for group messages using waterfall logic:
     // Each reader's avatar only appears on the LATEST message they've read, since
     // reading message N implies having read all prior messages.
-    updateGroupReaderAvatars(nymMessageId) {
-        // Find the current group conversation
-        if (!this.inPMMode || !this.currentGroup) {
-            // Fallback: just update the single message
-            this._updateSingleGroupReaders(nymMessageId);
-            return;
+    updateGroupReaderAvatars(nymMessageId, convKey) {
+        // Resolve the conversation from the caller (so background/columns-view
+        // groups update correctly) and fall back to the focused group.
+        if (!convKey && this.inPMMode && this.currentGroup) {
+            convKey = this.getGroupConversationKey(this.currentGroup);
         }
-        const groupConvKey = this.getGroupConversationKey(this.currentGroup);
-        const messages = this.pmMessages.get(groupConvKey);
+        const messages = convKey ? this.pmMessages.get(convKey) : null;
         if (!messages) {
             this._updateSingleGroupReaders(nymMessageId);
             return;
@@ -2573,12 +2571,13 @@ Object.assign(NYM.prototype, {
 
         for (const msg of messages) {
             if (!msg.isOwn || !msg.nymMessageId || !this.groupMessageReaders.has(msg.nymMessageId)) continue;
-            const el = document.querySelector(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
-            if (!el) continue;
-            const hasReaders = this._syncReaderAvatars(el, displayReaders.get(msg.nymMessageId));
-            if (hasReaders && !el._readerLongPressBound) {
-                this._bindReaderLongPress(el, msg.nymMessageId);
-                el._readerLongPressBound = true;
+            const els = document.querySelectorAll(`.group-readers[data-nym-msg-id="${msg.nymMessageId}"]`);
+            for (const el of els) {
+                const hasReaders = this._syncReaderAvatars(el, displayReaders.get(msg.nymMessageId));
+                if (hasReaders && !el._readerLongPressBound) {
+                    this._bindReaderLongPress(el, msg.nymMessageId);
+                    el._readerLongPressBound = true;
+                }
             }
         }
     },
@@ -2695,13 +2694,14 @@ Object.assign(NYM.prototype, {
     },
 
     // Channel-message reader avatars (kind 20000 message IDs keyed in channelMessageReaders)
-    updateChannelReaderAvatars(messageId) {
-        if (this.inPMMode || !this.currentGeohash) {
-            this._updateSingleChannelReaders(messageId);
-            return;
+    updateChannelReaderAvatars(messageId, geohash) {
+        // Resolve the channel from the caller (so background/columns-view channels
+        // update correctly) and fall back to the focused channel.
+        if (!geohash && !this.inPMMode && this.currentGeohash) {
+            geohash = this.currentGeohash;
         }
-        const storageKey = `#${this.currentGeohash}`;
-        const messages = this.messages.get(storageKey);
+        const storageKey = geohash ? `#${geohash}` : null;
+        const messages = storageKey ? this.messages.get(storageKey) : null;
         if (!messages) {
             this._updateSingleChannelReaders(messageId);
             return;
@@ -2712,12 +2712,13 @@ Object.assign(NYM.prototype, {
 
         for (const msg of messages) {
             if (!msg.isOwn || !msg.id || !this.channelMessageReaders.has(msg.id)) continue;
-            const el = document.querySelector(`.channel-readers[data-msg-id="${msg.id}"]`);
-            if (!el) continue;
-            const hasReaders = this._syncReaderAvatars(el, displayReaders.get(msg.id));
-            if (hasReaders && !el._readerLongPressBound) {
-                this._bindChannelReaderLongPress(el, msg.id);
-                el._readerLongPressBound = true;
+            const els = document.querySelectorAll(`.channel-readers[data-msg-id="${msg.id}"]`);
+            for (const el of els) {
+                const hasReaders = this._syncReaderAvatars(el, displayReaders.get(msg.id));
+                if (hasReaders && !el._readerLongPressBound) {
+                    this._bindChannelReaderLongPress(el, msg.id);
+                    el._readerLongPressBound = true;
+                }
             }
         }
     },
@@ -2734,17 +2735,28 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _buildChannelReadersHtml(messageId) {
-        const readers = this._waterfallReadersForChannel(messageId);
+    _buildChannelReadersHtml(message) {
+        const readers = this._waterfallReadersForChannel(message);
         if (!readers || readers.size === 0) return '';
         return this._buildGroupReadersHtmlFromMap(readers);
     },
 
     // Resolve the waterfalled reader set for a single channel message so the
     // initial render only shows avatars on each reader's latest seen message.
-    _waterfallReadersForChannel(messageId) {
-        if (this.inPMMode || !this.currentGeohash) return this.channelMessageReaders.get(messageId) || null;
-        const messages = this.messages.get(`#${this.currentGeohash}`);
+    // Accepts the message object (preferred) so the waterfall is computed against
+    // the message's OWN channel rather than whichever channel is focused —
+    // otherwise a background/columns-view channel falls back to the raw reader
+    // store and shows the avatar on every seen message.
+    _waterfallReadersForChannel(message) {
+        const messageId = (message && typeof message === 'object') ? message.id : message;
+        if (!messageId) return null;
+        let storageKey = null;
+        if (message && typeof message === 'object' && message.geohash) {
+            storageKey = `#${message.geohash}`;
+        } else if (this.currentGeohash) {
+            storageKey = `#${this.currentGeohash}`;
+        }
+        const messages = storageKey ? this.messages.get(storageKey) : null;
         if (!messages) return this.channelMessageReaders.get(messageId) || null;
         const displayReaders = this._computeWaterfallReaders(
             messages, this.channelMessageReaders, m => m.id, m => (m.created_at || 0));
@@ -2780,17 +2792,29 @@ Object.assign(NYM.prototype, {
     },
 
     // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
-    _buildGroupReadersHtml(nymMessageId) {
-        const readers = this._waterfallReadersForGroup(nymMessageId);
+    _buildGroupReadersHtml(message) {
+        const readers = this._waterfallReadersForGroup(message);
         if (!readers || readers.size === 0) return '';
         return this._buildGroupReadersHtmlFromMap(readers);
     },
 
     // Resolve the waterfalled reader set for a single group message so the
     // initial render only shows avatars on each reader's latest seen message.
-    _waterfallReadersForGroup(nymMessageId) {
-        if (!this.inPMMode || !this.currentGroup) return this.groupMessageReaders.get(nymMessageId) || null;
-        const messages = this.pmMessages.get(this.getGroupConversationKey(this.currentGroup));
+    // Accepts the message object (preferred) so the waterfall is computed against
+    // the message's OWN conversation rather than whichever group is focused —
+    // otherwise a background/columns-view group falls back to the raw reader
+    // store and shows the avatar on every seen message.
+    _waterfallReadersForGroup(message) {
+        const nymMessageId = (message && typeof message === 'object') ? message.nymMessageId : message;
+        if (!nymMessageId) return null;
+        let convKey = null;
+        if (message && typeof message === 'object') {
+            convKey = message.conversationKey ||
+                (message.groupId ? this.getGroupConversationKey(message.groupId) : null);
+        } else if (this.inPMMode && this.currentGroup) {
+            convKey = this.getGroupConversationKey(this.currentGroup);
+        }
+        const messages = convKey ? this.pmMessages.get(convKey) : null;
         if (!messages) return this.groupMessageReaders.get(nymMessageId) || null;
         const displayReaders = this._computeWaterfallReaders(
             messages, this.groupMessageReaders, m => m.nymMessageId, m => m.timestamp.getTime());

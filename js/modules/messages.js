@@ -827,12 +827,12 @@ Object.assign(NYM.prototype, {
             if (message.isOwn && !message.isPM && message.geohash &&
                 message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
                 typeof this._buildChannelReadersHtml === 'function') {
-                const avatarHtml = this._buildChannelReadersHtml(message.id);
+                const avatarHtml = this._buildChannelReadersHtml(message);
                 deliveryCheckmark = `<span class="channel-readers" data-msg-id="${message.id}">${avatarHtml}</span>`;
             } else if (message.isOwn && message.isPM) {
                 if (message.isGroup && message.nymMessageId) {
                     // Group messages: show stacked reader avatars instead of checkmarks
-                    const avatarHtml = this._buildGroupReadersHtml(message.nymMessageId);
+                    const avatarHtml = this._buildGroupReadersHtml(message);
                     deliveryCheckmark = `<span class="group-readers" data-nym-msg-id="${message.nymMessageId}">${avatarHtml}</span>`;
                 } else if (message.deliveryStatus) {
                     if (message.deliveryStatus === 'read') {
@@ -1270,7 +1270,9 @@ Object.assign(NYM.prototype, {
             const shouldBlur = this.blurOthersImages === true ||
                 (this.blurOthersImages === 'friends' && !this.isFriend(message.pubkey));
             if (shouldBlur) {
-                messageEl.querySelectorAll('img').forEach(img => img.classList.add('blurred'));
+                // Blur posted media only — never the inline avatar chips used by
+                // @mentions and quoted authors (custom emoji are handled in CSS).
+                messageEl.querySelectorAll('img:not(.avatar-message)').forEach(img => img.classList.add('blurred'));
             }
         }
 

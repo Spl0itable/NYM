@@ -1663,12 +1663,12 @@ body.chat-bubbles .crypto-lock-irc {
     display: none !important;
 }
 
-.message-content img.blurred:not(.custom-emoji) {
+.message-content img.blurred:not(.custom-emoji):not(.avatar-message) {
     filter: blur(20px);
     transition: filter 0.3s ease;
 }
 
-.message-content img.blurred:not(.custom-emoji):hover {
+.message-content img.blurred:not(.custom-emoji):not(.avatar-message):hover {
     filter: blur(10px);
 }
 
