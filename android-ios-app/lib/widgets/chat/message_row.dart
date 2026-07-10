@@ -1067,15 +1067,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Flexible(
-                        // `/me` action mentions get inline avatars + flair
-                        // (PWA `_enrichActionMentions`, messages.js:1369-1403):
-                        // each `@nym#xxxx` inside the emote is decorated with the
-                        // mentioned user's avatar. `enrichMentionAvatars` threads
-                        // through `MessageContent` to `_MentionChip(withAvatar:)`.
+                        // Every `@nym` mention (here and everywhere) is decorated
+                        // with the mentioned user's inline avatar + flair by
+                        // `_MentionChip` (PWA `_enrichActionMentions`,
+                        // messages.js:1369-1403).
                         child: MessageContent(
                           content: action,
                           fontSize: fontSize,
-                          enrichMentionAvatars: true,
                         ),
                       ),
                       const Text(' *'),

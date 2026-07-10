@@ -127,14 +127,53 @@ class InlineNetworkImage extends StatefulWidget {
     return fut;
   }
 
+  /// Browser-like headers for every image fetch. Many image hosts (Cloudflare
+  /// bot protection, hotlink guards) 403 a bare `Dart/x` User-Agent, so a
+  /// proxy-blocked avatar's RAW-URL fallback failed natively while the PWA — a
+  /// real browser — loaded it fine. Presenting a browser UA + image `Accept`
+  /// makes the direct-host fetch behave like the PWA's. Harmless on the media
+  /// proxy itself (it has no UA gate). Applied to both the `http.get` path here
+  /// and the [CachedNetworkImage] path (via `httpHeaders`).
+  static const Map<String, String> imageFetchHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+  };
+
+  /// Drops [url] from every cache tier — the in-memory decode cache, the
+  /// framework [ImageCache], and the on-disk `flutter_cache_manager` store — so
+  /// the next request re-fetches it. Called when a user changes their avatar so
+  /// a re-used URL (or a stale disk entry) can't keep serving the old image,
+  /// mirroring the PWA revoking the old blob on an avatar URL change
+  /// (`cacheAvatarImage`). Best-effort; failures are swallowed.
+  static void evict(String url) {
+    if (url.isEmpty) return;
+    _cache.remove(url);
+    unawaited(CachedNetworkImage.evictFromCache(url).catchError((_) => false));
+    unawaited(CachedNetworkImageProvider(url).evict().catchError((_) => false));
+  }
+
   static Future<_Decoded?> _fetchAndDecode(String url) async {
     Uint8List bytes;
     try {
-      final resp =
-          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 12));
-      if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) return null;
+      final resp = await http
+          .get(Uri.parse(url), headers: imageFetchHeaders)
+          .timeout(const Duration(seconds: 12));
+      if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
+        assert(() {
+          debugPrint('[img-fetch] status=${resp.statusCode} '
+              'len=${resp.bodyBytes.length} '
+              'ct=${resp.headers['content-type']} url=$url');
+          return true;
+        }());
+        return null;
+      }
       bytes = resp.bodyBytes;
-    } catch (_) {
+    } catch (e) {
+      assert(() {
+        debugPrint('[img-fetch] ERROR $e url=$url');
+        return true;
+      }());
       return null;
     }
     if (_looksLikeSvg(bytes)) {
@@ -171,8 +210,8 @@ class InlineNetworkImage extends StatefulWidget {
     // compiled picture cached above IS the warm state.
     if (decoded == null || decoded.raster == null) return;
     final completer = Completer<void>();
-    final stream =
-        CachedNetworkImageProvider(url).resolve(ImageConfiguration.empty);
+    final stream = CachedNetworkImageProvider(url, headers: imageFetchHeaders)
+        .resolve(ImageConfiguration.empty);
     late final ImageStreamListener listener;
     void done() {
       stream.removeListener(listener);
@@ -347,6 +386,7 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
     }
     return CachedNetworkImage(
       imageUrl: url,
+      httpHeaders: InlineNetworkImage.imageFetchHeaders,
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
