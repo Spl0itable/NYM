@@ -16,6 +16,7 @@ import '../../services/platform/deep_links.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../i18n/i18n.dart';
 import 'dev_nsec_modal.dart';
 import 'modal_chrome.dart';
 import 'nip46_service.dart';
@@ -68,7 +69,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
   bool _remoteSignerOpen = false;
   String? _nostrConnectUri;
   Nip46Service? _nip46;
-  String _remoteStatus = 'Waiting for remote signer...';
+  String _remoteStatus = tr('Waiting for remote signer...');
 
   /// Guards the async nsec adopt so a double-tap can't re-enter login.
   bool _loggingIn = false;
@@ -155,8 +156,11 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       final actualMb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
       await showAppAlert(
         context,
-        '${avatar ? 'Avatar' : 'Banner'} must be under ${capMb}MB '
-        '(this image is ${actualMb}MB).',
+        tr('{label} must be under {cap}MB (this image is {actual}MB).', {
+          'label': avatar ? tr('Avatar') : tr('Banner'),
+          'cap': capMb,
+          'actual': actualMb,
+        }),
       );
       return;
     }
@@ -188,7 +192,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         _uploading = false;
         _uploadProgress = 0;
       });
-      await showAppAlert(context, 'Upload failed — try again.');
+      await showAppAlert(context, tr('Upload failed — try again.'));
       return;
     }
 
@@ -204,7 +208,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       }
     });
     if (avatar && mounted) {
-      await showAppAlert(context, 'Avatar updated successfully');
+      await showAppAlert(context, tr('Avatar updated successfully'));
     }
   }
 
@@ -277,14 +281,14 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       _nip46 = service;
       _remoteSignerOpen = true;
       _nostrConnectUri = uri;
-      _remoteStatus = 'Waiting for remote signer...';
+      _remoteStatus = tr('Waiting for remote signer...');
       _loginError = null;
     });
     () async {
       try {
         await service.awaitConnect();
         if (!mounted) return;
-        setState(() => _remoteStatus = 'Connected! Fetching public key...');
+        setState(() => _remoteStatus = tr('Connected! Fetching public key...'));
         // Persists the session and keeps the socket live.
         await service.finishNostrConnect();
         if (!mounted) return;
@@ -295,7 +299,8 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         widget.onComplete();
       } catch (e) {
         if (!mounted) return;
-        setState(() => _remoteStatus = 'Connection failed: $e');
+        setState(() =>
+            _remoteStatus = tr('Connection failed: {error}', {'error': e}));
       }
     }();
   }
@@ -306,7 +311,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     setState(() {
       _remoteSignerOpen = false;
       _nostrConnectUri = null;
-      _remoteStatus = 'Waiting for remote signer...';
+      _remoteStatus = tr('Waiting for remote signer...');
     });
   }
 
@@ -318,7 +323,8 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (_connectingUri || _loggingIn) return;
     final uri = _bunkerCtl.text.trim();
     if (uri.isEmpty) {
-      setState(() => _loginError = 'Paste a bunker:// or nostrconnect:// URI.');
+      setState(
+          () => _loginError = tr('Paste a bunker:// or nostrconnect:// URI.'));
       return;
     }
     final service = ref.read(nip46ServiceProvider);
@@ -339,7 +345,8 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       if (!mounted) return;
       setState(() {
         _connectingUri = false;
-        _loginError = 'Signer connection failed. Check the URI and try again.';
+        _loginError =
+            tr('Signer connection failed. Check the URI and try again.');
       });
     }
   }
@@ -352,19 +359,19 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (_loggingIn) return;
     final input = _nsecCtl.text.trim();
     if (input.isEmpty) {
-      setState(() => _loginError = 'Please enter your nsec.');
+      setState(() => _loginError = tr('Please enter your nsec.'));
       return;
     }
     try {
       final bytes = decodeNsec(input);
       if (bytes.length != 32) {
         setState(() =>
-            _loginError = 'Invalid nsec key. Please check and try again.');
+            _loginError = tr('Invalid nsec key. Please check and try again.'));
         return;
       }
     } catch (_) {
-      setState(
-          () => _loginError = 'Invalid nsec key. Please check and try again.');
+      setState(() =>
+          _loginError = tr('Invalid nsec key. Please check and try again.'));
       return;
     }
     setState(() {
@@ -377,7 +384,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       if (!mounted) return;
       setState(() {
         _loggingIn = false;
-        _loginError = 'Invalid nsec key. Please check and try again.';
+        _loginError = tr('Invalid nsec key. Please check and try again.');
       });
       return;
     }
@@ -436,9 +443,9 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       ),
       child: Row(
         children: [
-          Expanded(child: _setupTabBtn(c, _SetupTab.signup, 'Sign up')),
+          Expanded(child: _setupTabBtn(c, _SetupTab.signup, tr('Sign up'))),
           const SizedBox(width: 4), // `.setup-tabs { gap: 4px }`
-          Expanded(child: _setupTabBtn(c, _SetupTab.login, 'Login')),
+          Expanded(child: _setupTabBtn(c, _SetupTab.login, tr('Login'))),
         ],
       ),
     );
@@ -483,35 +490,35 @@ class _SetupModalState extends ConsumerState<SetupModal> {
   /// footer that live under the signup tab.
   List<Widget> _signupPanel(NymColors c) {
     return [
-      _label(c, 'Choose Your Nickname', optional: true),
+      _label(c, tr('Choose Your Nickname'), optional: true),
       const SizedBox(height: 6),
       _field(
         c,
         controller: _nymCtl,
-        hint: 'Leave empty for random nickname',
+        hint: tr('Leave empty for random nickname'),
         maxLength: 20,
         showCounter: true,
       ),
       const SizedBox(height: 4),
       Text(
-        'Your ephemeral pseudonym nickname for this session',
+        tr('Your ephemeral pseudonym nickname for this session'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       const SizedBox(height: 16),
-      _label(c, 'Choose Your Avatar', optional: true),
+      _label(c, tr('Choose Your Avatar'), optional: true),
       const SizedBox(height: 6),
       _avatarPicker(c),
       const SizedBox(height: 16),
-      _label(c, 'Choose Your Banner', optional: true),
+      _label(c, tr('Choose Your Banner'), optional: true),
       const SizedBox(height: 6),
       _bannerPicker(c),
       const SizedBox(height: 16),
-      _label(c, 'Bio', optional: true),
+      _label(c, tr('Bio'), optional: true),
       const SizedBox(height: 6),
       _field(
         c,
         controller: _bioCtl,
-        hint: 'Tell people a bit about yourself...',
+        hint: tr('Tell people a bit about yourself...'),
         maxLength: 150,
         maxLines: 3,
         showCounter: true,
@@ -519,7 +526,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       const SizedBox(height: 5),
       // `.form-hint` under the bio char count (index.html:1332).
       Text(
-        'Short bio shown on your profile (max 150 characters)',
+        tr('Short bio shown on your profile (max 150 characters)'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       const SizedBox(height: 20),
@@ -531,7 +538,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         alignment: Alignment.center,
         child: ModalChrome.sendButton(
           c,
-          'Enter',
+          tr('Enter'),
           _busy ? null : _enter,
           child: _busy
               ? SizedBox(
@@ -545,7 +552,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       ),
       const SizedBox(height: 20),
       // `#setupSignupTos` (index.html:1341): centered ToS/Privacy footer.
-      _tosText(c, 'By entering, you agree to our '),
+      _tosText(c, tr('By entering, you agree to our ')),
     ];
   }
 
@@ -555,20 +562,20 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     return [
       // `.nm-h-21`: 13px text-dim.
       Text(
-        'Login with your Nostr identity to sync settings across devices.',
+        tr('Login with your Nostr identity to sync settings across devices.'),
         style: TextStyle(color: c.textDim, fontSize: 13),
       ),
       const SizedBox(height: 18),
       // `.send-btn` "Login with Remote Signer" + hint.
       ModalChrome.sendButton(
         c,
-        'Login with Remote Signer',
+        tr('Login with Remote Signer'),
         _startRemoteSigner,
         fullWidth: true,
       ),
       const SizedBox(height: 5),
       Text(
-        'Use Amber, or another NIP-46 compatible remote signer',
+        tr('Use Amber, or another NIP-46 compatible remote signer'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       if (_remoteSignerOpen) ..._remoteSignerConnect(c),
@@ -576,7 +583,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       // Paste a signer connection URI (bunker:// or a nostrconnect:// string) —
       // an alternative to scanning the QR, and the way to use a signer whose
       // relay isn't the default (the URI carries its own relay).
-      _label(c, 'Or paste a signer URI'),
+      _label(c, tr('Or paste a signer URI')),
       const SizedBox(height: 6),
       Row(
         children: [
@@ -584,25 +591,25 @@ class _SetupModalState extends ConsumerState<SetupModal> {
             child: _field(
               c,
               controller: _bunkerCtl,
-              hint: 'bunker://…  or  nostrconnect://…',
+              hint: tr('bunker://…  or  nostrconnect://…'),
             ),
           ),
           const SizedBox(width: 8),
           _smallButton(
             c,
-            _connectingUri ? 'Connecting…' : 'Connect',
+            _connectingUri ? tr('Connecting…') : tr('Connect'),
             _connectingUri ? () {} : _connectViaUri,
           ),
         ],
       ),
       const SizedBox(height: 5),
       Text(
-        'Paste a bunker:// URI from your signer, or a nostrconnect:// string',
+        tr('Paste a bunker:// URI from your signer, or a nostrconnect:// string'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       ModalChrome.orDivider(c),
       // Paste-nsec option.
-      _label(c, 'Paste your nsec'),
+      _label(c, tr('Paste your nsec')),
       const SizedBox(height: 6),
       _field(
         c,
@@ -616,7 +623,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       ],
       const SizedBox(height: 5),
       Text(
-        'Your private key stays local and is never sent to any server',
+        tr('Your private key stays local and is never sent to any server'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       // `.modal-actions.nm-h-81 { margin: 40px auto 20px }`.
@@ -627,7 +634,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         alignment: Alignment.center,
         child: ModalChrome.sendButton(
           c,
-          'Login',
+          tr('Login'),
           _loggingIn ? null : _loginWithNsec,
           child: _loggingIn
               ? SizedBox(
@@ -640,7 +647,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         ),
       ),
       const SizedBox(height: 20),
-      _tosText(c, 'By logging in, you agree to our '),
+      _tosText(c, tr('By logging in, you agree to our ')),
     ];
   }
 
@@ -673,7 +680,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         ),
       ),
       const SizedBox(height: 12),
-      _label(c, 'Connection String'),
+      _label(c, tr('Connection String')),
       const SizedBox(height: 8),
       Row(
         children: [
@@ -694,7 +701,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
             ),
           ),
           const SizedBox(width: 8),
-          _smallButton(c, 'Copy', () {
+          _smallButton(c, tr('Copy'), () {
             final uri = _nostrConnectUri;
             if (uri != null) Clipboard.setData(ClipboardData(text: uri));
           }),
@@ -702,14 +709,14 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       ),
       const SizedBox(height: 5),
       Text(
-        'Scan the QR code or copy this connection string into your remote '
-        'signer app',
+        tr('Scan the QR code or copy this connection string into your remote '
+            'signer app'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       const SizedBox(height: 10),
       Align(
         alignment: Alignment.centerLeft,
-        child: _smallButton(c, 'Cancel', _cancelRemoteSigner),
+        child: _smallButton(c, tr('Cancel'), _cancelRemoteSigner),
       ),
     ];
   }
@@ -723,7 +730,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         children: [
           TextSpan(text: lead),
           TextSpan(
-            text: 'Terms of Service',
+            text: tr('Terms of Service'),
             style: TextStyle(
               color: c.secondary,
               decoration: TextDecoration.underline,
@@ -731,9 +738,9 @@ class _SetupModalState extends ConsumerState<SetupModal> {
             ),
             recognizer: _linkTap('https://web.nymchat.app/static/tos.html'),
           ),
-          const TextSpan(text: ' and '),
+          TextSpan(text: tr(' and ')),
           TextSpan(
-            text: 'Privacy Policy',
+            text: tr('Privacy Policy'),
             style: TextStyle(
               color: c.secondary,
               decoration: TextDecoration.underline,
@@ -759,11 +766,13 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (token == null || token.isEmpty) return null;
     final name = parseGroupInvite(token)?.name.trim() ?? '';
     if (name.isEmpty) {
-      return 'You\'ve been invited to join a group. Pick a nym or log in '
-          'below to continue.';
+      return tr('You\'ve been invited to join a group. Pick a nym or log in '
+          'below to continue.');
     }
-    return 'You\'ve been invited to join "$name". Pick a nym or log in '
-        'below to continue.';
+    return tr(
+        'You\'ve been invited to join "{name}". Pick a nym or log in '
+        'below to continue.',
+        {'name': name});
   }
 
   /// `.form-label`: 11px textDim UPPERCASE ls1.2 w600; the trailing
@@ -781,7 +790,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         children: [
           if (optional)
             TextSpan(
-              text: ' (optional)',
+              text: tr(' (optional)'),
               style: TextStyle(
                 color: c.textDim,
                 fontSize: 11,
@@ -895,12 +904,12 @@ class _SetupModalState extends ConsumerState<SetupModal> {
             children: [
               Row(
                 children: [
-                  _smallButton(c, 'Choose photo', () => _pickImage(true)),
+                  _smallButton(c, tr('Choose photo'), () => _pickImage(true)),
                   if (_avatarPath != null) ...[
                     const SizedBox(width: 8),
                     _smallButton(
                         c,
-                        'Remove',
+                        tr('Remove'),
                         () => setState(() {
                               _avatarPath = null;
                               _avatarUrl = null;
@@ -937,18 +946,18 @@ class _SetupModalState extends ConsumerState<SetupModal> {
           ),
           alignment: Alignment.center,
           child: _bannerPath == null
-              ? Text('No banner set', style: TextStyle(color: c.textDim))
+              ? Text(tr('No banner set'), style: TextStyle(color: c.textDim))
               : null,
         ),
         const SizedBox(height: 8),
         Row(
           children: [
-            _smallButton(c, 'Choose banner', () => _pickImage(false)),
+            _smallButton(c, tr('Choose banner'), () => _pickImage(false)),
             if (_bannerPath != null) ...[
               const SizedBox(width: 8),
               _smallButton(
                   c,
-                  'Remove',
+                  tr('Remove'),
                   () => setState(() {
                         _bannerPath = null;
                         _bannerUrl = null;

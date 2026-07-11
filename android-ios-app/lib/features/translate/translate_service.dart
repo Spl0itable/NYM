@@ -39,8 +39,19 @@ class TranslateService {
   /// `EMJ<n>EMJ` placeholder restore (`translate.js:288-290`).
   static final RegExp _rxEmojiPlaceholder = RegExp(r'EMJ(\d+)EMJ');
 
-  /// `@nym` token (`translate.js:298` — `/(@[^\s@]+)/`).
-  static final RegExp _rxMention = RegExp(r'@[^\s@]+');
+  /// Tokens that must pass through translation UNTRANSLATED. Split out (like the
+  /// PWA's `@mention` handling, `translate.js:298`) so the upstream never sees
+  /// them and can't translate/reflow/break them:
+  ///  * `` `inline code` `` — keeps command tokens (e.g. `` `?help` ``, `` `?model` ``
+  ///    in the Nymbot welcome) and code verbatim (matched FIRST so anything
+  ///    inside a code span is preserved whole);
+  ///  * bare `http(s)://…` URLs — so media, rich link previews, and clickable
+  ///    links survive in the re-rendered translation, and any `@` inside a URL
+  ///    isn't mistaken for a mention (URL is matched before mentions);
+  ///  * `@nym` mentions — handles stay clickable and nicknames aren't translated;
+  ///  * `:shortcode:` custom emoji — render as inline images, not translated text.
+  static final RegExp _rxPreserve =
+      RegExp(r'`[^`\n]*`|https?://[^\s]+|@[^\s@]+|:[a-zA-Z0-9_+\-]+:');
 
   /// Per-chunk leading/trailing whitespace capture (`translate.js:305`).
   static final RegExp _rxEdgeWhitespace = RegExp(r'^(\s*)([\s\S]*?)(\s*)$');
@@ -58,18 +69,18 @@ class TranslateService {
     // 1. Shield emoji so the upstream can't strip/reorder them.
     final shield = _shieldEmojis(text);
 
-    // 2. Split into interleaved non-mention / mention parts. JS `split` with a
-    //    capturing group interleaves the delimiters; Dart's `String.split`
-    //    drops them, so build the same even=text / odd=mention list by hand
-    //    from the mention matches (`translate.js:298`).
-    final parts = _splitOnMentions(shield.text);
+    // 2. Split into interleaved translatable-text / preserved-token parts
+    //    (URLs, @mentions, :shortcodes:). JS `split` with a capturing group
+    //    interleaves the delimiters; Dart's `String.split` drops them, so build
+    //    the same even=text / odd=preserved list by hand from the matches.
+    final parts = _splitOnPreserved(shield.text);
 
     // 3. Collect the translatable (even-index, non-blank) chunks, capturing the
     //    leading/trailing whitespace Google would otherwise strip
     //    (`translate.js:302-307`).
     final translatable = <_Chunk>[];
     for (var i = 0; i < parts.length; i++) {
-      if (i.isOdd) continue; // odd indices are @mentions — leave verbatim.
+      if (i.isOdd) continue; // odd indices are preserved tokens — leave verbatim.
       final part = parts[i];
       if (part.trim().isEmpty) continue;
       final m = _rxEdgeWhitespace.firstMatch(part)!;
@@ -165,17 +176,16 @@ class TranslateService {
     });
   }
 
-  /// Builds the same interleaved `parts` list JS produces from
-  /// `text.split(/(@[^\s@]+)/)`: even indices are non-mention text (possibly
-  /// empty), odd indices are the `@mention` tokens, in source order. Dart's
-  /// `String.split` discards capture-group delimiters, so reconstruct it from
-  /// the mention matches.
-  static List<String> _splitOnMentions(String text) {
+  /// Builds an interleaved `parts` list splitting [text] on the preserved tokens
+  /// ([_rxPreserve]: URLs, `@mentions`, `:shortcodes:`): even indices are
+  /// translatable text (possibly empty), odd indices are the preserved tokens,
+  /// in source order — the same shape JS's `text.split(/(token)/)` produces.
+  static List<String> _splitOnPreserved(String text) {
     final parts = <String>[];
     var last = 0;
-    for (final m in _rxMention.allMatches(text)) {
+    for (final m in _rxPreserve.allMatches(text)) {
       parts.add(text.substring(last, m.start)); // leading text (may be empty)
-      parts.add(m.group(0)!); // the @mention
+      parts.add(m.group(0)!); // the preserved token (URL / @mention / :emoji:)
       last = m.end;
     }
     parts.add(text.substring(last)); // trailing text (may be empty)

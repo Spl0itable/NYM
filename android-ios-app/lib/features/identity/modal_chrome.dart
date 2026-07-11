@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../i18n/i18n.dart';
 
 /// Shared `.modal` chrome primitives — the exact CSS the PWA applies to every
 /// standard modal (audit2/11 §"SHARED MODAL CHROME", lines 21-37). Used by the
@@ -206,7 +207,7 @@ class ModalChrome {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Center(
-        child: Text('or', style: TextStyle(color: c.textDim, fontSize: 12)),
+        child: Text(tr('or'), style: TextStyle(color: c.textDim, fontSize: 12)),
       ),
     );
   }

@@ -37,6 +37,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_switch.dart';
+import '../i18n/i18n.dart';
 
 /// Width breakpoint at or below which the modal applies its phone layout:
 /// 3-column stat cards, hidden per-relay latency column, and 18/14 content
@@ -176,7 +177,7 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                             bottom: BorderSide(color: c.glassBorder)),
                       ),
                       child: Text(
-                        'NETWORK STATS',
+                        tr('NETWORK STATS'),
                         style: TextStyle(
                           color: c.primary,
                           fontSize: 22,
@@ -270,11 +271,11 @@ class _Cards extends StatelessWidget {
         spacing: gap,
         runSpacing: gap,
         children: [
-          _StatCard(width: cardW, value: '$connected', label: 'Connected'),
-          _StatCard(width: cardW, value: latency, label: 'Avg Latency'),
-          _StatCard(width: cardW, value: events, label: 'Events'),
-          _StatCard(width: cardW, value: dataIn, label: 'Data In'),
-          _StatCard(width: cardW, value: dataOut, label: 'Data Out'),
+          _StatCard(width: cardW, value: '$connected', label: tr('Connected')),
+          _StatCard(width: cardW, value: latency, label: tr('Avg Latency')),
+          _StatCard(width: cardW, value: events, label: tr('Events')),
+          _StatCard(width: cardW, value: dataIn, label: tr('Data In')),
+          _StatCard(width: cardW, value: dataOut, label: tr('Data Out')),
         ],
       );
     });
@@ -398,7 +399,7 @@ class _ThroughputSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionTitle('Throughput (events/sec)'),
+        _SectionTitle(tr('Throughput (events/sec)')),
         Container(
           // .relay-stats-graph-wrap: white/0.02 fill, glass border, radius 12,
           // padding 10. Canvas is 100px tall.
@@ -595,13 +596,13 @@ class _RelayListSection extends StatelessWidget {
       rows.add(Padding(
         padding: const EdgeInsets.all(12),
         child: Text(
-          'No relays connected',
+          tr('No relays connected'),
           style: TextStyle(color: c.textDim, fontSize: 12),
         ),
       ));
     } else {
       if (hasApiData) {
-        rows.add(const _ListSubHeader('App data'));
+        rows.add(_ListSubHeader(tr('App data')));
         rows.add(_ApiRow(
           stats: stats!,
           expanded: expandedRow == _kApiRowKey,
@@ -609,7 +610,7 @@ class _RelayListSection extends StatelessWidget {
         ));
       }
       if (entries.isNotEmpty) {
-        rows.add(const _ListSubHeader('Relay data'));
+        rows.add(_ListSubHeader(tr('Relay data')));
         for (final e in entries) {
           rows.add(_RelayRow(
             data: e,
@@ -624,7 +625,7 @@ class _RelayListSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionTitle('Data transferred'),
+        _SectionTitle(tr('Data transferred')),
         Container(
           constraints: const BoxConstraints(maxHeight: 240),
           decoration: BoxDecoration(
@@ -848,7 +849,7 @@ class _RelayRow extends StatelessWidget {
       tooltip: data.url,
       latency: data.latency,
       // `<n> evt` per-relay event count (app.js:7652).
-      metric: '${data.events} evt',
+      metric: tr('{n} evt', {'n': data.events}),
       metricColor: context.nym.textBright,
       expanded: expanded,
       onTap: onTap,
@@ -878,8 +879,8 @@ class _ApiRow extends StatelessWidget {
     // has no persistent api socket, so treat any recorded api data as "open".
     return _StatsRow(
       open: stats.hasApiData,
-      label: 'app backend',
-      tooltip: 'App backend (D1 storage, profiles, messages)',
+      label: tr('app backend'),
+      tooltip: tr('App backend (D1 storage, profiles, messages)'),
       latency: null,
       metric: '${formatBytes(stats.apiBytesReceived)} ↓',
       metricColor: c.textBright,
@@ -902,7 +903,7 @@ class _KindDetail extends StatelessWidget {
     final pk = perKind;
     if (pk == null || pk.isEmpty) {
       return Text(
-        'No events recorded from this relay yet.',
+        tr('No events recorded from this relay yet.'),
         style: TextStyle(color: c.textDim, fontSize: 10),
       );
     }
@@ -913,8 +914,8 @@ class _KindDetail extends StatelessWidget {
       children: [
         for (final e in rows)
           _KindRow(
-            left: 'kind ${e.key}',
-            mid: '${e.value.count} evt',
+            left: tr('kind {k}', {'k': e.key}),
+            mid: tr('{n} evt', {'n': e.value.count}),
             right: formatBytes(e.value.bytes),
           ),
       ],
@@ -962,7 +963,7 @@ class _ApiActionDetail extends StatelessWidget {
     final c = context.nym;
     if (actions.isEmpty) {
       return Text(
-        'No app data recorded yet.',
+        tr('No app data recorded yet.'),
         style: TextStyle(color: c.textDim, fontSize: 10),
       );
     }
@@ -1049,7 +1050,7 @@ class _LowDataPanel extends StatelessWidget {
               children: [
                 // .relay-stats-low-data-title: 13, w600, textBright.
                 Text(
-                  'Using too much data?',
+                  tr('Using too much data?'),
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
@@ -1059,8 +1060,8 @@ class _LowDataPanel extends StatelessWidget {
                 const SizedBox(height: 2),
                 // .relay-stats-low-data-hint: 11, textDim, line-height 1.4.
                 Text(
-                  'Enable Low Data Mode to limit relay connections to a small '
-                  'core set and load geo relays only when entering channels.',
+                  tr('Enable Low Data Mode to limit relay connections to a small '
+                      'core set and load geo relays only when entering channels.'),
                   style: TextStyle(
                     fontSize: 11,
                     color: c.textDim,

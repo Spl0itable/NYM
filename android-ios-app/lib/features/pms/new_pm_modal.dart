@@ -15,6 +15,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
+import '../i18n/i18n.dart';
 
 /// A picked recipient: pubkey (64-hex) + a display nym.
 class PmRecipient {
@@ -107,7 +108,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   /// avatar…"/"Uploading group banner…" line, `_uploadProgress` drives the
   /// `.progress-fill` width (15%→55%→100%, users.js `_uploadFileWithProgress`).
   bool _uploading = false;
-  String _uploadLabel = 'Uploading…';
+  String _uploadLabel = tr('Uploading…');
   double _uploadProgress = 0;
   /// Last upload error surfaced under the media section (PWA `displaySystemMessage`
   /// "Failed to upload image: …"); cleared on the next pick.
@@ -192,7 +193,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
         (!isBot &&
             _recipients.any((r) => controller.isVerifiedBot(r.pubkey)))) {
       setState(() => _recipientError =
-          'Nymbot can only be messaged 1:1, not added to a group chat.');
+          tr('Nymbot can only be messaged 1:1, not added to a group chat.'));
       return;
     }
     setState(() {
@@ -269,8 +270,12 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     if (bytes.length > cap) {
       final capMb = avatar ? 5 : 10;
       final actualMb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
-      setState(() => _uploadError =
-          '${avatar ? 'Avatar' : 'Banner'} must be under ${capMb}MB (this is ${actualMb}MB).');
+      setState(() => _uploadError = tr(
+          '{label} must be under {cap}MB (this is {actual}MB).', {
+        'label': avatar ? tr('Avatar') : tr('Banner'),
+        'cap': capMb,
+        'actual': actualMb,
+      }));
       return;
     }
 
@@ -279,7 +284,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
       _uploading = true;
       _uploadProgress = 0.15; // PWA seeds the fill at 15%.
       _uploadLabel =
-          avatar ? 'Uploading group avatar…' : 'Uploading group banner…';
+          avatar ? tr('Uploading group avatar…') : tr('Uploading group banner…');
     });
 
     String? url;
@@ -302,7 +307,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
       setState(() {
         _uploading = false;
         _uploadProgress = 0;
-        _uploadError = 'Failed to upload image. Try again.';
+        _uploadError = tr('Failed to upload image. Try again.');
       });
       return;
     }
@@ -356,7 +361,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final title = _groupMode ? 'New Group' : 'New Message';
+    final title = _groupMode ? tr('New Group') : tr('New Message');
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -412,7 +417,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _label(c, 'To'),
+                          _label(c, tr('To')),
                           const SizedBox(height: 8),
                           // `.pm-recipient-box` — chips + inline input in one box.
                           _recipientBox(c),
@@ -430,7 +435,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                           _suggestionsList(c),
                       if (_groupMode) ...[
                         const SizedBox(height: 16),
-                        _label(c, 'Group Name', optional: true),
+                        _label(c, tr('Group Name'), optional: true),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _groupNameController,
@@ -439,7 +444,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                           style: TextStyle(color: c.textBright, fontSize: 15),
                           decoration: _inputDecoration(
                             c,
-                            'Enter a group name...',
+                            tr('Enter a group name...'),
                           ).copyWith(counterText: ''),
                         ),
                         // `pmGroupNameCharCount 0/40` (index.html:317).
@@ -447,7 +452,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                         const SizedBox(height: 16),
                         _groupMediaSection(c),
                         const SizedBox(height: 16),
-                        _label(c, 'Description', optional: true),
+                        _label(c, tr('Description'), optional: true),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _groupDescController,
@@ -457,7 +462,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                           style: TextStyle(color: c.textBright, fontSize: 15),
                           decoration: _inputDecoration(
                             c,
-                            "What's this group about?",
+                            tr("What's this group about?"),
                           ).copyWith(counterText: ''),
                         ),
                         // `newGroupDescCharCount 0/150` (index.html:339).
@@ -467,14 +472,14 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                       ],
                       // `pmInitialMessage` — "Message (optional)" (index.html:348).
                       const SizedBox(height: 16),
-                      _label(c, 'Message', optional: true),
+                      _label(c, tr('Message'), optional: true),
                       const SizedBox(height: 8),
                       TextField(
                         controller: _messageController,
                         maxLines: 3,
                         style: TextStyle(color: c.textBright, fontSize: 15),
                         decoration:
-                            _inputDecoration(c, 'Start the conversation...'),
+                            _inputDecoration(c, tr('Start the conversation...')),
                       ),
                         ],
                       ),
@@ -538,7 +543,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
           borderRadius: NymRadius.rxs,
         ),
         child: Text(
-          'CANCEL',
+          tr('Cancel').toUpperCase(),
           style: TextStyle(
             color: c.text,
             fontSize: 12,
@@ -570,7 +575,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
             borderRadius: NymRadius.rsm,
           ),
           child: Text(
-            (_groupMode ? 'Create' : 'Start').toUpperCase(),
+            (_groupMode ? tr('Create') : tr('Start')).toUpperCase(),
             style: TextStyle(
               color: c.primary,
               fontSize: 12,
@@ -596,10 +601,10 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
             letterSpacing: 1.2,
           ),
           children: optional
-              ? const [
+              ? [
                   TextSpan(
-                    text: ' (optional)',
-                    style: TextStyle(
+                    text: tr(' (optional)'),
+                    style: const TextStyle(
                       fontWeight: FontWeight.w400,
                       letterSpacing: 0,
                     ),
@@ -665,7 +670,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                       isCollapsed: true,
                       border: InputBorder.none,
                       hintText: _recipients.isEmpty
-                          ? 'Search nym or paste pubkey...'
+                          ? tr('Search nym or paste pubkey...')
                           : null,
                       hintStyle: TextStyle(color: c.textDim, fontSize: 13),
                       contentPadding: const EdgeInsets.symmetric(vertical: 2),
@@ -775,7 +780,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
             ),
           ),
           child: Text(
-            'RECENTLY SEEN USERS',
+            tr('Recently seen users').toUpperCase(),
             style: TextStyle(
               color: c.textDim,
               fontSize: 11,
@@ -851,7 +856,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
             const SizedBox(width: 6),
             Flexible(
               child: Text(
-                name.isEmpty ? 'Group' : name,
+                name.isEmpty ? tr('Group') : name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: c.text, fontSize: 13),
@@ -860,7 +865,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
             const SizedBox(width: 4),
             // `.pm-suggestion-suffix` — "Join group" (11px text-dim).
             Text(
-              'Join group',
+              tr('Join group'),
               style: TextStyle(color: c.textDim, fontSize: 11),
             ),
           ],
@@ -930,7 +935,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _label(c, 'Group Avatar & Banner', optional: true),
+        _label(c, tr('Group Avatar & Banner'), optional: true),
         const SizedBox(height: 4), // `.new-group-media` margin-top
         Padding(
           padding: const EdgeInsets.only(bottom: 30), // clear the -22 overhang
@@ -976,9 +981,9 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                             color: Colors.black.withValues(alpha: 0.4),
                             borderRadius: NymRadius.rsm,
                           ),
-                          child: const Text('Add banner',
-                              style:
-                                  TextStyle(color: Colors.white, fontSize: 12)),
+                          child: Text(tr('Add banner'),
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 12)),
                         ),
                 ),
               ),
@@ -1100,7 +1105,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                 ),
               ),
               const SizedBox(width: 8),
-              Text('Allow members to add others',
+              Text(tr('Allow members to add others'),
                   style: TextStyle(color: c.text, fontSize: 13)),
             ],
           ),
@@ -1108,7 +1113,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
         Padding(
           padding: const EdgeInsets.only(left: 30, top: 2),
           child: Text(
-            'When off, only you (the group owner) can add new members.',
+            tr('When off, only you (the group owner) can add new members.'),
             style: TextStyle(color: c.textDim, fontSize: 11),
           ),
         ),

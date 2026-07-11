@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/crypto/bech32_codec.dart';
 import '../../core/crypto/keys.dart';
 import '../../core/theme/nym_colors.dart';
+import '../i18n/i18n.dart';
 import 'modal_chrome.dart';
 
 /// The reserved developer pubkey ("Luxas"), `verifiedDeveloper.pubkey`
@@ -110,7 +111,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      ModalChrome.header(c, 'Reserved Nickname'),
+                      ModalChrome.header(c, tr('Reserved Nickname')),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
                         child: Column(
@@ -118,7 +119,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                           children: [
                             // `.form-label`.
                             Text(
-                              '"Luxas" is reserved for the Nymchat developer.',
+                              tr('"Luxas" is reserved for the Nymchat developer.'),
                               style: TextStyle(
                                 color: c.textDim,
                                 fontSize: 11,
@@ -129,7 +130,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                             const SizedBox(height: 8),
                             // `.nm-h-19` hint.
                             Text(
-                              'Paste your nsec to verify your identity:',
+                              tr('Paste your nsec to verify your identity:'),
                               style:
                                   TextStyle(color: c.textDim, fontSize: 11),
                             ),
@@ -149,8 +150,8 @@ class _DevNsecModalState extends State<DevNsecModal> {
                               const SizedBox(height: 6),
                               // `.nm-h-20` error.
                               Text(
-                                'Invalid nsec - does not match the developer '
-                                'pubkey.',
+                                tr('Invalid nsec - does not match the developer '
+                                    'pubkey.'),
                                 style:
                                     TextStyle(color: c.danger, fontSize: 12),
                               ),
@@ -164,10 +165,10 @@ class _DevNsecModalState extends State<DevNsecModal> {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            ModalChrome.iconButton(c, 'Cancel',
+                            ModalChrome.iconButton(c, tr('Cancel'),
                                 () => Navigator.of(context).pop()),
                             const SizedBox(width: 10),
-                            ModalChrome.sendButton(c, 'Verify', _verify),
+                            ModalChrome.sendButton(c, tr('Verify'), _verify),
                           ],
                         ),
                       ),

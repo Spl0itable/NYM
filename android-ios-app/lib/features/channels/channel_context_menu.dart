@@ -12,6 +12,7 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
+import '../i18n/i18n.dart';
 
 /// One entry in the channel `.quick-context-menu` (sidebar-sections.js
 /// `_buildSidebarMenuItems`).
@@ -50,13 +51,13 @@ List<ChannelMenuAction> buildChannelMenuActions(
 
   return <ChannelMenuAction>[
     ChannelMenuAction(
-      label: isPinned ? 'Unfavorite channel' : 'Favorite channel',
+      label: isPinned ? tr('Unfavorite channel') : tr('Favorite channel'),
       // PWA uses the same filled-star `favSvg` for both states.
       svg: NymIcons.sidebarFavorite,
       onSelected: () => controller.togglePin(key),
     ),
     ChannelMenuAction(
-      label: isHidden ? 'Unhide channel' : 'Hide channel',
+      label: isHidden ? tr('Unhide channel') : tr('Hide channel'),
       // PWA uses the same eye-off `hideSvg` for both states.
       svg: NymIcons.sidebarHide,
       onSelected: () {
@@ -78,7 +79,7 @@ List<ChannelMenuAction> buildChannelMenuActions(
       },
     ),
     ChannelMenuAction(
-      label: 'Block channel',
+      label: tr('Block channel'),
       svg: NymIcons.sidebarBlock,
       danger: true,
       // PWA (sidebar-sections.js:187-198): confirm with a danger dialog
@@ -89,15 +90,16 @@ List<ChannelMenuAction> buildChannelMenuActions(
         if (!context.mounted) return;
         final ok = await showAppConfirm(
           context,
-          'Block channel #$key? Messages to it will be dropped.',
+          tr('Block channel #{name}? Messages to it will be dropped.',
+              {'name': key}),
           danger: true,
-          okLabel: 'Block',
+          okLabel: tr('Block'),
         );
         if (!ok || !context.mounted) return;
         controller.blockChannel(key);
         ref
             .read(appStateProvider.notifier)
-            .addSystemMessage('Blocked channel #$key');
+            .addSystemMessage(tr('Blocked channel #{name}', {'name': key}));
       },
     ),
   ];

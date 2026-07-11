@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../i18n/i18n.dart';
 import 'translate_languages.dart';
 
 /// "Select Your Language" picker (translate.js `_promptTranslateLanguage`,
@@ -60,7 +61,7 @@ class _LanguagePromptDialogState extends State<_LanguagePromptDialog> {
           children: [
             // `.nm-tr-2`: 1.1em (~16.5 of 15) text-bright, margin-bottom 6 — a
             // bespoke <h3>, NOT a `.modal-header` (no uppercase/primary/rule).
-            Text('Select Your Language',
+            Text(tr('Select Your Language'),
                 style: TextStyle(
                     color: c.textBright,
                     fontSize: 16.5,
@@ -68,8 +69,7 @@ class _LanguagePromptDialogState extends State<_LanguagePromptDialog> {
             const SizedBox(height: 6),
             // `.nm-tr-3`: 0.85em (~13) text-dim, margin-bottom 12.
             Text(
-              "Choose the language you'd like messages translated into. "
-              'This will be saved to your settings.',
+              tr("Choose the language you'd like messages translated into. This will be saved to your settings."),
               style: TextStyle(color: c.textDim, fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -82,7 +82,7 @@ class _LanguagePromptDialogState extends State<_LanguagePromptDialog> {
               cursorColor: c.isLight ? Colors.black : Colors.white,
               decoration: InputDecoration(
                 isDense: true,
-                hintText: 'Search languages...',
+                hintText: tr('Search languages...'),
                 hintStyle: TextStyle(color: c.textDim, fontSize: 13.5),
                 filled: true,
                 fillColor: Colors.white.withValues(alpha: 0.05),

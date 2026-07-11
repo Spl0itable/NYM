@@ -5,6 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../state/app_state.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
 
 /// One reactor row in the reactor-list popup.
@@ -169,7 +170,7 @@ class ReactorsModal extends ConsumerWidget {
                       padding:
                           const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                       child: Text(
-                        '+$overflow more',
+                        tr('+{n} more', {'n': overflow}),
                         style: TextStyle(
                           fontSize: 12,
                           color: c.textDim,
@@ -230,7 +231,7 @@ class ReactorsModal extends ConsumerWidget {
             if (r.isYou) ...[
               const SizedBox(width: 6),
               Text(
-                'you',
+                tr('you'),
                 style: TextStyle(
                   fontSize: 10,
                   color: c.primary.withValues(alpha: 0.7),

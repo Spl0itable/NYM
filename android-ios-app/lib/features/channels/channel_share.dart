@@ -7,6 +7,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../features/identity/modal_chrome.dart';
 import '../../models/channel.dart';
 import '../../state/settings_provider.dart';
+import '../i18n/i18n.dart';
 
 /// The canonical web host for the PWA (`https://web.nymchat.app`). The PWA's
 /// `shareChannel()` uses `window.location.origin + pathname` (channels.js:413),
@@ -88,7 +89,7 @@ class _ShareChannelModalState extends State<ShareChannelModal> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  ModalChrome.header(c, 'Share Channel'),
+                  ModalChrome.header(c, tr('Share Channel')),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
                     child: Column(
@@ -96,7 +97,7 @@ class _ShareChannelModalState extends State<ShareChannelModal> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // `.form-label` — 11px UPPERCASE ls1.2 w600 textDim.
-                        ModalChrome.formLabel(c, 'Channel URL'),
+                        ModalChrome.formLabel(c, tr('Channel URL')),
                         // `.share-url-container` margin: 20px 0 (its 20px top
                         // margin collapses over the label's 8px bottom margin).
                         const SizedBox(height: 20),
@@ -164,7 +165,7 @@ class _ShareChannelModalState extends State<ShareChannelModal> {
                         const SizedBox(height: 20),
                         // `.form-hint`: 11px textDim.
                         Text(
-                          'Share this URL to invite others to this channel',
+                          tr('Share this URL to invite others to this channel'),
                           style: TextStyle(color: c.textDim, fontSize: 11),
                         ),
                         // `.form-group` / `.modal-body` margin-bottom 20.
@@ -174,7 +175,7 @@ class _ShareChannelModalState extends State<ShareChannelModal> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            ModalChrome.iconButton(c, 'Close',
+                            ModalChrome.iconButton(c, tr('Close'),
                                 () => Navigator.of(context).maybePop()),
                           ],
                         ),
@@ -238,7 +239,7 @@ class _CopyButtonState extends State<_CopyButton> {
                 : null,
           ),
           child: Text(
-            copied ? 'COPIED!' : 'COPY',
+            copied ? tr('COPIED!') : tr('COPY'),
             style: TextStyle(
               color: c.primary,
               fontSize: 12,

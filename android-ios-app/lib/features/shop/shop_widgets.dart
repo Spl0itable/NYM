@@ -7,6 +7,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../i18n/i18n.dart';
 import 'cosmetics.dart'
     show
         CosmeticAura,
@@ -347,7 +348,7 @@ class SupporterBadge extends StatelessWidget {
           ),
           const SizedBox(width: 5),
           Text(
-            'SUPPORTER',
+            tr('SUPPORTER'),
             style: TextStyle(
               color: textColor,
               fontSize: 11,
@@ -941,7 +942,7 @@ class _SupporterStyleBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final isLight = context.nym.isLight;
     final text = Text(
-      'Preview message',
+      tr('Preview message'),
       style: TextStyle(
         color: isLight ? const Color(0xFF8A6D00) : const Color(0xFFFFD700),
         // `.shop-msg-demo .message-content { font-size: 13px }`, normal weight.
@@ -1091,7 +1092,8 @@ class ShopBundlePreview extends StatelessWidget {
             child: ShopSupplyBadge(
               availability: ShopAvailability(
                 ShopAvailabilityState.available,
-                'Save $savePct% · $value sats value',
+                tr('Save {pct}% · {value} sats value',
+                    {'pct': savePct, 'value': value}),
               ),
             ),
           ),
@@ -1125,7 +1127,7 @@ class _BundleChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final item = itemId == null ? null : ShopCatalog.byId(itemId!);
-    final label = item?.name ?? '+$extra more';
+    final label = item?.name ?? tr('+{n} more', {'n': extra});
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -1204,12 +1206,12 @@ class RecoveryCodeRow extends StatelessWidget {
             await Clipboard.setData(ClipboardData(text: code));
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Copied recovery code')),
+                SnackBar(content: Text(tr('Copied recovery code'))),
               );
             }
           },
           child: Tooltip(
-            message: 'Click to copy',
+            message: tr('Click to copy'),
             child: Text(
               code,
               style: TextStyle(
@@ -1249,10 +1251,10 @@ class ShopLegendaryRibbon extends StatelessWidget {
             ),
             boxShadow: [BoxShadow(color: Color(0x59000000), blurRadius: 4, offset: Offset(0, 1))],
           ),
-          child: const Text(
-            'LEGENDARY',
+          child: Text(
+            tr('LEGENDARY'),
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
               color: Color(0xFF1A1320),
               fontSize: 8,
               fontWeight: FontWeight.w800,

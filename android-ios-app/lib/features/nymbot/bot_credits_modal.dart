@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../features/identity/modal_chrome.dart';
 import '../../state/nostr_controller.dart';
+import '../i18n/i18n.dart';
 import 'nymbot_models.dart';
 import 'nymbot_providers.dart';
 
@@ -142,7 +143,8 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   String _satLabel(int sats) =>
       sats >= 1000 ? '${(sats / 1000).toStringAsFixed(sats % 1000 == 0 ? 0 : 1)}K' : '$sats';
 
-  String get _creditWord => _tier == CreditTier.pro ? 'Pro' : 'credits';
+  String get _creditWord =>
+      _tier == CreditTier.pro ? tr('Pro') : tr('credits');
 
   @override
   Widget build(BuildContext context) {
@@ -176,7 +178,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                         Border(bottom: BorderSide(color: c.glassBorder)),
                   ),
                   child: Text(
-                    'SEND LIGHTNING ZAP',
+                    tr('SEND LIGHTNING ZAP'),
                     style: TextStyle(
                       color: c.primary,
                       fontSize: 22,
@@ -188,8 +190,9 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                 // PWA `zapRecipientInfo`: gift vs buy heading.
                 Text(
                   widget.isGift
-                      ? 'Gift Nymbot credits to @${widget.giftRecipientNym ?? 'user'}'
-                      : 'Buy Nymbot private message credits',
+                      ? tr('Gift Nymbot credits to @{nym}',
+                          {'nym': widget.giftRecipientNym ?? 'user'})
+                      : tr('Buy Nymbot private message credits'),
                   style: TextStyle(
                       color: c.textBright,
                       fontSize: 16,
@@ -217,7 +220,9 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
               // "Generating invoice..." (zaps.js:588-590).
               ModalChrome.sendButton(
                 c,
-                widget.isGift ? 'Generate gift invoice' : 'Pay with Lightning',
+                widget.isGift
+                    ? tr('Generate gift invoice')
+                    : tr('Pay with Lightning'),
                 (_loading || _amountSats == null) ? null : _generate,
                 fullWidth: true,
                 child: _loading
@@ -227,7 +232,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                           _loader(c),
                           const SizedBox(width: 8),
                           Text(
-                            'GENERATING INVOICE…',
+                            tr('GENERATING INVOICE…'),
                             style: TextStyle(
                               color: c.primary,
                               fontSize: 12,
@@ -303,8 +308,8 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
       ),
       child: Row(
         children: [
-          seg('Standard', CreditTier.standard),
-          seg('Pro', CreditTier.pro),
+          seg(tr('Standard'), CreditTier.standard),
+          seg(tr('Pro'), CreditTier.pro),
         ],
       ),
     );
@@ -352,7 +357,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('${_satLabel(sats)} sats',
+            Text(tr('{amount} sats', {'amount': _satLabel(sats)}),
                 style: TextStyle(
                     color: c.lightning,
                     fontSize: 15,
@@ -374,7 +379,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
       style: TextStyle(color: c.text, fontSize: 14),
       decoration: InputDecoration(
-        hintText: 'Custom amount (sats)',
+        hintText: tr('Custom amount (sats)'),
         hintStyle: TextStyle(color: c.textDim),
         isDense: true,
         filled: true,
@@ -401,13 +406,16 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   Widget _estimate(NymColors c) {
     final sats = _amountSats;
     if (sats == null) {
-      return Text('Select or enter an amount',
+      return Text(tr('Select or enter an amount'),
           style: TextStyle(color: c.textDim, fontSize: 12));
     }
     final credits = _creditsForSats(sats);
+    final tierWord = _tier == CreditTier.pro ? tr('Pro') : tr('standard');
+    final text = credits == 1
+        ? tr('≈ {n} {tier} credit', {'n': credits, 'tier': tierWord})
+        : tr('≈ {n} {tier} credits', {'n': credits, 'tier': tierWord});
     return Text(
-      '≈ $credits ${_tier == CreditTier.pro ? "Pro" : "standard"} '
-      'credit${credits == 1 ? '' : 's'}',
+      text,
       style: TextStyle(color: c.text, fontSize: 13, fontWeight: FontWeight.w600),
     );
   }
@@ -415,15 +423,15 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   /// Pricing note (`.bot-credit-pricing-note`, zaps.js:466-480).
   Widget _pricingNote(NymColors c) {
     final lines = _tier == CreditTier.pro
-        ? const [
-            'Pro replies start at 1–2 Pro credits and scale with reply length '
-                '(each model\'s range is in ?model).',
-            'Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.',
+        ? [
+            tr('Pro replies start at 1–2 Pro credits and scale with reply length '
+                '(each model\'s range is in ?model).'),
+            tr('Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.'),
           ]
-        : const [
-            '1 credit per general chat, creative writing, or translation reply.',
-            '2 credits per coding or reasoning/math reply (larger models).',
-            'Bulk bonus: +10% at 500 sats, +15% at 1K, +20% at 5K.',
+        : [
+            tr('1 credit per general chat, creative writing, or translation reply.'),
+            tr('2 credits per coding or reasoning/math reply (larger models).'),
+            tr('Bulk bonus: +10% at 500 sats, +15% at 1K, +20% at 5K.'),
           ];
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -444,7 +452,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   Future<void> _generate() async {
     final sats = _amountSats;
     if (sats == null) {
-      setState(() => _error = 'Please select or enter an amount');
+      setState(() => _error = tr('Please select or enter an amount'));
       return;
     }
     setState(() {
@@ -490,15 +498,16 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
       // A null result means the chat isn't bound to an identity yet — the worker
       // can't issue an invoice without a pubkey (PWA gates on `this.pubkey`).
       if (inv == null) {
-        err = 'Open the Nymbot chat once to bind your identity, then try again.';
+        err = tr(
+            'Open the Nymbot chat once to bind your identity, then try again.');
       } else if (inv.pr.isEmpty) {
-        err = 'Failed to generate invoice. Please try again.';
+        err = tr('Failed to generate invoice. Please try again.');
         inv = null;
       }
     } catch (e) {
       // Surface the real failure (PWA: `Failed: ${error.message}`,
       // zaps.js:627) — never fabricate a placeholder bolt11.
-      err = 'Failed: ${_short(e)}';
+      err = tr('Failed: {error}', {'error': _short(e)});
       inv = null;
     }
     if (!mounted) return;
@@ -539,7 +548,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
   static const int _maxChecks = 180; // PWA: 180 × 2s ≈ 6 min.
   bool _paid = false;
   bool _checking = false;
-  String _status = 'Waiting for payment…';
+  String _status = tr('Waiting for payment…');
 
   @override
   void initState() {
@@ -561,7 +570,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
     if (manual) {
       setState(() {
         _checking = true;
-        _status = 'Checking payment…';
+        _status = tr('Checking payment…');
       });
     }
     _checks++;
@@ -576,7 +585,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
         _checking = false;
         // handleZapPaymentSuccess shows the same success line for credit
         // purchases as for zaps (zaps.js:1130-1134).
-        _status = 'Zap sent successfully!';
+        _status = tr('Zap sent successfully!');
       });
       return;
     }
@@ -586,12 +595,12 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
     setState(() {
       _checking = false;
       if (manual) {
-        _status =
-            'Not paid yet — complete the payment in your wallet, then tap again.';
+        _status = tr(
+            'Not paid yet — complete the payment in your wallet, then tap again.');
       } else if (_checks >= _maxChecks) {
         // PWA gives up after 180 polls with a distinct hint (zaps.js:686-693).
-        _status =
-            'Payment not detected yet — if you paid, tap "I\'ve paid" or run ?balance shortly.';
+        _status = tr(
+            'Payment not detected yet — if you paid, tap "I\'ve paid" or run ?balance shortly.');
       }
     });
   }
@@ -631,7 +640,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
                 style: TextStyle(color: c.primary)),
             if (widget.invoice.amountSats > 0) ...[
               const SizedBox(height: 10),
-              Text('${widget.invoice.amountSats} sats',
+              Text(tr('{n} sats', {'n': widget.invoice.amountSats}),
                   style: TextStyle(color: c.primary, fontSize: 20)),
             ],
           ],
@@ -652,7 +661,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
           const SizedBox(height: 16),
           ModalChrome.sendButton(
             c,
-            'Done',
+            tr('Done'),
             () => Navigator.of(context).maybePop(),
             fullWidth: true,
           ),
@@ -691,13 +700,13 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
             Expanded(
               child: _iconBtn(
                 c,
-                'Copy Invoice',
+                tr('Copy Invoice'),
                 () =>
                     Clipboard.setData(ClipboardData(text: widget.invoice.pr)),
               ),
             ),
             const SizedBox(width: 10),
-            Expanded(child: _iconBtn(c, 'Open Wallet', _openWallet)),
+            Expanded(child: _iconBtn(c, tr('Open Wallet'), _openWallet)),
           ],
         ),
         // `.zap-status` (styles-chat.css:274-286): centered box, white/0.03
@@ -735,11 +744,11 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ModalChrome.iconButton(c, 'Change amount', widget.onBack),
+            ModalChrome.iconButton(c, tr('Change amount'), widget.onBack),
             const SizedBox(width: 10),
             ModalChrome.sendButton(
               c,
-              "I've paid",
+              tr("I've paid"),
               _checking ? null : () => _check(manual: true),
             ),
           ],

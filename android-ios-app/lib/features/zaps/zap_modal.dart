@@ -12,6 +12,7 @@ import '../../features/identity/modal_chrome.dart';
 import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../i18n/i18n.dart';
 import 'lnurl.dart';
 import 'zap_logic.dart';
 
@@ -140,14 +141,15 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     if (widget.lightningAddress.trim().isEmpty) {
       setState(() {
         _phase = _Phase.error;
-        _statusText =
-            '@${widget.recipientNym} cannot receive zaps (no lightning address set)';
+        _statusText = tr(
+            '@{nym} cannot receive zaps (no lightning address set)',
+            {'nym': widget.recipientNym});
       });
       return;
     }
     setState(() {
       _phase = _Phase.generating;
-      _statusText = 'Generating invoice...';
+      _statusText = tr('Generating invoice...');
     });
     try {
       final controller = ref.read(nostrControllerProvider);
@@ -189,7 +191,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       if (!mounted) return;
       setState(() {
         _phase = _Phase.error;
-        _statusText = 'Failed: $e';
+        _statusText = tr('Failed: {error}', {'error': e});
       });
     }
   }
@@ -211,7 +213,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         t.cancel();
         setState(() {
           _phase = _Phase.error;
-          _statusText = 'Payment timeout - please check your wallet';
+          _statusText = tr('Payment timeout - please check your wallet');
         });
       }
     });
@@ -266,7 +268,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     if (invoice == null || _checkingManual) return;
     setState(() {
       _checkingManual = true;
-      _statusText = 'Checking payment...';
+      _statusText = tr('Checking payment...');
     });
     try {
       final paid = await _api.zapVerify(
@@ -282,14 +284,14 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       }
       setState(() {
         _checkingManual = false;
-        _statusText =
-            'Not paid yet — complete the payment in your wallet, then tap again.';
+        _statusText = tr(
+            'Not paid yet — complete the payment in your wallet, then tap again.');
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _checkingManual = false;
-        _statusText = 'Could not check yet — try again in a moment.';
+        _statusText = tr('Could not check yet — try again in a moment.');
       });
     }
   }
@@ -362,8 +364,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
                 // `#zapRecipientInfo` (`.nm-h-75`) — centered, body-size, mb20.
                 Text(
                   widget.messageId != null
-                      ? 'Zapping @${widget.recipientNym}'
-                      : "Zapping @${widget.recipientNym}'s profile",
+                      ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
+                      : tr("Zapping @{nym}'s profile",
+                          {'nym': widget.recipientNym}),
                   textAlign: TextAlign.center,
                   style: TextStyle(color: c.textDim, fontSize: 15),
                 ),
@@ -402,7 +405,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
       child: Text(
-        'SEND LIGHTNING ZAP',
+        tr('SEND LIGHTNING ZAP'),
         style: TextStyle(
           color: c.primary,
           fontSize: 22,
@@ -418,7 +421,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     // (styles-themes-responsive.css @media).
     final cols = MediaQuery.of(context).size.width < 768 ? 2 : 3;
     return [
-      _formLabel(c, 'Select Amount'),
+      _formLabel(c, tr('Select Amount')),
       const SizedBox(height: 8),
       GridView.count(
         crossAxisCount: cols,
@@ -435,7 +438,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       Row(
         children: [
           Expanded(
-            child: _input(c, _customController, 'Custom amount (sats)',
+            child: _input(c, _customController, tr('Custom amount (sats)'),
                 number: true,
                 focusNode: _customFocus,
                 onSubmitted: (_) => _triggerCustom()),
@@ -447,9 +450,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       const SizedBox(height: 20),
       // `Comment <span class="nm-h-2">(optional)</span>` — "(optional)" is
       // lowercase w400 ls0 (not uppercased with the rest of the label).
-      _formLabel(c, 'Comment', optional: true),
+      _formLabel(c, tr('Comment'), optional: true),
       const SizedBox(height: 8),
-      _input(c, _commentController, 'Add a comment to your zap'),
+      _input(c, _commentController, tr('Add a comment to your zap')),
     ];
   }
 
@@ -467,9 +470,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         ),
         children: optional
             ? [
-                const TextSpan(
-                  text: ' (optional)',
-                  style: TextStyle(
+                TextSpan(
+                  text: ' ${tr('(optional)')}',
+                  style: const TextStyle(
                     fontWeight: FontWeight.w400,
                     letterSpacing: 0,
                   ),
@@ -528,7 +531,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
               ),
             ),
             // bare "sats" text node inherits `.zap-amount-btn` (14px, --text).
-            Text('sats', style: TextStyle(color: c.text, fontSize: 14)),
+            Text(tr('sats'), style: TextStyle(color: c.text, fontSize: 14)),
           ],
         ),
       ),
@@ -549,7 +552,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           borderRadius: NymRadius.rsm,
         ),
         child: Text(
-          'Generate',
+          tr('Generate'),
           style: TextStyle(
             color: c.lightning,
             fontSize: 14,
@@ -602,9 +605,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _iconBtn(c, 'Copy Invoice', _copyInvoice),
+          _iconBtn(c, tr('Copy Invoice'), _copyInvoice),
           const SizedBox(width: 10),
-          _iconBtn(c, 'Open Wallet', _openWallet),
+          _iconBtn(c, tr('Open Wallet'), _openWallet),
         ],
       ),
       // WebLN is not applicable on native — mirrors the PWA hiding the WebLN
@@ -624,9 +627,10 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         children: [
           const Text('⚡', style: TextStyle(fontSize: 40)),
           const SizedBox(height: 4),
-          Text('Zap sent successfully!', style: TextStyle(color: c.primary)),
+          Text(tr('Zap sent successfully!'),
+              style: TextStyle(color: c.primary)),
           const SizedBox(height: 4),
-          Text('${_invoice?.amountSats ?? ''} sats',
+          Text(tr('{n} sats', {'n': _invoice?.amountSats ?? ''}),
               style: TextStyle(color: c.primary, fontSize: 12)),
         ],
       ),
@@ -667,7 +671,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
             child: Text(
               _statusText.isNotEmpty
                   ? _statusText
-                  : (checking ? 'Generating invoice...' : ''),
+                  : (checking ? tr('Generating invoice...') : ''),
               textAlign: TextAlign.center,
               style: TextStyle(color: checking ? c.warning : c.text),
             ),
@@ -685,16 +689,16 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       return Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _iconBtn(c, 'Cancel', () => Navigator.of(context).maybePop()),
+          _iconBtn(c, tr('Cancel'), () => Navigator.of(context).maybePop()),
           const SizedBox(width: 10),
-          _sendBtn(c, "I've paid", _checkingManual ? null : _manualCheck),
+          _sendBtn(c, tr("I've paid"), _checkingManual ? null : _manualCheck),
         ],
       );
     }
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _iconBtn(c, 'Cancel', () => Navigator.of(context).maybePop()),
+        _iconBtn(c, tr('Cancel'), () => Navigator.of(context).maybePop()),
       ],
     );
   }

@@ -10,6 +10,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/i18n/i18n.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/translate/translate_language_prompt.dart';
@@ -85,7 +86,7 @@ class ContextMenuPanel extends ConsumerWidget {
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
-      barrierLabel: 'context menu',
+      barrierLabel: tr('context menu'),
       barrierColor: const Color(0x99000000), // rgba(0,0,0,0.6)
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim, _) => const SizedBox.shrink(),
@@ -183,7 +184,7 @@ class ContextMenuPanel extends ConsumerWidget {
                 controller,
                 () => ref
                     .read(appStateProvider.notifier)
-                    .addSystemMessage('Copied pubkey to clipboard'),
+                    .addSystemMessage(tr('Copied pubkey to clipboard')),
               ),
               // Bio block (`.context-menu-bio`) — sibling below the header, its
               // own bottom border; collapses when empty (:empty).
@@ -315,8 +316,8 @@ class ContextMenuPanel extends ConsumerWidget {
     // Owner/Mod label, only when viewing the target's group (ui-context.js:422).
     final String? ownerModLabel = target.inGroup
         ? (target.targetIsOwner
-            ? 'Group Owner'
-            : (target.targetIsMod ? 'Moderator' : null))
+            ? tr('Group Owner')
+            : (target.targetIsMod ? tr('Moderator') : null))
         : null;
 
     // Avatar — real picture (proxied/cached) with identicon fallback. With a
@@ -428,7 +429,7 @@ class ContextMenuPanel extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(
-                isDeveloper ? 'Nymchat Developer' : 'Nymchat Bot',
+                isDeveloper ? tr('Nymchat Developer') : tr('Nymchat Bot'),
                 style: TextStyle(
                   color: c.textDim,
                   fontSize: 10,
@@ -552,12 +553,12 @@ class ContextMenuPanel extends ConsumerWidget {
   String _statusLabel(UserStatus status) {
     switch (status) {
       case UserStatus.online:
-        return 'Online';
+        return tr('Online');
       case UserStatus.away:
-        return 'Away';
+        return tr('Away');
       case UserStatus.offline:
       case UserStatus.hidden:
-        return 'Offline';
+        return tr('Offline');
     }
   }
 
@@ -725,8 +726,8 @@ class ContextMenuPanel extends ConsumerWidget {
       case CtxAction.transferOwner:
         await _confirmThen(
           context,
-          'Transfer group ownership to this user? You will lose owner privileges.',
-          okLabel: 'Transfer',
+          tr('Transfer group ownership to this user? You will lose owner privileges.'),
+          okLabel: tr('Transfer'),
           danger: true,
           action: () => controller.transferOwner(_groupId(ref), t.pubkey),
         );
@@ -738,8 +739,8 @@ class ContextMenuPanel extends ConsumerWidget {
       case CtxAction.ban:
         await _confirmThen(
           context,
-          'Ban this user from the group? They cannot be re-invited unless the owner unbans them.',
-          okLabel: 'Ban',
+          tr('Ban this user from the group? They cannot be re-invited unless the owner unbans them.'),
+          okLabel: tr('Ban'),
           danger: true,
           action: () => controller.banFromGroup(_groupId(ref), t.pubkey),
         );
@@ -782,16 +783,16 @@ class ContextMenuPanel extends ConsumerWidget {
     if (t.isSelf) {
       await _confirmThen(
         context,
-        'Are you sure you want to delete this message? This will send a deletion request to relays.',
-        okLabel: 'Delete',
+        tr('Are you sure you want to delete this message? This will send a deletion request to relays.'),
+        okLabel: tr('Delete'),
         danger: true,
         action: () => controller.deleteMessage(messageId),
       );
     } else {
       await _confirmThen(
         context,
-        "Delete this member's message for everyone in the group?",
-        okLabel: 'Delete',
+        tr("Delete this member's message for everyone in the group?"),
+        okLabel: tr('Delete'),
         danger: true,
         action: () =>
             controller.modDeleteGroupMessage(_groupId(ref), messageId, t.pubkey),
@@ -848,8 +849,8 @@ class ContextMenuPanel extends ConsumerWidget {
       // No lightning address — mirror the PWA's "cannot receive zaps" notice
       // (zaps.js:1960/2021); a bare return left the user with zero feedback.
       ref.read(appStateProvider.notifier).addSystemMessage(
-            '@${stripPubkeySuffix(target.nym)} cannot receive zaps '
-            '(no lightning address set)',
+            tr('@{nym} cannot receive zaps (no lightning address set)',
+                {'nym': stripPubkeySuffix(target.nym)}),
           );
       return;
     }
@@ -903,7 +904,8 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
             children: [
               Icon(Icons.copy, size: 12, color: color),
               const SizedBox(width: 2),
-              Text('Copy Pubkey', style: TextStyle(color: color, fontSize: 11)),
+              Text(tr('Copy Pubkey'),
+                  style: TextStyle(color: color, fontSize: 11)),
             ],
           ),
         ),

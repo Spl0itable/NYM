@@ -18,9 +18,9 @@ repository: https://github.com/Spl0itable/NYM
 
 # --- App metadata ---
 name: Nymchat
-summary: Ephemeral Nostr chat with E2E-encrypted DMs, group calls, and Lightning zaps — no registration required.
+summary: Ephemeral Nostr chat with E2E-encrypted PMs, group chats, audio/video calls, and Lightning zaps — no registration required.
 description: |
-  Nymchat (NYM — Nostr Ynstant Messenger) is a feature-rich, ephemeral chat
+  Nymchat (NYM aka Nostr Ynstant Messenger) is a feature-rich, ephemeral chat
   client built on the Nostr protocol, bridged with Bitchat for pseudonymous,
   temporary messaging. No registration required — pick a nym and start
   chatting instantly, or log in with an existing Nostr account.

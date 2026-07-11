@@ -15,6 +15,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
+import '../i18n/i18n.dart';
 import 'dev_nsec_modal.dart';
 import 'modal_chrome.dart';
 import 'nym_identicon.dart';
@@ -209,7 +210,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
           border: Border(bottom: BorderSide(color: c.glassBorder)),
         ),
         child: Text(
-          "Change Nym's Details".toUpperCase(),
+          tr("Change Nym's Details").toUpperCase(),
           style: TextStyle(
             color: c.primary,
             fontSize: 22,
@@ -245,7 +246,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label(c, 'Nickname'),
+        _label(c, tr('Nickname')),
         Row(
           children: [
             Expanded(
@@ -261,7 +262,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 style: TextStyle(color: c.text, fontSize: 14),
                 decoration: InputDecoration(
                   isDense: true,
-                  hintText: 'Enter new nym',
+                  hintText: tr('Enter new nym'),
                   hintStyle: TextStyle(color: c.textDim),
                   contentPadding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 11),
@@ -277,7 +278,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             // `.nym-suffix-clickable` (index.html:1159) — tap to view the full
             // hex pubkey.
             Tooltip(
-              message: 'Click to view full pubkey',
+              message: tr('Click to view full pubkey'),
               child: InkWell(
                 onTap: () => setState(() => _pubkeyOpen = !_pubkeyOpen),
                 borderRadius: NymRadius.rxs,
@@ -307,8 +308,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         if (_pubkeyOpen) _pubkeySlideout(c),
         _hint(
           c,
-          'Your ephemeral pseudonym nickname for this session. The # and four '
-          'characters identify this Nym\'s pubkey.',
+          tr('Your ephemeral pseudonym nickname for this session. The # and four '
+              'characters identify this Nym\'s pubkey.'),
         ),
       ],
     );
@@ -329,14 +330,14 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Full Hex Pubkey',
+          Text(tr('Full Hex Pubkey'),
               style: TextStyle(
                   color: c.text, fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           Text(
-            'This is your public key — a unique identifier derived from your '
-            'keypair. Share it so others can find and verify this Nym. It is '
-            'safe to share (unlike your private key).',
+            tr('This is your public key — a unique identifier derived from your '
+                'keypair. Share it so others can find and verify this Nym. It is '
+                'safe to share (unlike your private key).'),
             style: TextStyle(color: c.textDim, fontSize: 11, height: 1.4),
           ),
           const SizedBox(height: 8),
@@ -355,8 +356,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               const SizedBox(width: 8),
               _smallButton(
                 c,
-                'Copy',
-                () => _copyToClipboard(pk, 'Pubkey copied'),
+                tr('Copy'),
+                () => _copyToClipboard(pk, tr('Pubkey copied')),
               ),
             ],
           ),
@@ -369,7 +370,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label(c, 'Avatar'),
+        _label(c, tr('Avatar')),
         Row(
           children: [
             // `.avatar-preview` (styles-features.css:2891): a CIRCLE
@@ -403,12 +404,13 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 children: [
                   Row(
                     children: [
-                      _smallButton(c, 'Change photo', () => _pickImage(true)),
+                      _smallButton(
+                          c, tr('Change photo'), () => _pickImage(true)),
                       if (_avatarPath != null) ...[
                         const SizedBox(width: 8),
                         _smallButton(
                           c,
-                          'Remove',
+                          tr('Remove'),
                           () => setState(() {
                             _avatarPath = null;
                             _currentAvatarUrl = _origAvatarUrl;
@@ -433,7 +435,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label(c, 'Banner'),
+        _label(c, tr('Banner')),
         Builder(builder: (_) {
           final remoteBanner = _bannerPath == null
               ? proxiedAvatarUrl(_currentBannerUrl)
@@ -455,19 +457,19 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             ),
             alignment: Alignment.center,
             child: (_bannerPath == null && remoteBanner == null)
-                ? Text('No banner set', style: TextStyle(color: c.textDim))
+                ? Text(tr('No banner set'), style: TextStyle(color: c.textDim))
                 : null,
           );
         }),
         const SizedBox(height: 8),
         Row(
           children: [
-            _smallButton(c, 'Choose banner', () => _pickImage(false)),
+            _smallButton(c, tr('Choose banner'), () => _pickImage(false)),
             if (_bannerPath != null) ...[
               const SizedBox(width: 8),
               _smallButton(
                   c,
-                  'Remove',
+                  tr('Remove'),
                   () => setState(() {
                         _bannerPath = null;
                         _currentBannerUrl = _origBannerUrl;
@@ -523,7 +525,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label(c, 'Bio'),
+        _label(c, tr('Bio')),
         TextField(
           controller: _bio,
           maxLength: 150,
@@ -534,7 +536,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               null,
           style: TextStyle(color: c.text, fontSize: 14),
           decoration: InputDecoration(
-            hintText: 'Tell people a bit about yourself...',
+            hintText: tr('Tell people a bit about yourself...'),
             hintStyle: TextStyle(color: c.textDim),
             filled: true,
             fillColor: Colors.white.withValues(alpha: 0.05),
@@ -548,7 +550,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
           child: Text('${_bio.text.length}/150',
               style: TextStyle(color: c.textDim, fontSize: 11)),
         ),
-        _hint(c, 'Short bio shown on your profile (max 150 characters)'),
+        _hint(c, tr('Short bio shown on your profile (max 150 characters)')),
       ],
     );
   }
@@ -557,7 +559,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label(c, 'Bitcoin Lightning Address'),
+        _label(c, tr('Bitcoin Lightning Address')),
         TextField(
           controller: _lightning,
           style: TextStyle(color: c.text, fontSize: 14),
@@ -574,7 +576,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             focusedBorder: _inputBorder(c, c.primaryA(0.3)),
           ),
         ),
-        _hint(c, 'Your Bitcoin Lightning address for receiving zaps'),
+        _hint(c, tr('Your Bitcoin Lightning address for receiving zaps')),
       ],
     );
   }
@@ -598,7 +600,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 color: c.textDim,
               ),
               Text(
-                "Reveal this nym's private key",
+                tr("Reveal this nym's private key"),
                 style: TextStyle(color: c.textDim, fontSize: 13),
               ),
             ],
@@ -625,9 +627,9 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Your private key (nsec) is like a password for your '
-                        'Nym identity. Anyone with access to it can post as you '
-                        'and read your encrypted messages. Never share it.',
+                        tr('Your private key (nsec) is like a password for your '
+                            'Nym identity. Anyone with access to it can post as you '
+                            'and read your encrypted messages. Never share it.'),
                         style: TextStyle(color: c.text, fontSize: 11),
                       ),
                     ),
@@ -654,14 +656,14 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       } catch (_) {}
     }
     final display = nsec.isEmpty
-        ? 'No local private key (delegated signer)'
+        ? tr('No local private key (delegated signer)')
         : (_nsecVisible
             ? nsec
             : '•' * (nsec.length.clamp(8, 24)));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('nsec (Nostr Private Key)',
+        Text(tr('nsec (Nostr Private Key)'),
             style: TextStyle(color: c.text, fontSize: 12)),
         const SizedBox(height: 6),
         Row(
@@ -697,9 +699,9 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             // (the two-sheet glyph, identical to the context-menu copy).
             if (nsec.isNotEmpty)
               IconButton(
-                tooltip: 'Copy',
+                tooltip: tr('Copy'),
                 icon: NymSvgIcon(NymIcons.ctxCopy, size: 16, color: c.textDim),
-                onPressed: () => _copyToClipboard(nsec, 'Private key copied'),
+                onPressed: () => _copyToClipboard(nsec, tr('Private key copied')),
               ),
           ],
         ),
@@ -719,14 +721,14 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           ModalChrome.iconButton(
-              c, 'Randomize', _saving ? null : _randomize),
+              c, tr('Randomize'), _saving ? null : _randomize),
           const SizedBox(width: 10),
           ModalChrome.iconButton(
-              c, 'Cancel', () => Navigator.of(context).pop()),
+              c, tr('Cancel'), () => Navigator.of(context).pop()),
           const SizedBox(width: 10),
           ModalChrome.sendButton(
             c,
-            'Change',
+            tr('Change'),
             _saving ? null : _save,
             child: _saving
                 ? SizedBox(
@@ -798,8 +800,11 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       final actualMb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
       await showAppAlert(
         context,
-        '${avatar ? 'Avatar' : 'Banner'} must be under ${capMb}MB '
-        '(this image is ${actualMb}MB).',
+        tr('{label} must be under {cap}MB (this image is {actual}MB).', {
+          'label': avatar ? tr('Avatar') : tr('Banner'),
+          'cap': capMb,
+          'actual': actualMb,
+        }),
       );
       return;
     }
@@ -831,7 +836,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         _uploading = false;
         _uploadProgress = 0;
       });
-      await showAppAlert(context, 'Upload failed — try again.');
+      await showAppAlert(context, tr('Upload failed — try again.'));
       return;
     }
 
@@ -848,7 +853,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     });
     // PWA confirms the avatar swap with "Avatar updated successfully".
     if (avatar && mounted) {
-      await showAppAlert(context, 'Avatar updated successfully');
+      await showAppAlert(context, tr('Avatar updated successfully'));
     }
   }
 
@@ -904,7 +909,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     Navigator.of(context).pop();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-          content: Text(ok ? 'Profile updated' : 'Could not save profile')),
+          content:
+              Text(ok ? tr('Profile updated') : tr('Could not save profile'))),
     );
   }
 

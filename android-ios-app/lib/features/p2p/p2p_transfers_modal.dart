@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../state/app_state.dart';
+import '../i18n/i18n.dart';
 import 'p2p_models.dart';
 import 'p2p_service.dart';
 
@@ -137,7 +138,7 @@ class P2PTransfersModal extends ConsumerWidget {
                                 bottom: BorderSide(color: c.glassBorder)),
                           ),
                           child: Text(
-                            'P2P FILE TRANSFERS',
+                            tr('P2P FILE TRANSFERS'),
                             style: TextStyle(
                               color: c.primary,
                               fontSize: 22,
@@ -159,7 +160,7 @@ class P2PTransfersModal extends ConsumerWidget {
                                     // textDim, padding 30.
                                     padding: const EdgeInsets.all(30),
                                     child: Text(
-                                      'No active transfers',
+                                      tr('No active transfers'),
                                       textAlign: TextAlign.center,
                                       style: TextStyle(
                                         color: c.textDim,
@@ -205,7 +206,7 @@ class P2PTransfersModal extends ConsumerWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             _IconBtn(
-                              label: 'Close',
+                              label: tr('Close'),
                               onTap: () => Navigator.of(context).maybePop(),
                             ),
                           ],
@@ -309,12 +310,12 @@ class _SeedingRow extends StatelessWidget {
           children: [
             Flexible(
               child: Text(
-                'Seeding${offer.isTorrent ? ' (Torrent)' : ' (P2P)'}',
+                offer.isTorrent ? tr('Seeding (Torrent)') : tr('Seeding (P2P)'),
                 style: TextStyle(color: c.primary, fontSize: 12),
               ),
             ),
             const SizedBox(width: 8),
-            _CancelBtn(label: 'Stop', onTap: onStop),
+            _CancelBtn(label: tr('Stop'), onTap: onStop),
           ],
         ),
       ],
@@ -386,7 +387,7 @@ class _TransferRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            _CancelBtn(label: 'Cancel', onTap: onCancel),
+            _CancelBtn(label: tr('Cancel'), onTap: onCancel),
           ],
         ),
       ],

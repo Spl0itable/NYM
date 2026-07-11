@@ -10,6 +10,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/i18n/i18n.dart';
 import '../../features/messages/flood_tracker.dart';
 import '../../features/messages/format/message_content.dart';
 import '../../features/messages/inline_network_image.dart';
@@ -22,7 +23,9 @@ import '../../features/reactions/quick_react_popup.dart';
 import '../../features/reactions/reaction_burst.dart';
 import 'relative_time_ticker.dart';
 import '../../features/reactions/reactors_modal.dart';
+import '../../features/translate/auto_translate.dart';
 import '../../features/translate/message_translation.dart';
+import '../../features/translate/translate_languages.dart';
 import '../../features/zaps/zap_badge.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../../models/message.dart';
@@ -281,6 +284,17 @@ class MessageRow extends ConsumerStatefulWidget {
 class _MessageRowState extends ConsumerState<MessageRow> {
   bool _showTranslation = false;
   String? _translateLangOverride;
+
+  /// Auto-translate: when the message has been auto-translated in place, this is
+  /// the toggle for the "show original" reveal (default hidden ⇒ translated text
+  /// is the message body). See [_resolveAutoTranslate] / [_autoTranslateFooter].
+  bool _showOriginal = false;
+
+  /// The fresh (non-stale) auto-translation entry for this message, resolved at
+  /// the top of [build] so [_content] can swap in the translated text and the
+  /// footer can offer the original. Null when auto-translate doesn't apply, no
+  /// target language is set, or nothing has been translated yet.
+  AutoTranslateEntry? _autoEntry;
 
   /// Desktop row hover (`@media(hover:hover) .message:hover`, styles-chat.css
   /// :124-132): drives the IRC row hover tint and the `.msg-hover-buttons`
@@ -688,6 +702,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (message.isSystemRow) return _buildSystemMessage(context);
     // `/me …` emote → italic "* author action *" line.
     if (message.isMeAction) return _buildActionMessage(context);
+    // Auto-translate: resolve (and lazily kick) this message's translation so
+    // `_content` can render the translated text in place and the footer can
+    // reveal the original.
+    _resolveAutoTranslate();
     Widget row =
         settings.useBubbles ? _buildBubble(context) : _buildIrc(context);
     // Hover-capable (non-touch) devices: track `.message:hover` for the IRC row
@@ -857,7 +875,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         // `.group-info-title { font-weight: 600; margin-bottom: 2px }` —
         // inherits the pill's text-dim + `textSize − 3`.
         Text(
-          'Group: "${info.name}"',
+          tr('Group: "{name}"', {'name': info.name}),
           style: TextStyle(
             color: c.textDim,
             fontSize: size,
@@ -869,7 +887,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         // `.group-info-count { color: --text-dim; font-size: 12px;
         // margin-bottom: 6px }`.
         Text(
-          'Members (${info.count})',
+          tr('Members ({count})', {'count': info.count}),
           style: TextStyle(color: c.textDim, fontSize: 12),
         ),
         const SizedBox(height: 6),
@@ -1067,15 +1085,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Flexible(
-                        // `/me` action mentions get inline avatars + flair
-                        // (PWA `_enrichActionMentions`, messages.js:1369-1403):
-                        // each `@nym#xxxx` inside the emote is decorated with the
-                        // mentioned user's avatar. `enrichMentionAvatars` threads
-                        // through `MessageContent` to `_MentionChip(withAvatar:)`.
+                        // Every `@nym` mention (here and everywhere) is decorated
+                        // with the mentioned user's inline avatar + flair by
+                        // `_MentionChip` (PWA `_enrichActionMentions`,
+                        // messages.js:1369-1403).
                         child: MessageContent(
                           content: action,
                           fontSize: fontSize,
-                          enrichMentionAvatars: true,
                         ),
                       ),
                       const Text(' *'),
@@ -1440,7 +1456,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             child: Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(
-                '(edited)',
+                tr('(edited)'),
                 style: TextStyle(
                   color: c.textDim.withValues(alpha: 0.7),
                   fontSize: 10,
@@ -1449,6 +1465,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
               ),
             ),
           ),
+        // Auto-translate affordance (icon + "show original" reveal), when this
+        // message was translated in place.
+        _autoTranslateFooter(context),
         // `.message-translation`: full-width left-primary-bordered block BELOW
         // the message content (a sibling after `.message-content`, width:100%).
         if (_showTranslation)
@@ -1694,7 +1713,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       children: [
         if (message.isEdited)
           Text(
-            '(edited) ',
+            '${tr('(edited)')} ',
             // `.edited-indicator` base (styles-chat.css:1549-1554): 10px
             // italic text-dim AT OPACITY 0.7 — the in-bubble variant
             // (`.bubble-time-inner .edited-indicator`) inherits it.
@@ -1856,6 +1875,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         // bubble, right-aligned — NOT inside the bubble next to the time. Identical
         // placement to the IRC layout (which also appends it as a sibling).
         if (self && message.isPM && !message.isGroup) _deliveryTicks(context),
+        // Auto-translate affordance (icon + "show original" reveal), aligned to
+        // the bubble's side, when this message was translated in place.
+        if (_autoEntry?.isReady == true)
+          Align(
+            alignment: sideAlign,
+            child: _autoTranslateFooter(context),
+          ),
         // `.message-translation`: a full-width left-primary-bordered block BELOW
         // the bubble (a sibling after `.message-content`, NOT inside it).
         if (_showTranslation)
@@ -2195,7 +2221,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       context,
       anchorRect: _globalRectOfContext(context) ?? Rect.zero,
       emoji: '',
-      title: 'Seen by ${abbreviateNumber(reactors.length)}',
+      title: tr('Seen by {count}', {'count': abbreviateNumber(reactors.length)}),
       reactors: reactors,
       // "Click user row to open their context menu" (`_showReadersModalFromMap`,
       // groups.js:2861-2869): close the modal, then
@@ -2424,7 +2450,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         Clipboard.setData(ClipboardData(text: message.content));
         ref
             .read(appStateProvider.notifier)
-            .addSystemMessage('Message copied to clipboard');
+            .addSystemMessage(tr('Message copied to clipboard'));
         return;
       case 'react':
         _quickReact(context, settings.swipeReactEmoji);
@@ -2436,7 +2462,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         if (message.isOwn) {
           ref
               .read(appStateProvider.notifier)
-              .addSystemMessage('Cannot zap your own message');
+              .addSystemMessage(tr('Cannot zap your own message'));
           return;
         }
         _zapMessage(context, baseNym);
@@ -2465,19 +2491,22 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// "Failed to check if @X can receive zaps".
   Future<void> _zapMessage(BuildContext context, String baseNym) async {
     final notifier = ref.read(appStateProvider.notifier);
-    notifier.addSystemMessage('Checking if @$baseNym can receive zaps...');
+    notifier.addSystemMessage(
+        tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
     final String? lnAddr;
     try {
       lnAddr = await ref
           .read(nostrControllerProvider)
           .resolveLightningAddressForZap(message.pubkey);
     } catch (_) {
-      notifier.addSystemMessage('Failed to check if @$baseNym can receive zaps');
+      notifier.addSystemMessage(
+          tr('Failed to check if @{nym} can receive zaps', {'nym': baseNym}));
       return;
     }
     if (lnAddr == null || lnAddr.isEmpty) {
-      notifier.addSystemMessage(
-          '@$baseNym cannot receive zaps (no lightning address set)');
+      notifier.addSystemMessage(tr(
+          '@{nym} cannot receive zaps (no lightning address set)',
+          {'nym': baseNym}));
       return;
     }
     if (!context.mounted || !mounted) return;
@@ -2576,6 +2605,118 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     return false;
   }
 
+  /// Resolves this message's auto-translation for the current build and, when
+  /// eligible but not yet cached, schedules a (proxy-bound, idempotent) request.
+  ///
+  /// Only messages that actually reach this method — i.e. rows currently laid
+  /// out in the viewed conversation — are ever translated, which is what keeps
+  /// auto-translate from asking the proxy to translate whole histories at once.
+  /// Sets [_autoEntry] to the fresh entry (matching the current target language
+  /// and message content) or null.
+  void _resolveAutoTranslate() {
+    _autoEntry = null;
+    if (!autoTranslateAppliesTo(message, widget.settings)) return;
+    // widget.settings is the live Settings the list passes down (it watches
+    // settingsProvider), so this reacts to translation/app-language changes.
+    final target = autoTranslateTargetFor(widget.settings);
+    if (target.isEmpty) return;
+    final raw = ref.watch(autoTranslateProvider.select((m) => m[message.id]));
+    final fresh = (raw != null &&
+            raw.target == target &&
+            raw.source == message.content)
+        ? raw
+        : null;
+    _autoEntry = fresh;
+    if (fresh == null) {
+      // No (or stale) entry: kick the translation after this frame so we don't
+      // mutate the provider mid-build. `ensure` is idempotent + de-duped.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(autoTranslateProvider.notifier).ensure(message, target);
+        }
+      });
+    }
+  }
+
+  /// The "🌐 translated · show original" affordance shown below an
+  /// auto-translated message: a translation icon + toggle that expands the
+  /// ORIGINAL text (in its source language) on tap. Renders nothing unless a
+  /// ready translation is being shown in place — a no-op / already-in-language
+  /// message shows neither the icon nor any error.
+  Widget _autoTranslateFooter(BuildContext context) {
+    final entry = _autoEntry;
+    if (entry == null || !entry.isReady) return const SizedBox.shrink();
+    final c = context.nym;
+    final baseSize = settings.textSize.toDouble();
+    final detected = entry.detected;
+    final sourceName =
+        (detected.isNotEmpty && detected != 'auto') ? languageName(detected) : '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Icon + toggle. The 🌐 glyph marks the message as auto-translated; the
+        // label flips between revealing and hiding the original.
+        InkWell(
+          onTap: () => setState(() => _showOriginal = !_showOriginal),
+          borderRadius: NymRadius.rxs,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                NymSvgIcon(NymIcons.translate, size: 12, color: c.primary),
+                const SizedBox(width: 4),
+                Text(
+                  _showOriginal ? tr('Hide original') : tr('Show original'),
+                  style: TextStyle(
+                    color: c.textDim,
+                    fontSize: baseSize * 0.75,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // The revealed original, in a dim left-accented block mirroring the
+        // manual `.message-translation` styling (but carrying the SOURCE text).
+        if (_showOriginal)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(top: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              border: Border(left: BorderSide(color: c.textDim, width: 3)),
+              borderRadius: const BorderRadius.only(
+                topRight: Radius.circular(NymRadius.xs),
+                bottomRight: Radius.circular(NymRadius.xs),
+              ),
+            ),
+            child: Text.rich(
+              TextSpan(
+                style: TextStyle(
+                    color: c.textDim, fontSize: baseSize * 0.9, height: 1.4),
+                children: [
+                  TextSpan(
+                    text: sourceName.isEmpty
+                        ? tr('Original: ')
+                        : tr('Original ({lang}): ', {'lang': sourceName}),
+                    style: TextStyle(
+                      color: c.textDim.withValues(alpha: 0.7),
+                      fontSize: baseSize * 0.8,
+                    ),
+                  ),
+                  TextSpan(text: message.content),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _content(
     BuildContext context,
     Color color,
@@ -2584,8 +2725,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     bool bubble = false,
   }) {
     final blur = _shouldBlurImages();
+    // When this message is auto-translated (and the user isn't peeking at the
+    // original), the translated text REPLACES the message body in place.
+    final displayContent = (_autoEntry?.isReady == true && !_showOriginal)
+        ? _autoEntry!.translated
+        : message.content;
     final body = MessageContent(
-      content: message.content,
+      content: displayContent,
       // fire/ice paint a brighter glyph in the bubble than IRC (`#ff6600`/
       // `#00ccff` vs `#ffaa00`/`#00ccee`) — `textColorFor` returns the override.
       baseColor: deco?.textColorFor(bubble: bubble) ?? color,
@@ -2615,7 +2761,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           colors: gradient,
         ).createShader(rect),
         child: MessageContent(
-          content: message.content,
+          content: displayContent,
           baseColor: Colors.white,
           fontSize: fontSize,
           blurImages: blur,
@@ -2630,7 +2776,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           // The blue glow halo: transparent glyphs whose only paint is the
           // shadow, sitting behind the gradient-clipped text.
           MessageContent(
-            content: message.content,
+            content: displayContent,
             baseColor: const Color(0x00000000),
             fontSize: fontSize,
             blurImages: false,
@@ -2695,7 +2841,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             behavior: HitTestBehavior.opaque,
             onTap: _retryFailedPm,
             child: Tooltip(
-              message: 'Failed to send - click to retry',
+              message: tr('Failed to send - click to retry'),
               child: Text(
                 '!',
                 style: TextStyle(
@@ -3170,7 +3316,7 @@ class _BotThinkSectionState extends State<_BotThinkSection> {
                   ),
                   const SizedBox(width: 6),
                   // `.bot-think summary` has no font-weight (normal/w400).
-                  Text('💭 Reasoning',
+                  Text(tr('💭 Reasoning'),
                       style: TextStyle(
                           color: c.textDim,
                           fontSize: fs,
@@ -3319,7 +3465,7 @@ class _MsgHoverButtons extends StatelessWidget {
       _HoverActionButton(
         svg: NymIcons.translate,
         onTap: onTranslate,
-        tooltip: 'Translate',
+        tooltip: tr('Translate'),
       ),
     ];
     return vertical
@@ -3722,7 +3868,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
                         ),
                         Text(
                           '${formatFileSize(offer.size)} • '
-                          '${offer.type.isEmpty ? 'Unknown type' : offer.type}'
+                          '${offer.type.isEmpty ? tr('Unknown type') : offer.type}'
                           '${isTorrent ? ' • Torrent' : ''}',
                           style: TextStyle(color: c.textDim, fontSize: 12),
                         ),
@@ -3748,7 +3894,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
     // Own offer: seeding (pulsing primary dot + Stop) or no-longer-seeding.
     if (isOwn) {
       if (unseeded) {
-        return _dotRow(c, 'No longer seeding');
+        return _dotRow(c, tr('No longer seeding'));
       }
       // `.file-offer-seeding`: gap 6, --primary 11px, margin-top 8; the dot
       // pulses opacity 1↔0.5 on a 1.5s loop (`animation: pulse 1.5s infinite`,
@@ -3760,7 +3906,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
             _SeedingDot(color: c.primary),
             const SizedBox(width: 6),
             Expanded(
-              child: Text('Seeding - available for download',
+              child: Text(tr('Seeding - available for download'),
                   style: TextStyle(color: c.primary, fontSize: 11)),
             ),
             _StopBtn(
@@ -3775,7 +3921,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
     // (messages.js:876-882). A card that saw the offer seeded keeps its
     // button and flips it to "Unavailable" below (`updateFileOfferUI`).
     if (unseeded && !_sawSeeded) {
-      return _dotRow(c, 'No longer available');
+      return _dotRow(c, tr('No longer available'));
     }
 
     // Peer offer: the `.file-offer-btn` stays visible through the WHOLE
@@ -3795,7 +3941,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
     final Widget button;
     if (unseeded) {
       button = _OfferBtn(
-        label: 'Unavailable',
+        label: tr('Unavailable'),
         textColor: c.textDim,
         borderColor: c.textDim,
         fillColor: base.withValues(alpha: 0.08),
@@ -3806,7 +3952,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
       // `.file-offer-btn.downloading`: border + text --secondary (the fill
       // keeps the base class tint), default cursor.
       button = _OfferBtn(
-        label: 'Connecting...',
+        label: tr('Connecting...'),
         textColor: c.secondary,
         borderColor: c.secondary,
         fillColor: base.withValues(alpha: 0.08),
@@ -3814,7 +3960,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
       );
     } else if (transfer != null && transfer.status == P2PStatus.complete) {
       button = _OfferBtn(
-        label: 'Downloaded',
+        label: tr('Downloaded'),
         textColor: base,
         borderColor: base.withValues(alpha: 0.25),
         fillColor: base.withValues(alpha: 0.08),
@@ -3822,7 +3968,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
       );
     } else if (transfer != null && transfer.status == P2PStatus.error) {
       button = _OfferBtn(
-        label: 'Retry',
+        label: tr('Retry'),
         textColor: base,
         borderColor: base.withValues(alpha: 0.25),
         fillColor: base.withValues(alpha: 0.08),
@@ -3830,7 +3976,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
       );
     } else {
       button = _OfferBtn(
-        label: offer.isTorrent ? 'Download (Torrent)' : 'Download',
+        label: offer.isTorrent ? tr('Download (Torrent)') : tr('Download'),
         textColor: base,
         borderColor: base.withValues(alpha: 0.25),
         fillColor: base.withValues(alpha: 0.08),
@@ -3904,7 +4050,7 @@ class _FileOfferCardState extends State<FileOfferCard> {
       return '${transfer.progress.toStringAsFixed(1)}% • '
           '${formatFileSize(speed)}/s';
     }
-    return transfer.message ?? 'Connecting...';
+    return transfer.message ?? tr('Connecting...');
   }
 
   /// `.file-offer-unseeded` (styles-features.css:2228-2244): text-dim 11px row
@@ -4058,7 +4204,7 @@ class _StopBtn extends StatelessWidget {
           // `.file-offer-btn { border-radius: var(--radius-xs)=8 }` (:2110).
           borderRadius: const BorderRadius.all(Radius.circular(8)),
         ),
-        child: Text('Stop',
+        child: Text(tr('Stop'),
             style: TextStyle(color: c.danger, fontSize: 10)),
       ),
     );

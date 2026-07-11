@@ -14,6 +14,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../common/css_focus_ring.dart';
+import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import '../../features/autocomplete/autocomplete_dropdown.dart';
 import '../../features/autocomplete/autocomplete_queries.dart';
@@ -27,9 +28,11 @@ import '../../features/emoji/emoji_data.dart';
 import '../../features/emoji/emoji_picker.dart';
 import '../../features/emoji/gif_picker.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/i18n/i18n.dart';
 import '../../features/identity/dev_nsec_modal.dart';
 import '../../features/messages/format/message_content.dart'
     show InlineEmojiText, proxiedMedia;
+import '../../features/messages/format/nym_format.dart' show NymFormat;
 import '../../features/messages/inline_network_image.dart';
 import '../../features/nymbot/nymbot_models.dart';
 import '../../features/polls/poll_create_modal.dart';
@@ -293,7 +296,15 @@ class _ComposerState extends ConsumerState<Composer> {
       case MentionAction(:final fullNym):
         final existing = _controller.text;
         final needsSpace = existing.isNotEmpty && !existing.endsWith(' ');
-        final insert = '${needsSpace ? ' ' : ''}@$fullNym ';
+        final lead = needsSpace ? ' ' : '';
+        // Resolve the nym to a pubkey so the injected mention carries the user's
+        // avatar + flair chip (like autocomplete picks); unresolved → literal.
+        final target = resolveTarget(fullNym, ref.read(usersProvider));
+        final ch = target == null
+            ? null
+            : _controller.mentionSentinel(
+                fullNym: fullNym, pubkey: target.pubkey);
+        final insert = ch != null ? '$lead$ch ' : '$lead@$fullNym ';
         _controller.text = existing + insert;
         _controller.selection =
             TextSelection.collapsed(offset: _controller.text.length);
@@ -328,10 +339,12 @@ class _ComposerState extends ConsumerState<Composer> {
         .trim();
   }
 
-  /// The chip's cleaned preview text: strip HTML/markdown punctuation, cap 120
-  /// (`cleanText` in setQuoteReply, messages.js:1845-1846).
+  /// The chip's cleaned preview text: drop the hidden game-state token, then
+  /// strip HTML/markdown punctuation, cap 120 (`cleanText` in setQuoteReply,
+  /// messages.js:1845-1846). The game token is elided FIRST so quoting a Nymbot
+  /// game message never flashes a literal `[gc:…]` blob in the quote chip.
   static String _quotePreviewText(String text) {
-    final clean = text
+    final clean = NymFormat.stripGameTokens(text)
         .replaceAll(RegExp(r'<[^>]*>'), '')
         .replaceAll(RegExp(r'[*_~`>#]'), '');
     return clean.length > 120 ? '${clean.substring(0, 120)}...' : clean;
@@ -414,11 +427,13 @@ class _ComposerState extends ConsumerState<Composer> {
       // NOT the cache alone (F07-Z18).
       openZap: (pubkey, nym) async {
         final baseNym = stripPubkeySuffix(nym);
-        _onSystemMessage('Checking if @$baseNym can receive zaps...');
+        _onSystemMessage(
+            tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
         final lnAddr = await controller.resolveLightningAddressForZap(pubkey);
         if (lnAddr == null || lnAddr.isEmpty) {
-          _onSystemMessage(
-              '@$baseNym cannot receive zaps (no lightning address set)');
+          _onSystemMessage(tr(
+              '@{nym} cannot receive zaps (no lightning address set)',
+              {'nym': baseNym}));
           return;
         }
         if (!mounted) return;
@@ -432,7 +447,7 @@ class _ComposerState extends ConsumerState<Composer> {
       // `/group @a @b [name]` → create the group (`cmdGroup` → createGroup).
       createGroup: (members, name) {
         if (members.isEmpty) {
-          _onSystemMessage('Usage: /group @nym1 @nym2 [group name]');
+          _onSystemMessage(tr('Usage: /group @nym1 @nym2 [group name]'));
           return;
         }
         unawaited(controller.createGroup(name, members));
@@ -474,7 +489,7 @@ class _ComposerState extends ConsumerState<Composer> {
     if (!mounted) return;
     final result = await DevNsecModal.open(context);
     if (result == null) {
-      _onSystemMessage('Nickname change cancelled.');
+      _onSystemMessage(tr('Nickname change cancelled.'));
       return;
     }
     try {
@@ -482,12 +497,13 @@ class _ComposerState extends ConsumerState<Composer> {
     } catch (_) {
       // The modal pre-verified the nsec, so a failure here is a login-flow
       // error; surface the abort line rather than crashing the composer.
-      if (mounted) _onSystemMessage('Nickname change cancelled.');
+      if (mounted) _onSystemMessage(tr('Nickname change cancelled.'));
       return;
     }
     if (!mounted) return;
     final nym = ref.read(appStateProvider).selfNym;
-    _onSystemMessage('Identity verified. You are now logged in as $nym.');
+    _onSystemMessage(
+        tr('Identity verified. You are now logged in as {nym}.', {'nym': nym}));
   }
 
   /// Runs [action] against the current group id when the active view is a group.
@@ -500,12 +516,12 @@ class _ComposerState extends ConsumerState<Composer> {
   void _addMemberToCurrentGroup(String arg) {
     final view = ref.read(currentViewProvider);
     if (view.kind != ViewKind.group) {
-      _onSystemMessage('You must be in a group to add members.');
+      _onSystemMessage(tr('You must be in a group to add members.'));
       return;
     }
     final target = resolveTarget(arg, ref.read(usersProvider));
     if (target == null) {
-      _onSystemMessage('User ${arg.trim()} not found');
+      _onSystemMessage(tr('User {user} not found', {'user': arg.trim()}));
       return;
     }
     unawaited(
@@ -529,11 +545,11 @@ class _ComposerState extends ConsumerState<Composer> {
     final group = appState.groupById(view.id);
     if (group == null) return;
     if (!GroupLogic.isOwner(group, app.selfPubkey)) {
-      _onSystemMessage('Only the group owner can unban users.');
+      _onSystemMessage(tr('Only the group owner can unban users.'));
       return;
     }
     if (!group.banned.contains(pubkey)) {
-      _onSystemMessage('That user is not banned.');
+      _onSystemMessage(tr('That user is not banned.'));
       return;
     }
     appState.applyGroupControl(
@@ -550,7 +566,8 @@ class _ComposerState extends ConsumerState<Composer> {
     ref.read(nostrControllerProvider).ensureProfiles([pubkey]);
     final nym = ref.read(usersProvider)[pubkey]?.nym ??
         'anon#${pubkey.substring(pubkey.length - 4)}';
-    _onSystemMessage('@$nym was unbanned. They can be re-invited.');
+    _onSystemMessage(
+        tr('@{nym} was unbanned. They can be re-invited.', {'nym': nym}));
   }
 
   /// `/groupinfo` — the PWA's `cmdGroupInfo` (groups.js:3487-3525): sort the
@@ -933,6 +950,19 @@ class _ComposerState extends ConsumerState<Composer> {
     _onInputChanged();
   }
 
+  /// Inserts a picked @mention as an inline avatar + nym + flair chip: allocate
+  /// a sentinel char for the user (kept as ONE caret slot) and splice it — plus
+  /// a trailing space — over the trigger token. Falls back to the literal
+  /// `@base#suffix ` when the PUA space is exhausted. The sentinel expands back
+  /// to `@base#suffix` on the wire ([EmojiSentinelController.expand]), so the
+  /// SENT message text is byte-for-byte what it was before the chip.
+  void _selectMention(MentionResult m) {
+    final fullNym = '${m.baseNym}#${m.suffix}';
+    final ch =
+        _controller.mentionSentinel(fullNym: fullNym, pubkey: m.pubkey);
+    _replaceTriggerToken(ch != null ? '$ch ' : m.insertText);
+  }
+
   void _completeCommand(CommandSpec spec) {
     // selectCommand inserts `"<command> "` then hides the palette.
     _controller.value = TextEditingValue(
@@ -987,7 +1017,7 @@ class _ComposerState extends ConsumerState<Composer> {
     switch (v.kind) {
       case AutocompleteKind.mention:
         if (_selectedIndex < v.mentions.length) {
-          _replaceTriggerToken(v.mentions[_selectedIndex].insertText);
+          _selectMention(v.mentions[_selectedIndex]);
         }
       case AutocompleteKind.channel:
         if (_selectedIndex < v.channels.length) {
@@ -1301,7 +1331,7 @@ class _ComposerState extends ConsumerState<Composer> {
         continue;
       }
       if (bytes.length > maxUpload) {
-        _onSystemMessage('Files must be under 50MB.');
+        _onSystemMessage(tr('Files must be under 50MB.'));
         continue;
       }
       final contentType = file.mimeType ?? _guessImageMime(file.name);
@@ -1321,7 +1351,7 @@ class _ComposerState extends ConsumerState<Composer> {
       if (!mounted) return;
       if (_uploadCancelled) break;
       if (url == null) {
-        _onSystemMessage('Failed to upload media.');
+        _onSystemMessage(tr('Failed to upload media.'));
         continue;
       }
       urls.add(url);
@@ -1362,7 +1392,7 @@ class _ComposerState extends ConsumerState<Composer> {
     final file = result.files.first;
     final bytes = file.bytes;
     if (bytes == null) {
-      _onSystemMessage('Could not read the selected file.');
+      _onSystemMessage(tr('Could not read the selected file.'));
       return;
     }
     await ref.read(nostrControllerProvider).shareP2PFile(
@@ -1370,7 +1400,7 @@ class _ComposerState extends ConsumerState<Composer> {
           name: file.name,
           type: _guessImageMime(file.name),
         );
-    if (mounted) _onSystemMessage('File offered for P2P download.');
+    if (mounted) _onSystemMessage(tr('File offered for P2P download.'));
   }
 
   static String _guessImageMime(String name) {
@@ -1552,10 +1582,10 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget _uploadBar(BuildContext context) {
     final c = context.nym;
     final isVideo = (_uploadMime ?? '').startsWith('video/');
-    final kind = isVideo ? 'video' : 'image';
     final label = _uploadTotal > 1
-        ? 'Uploading $_uploadIndex of $_uploadTotal...'
-        : 'Uploading $kind...';
+        ? tr('Uploading {i} of {total}...',
+            {'i': _uploadIndex, 'total': _uploadTotal})
+        : (isVideo ? tr('Uploading video...') : tr('Uploading image...'));
     final fraction = (_uploadProgress ?? 0.1).clamp(0.0, 1.0);
     // In solid-ui the panel is repainted with --glass-bg (#14141e dark /
     // opaque #ffffff light — styles-themes-responsive.css:1593-1627, sourced
@@ -1757,7 +1787,7 @@ class _ComposerState extends ConsumerState<Composer> {
             custom: _customEmojis,
             badgesFor: _mentionBadges,
             cosmeticsFor: (pk) => resolveCosmetics(ref, pk),
-            onSelectMention: (m) => _replaceTriggerToken(m.insertText),
+            onSelectMention: _selectMention,
             onSelectChannel: (ch) => _replaceTriggerToken(ch.insertText),
             onSelectEmoji: _onEmojiAutocompletePicked,
             onSelectKaomoji: (k) => _replaceTriggerToken(kaomojiInsertText(k)),
@@ -1821,7 +1851,7 @@ class _ComposerState extends ConsumerState<Composer> {
       verified: isDev || isBot,
       friend: friend,
       verifiedTitle:
-          isDev ? 'Nymchat Developer' : (isBot ? 'Nymchat Bot' : null),
+          isDev ? tr('Nymchat Developer') : (isBot ? tr('Nymchat Bot') : null),
     );
   }
 
@@ -1913,7 +1943,7 @@ class _ComposerState extends ConsumerState<Composer> {
       decoration: InputDecoration(
         isDense: true,
         // PWA `data-placeholder` teaches the `/` and `?` affordances (F9).
-        hintText: 'Message, / for commands, ? for Nymbot...',
+        hintText: tr('Message, / for commands, ? for Nymbot...'),
         hintStyle: TextStyle(
             // `div.message-input:empty::before` → white@0.4 (dark) /
             // black@0.4 (`body.light-mode …`, styles-themes-responsive.css:58).
@@ -2117,7 +2147,7 @@ class _ComposerState extends ConsumerState<Composer> {
                         cursorColor: c.isLight ? Colors.black : Colors.white,
                         decoration: InputDecoration(
                           isDense: true,
-                          hintText: 'Search languages...',
+                          hintText: tr('Search languages...'),
                           hintStyle: TextStyle(color: c.textDim, fontSize: 13),
                           filled: true,
                           // `.translate-dropdown-search input` is white@0.05
@@ -2148,7 +2178,7 @@ class _ComposerState extends ConsumerState<Composer> {
                       child: langs.isEmpty
                           ? Padding(
                               padding: const EdgeInsets.all(14),
-                              child: Text('No languages found',
+                              child: Text(tr('No languages found'),
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                       color: c.textDim, fontSize: 13)),
@@ -2199,8 +2229,8 @@ class _ComposerState extends ConsumerState<Composer> {
       // the original (detected language already matches the target) —
       // `translateInputText` (translate.js:479-483).
       if (out.trim().isEmpty || out.trim() == text) {
-        _onSystemMessage(
-            'Nothing to translate (text may already be in the target language).');
+        _onSystemMessage(tr(
+            'Nothing to translate (text may already be in the target language).'));
         return;
       }
       _controller.text = out;
@@ -2213,7 +2243,7 @@ class _ComposerState extends ConsumerState<Composer> {
       if (mounted) {
         _onSystemMessage(e is TranslateException
             ? e.message
-            : 'Translation failed: Unknown error');
+            : tr('Translation failed: Unknown error'));
       }
     } finally {
       if (mounted) {
@@ -2228,7 +2258,7 @@ class _ComposerState extends ConsumerState<Composer> {
     final buttons = <Widget>[
       _IconBtn(
         svg: NymIcons.composerImage,
-        tooltip: 'Upload Image/Video',
+        tooltip: tr('Upload Image/Video'),
         expand: widget.compact,
         // Inert until relays connect (same `sendEnabled` as SEND), then the
         // existing in-upload guard takes over.
@@ -2237,7 +2267,7 @@ class _ComposerState extends ConsumerState<Composer> {
       ),
       _IconBtn(
         svg: NymIcons.composerFile,
-        tooltip: 'Share File (P2P)',
+        tooltip: tr('Share File (P2P)'),
         expand: widget.compact,
         enabled: sendEnabled,
         onTap: _pickAndShareFile,
@@ -2304,7 +2334,7 @@ class _ComposerState extends ConsumerState<Composer> {
         ),
         child: _IconBtn(
           svg: NymIcons.composerEmoji,
-          tooltip: 'Emoji',
+          tooltip: tr('Emoji'),
           expand: widget.compact,
           enabled: enabled,
           onTap: _toggleEmojiPicker,
@@ -2707,7 +2737,7 @@ class _SendButtonState extends State<_SendButton> {
                       horizontal: widget.phone ? 10 : 22),
                   alignment: Alignment.center,
                   child: Text(
-                    _anonFired ? 'ANON' : 'SEND',
+                    _anonFired ? tr('ANON') : tr('SEND'),
                     style: TextStyle(
                       color: c.primary,
                       fontSize: widget.phone ? 11 : 12,
@@ -2838,8 +2868,11 @@ class _ChipSlideInState extends State<_ChipSlideIn>
 }
 
 /// `.quote-preview`: author (primary 12/w600 with a muted `#suffix`) over the
-/// truncated quoted text (dim 12, ellipsis).
-class _QuotePreviewChip extends StatelessWidget {
+/// truncated quoted text (dim 12, ellipsis). The author line leads with the
+/// quoted user's avatar and trails their flair/supporter badge — parity with
+/// the rendered reply blockquote (`_quoteAuthor`, message_content.dart) and the
+/// @mention chip, both of which the user extended to carry avatar + flair.
+class _QuotePreviewChip extends ConsumerWidget {
   const _QuotePreviewChip({
     required this.author,
     required this.text,
@@ -2851,15 +2884,19 @@ class _QuotePreviewChip extends StatelessWidget {
   final VoidCallback onClose;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final split = splitNymSuffix(author);
     final base = split.base;
     final suffix = split.suffix;
+    // Resolve the quoted author's nym to a pubkey so the chip can show their
+    // real avatar + flair; an unresolved author renders plain (like the PWA).
+    final users = ref.watch(usersProvider);
+    final t = resolveTarget(author, users);
     return _PreviewChip(
       barColor: c.primary,
       onClose: onClose,
-      closeTooltip: 'Cancel reply',
+      closeTooltip: tr('Cancel reply'),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -2871,6 +2908,19 @@ class _QuotePreviewChip extends StatelessWidget {
               style: TextStyle(
                   color: c.primary, fontSize: 12, fontWeight: FontWeight.w600),
               children: [
+                // Leading avatar before the quoted author's nym.
+                if (t != null)
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 3),
+                      child: NymAvatar(
+                        seed: t.pubkey,
+                        size: 12,
+                        imageUrl: users[t.pubkey]?.profile?.picture,
+                      ),
+                    ),
+                  ),
                 TextSpan(text: base),
                 if (suffix.isNotEmpty)
                   TextSpan(
@@ -2881,6 +2931,16 @@ class _QuotePreviewChip extends StatelessWidget {
                       color: c.primary.withValues(alpha: 0.7),
                       fontWeight: FontWeight.w100,
                       fontSize: 12 * 0.9,
+                    ),
+                  ),
+                // Flair + supporter badge after the nym (self-hides when none).
+                if (t != null)
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: CosmeticNymBadges(
+                      cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
+                      flairSize: 12,
+                      supporterHeight: 12,
                     ),
                   ),
               ],
@@ -2921,16 +2981,16 @@ class _EditPreviewChip extends StatelessWidget {
     return _PreviewChip(
       barColor: amber,
       onClose: onClose,
-      closeTooltip: 'Cancel edit',
+      closeTooltip: tr('Cancel edit'),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'Editing message',
+          Text(
+            tr('Editing message'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
+            style: const TextStyle(
                 color: amber, fontSize: 12, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 2),
@@ -3070,7 +3130,7 @@ class _TranslateInputButtonState extends State<_TranslateInputButton>
           ? 1.0
           : (widget.enabled ? (_hover ? 1.0 : 0.6) : 0.4),
       child: Tooltip(
-        message: 'Translate text',
+        message: tr('Translate text'),
         child: MouseRegion(
           cursor: widget.enabled
               ? SystemMouseCursors.click
@@ -3260,6 +3320,16 @@ class EmojiSentinelController extends TextEditingController {
   /// shortcode present in the draft, reused across occurrences.
   final Map<String, String> _sentinelToCode = {};
   final Map<String, String> _codeToSentinel = {};
+
+  /// sentinel char → @mention and the inverse (`fullNym` = `base#suffix`, no
+  /// `@`). Same technique + PUA space as the emoji sentinels: an @mention the
+  /// user picks from autocomplete / the context menu is kept as ONE sentinel
+  /// char (rendered as an inline avatar + nym + flair chip by [buildTextSpan]),
+  /// so caret / backspace treat the whole mention atomically and [expand] maps
+  /// it back to the wire form `@base#suffix`. One sentinel per DISTINCT mention,
+  /// reused across occurrences.
+  final Map<String, _MentionSentinel> _sentinelToMention = {};
+  final Map<String, String> _mentionToSentinel = {};
   int _nextSentinel = _kSentinelBase;
 
   /// Allocates (or reuses) the sentinel char for [code]. Returns null only if the
@@ -3275,14 +3345,38 @@ class EmojiSentinelController extends TextEditingController {
     return ch;
   }
 
-  /// Maps every sentinel char in [input] back to its literal `:shortcode:`. The
-  /// wire-safety primitive: the composer expands the draft through this before it
-  /// reaches the relay / translate / history. Non-sentinel text passes verbatim.
+  /// Allocates (or reuses) the sentinel char for the mention [fullNym]
+  /// (`base#suffix`, no leading `@`) resolving to [pubkey]. Returns null when the
+  /// PUA space is exhausted, so the caller inserts the literal `@fullNym` text
+  /// instead (no chip, but still correct on the wire). Reused per distinct
+  /// mention so repeat mentions of one user share a char.
+  String? mentionSentinel({required String fullNym, required String pubkey}) {
+    final existing = _mentionToSentinel[fullNym];
+    if (existing != null) return existing;
+    if (_nextSentinel > _kSentinelEnd) return null;
+    final ch = String.fromCharCode(_nextSentinel++);
+    _mentionToSentinel[fullNym] = ch;
+    _sentinelToMention[ch] = _MentionSentinel(fullNym: fullNym, pubkey: pubkey);
+    return ch;
+  }
+
+  /// Maps every sentinel char in [input] back to its literal wire form: a
+  /// `:shortcode:` for an emoji sentinel or `@base#suffix` for a mention
+  /// sentinel. The wire-safety primitive: the composer expands the draft through
+  /// this before it reaches the relay / translate / history, so a PUA sentinel
+  /// NEVER leaves the composer. Non-sentinel text passes verbatim.
   String expand(String input) {
-    if (input.isEmpty || _sentinelToCode.isEmpty) return input;
+    if (input.isEmpty ||
+        (_sentinelToCode.isEmpty && _sentinelToMention.isEmpty)) {
+      return input;
+    }
     return input.replaceAllMapped(_rxSentinel, (m) {
-      final code = _sentinelToCode[m[0]];
-      return code != null ? ':$code:' : m[0]!;
+      final ch = m[0]!;
+      final code = _sentinelToCode[ch];
+      if (code != null) return ':$code:';
+      final mention = _sentinelToMention[ch];
+      if (mention != null) return '@${mention.fullNym}';
+      return ch;
     });
   }
 
@@ -3361,7 +3455,8 @@ class EmojiSentinelController extends TextEditingController {
     // the sentinel allocations so a fresh draft starts from U+E000 and stale
     // mappings can't leak. (`clear()` also resets, but text can empty via a
     // direct value/`text=` assignment too.)
-    if (newValue.text.isEmpty && _sentinelToCode.isNotEmpty) {
+    if (newValue.text.isEmpty &&
+        (_sentinelToCode.isNotEmpty || _sentinelToMention.isNotEmpty)) {
       _resetSentinels();
     }
     super.value = newValue;
@@ -3370,6 +3465,8 @@ class EmojiSentinelController extends TextEditingController {
   void _resetSentinels() {
     _sentinelToCode.clear();
     _codeToSentinel.clear();
+    _sentinelToMention.clear();
+    _mentionToSentinel.clear();
     _nextSentinel = _kSentinelBase;
   }
 
@@ -3385,9 +3482,10 @@ class EmojiSentinelController extends TextEditingController {
     required bool withComposing,
   }) {
     final src = text;
-    // Fast path: no sentinel → defer to the framework's default (also keeps
-    // composing-region underlines intact while typing plain text).
-    if (_sentinelToCode.isEmpty || !_rxSentinel.hasMatch(src)) {
+    // Fast path: no sentinel of either kind → defer to the framework's default
+    // (also keeps composing-region underlines intact while typing plain text).
+    if ((_sentinelToCode.isEmpty && _sentinelToMention.isEmpty) ||
+        !_rxSentinel.hasMatch(src)) {
       return super.buildTextSpan(
           context: context, style: style, withComposing: withComposing);
     }
@@ -3406,16 +3504,31 @@ class EmojiSentinelController extends TextEditingController {
 
     for (final rune in src.runes) {
       final isSentinel = rune >= _kSentinelBase && rune <= _kSentinelEnd;
-      final code =
-          isSentinel ? _sentinelToCode[String.fromCharCode(rune)] : null;
+      final chStr = isSentinel ? String.fromCharCode(rune) : null;
+      final code = chStr == null ? null : _sentinelToCode[chStr];
       final url = code == null ? null : _codeToUrl[code];
-      if (code == null || url == null) {
-        // Plain char — OR a sentinel whose mapping/url is somehow gone: render the
+      final mention = chStr == null ? null : _sentinelToMention[chStr];
+      if ((code == null || url == null) && mention == null) {
+        // Plain char — OR an emoji sentinel whose url is somehow gone: render the
         // literal `:code:` (never a bare PUA glyph) so nothing visually leaks.
         buf.write(code != null ? ':$code:' : String.fromCharCode(rune));
         continue;
       }
       flushText();
+      if (mention != null) {
+        // An @mention picked from autocomplete / the context menu: an inline
+        // avatar + `@nym#suffix` + flair chip, matching the rendered-message
+        // mention (`_MentionChip`, message_content.dart). One caret slot.
+        children.add(WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: _InputMentionChip(
+            pubkey: mention.pubkey,
+            fullNym: mention.fullNym,
+            baseStyle: baseStyle,
+          ),
+        ));
+        continue;
+      }
       // `div.message-input .custom-emoji { vertical-align: -0.3em }`
       // (styles-chat.css:1703-1708): baseline-aligned with the image bottom
       // 0.3em below the alphabetic baseline.
@@ -3427,7 +3540,7 @@ class EmojiSentinelController extends TextEditingController {
           child: EmojiBaselineDrop(
             drop: (baseStyle.fontSize ?? 14) * 0.3,
             child: InlineNetworkImage(
-              url: proxiedMedia(url, emoji: true),
+              url: proxiedMedia(url!, emoji: true),
               width: side,
               height: side,
               fit: BoxFit.contain,
@@ -3442,5 +3555,75 @@ class EmojiSentinelController extends TextEditingController {
     }
     flushText();
     return TextSpan(style: baseStyle, children: children);
+  }
+}
+
+/// The wire form + resolved pubkey a mention sentinel stands for. [fullNym] is
+/// `base#suffix` (no leading `@`); [expand] emits `@$fullNym` for the wire and
+/// [buildTextSpan] renders [pubkey]'s avatar + flair chip.
+class _MentionSentinel {
+  const _MentionSentinel({required this.fullNym, required this.pubkey});
+  final String fullNym;
+  final String pubkey;
+}
+
+/// The inline @mention chip painted for a mention sentinel in the composer
+/// field: the mentioned user's avatar, their `@nym#suffix`, and their flair /
+/// supporter badge — the composer-input counterpart of the rendered-message
+/// `_MentionChip` (message_content.dart). Watches the user's picture + cosmetics
+/// so a profile that lands after insertion fills the avatar/flair in place.
+class _InputMentionChip extends ConsumerWidget {
+  const _InputMentionChip({
+    required this.pubkey,
+    required this.fullNym,
+    required this.baseStyle,
+  });
+
+  final String pubkey;
+
+  /// `base#suffix` — no leading `@`.
+  final String fullNym;
+  final TextStyle baseStyle;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.nym;
+    final split = splitNymSuffix(fullNym);
+    final base = split.base;
+    final suffix = split.suffix; // includes the leading '#'
+    final size = baseStyle.fontSize ?? 14;
+    final picture =
+        ref.watch(usersProvider.select((m) => m[pubkey]?.profile?.picture));
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        NymAvatar(seed: pubkey, size: size, imageUrl: picture),
+        const SizedBox(width: 3),
+        Text.rich(
+          TextSpan(
+            style: baseStyle,
+            children: [
+              TextSpan(text: '@$base'),
+              if (suffix.isNotEmpty)
+                // `.nym-suffix`: opacity 0.7, 0.9em, weight 100.
+                TextSpan(
+                  text: suffix,
+                  style: baseStyle.copyWith(
+                    color: (baseStyle.color ?? c.text).withValues(alpha: 0.7),
+                    fontWeight: FontWeight.w100,
+                    fontSize: size * 0.9,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        // Nickname flair + supporter badge (self-hides when the user has none).
+        CosmeticNymBadges(
+          cosmetics: ref.watch(userCosmeticsProvider(pubkey)),
+          flairSize: size,
+          supporterHeight: size,
+        ),
+      ],
+    );
   }
 }

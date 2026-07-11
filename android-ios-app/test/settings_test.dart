@@ -110,6 +110,17 @@ void main() {
       expect(ctrl.blurImages, 'friends');
     });
 
+    test('choosing an app language also sets the translation language', () {
+      ctrl.setUiLanguage('fr');
+      final s = reload();
+      expect(s.uiLanguage, 'fr');
+      // The message-translation target follows the app language so it's ready
+      // to use without a second setting.
+      expect(s.translateLanguage, 'fr');
+      // And it answered the first-run picker.
+      expect(kv.getBool(StorageKeys.uiLanguageChosen), isTrue);
+    });
+
     test('messaging setters', () {
       ctrl.setTranslateLanguage('es');
       expect(reload().translateLanguage, 'es');

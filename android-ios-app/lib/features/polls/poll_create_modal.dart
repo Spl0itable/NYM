@@ -5,6 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../i18n/i18n.dart';
 
 /// Validation for the poll-create form (commands.js `submitPoll`): a non-empty
 /// question and at least 2 non-empty options. Returns true when the form may be
@@ -143,7 +144,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                       border: Border(bottom: BorderSide(color: c.glassBorder)),
                     ),
                     child: Text(
-                      'CREATE POLL',
+                      tr('CREATE POLL'),
                       style: TextStyle(
                         color: c.primary,
                         fontSize: 22,
@@ -159,16 +160,16 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _label(c, 'Question'),
+                          _label(c, tr('Question')),
                           const SizedBox(height: 8),
                           _FormInput(
                             controller: _questionController,
-                            hint: 'Ask a question...',
+                            hint: tr('Ask a question...'),
                             maxLength: 280,
                             onChanged: (_) => setState(() {}),
                           ),
                           const SizedBox(height: 20), // `.form-group` margin
-                          _label(c, 'Options'),
+                          _label(c, tr('Options')),
                           const SizedBox(height: 8),
                           for (var i = 0; i < _optionControllers.length; i++)
                             Padding(
@@ -178,7 +179,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                                   Expanded(
                                     child: _FormInput(
                                       controller: _optionControllers[i],
-                                      hint: 'Option ${i + 1}',
+                                      hint: tr('Option {n}', {'n': i + 1}),
                                       maxLength: 100,
                                       onChanged: (_) => setState(() {}),
                                     ),
@@ -289,7 +290,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             alignment: Alignment.center,
             child: Text(
-              '+ Add option',
+              tr('+ Add option'),
               style: TextStyle(color: c.textDim, fontSize: 13),
             ),
           ),
@@ -316,7 +317,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
           borderRadius: NymRadius.rxs,
         ),
         child: Text(
-          'CANCEL',
+          tr('CANCEL'),
           style: TextStyle(
             color: c.isLight ? c.primary : c.text,
             fontSize: 12,
@@ -348,7 +349,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
             borderRadius: NymRadius.rsm,
           ),
           child: Text(
-            'CREATE POLL',
+            tr('CREATE POLL'),
             style: TextStyle(
               color: c.primary,
               fontSize: 12,

@@ -22,6 +22,7 @@ import '../features/commands/command_registry.dart';
 import '../features/emoji/custom_emoji.dart';
 import '../features/groups/group_logic.dart';
 import '../features/groups/group_manager.dart';
+import '../features/i18n/i18n.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/notifications/notifications_service.dart';
 import '../features/shop/shop_controller.dart';
@@ -601,7 +602,7 @@ class NostrController {
           _ref.read(appStateProvider.notifier).reset();
         } catch (_) {}
       }
-      _emitSystemMessage('Connection failed — working offline.');
+      _emitSystemMessage(tr('Connection failed — working offline.'));
       // A failed boot must still release the onboarding gate — no settings
       // restore is coming (mirrors the PWA's 10s hydration fallback).
       _markSettingsHydrated();
@@ -1541,6 +1542,20 @@ class NostrController {
       }
       _maybeNotifyChannel(event);
 
+      // Clear the "Nymbot is thinking" channel typing strip the moment the bot's
+      // reply lands — the PWA's `if (message.isBot) this._setBotChannelThinking(
+      // false)` in the channel ingest path (nostr-core.js:508-510). The command
+      // path only sets the indicator (with a 45s auto-expiry) and clears it on
+      // the ERROR branches; the SUCCESS branch relies on the reply arriving to
+      // clear it. Without this the strip hung for the full 45s even after the
+      // answer was already shown (the reported "stuck thinking indicator").
+      if (isVerifiedBot(event.pubkey)) {
+        final botChannelKey = EventMapper.channelKeyOf(event);
+        if (botChannelKey != null) {
+          _setBotChannelThinking(botChannelKey, false);
+        }
+      }
+
       // Web-of-trust observation for a non-own channel message (nostr-core.js:
       // 383-392). Two effects:
       //  (1) ≥2 distinct messages from a sender earns them session trust
@@ -1746,7 +1761,7 @@ class NostrController {
       route: channelRoute.isNotEmpty ? channelRoute : e.pubkey,
       eventId: e.id,
       tsMs: e.createdAt * 1000,
-      contextLabel: key != null ? 'in $key' : null,
+      contextLabel: key != null ? tr('in {key}', {'key': key}) : null,
       silent: !alert,
     );
   }
@@ -1810,16 +1825,17 @@ class NostrController {
       tsMs: m.timestamp,
       // Group footer label `in <GroupName>` (PWA `channelInfo`); PMs leave it
       // null so the panel labels them 'PM' from the type.
-      contextLabel: isGroup ? 'in ${_groupNameFor(m.groupId)}' : null,
+      contextLabel:
+          isGroup ? tr('in {name}', {'name': _groupNameFor(m.groupId)}) : null,
       silent: treatAsHistorical,
     );
   }
 
   /// Group display name for a notification title/context (falls back to "Group").
   String _groupNameFor(String? groupId) {
-    if (groupId == null) return 'Group';
+    if (groupId == null) return tr('Group');
     final g = _ref.read(appStateProvider.notifier).groupById(groupId);
-    return (g != null && g.name.isNotEmpty) ? g.name : 'Group';
+    return (g != null && g.name.isNotEmpty) ? g.name : tr('Group');
   }
 
   /// Records a notification into the in-app notification history
@@ -1954,8 +1970,9 @@ class NostrController {
       preview = '${preview.substring(0, 80)}…';
     }
     final body = (preview != null && preview.isNotEmpty)
-        ? 'reacted $emoji to: "$preview"'
-        : 'reacted $emoji to your message';
+        ? tr('reacted {emoji} to: "{preview}"',
+            {'emoji': emoji, 'preview': preview})
+        : tr('reacted {emoji} to your message', {'emoji': emoji});
 
     // A replayed/backlogged reaction is still recorded to history, silently
     // (reactions.js:2032/2057: `isHistorical ? _addNotificationToHistory :
@@ -2031,8 +2048,9 @@ class NostrController {
     }
     final sats = _abbreviateSats(amountSats);
     final body = (preview != null && preview.isNotEmpty)
-        ? '⚡ zapped $sats sats to: "$preview"'
-        : '⚡ zapped $sats sats to your message';
+        ? tr('⚡ zapped {sats} sats to: "{preview}"',
+            {'sats': sats, 'preview': preview})
+        : tr('⚡ zapped {sats} sats to your message', {'sats': sats});
 
     // PWA zap notifications route as `type: 'reaction'` to the zapper's PM and
     // are silent (history-only) when historical (>10s, zaps.js:1419).
@@ -2089,8 +2107,10 @@ class NostrController {
       final verified = providerPubkey != null &&
           event.pubkey.toLowerCase() == providerPubkey;
       final sats = _abbreviateSats(amount);
-      final body =
-          '⚡ zapped $sats sats to your profile${verified ? '' : ' (unverified)'}';
+      final body = verified
+          ? tr('⚡ zapped {sats} sats to your profile', {'sats': sats})
+          : tr('⚡ zapped {sats} sats to your profile (unverified)',
+              {'sats': sats});
       _dispatchNotification(
         title: _nymDisplayFor(zapper),
         body: body,
@@ -2529,8 +2549,9 @@ class NostrController {
           ((rumor['created_at'] as num?)?.toInt() ?? 0),
     ));
 
-    _emitSystemMessage(
-        'Settings received from $short8...! Approve from settings modal.');
+    _emitSystemMessage(tr(
+        'Settings received from {short8}...! Approve from settings modal.',
+        {'short8': short8}));
   }
 
   /// The persisted dismissed-transfer event ids (`nym_dismissed_transfers`,
@@ -2605,8 +2626,8 @@ class NostrController {
     syncSettings();
 
     _dismissTransferEvent(eventId);
-    _emitSystemMessage(
-        'Settings from ${transfer.fromNym} applied successfully!');
+    _emitSystemMessage(tr('Settings from {nym} applied successfully!',
+        {'nym': transfer.fromNym}));
     return true;
   }
 
@@ -2617,8 +2638,8 @@ class NostrController {
     final transfer = notifier.removeByEventId(eventId);
     _dismissTransferEvent(eventId);
     if (transfer != null) {
-      _emitSystemMessage(
-          'Settings transfer from ${transfer.fromNym} rejected.');
+      _emitSystemMessage(tr('Settings transfer from {nym} rejected.',
+          {'nym': transfer.fromNym}));
       return true;
     }
     return false;
@@ -2954,7 +2975,8 @@ class NostrController {
         final content = rumor['content'];
         final body = (content is String && content.isNotEmpty)
             ? content
-            : 'You\'ve been added to group "${name.isNotEmpty ? name : 'group'}"';
+            : tr('You\'ve been added to group "{name}"',
+                {'name': name.isNotEmpty ? name : tr('group')});
         // Live-vs-history gate (groups.js:857-859): a backlog/boot replay of
         // an invite records silently; only a fresh invite (≤30s old) takes the
         // loud sound/popup path. The PWA also flags `_isGiftWrapBacklog()`;
@@ -2964,7 +2986,8 @@ class NostrController {
             DateTime.now().millisecondsSinceEpoch - inviteTs * 1000;
         final isHistorical = inviteTs <= 0 || inviteAgeMs > 30000;
         _dispatchNotification(
-          title: 'Group invite: ${name.isNotEmpty ? name : 'group'}',
+          title: tr('Group invite: {name}',
+              {'name': name.isNotEmpty ? name : tr('group')}),
           body: body,
           senderPubkey: senderPubkey,
           isFriend: _ref.read(appStateProvider).isFriend(senderPubkey),
@@ -2975,7 +2998,8 @@ class NostrController {
           eventId: u.wrapId,
           tsMs: inviteTs > 0 ? inviteTs * 1000 : null,
           // Group source → footer label `in <GroupName>` (PWA `channelInfo`).
-          contextLabel: 'in ${name.isNotEmpty ? name : 'a group'}',
+          contextLabel: tr('in {name}',
+              {'name': name.isNotEmpty ? name : tr('a group')}),
           silent: isHistorical,
         );
       }
@@ -3151,7 +3175,7 @@ class NostrController {
     // ? subjectTag[1] : 'Group'` (groups.js:714).
     final name = (groupName != null && groupName.isNotEmpty)
         ? groupName
-        : (_tagValue(tags, 'subject') ?? 'Group');
+        : (_tagValue(tags, 'subject') ?? tr('Group'));
     final actor = _nymDisplayFor(senderPubkey);
 
     String? title;
@@ -3162,26 +3186,30 @@ class NostrController {
         if (_tagValue(tags, 'kick') != self) return;
         final banned =
             tags.any((t) => t.length > 1 && t[0] == 'ban' && t[1] == '1');
-        title = banned ? 'Banned from $name' : 'Removed from $name';
+        title = banned
+            ? tr('Banned from {name}', {'name': name})
+            : tr('Removed from {name}', {'name': name});
         body = banned
-            ? '$actor banned you. You can be re-invited only by the group owner.'
-            : '$actor removed you from the group.';
+            ? tr('{actor} banned you. You can be re-invited only by the group owner.',
+                {'actor': actor})
+            : tr('{actor} removed you from the group.', {'actor': actor});
       case GroupControlType.promoteMod:
         if (_tagValue(tags, 'mod') != self) return;
-        title = 'Promoted in $name';
-        body = '$actor made you a moderator.';
+        title = tr('Promoted in {name}', {'name': name});
+        body = tr('{actor} made you a moderator.', {'actor': actor});
       case GroupControlType.revokeMod:
         if (_tagValue(tags, 'mod') != self) return;
-        title = 'Moderator removed in $name';
-        body = '$actor revoked your moderator role.';
+        title = tr('Moderator removed in {name}', {'name': name});
+        body = tr('{actor} revoked your moderator role.', {'actor': actor});
       case GroupControlType.transferOwner:
         if (_tagValue(tags, 'owner') != self) return;
-        title = 'Owner of $name';
-        body = '$actor transferred group ownership to you.';
+        title = tr('Owner of {name}', {'name': name});
+        body = tr('{actor} transferred group ownership to you.', {'actor': actor});
       case GroupControlType.unban:
         if (_tagValue(tags, 'unban') != self) return;
-        title = 'Unbanned from $name';
-        body = '$actor unbanned you from "$name". You may be re-invited.';
+        title = tr('Unbanned from {name}', {'name': name});
+        body = tr('{actor} unbanned you from "{name}". You may be re-invited.',
+            {'actor': actor, 'name': name});
       default:
         return;
     }
@@ -3228,42 +3256,54 @@ class NostrController {
     String? line;
     switch (type) {
       case GroupControlType.leave:
-        line = '$actor left the group.';
+        line = tr('{actor} left the group.', {'actor': actor});
       case GroupControlType.removeMember:
         final target = _tagValue(tags, 'kick');
         if (target == null) break;
         final banned = tags.any((t) => t.length > 1 && t[0] == 'ban' && t[1] == '1');
         line = banned
-            ? '${_nymDisplayFor(target)} was banned by $actor.'
-            : '${_nymDisplayFor(target)} was removed by $actor.';
+            ? tr('{target} was banned by {actor}.',
+                {'target': _nymDisplayFor(target), 'actor': actor})
+            : tr('{target} was removed by {actor}.',
+                {'target': _nymDisplayFor(target), 'actor': actor});
       case GroupControlType.addMember:
         final added = tags
             .where((t) => t.length > 1 && t[0] == 'p')
             .map((t) => _nymDisplayFor(t[1]))
             .toList();
         if (added.isEmpty) break;
-        line = '${added.join(', ')} was added by $actor.';
+        line = tr('{names} was added by {actor}.',
+            {'names': added.join(', '), 'actor': actor});
       case GroupControlType.promoteMod:
         final target = _tagValue(tags, 'mod');
-        if (target != null) line = '$actor made ${_nymDisplayFor(target)} a moderator.';
+        if (target != null) {
+          line = tr('{actor} made {target} a moderator.',
+              {'actor': actor, 'target': _nymDisplayFor(target)});
+        }
       case GroupControlType.revokeMod:
         final target = _tagValue(tags, 'mod');
         if (target != null) {
-          line = '$actor removed ${_nymDisplayFor(target)} as a moderator.';
+          line = tr('{actor} removed {target} as a moderator.',
+              {'actor': actor, 'target': _nymDisplayFor(target)});
         }
       case GroupControlType.transferOwner:
         final target = _tagValue(tags, 'owner');
         if (target != null) {
-          line = '$actor transferred ownership to ${_nymDisplayFor(target)}.';
+          line = tr('{actor} transferred ownership to {target}.',
+              {'actor': actor, 'target': _nymDisplayFor(target)});
         }
       case GroupControlType.unban:
         final target = _tagValue(tags, 'unban');
-        if (target != null) line = '${_nymDisplayFor(target)} was unbanned by $actor.';
+        if (target != null) {
+          line = tr('{target} was unbanned by {actor}.',
+              {'target': _nymDisplayFor(target), 'actor': actor});
+        }
       case GroupControlType.deleteMessage:
         final author = _tagValue(tags, 'target_pubkey');
         line = author != null
-            ? '$actor deleted a message from ${_nymDisplayFor(author)}.'
-            : '$actor deleted a message.';
+            ? tr('{actor} deleted a message from {target}.',
+                {'actor': actor, 'target': _nymDisplayFor(author)})
+            : tr('{actor} deleted a message.', {'actor': actor});
     }
     if (line == null || line.isEmpty) return;
     appState.addSystemMessage(line, storageKey: GroupLogic.groupStorageKey(groupId));
@@ -4202,13 +4242,14 @@ class NostrController {
     channel = channel.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
     if (channel.isEmpty) {
       _emitSystemMessage(
-          'Invalid channel name. Only letters and numbers are allowed.');
+          tr('Invalid channel name. Only letters and numbers are allowed.'));
       return;
     }
     final blocked = _ref.read(appStateProvider).blockedChannels;
     if (blocked.contains(channel)) {
-      _emitSystemMessage(
-          'Channel #$channel is blocked. Use /unblock #$channel to unblock it first.');
+      _emitSystemMessage(tr(
+          'Channel #{channel} is blocked. Use /unblock #{channel} to unblock it first.',
+          {'channel': channel}));
       return;
     }
     final geohash = isChannelGeohash(channel) ? channel : '';
@@ -4223,14 +4264,14 @@ class NostrController {
     if (state.view.kind != ViewKind.channel) return; // PM/group handled by hook
     final key = state.view.id.toLowerCase();
     if (key == 'nymchat') {
-      _emitSystemMessage('Cannot leave the default #nymchat channel');
+      _emitSystemMessage(tr('Cannot leave the default #nymchat channel'));
       return;
     }
     removeChannel(key);
     // PWA `removeChannel` posts a "Left channel #X" confirmation
     // (channels.js:1623). `key` is already the bare geohash/name, matching the
     // PWA's `'#' + (geohash || channel)` since it never carries a leading '#'.
-    _emitSystemMessage('Left channel #$key');
+    _emitSystemMessage(tr('Left channel #{key}', {'key': key}));
   }
 
   /// `/who` — lists current-channel users active within 300s (cmdWho).
@@ -4245,8 +4286,8 @@ class NostrController {
             '${stripPubkeySuffix(u.nym)}#${getPubkeySuffix(u.pubkey)}')
         .toList()
       ..sort();
-    _emitSystemMessage(
-        'Online nyms in this channel: ${names.isEmpty ? 'none' : names.join(', ')}');
+    _emitSystemMessage(tr('Online nyms in this channel: {names}',
+        {'names': names.isEmpty ? tr('none') : names.join(', ')}));
   }
 
   /// `/nick` — change nickname (cmdNick, commands.js:600-660): trim + cap 20,
@@ -4261,12 +4302,12 @@ class NostrController {
   Future<void> cmdNick(String newNym) async {
     final trimmed = newNym.trim();
     if (trimmed.isEmpty) {
-      _emitSystemMessage('Usage: /nick newnym');
+      _emitSystemMessage(tr('Usage: /nick newnym'));
       return;
     }
     final next = trimmed.length > 20 ? trimmed.substring(0, 20) : trimmed;
     if (stripPubkeySuffix(_identity?.nym ?? '') == next) {
-      _emitSystemMessage('That is already your current nym');
+      _emitSystemMessage(tr('That is already your current nym'));
       return;
     }
     if (isReservedNick(next)) {
@@ -4275,31 +4316,32 @@ class NostrController {
         challenge();
         return;
       }
-      _emitSystemMessage('Nickname change cancelled.');
+      _emitSystemMessage(tr('Nickname change cancelled.'));
       return;
     }
     await saveProfile(name: next);
-    _emitSystemMessage("Your nym's new nick is now ${_identity?.nym ?? next}");
+    _emitSystemMessage(tr("Your nym's new nick is now {nick}",
+        {'nick': _identity?.nym ?? next}));
   }
 
   /// `/brb` — set away message + broadcast away presence (cmdBRB).
   Future<void> cmdSetAway(String message) async {
     await publishPresence('away', awayMessage: message);
-    _emitSystemMessage('Away message set: "$message"');
+    _emitSystemMessage(tr('Away message set: "{message}"', {'message': message}));
     _emitSystemMessage(
-        'You will auto-reply to mentions in ALL channels while away');
+        tr('You will auto-reply to mentions in ALL channels while away'));
   }
 
   /// `/back` — clear away + broadcast online (cmdBack).
   Future<void> cmdBack() async {
     await publishPresence('online');
-    _emitSystemMessage('Away message cleared - you are back!');
+    _emitSystemMessage(tr('Away message cleared - you are back!'));
   }
 
   /// `/clear` — clear the conversation view (cmdClear). The message store is
   /// owned by app_state; we surface the PWA's confirmation. TODO(verify): a
   /// real clear needs an app_state clear API (not owned by this agent).
-  void cmdClear() => _emitSystemMessage('Chat cleared');
+  void cmdClear() => _emitSystemMessage(tr('Chat cleared'));
 
   /// `/share` — share the current channel URL (cmdShare/shareChannel).
   void cmdShare() {
@@ -4314,7 +4356,7 @@ class NostrController {
   /// `nym_connection_mode`/`nym_relay_url`/`nym_nsec`, are never written by
   /// the port).
   void cmdQuit() {
-    _emitSystemMessage('Disconnecting from Nymchat...');
+    _emitSystemMessage(tr('Disconnecting from Nymchat...'));
     final pubkey = _identity?.pubkey;
     if (pubkey != null && pubkey.isNotEmpty) {
       unawaited(_ref
@@ -4331,19 +4373,19 @@ class NostrController {
     final target = arg.trim();
     if (target.isEmpty) {
       if (state.view.kind != ViewKind.channel) {
-        _emitSystemMessage(
-            'Usage: /block nym, /block nym#xxxx, /block [pubkey], or /block #channel');
+        _emitSystemMessage(tr(
+            'Usage: /block nym, /block nym#xxxx, /block [pubkey], or /block #channel'));
         return;
       }
       final key = state.view.id.toLowerCase();
       if (key == 'nymchat') {
-        _emitSystemMessage('Cannot block the default #nymchat channel');
+        _emitSystemMessage(tr('Cannot block the default #nymchat channel'));
         return;
       }
       if (blockChannel(key)) {
         _emitSystemMessage(isChannelGeohash(key)
-            ? 'Blocked geohash channel #$key'
-            : 'Blocked channel #$key');
+            ? tr('Blocked geohash channel #{key}', {'key': key})
+            : tr('Blocked channel #{key}', {'key': key}));
         switchChannel('nymchat');
       }
       return;
@@ -4351,20 +4393,20 @@ class NostrController {
     if (target.startsWith('#')) {
       final name = target.substring(1).toLowerCase();
       if (name == 'nymchat') {
-        _emitSystemMessage('Cannot block the default #nymchat channel');
+        _emitSystemMessage(tr('Cannot block the default #nymchat channel'));
         return;
       }
       if (blockChannel(name)) {
         _emitSystemMessage(isChannelGeohash(name)
-            ? 'Blocked geohash channel #$name'
-            : 'Blocked channel #$name');
+            ? tr('Blocked geohash channel #{name}', {'name': name})
+            : tr('Blocked channel #{name}', {'name': name}));
       }
       return;
     }
     // User block — app_state owns blockedUsers; surface the PWA confirmation.
     final t = resolveTarget(target, state.users);
     if (t == null) {
-      _emitSystemMessage('User $target not found');
+      _emitSystemMessage(tr('User {target} not found', {'target': target}));
       return;
     }
     blockUser(t.pubkey);
@@ -4379,16 +4421,17 @@ class NostrController {
       if (state.blockedChannels.contains(name)) {
         unblockChannelEffect(name);
         _emitSystemMessage(isChannelGeohash(name)
-            ? 'Unblocked geohash channel #$name'
-            : 'Unblocked channel #$name');
+            ? tr('Unblocked geohash channel #{name}', {'name': name})
+            : tr('Unblocked channel #{name}', {'name': name}));
       } else {
-        _emitSystemMessage('Channel #$name is not blocked');
+        _emitSystemMessage(tr('Channel #{name} is not blocked', {'name': name}));
       }
       return;
     }
     final t = resolveTarget(target, state.users);
     if (t == null || !state.blockedUsers.contains(t.pubkey)) {
-      _emitSystemMessage('User $target not found or is not blocked');
+      _emitSystemMessage(
+          tr('User {target} not found or is not blocked', {'target': target}));
       return;
     }
     unblockUser(t.pubkey);
@@ -4492,15 +4535,16 @@ class NostrController {
     final service = _service;
     // Your own invite link (groups.js:458).
     if (identity != null && token.approver == identity.pubkey) {
-      _emitSystemMessage('That is your own invite link.');
+      _emitSystemMessage(tr('That is your own invite link.'));
       return;
     }
     final sanitized = _sanitizeGroupName(token.name);
-    final name = sanitized.isEmpty ? 'this group' : sanitized;
+    final name = sanitized.isEmpty ? tr('this group') : sanitized;
     // No identity / signer yet (groups.js:466 `_canSendGiftWraps`).
     if (identity == null || service == null || !service.canSign) {
-      _emitSystemMessage(
-          'Pick a nym or log in to join "$name", then you\'ll be added.');
+      _emitSystemMessage(tr(
+          'Pick a nym or log in to join "{name}", then you\'ll be added.',
+          {'name': name}));
       return;
     }
     // Build + gift-wrap the join request to the sharer (groups.js:480-491).
@@ -4527,11 +4571,11 @@ class NostrController {
         rumor: rumor,
         recipients: [token.approver],
       );
-      _emitSystemMessage(
-          'Join request sent for "$name". You\'ll be added once a member is '
-          'online.');
+      _emitSystemMessage(tr(
+          'Join request sent for "{name}". You\'ll be added once a member is online.',
+          {'name': name}));
     } catch (_) {
-      _emitSystemMessage('Failed to send join request. Please try again.');
+      _emitSystemMessage(tr('Failed to send join request. Please try again.'));
     }
   }
 
@@ -4852,7 +4896,7 @@ class NostrController {
       extraTags: extraTags,
     );
     appState.removeMessage(messageId);
-    if (ok) _emitSystemMessage('Message deleted');
+    if (ok) _emitSystemMessage(tr('Message deleted'));
     return ok;
   }
 
@@ -5029,8 +5073,8 @@ class NostrController {
       settings: _msgSettings,
     );
     _emitSystemMessage(allow
-        ? 'Group members can now add new users.'
-        : 'Only the group owner can add new users now.');
+        ? tr('Group members can now add new users.')
+        : tr('Only the group owner can add new users now.'));
     return true;
   }
 
@@ -5045,7 +5089,7 @@ class NostrController {
     final group = appState.groupById(groupId);
     if (identity == null || groups == null || group == null) return false;
     if (!GroupLogic.isOwner(group, identity.pubkey)) {
-      _emitSystemMessage('Only the group owner can change this setting.');
+      _emitSystemMessage(tr('Only the group owner can change this setting.'));
       return false;
     }
     if (enabled == group.inviteEnabled) return false;
@@ -5059,8 +5103,8 @@ class NostrController {
       settings: _msgSettings,
     );
     _emitSystemMessage(enabled
-        ? 'Joining via invite link is now enabled.'
-        : 'Joining via invite link is now disabled.');
+        ? tr('Joining via invite link is now enabled.')
+        : tr('Joining via invite link is now disabled.'));
     return true;
   }
 
@@ -5074,7 +5118,7 @@ class NostrController {
     final group = appState.groupById(groupId);
     if (identity == null || groups == null || group == null) return false;
     if (!GroupLogic.isOwner(group, identity.pubkey)) {
-      _emitSystemMessage('Only the group owner can reset the invite link.');
+      _emitSystemMessage(tr('Only the group owner can reset the invite link.'));
       return false;
     }
 
@@ -5087,7 +5131,7 @@ class NostrController {
       settings: _msgSettings,
     );
     _emitSystemMessage(
-        'Previous invite links revoked. A new link is now active.');
+        tr('Previous invite links revoked. A new link is now active.'));
     return true;
   }
 
@@ -5172,8 +5216,8 @@ class NostrController {
     _persistSet(StorageKeys.friends, _ref.read(appStateProvider).friends);
     final nymHtml = _nymDisplayFor(pubkey);
     _emitSystemMessage(nowFriend
-        ? 'Added $nymHtml as a friend'
-        : 'Removed $nymHtml from friends');
+        ? tr('Added {nym} as a friend', {'nym': nymHtml})
+        : tr('Removed {nym} from friends', {'nym': nymHtml}));
     return nowFriend;
   }
 
@@ -5191,7 +5235,8 @@ class NostrController {
       _ref
           .read(notificationHistoryProvider.notifier)
           .setBlocked(_ref.read(appStateProvider).blockedUsers);
-      _emitSystemMessage('Blocked ${_nymDisplayFor(pubkey)}');
+      _emitSystemMessage(
+          tr('Blocked {nym}', {'nym': _nymDisplayFor(pubkey)}));
       // Blocking mid-call ends a 1:1 call / drops the peer from a group call and
       // hides their chat (calls.js `_onUserBlockedForCall`).
       _ref.read(callServiceProvider).onUserBlocked(pubkey);
@@ -5211,7 +5256,8 @@ class NostrController {
       _ref
           .read(notificationHistoryProvider.notifier)
           .setBlocked(_ref.read(appStateProvider).blockedUsers);
-      _emitSystemMessage('Unblocked ${_nymDisplayFor(pubkey)}');
+      _emitSystemMessage(
+          tr('Unblocked {nym}', {'nym': _nymDisplayFor(pubkey)}));
     }
     return removed;
   }
@@ -5230,7 +5276,7 @@ class NostrController {
     if (kw == null) return false;
     _persistSet(
         StorageKeys.blockedKeywords, _ref.read(appStateProvider).blockedKeywords);
-    _emitSystemMessage('Blocked keyword: "$kw"');
+    _emitSystemMessage(tr('Blocked keyword: "{keyword}"', {'keyword': kw}));
     return true;
   }
 
@@ -5242,7 +5288,8 @@ class NostrController {
     if (removed) {
       _persistSet(StorageKeys.blockedKeywords,
           _ref.read(appStateProvider).blockedKeywords);
-      _emitSystemMessage('Unblocked keyword: "${keyword.toLowerCase()}"');
+      _emitSystemMessage(tr('Unblocked keyword: "{keyword}"',
+          {'keyword': keyword.toLowerCase()}));
     }
     return removed;
   }
@@ -5418,7 +5465,7 @@ class NostrController {
         unawaited(sync.pmDelete([messageId]));
       }
     }
-    _emitSystemMessage('Deletion request sent to relays');
+    _emitSystemMessage(tr('Deletion request sent to relays'));
     return true;
   }
 
@@ -6232,6 +6279,15 @@ class NostrController {
     if (sync != null) {
       try {
         final found = await sync.profileGet(pubkeys);
+        assert(() {
+          final withPics = found.values
+              .where((ev) => ev.isNotEmpty && (ev['content']?.toString() ?? '')
+                  .contains('"picture"'))
+              .length;
+          debugPrint('[avatar-pop] resolve req=${pubkeys.length} '
+              'd1Found=${found.length} d1WithPicture=$withPics');
+          return true;
+        }());
         if (found.isNotEmpty) {
           // One emit for the whole D1 profile batch (up to 100 rows) instead of
           // one Riverpod rebuild per profile.
@@ -6244,9 +6300,20 @@ class NostrController {
               } catch (_) {}
             }
           });
-          missing = pubkeys
-              .where((pk) => !found.containsKey(pk.toLowerCase()))
-              .toList();
+          // Relay-fallback for anyone D1 didn't supply an AVATAR for — not just
+          // D1 misses. A D1 row that exists but carries no `picture` (e.g. a
+          // kind-0 that predates the user's avatar, set in another client), or a
+          // pictureless TTL cache-hit (reported as an empty entry), would
+          // otherwise be treated as "resolved" and stay stuck on the identicon.
+          // Re-read the store AFTER the batched ingest so just-applied pictures
+          // count.
+          final users = _ref.read(appStateProvider).users;
+          missing = pubkeys.where((pk) {
+            final low = pk.toLowerCase();
+            if (!found.containsKey(low)) return true; // D1 miss
+            final pic = (users[low] ?? users[pk])?.profile?.picture;
+            return pic == null || pic.isEmpty; // D1/cache had no avatar
+          }).toList();
         }
       } catch (_) {
         // Fall through to relays.
@@ -7551,6 +7618,15 @@ class NostrController {
             if (ev.kind == EventKind.geoChannel ||
                 ev.kind == EventKind.namedChannel) {
               _observeMessageTrust(ev);
+              // Backfill each restored author's kind-0 (with avatar) from D1.
+              // The LIVE path does this via `_maybeBackfillProfiles`
+              // (queueProfileFetch, nostr-core.js:1767), but this archive replay
+              // ingests straight into app_state and would otherwise leave every
+              // HISTORICAL author stuck on the identicon until they post again
+              // live — the reason restored-channel avatars never loaded. Self-
+              // /picture-/throttle-guarded + debounced inside, so calling it per
+              // restored message coalesces into one batched `profile-get`.
+              _maybeBackfillProfiles(ev.pubkey);
             }
           } catch (_) {
             // Skip a malformed archived event (mirrors the PWA's per-event catch).
@@ -9472,10 +9548,10 @@ class NostrController {
       );
       final signed = await sig.sign(unsigned);
       await service.pool.publish(signed);
-      _emitSystemMessage('Report submitted successfully');
+      _emitSystemMessage(tr('Report submitted successfully'));
       return true;
     } catch (_) {
-      _emitSystemMessage('Failed to submit report');
+      _emitSystemMessage(tr('Failed to submit report'));
       return false;
     }
   }
@@ -9699,7 +9775,7 @@ class NostrController {
     } catch (e) {
       _setBotChannelThinking(storageKey, false);
       debugPrint('Nymbot command failed: $e');
-      _emitSystemMessage('Nymbot is unavailable right now.');
+      _emitSystemMessage(tr('Nymbot is unavailable right now.'));
     }
   }
 

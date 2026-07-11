@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/nym_colors.dart';
 import '../core/theme/nym_metrics.dart';
+import '../features/i18n/i18n.dart';
 import '../models/settings.dart';
 import '../state/settings_provider.dart';
 
@@ -37,13 +38,13 @@ class ThemeGalleryScreen extends ConsumerWidget {
                 ),
               ),
               Text(
-                'Design system preview',
+                tr('Design system preview'),
                 style: TextStyle(color: c.textDim, fontSize: 12),
               ),
               const SizedBox(height: 20),
 
               // Theme selector
-              _label(c, 'THEME'),
+              _label(c, tr('THEME')),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -58,7 +59,7 @@ class ThemeGalleryScreen extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 16),
-              _label(c, 'MODE'),
+              _label(c, tr('MODE')),
               Wrap(
                 spacing: 8,
                 children: [
@@ -82,14 +83,14 @@ class ThemeGalleryScreen extends ConsumerWidget {
                     }),
                     onChanged: ctrl.setTransparencyEnabled,
                   ),
-                  Text('Transparency (glass UI)',
+                  Text(tr('Transparency (glass UI)'),
                       style: TextStyle(color: c.text, fontSize: 13)),
                 ],
               ),
               const SizedBox(height: 20),
 
               // Color token swatches
-              _label(c, 'TOKENS'),
+              _label(c, tr('TOKENS')),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -111,7 +112,7 @@ class ThemeGalleryScreen extends ConsumerWidget {
               const SizedBox(height: 24),
 
               // Components preview
-              _label(c, 'COMPONENTS'),
+              _label(c, tr('COMPONENTS')),
               _surface(
                 c,
                 child: Column(
@@ -150,9 +151,9 @@ class ThemeGalleryScreen extends ConsumerWidget {
                 children: [
                   _sendBtn(c),
                   const SizedBox(width: 8),
-                  _iconBtn(c, 'EMOJI'),
+                  _iconBtn(c, tr('EMOJI')),
                   const SizedBox(width: 8),
-                  _iconBtn(c, 'GIF'),
+                  _iconBtn(c, tr('GIF')),
                 ],
               ),
               const SizedBox(height: 12),
@@ -322,7 +323,7 @@ class ThemeGalleryScreen extends ConsumerWidget {
           borderRadius: NymRadius.rsm,
           border: Border.all(color: c.primaryA(0.30)),
         ),
-        child: Text('SEND',
+        child: Text(tr('SEND'),
             style: TextStyle(
                 color: c.primary,
                 fontSize: 12,

@@ -31,6 +31,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../emoji/custom_emoji.dart';
+import '../i18n/i18n.dart';
 import '../notifications/notification_sounds.dart';
 import 'call_signaling.dart';
 import 'call_state.dart';
@@ -198,11 +199,13 @@ class CallService {
     int? whenMs,
   }) {
     if (callerPubkey.isEmpty) return;
-    final niceKind = kind == CallKind.video ? 'video' : 'audio';
-    var body = 'Missed $niceKind call';
+    final niceKind = kind == CallKind.video ? tr('video') : tr('audio');
+    var body = tr('Missed {kind} call', {'kind': niceKind});
     if (isGroup && groupId != null) {
       final g = _groupById(groupId);
-      if (g != null && g.name.isNotEmpty) body += ' in ${g.name}';
+      if (g != null && g.name.isNotEmpty) {
+        body += tr(' in {group}', {'group': g.name});
+      }
     }
     try {
       _ref.read(notificationHistoryProvider.notifier).record(
@@ -234,19 +237,19 @@ class CallService {
       _self = _ref.read(nostrControllerProvider).identity?.pubkey ?? '';
     }
     if (_self.isEmpty) {
-      _system('Must be connected to start a call');
+      _system(tr('Must be connected to start a call'));
       return;
     }
     if (_active != null || _incoming != null) {
-      _system('Already in a call');
+      _system(tr('Already in a call'));
       return;
     }
     // Calling a verified bot is intercepted with a joke instead of dialing
     // (calls.js:83-88 startCall PM branch). The bot never answers a real call.
     if (_ref.read(nostrControllerProvider).isVerifiedBot(peer)) {
       _system(video
-          ? 'You wish you could see my sexy body ദ്ദി(ᵔᗜᵔ)'
-          : 'You wish you could hear my sexy voice ദ്ദി(ᵔᗜᵔ)');
+          ? tr('You wish you could see my sexy body ദ്ദി(ᵔᗜᵔ)')
+          : tr('You wish you could hear my sexy voice ദ്ദി(ᵔᗜᵔ)'));
       return;
     }
     await _begin(
@@ -264,18 +267,18 @@ class CallService {
       _self = _ref.read(nostrControllerProvider).identity?.pubkey ?? '';
     }
     if (_self.isEmpty) {
-      _system('Must be connected to start a call');
+      _system(tr('Must be connected to start a call'));
       return;
     }
     if (_active != null || _incoming != null) {
-      _system('Already in a call');
+      _system(tr('Already in a call'));
       return;
     }
     final group = _groupById(groupId);
     if (group == null) return;
     final targets = group.members.where((pk) => pk != _self).toList();
     if (targets.isEmpty) {
-      _system('No one to call in this group');
+      _system(tr('No one to call in this group'));
       return;
     }
     await _begin(
@@ -379,7 +382,7 @@ class CallService {
       return;
     }
     if (!ac.isGroup) {
-      _system('Left the call — you blocked ${_nymFor(pubkey)}');
+      _system(tr('Left the call — you blocked {name}', {'name': _nymFor(pubkey)}));
       end();
       return;
     }
@@ -481,7 +484,7 @@ class CallService {
     for (final pk in ac.members.where((pk) => pk != _self)) {
       _send(pk, CallSignal.reaction(callId: ac.callId, emoji: emoji, emojiTags: tags));
     }
-    _pushFly(emoji, who: 'You');
+    _pushFly(emoji, who: tr('You'));
   }
 
   void _onReaction(String sender, Map<String, dynamic> data) {
@@ -736,7 +739,7 @@ class CallService {
     for (final pk in targets) {
       _send(pk, invite);
     }
-    _publish(statusText: isGroup ? 'Ringing group…' : 'Calling…');
+    _publish(statusText: isGroup ? tr('Ringing group…') : tr('Calling…'));
 
     // 45s ring timeout — cancel the call if nobody answered (calls.js
     // `startCall`: broadcasts cancel, surfaces "No answer", then ends).
@@ -745,7 +748,7 @@ class CallService {
         for (final pk in targets) {
           _send(pk, CallSignal.cancel(callId));
         }
-        _system('No answer');
+        _system(tr('No answer'));
         _endCall();
       }
     });
@@ -1176,7 +1179,7 @@ class CallService {
         _stopRingtone();
         // calls.js: surfaces "Missed call from X" + records it to history.
         _markCallSeen(inc.callId, 'missed'); // calls.js:374
-        _system('Missed call from ${inc.nym}');
+        _system(tr('Missed call from {name}', {'name': inc.nym}));
         _recordMissedCall(
           callId: inc.callId,
           callerPubkey: inc.from,
@@ -1198,7 +1201,7 @@ class CallService {
       if (ac.status == 'outgoing') {
         ac.status = 'connecting';
         ac.ringTimeout?.cancel();
-        _publish(statusText: 'Connecting…');
+        _publish(statusText: tr('Connecting…'));
       }
       _connectToPeer(sender);
       return;
@@ -1215,7 +1218,7 @@ class CallService {
     if (!ac.members.contains(sender)) return;
     if (!ac.isGroup) {
       // calls.js `_onCallReject`: busy peer vs explicit decline.
-      _system(data['reason'] == 'busy' ? 'User is busy' : 'Call declined');
+      _system(data['reason'] == 'busy' ? tr('User is busy') : tr('Call declined'));
       _endCall();
     }
   }
@@ -1229,7 +1232,7 @@ class CallService {
       _stopRingtone();
       // calls.js `_onCallCancel`: a cancelled ring is a missed call.
       _markCallSeen(inc.callId, 'missed'); // calls.js:473
-      _system('Missed call from ${inc.nym}');
+      _system(tr('Missed call from {name}', {'name': inc.nym}));
       _recordMissedCall(
         callId: inc.callId,
         callerPubkey: inc.from,
@@ -1248,7 +1251,7 @@ class CallService {
     if (!ac.members.contains(sender)) return;
     _removePeer(sender);
     if (!ac.isGroup || ac.peers.isEmpty) {
-      _system('Call ended');
+      _system(tr('Call ended'));
       _endCall();
     } else {
       _publish();
@@ -1654,7 +1657,11 @@ class CallService {
       debugPrint('CallService getUserMedia error: $e');
       // calls.js `_getLocalMedia` surfaces a media-error system message.
       _system(
-        'Could not access ${kind == CallKind.video ? 'camera/microphone' : 'microphone'}: $e',
+        tr('Could not access {device}: {error}', {
+          'device':
+              kind == CallKind.video ? tr('camera/microphone') : tr('microphone'),
+          'error': e,
+        }),
       );
       return null;
     }
@@ -1798,20 +1805,20 @@ class CallService {
         .where((pk) => pk != _self && _peerCanModerate(ac, pk))
         .toList();
     if (mods.isEmpty) {
-      _system('No moderator available to grant presenting');
+      _system(tr('No moderator available to grant presenting'));
       return;
     }
     for (final pk in mods) {
       _send(pk, CallSignal.presentRequest(ac.callId));
     }
-    _system('Requested to present');
+    _system(tr('Requested to present'));
   }
 
   void _onPresentRequest(String sender, Map<String, dynamic> data) {
     final ac = _active;
     if (ac == null || ac.callId != data['callId'] || !_isCallMod(ac)) return;
     ac.presentRequests.add(sender);
-    _system('${_nymFor(sender)} requested to present');
+    _system(tr('{name} requested to present', {'name': _nymFor(sender)}));
     _publish();
   }
 
@@ -1838,7 +1845,7 @@ class CallService {
     ac.presenter = data['presenter'] as String?;
     _enforceShareRestriction();
     if (!wasPresenter && ac.presenter == _self) {
-      _system('You can now share your screen');
+      _system(tr('You can now share your screen'));
     }
     _publish();
   }
@@ -1976,8 +1983,8 @@ class CallService {
           (phase == CallPhase.active
               ? _formatTimer(elapsed)
               : (phase == CallPhase.ringing
-                  ? (ac.isGroup ? 'Ringing group…' : 'Calling…')
-                  : 'Connecting…')),
+                  ? (ac.isGroup ? tr('Ringing group…') : tr('Calling…'))
+                  : tr('Connecting…'))),
       elapsedSeconds: elapsed,
       chatLog: chatLog,
       chatUnread: ac.chatUnread,

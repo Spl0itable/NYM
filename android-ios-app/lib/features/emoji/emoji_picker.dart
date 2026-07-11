@@ -23,6 +23,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/nym_icons.dart';
+import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
 import 'custom_emoji.dart';
@@ -191,7 +192,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     if (recents.isNotEmpty) {
       sections.add(_section(
         c,
-        title: 'Recently Used',
+        title: tr('Recently Used'),
         children: recents.map((e) {
           final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
           if (m != null) {
@@ -248,7 +249,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       final star = (isOwn(pack) || isSubscribed(pack)) ? ' ★' : '';
       // `pack.title || 'Emoji pack'` (emoji.js:507) — an empty/missing cached
       // title still gets a section header.
-      final packTitle = pack.title.isEmpty ? 'Emoji pack' : pack.title;
+      final packTitle = pack.title.isEmpty ? tr('Emoji pack') : pack.title;
       sections.add(_section(
         c,
         title: '$packTitle$star',
@@ -440,7 +441,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         decoration: InputDecoration(
           isDense: true,
           // reactions.js:709.
-          hintText: 'Search emoji by name...',
+          hintText: tr('Search emoji by name...'),
           hintStyle: TextStyle(color: c.textDim, fontSize: 12),
           filled: true,
           fillColor: c.isLight
@@ -644,7 +645,7 @@ class _FavStar extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     return Tooltip(
-      message: active ? 'Unfavorite' : 'Favorite',
+      message: active ? tr('Unfavorite') : tr('Favorite'),
       child: InkWell(
         onTap: onTap,
         borderRadius: NymRadius.rxs,

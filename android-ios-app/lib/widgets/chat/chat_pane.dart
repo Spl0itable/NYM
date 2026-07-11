@@ -10,6 +10,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_share.dart';
 import '../../features/emoji/emoji_prefetch.dart';
+import '../../features/i18n/i18n.dart';
 import '../../features/notifications/notifications_panel.dart';
 import '../../features/nymbot/bot_chat_screen.dart' show BotChatScreen;
 import '../../features/nymbot/nymbot_providers.dart'
@@ -499,7 +500,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
         final cosmetics = ref.watch(userCosmeticsProvider(view.id));
 
         // `.pm-header-avatar`: 26px round, margin-right 10, with a 7px status dot
-        // (bottom-right -2) ringed by the bg. Hidden status drops the dot.
+        // (bottom-right -2) ringed by a 2px ring. Hidden status drops the dot.
         final row = Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -515,13 +516,27 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
                   Positioned(
                     right: -2,
                     bottom: -2,
+                    // `.user-status-dot` is `box-sizing: content-box`, so the 7px
+                    // is the COLOURED size and the 2px ring sits OUTSIDE (11px
+                    // box) — matching the sidebar `_AvatarWithStatus`. Drawing the
+                    // border INSIDE a 7px box (Flutter's default) left only a ~3px
+                    // colour centre, which read as "too small". Ring colour is the
+                    // hardcoded `#0a0a0f` dark / `#f5f5f2` light, not `--bg`.
                     child: Container(
-                      width: 7,
-                      height: 7,
+                      width: 11,
+                      height: 11,
+                      padding: const EdgeInsets.all(2),
                       decoration: BoxDecoration(
-                        color: statusColor(status),
+                        color: c.isLight
+                            ? const Color(0xFFF5F5F2)
+                            : const Color(0xFF0A0A0F),
                         shape: BoxShape.circle,
-                        border: Border.all(color: c.bg, width: 2),
+                      ),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: statusColor(status),
+                          shape: BoxShape.circle,
+                        ),
                       ),
                     ),
                   ),
@@ -787,7 +802,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
         if (!isValidGeohash(gh)) {
           // `loc-country` → "Not a geohash" for a named channel (plain text —
           // only the geohash branch below builds the decode hyperlink).
-          return (text: 'Not a geohash', dist: '', url: null);
+          return (text: tr('Not a geohash'), dist: '', url: null);
         }
         // `.channel-location` text (channels.js:1005-1006,1029): the resolved
         // reverse-geocoded place name when cached, "Loading location…" while a
@@ -801,7 +816,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
         } else {
           _resolvePlaceName(ghKey);
           // Three-dot literal, as the PWA writes it (channels.js:1006).
-          place = 'Loading location...';
+          place = tr('Loading location...');
         }
         // ` (N.Nkm)` proximity, only with a known location + sortByProximity on.
         var dist = '';
@@ -829,7 +844,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
         for (final g in app.groups) {
           if (g.id == view.id) {
             return (
-              text: '${_abbreviateCount(g.members.length)} members',
+              text: tr('{count} members',
+                  {'count': _abbreviateCount(g.members.length)}),
               dist: '',
               url: null,
             );
@@ -865,7 +881,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
       ].firstWhere((x) => x.isNotEmpty, orElse: () => '');
       final country = s(addr['country']);
       result = [city, country].where((x) => x.isNotEmpty).join(', ');
-      if (result.isEmpty) result = 'Unknown location';
+      if (result.isEmpty) result = tr('Unknown location');
     } catch (_) {
       // Catch fallback: the PWA drops to the raw coordinate label on geocode
       // failure (channels.js:1029).
@@ -884,19 +900,21 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   /// last-seen ("Last seen 5m ago") or "Last seen unknown".
   String _pmLastSeenText(AppState app, String pubkey) {
     if (ref.read(nostrControllerProvider).isVerifiedBot(pubkey)) {
-      return 'Always at your service';
+      return tr('Always at your service');
     }
     final user = app.users[pubkey];
     final status = user?.effectiveStatus() ?? UserStatus.offline;
     if (status == UserStatus.hidden) return '';
-    if (status == UserStatus.online) return 'Active now';
-    if (status == UserStatus.away) return 'Away';
+    if (status == UserStatus.online) return tr('Active now');
+    if (status == UserStatus.away) return tr('Away');
     final lastSeen = user?.lastSeen ?? 0;
     if (lastSeen > 0) {
-      return 'Last seen '
-          '${formatRelativeTime(DateTime.fromMillisecondsSinceEpoch(lastSeen))}';
+      return tr('Last seen {time}', {
+        'time':
+            formatRelativeTime(DateTime.fromMillisecondsSinceEpoch(lastSeen))
+      });
     }
-    return 'Last seen unknown';
+    return tr('Last seen unknown');
   }
 
   /// `.mobile-header-actions`: the `.icon-btn`-class notif + hamburger toggles,
@@ -919,14 +937,14 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           // only updates #notifBadgeMobile).
           _MobileToggle(
             svg: NymIcons.bell,
-            tooltip: 'Notifications',
+            tooltip: tr('Notifications'),
             badge: notifEnabled ? unread : 0,
             onTap: _openNotifications,
           ),
           const SizedBox(width: 8),
           _MobileToggle(
             svg: NymIcons.menu,
-            tooltip: 'Menu',
+            tooltip: tr('Menu'),
             onTap: widget.onOpenSidebar,
           ),
         ],
@@ -956,13 +974,13 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
       // `.channel-nav-buttons` — boxed (28×28, radius 4, hover bg), dimmed.
       _NavBtn(
         svg: NymIcons.chevronLeft,
-        tooltip: 'Go back',
+        tooltip: tr('Go back'),
         onTap: _canBack ? _back : null,
         disabled: !_canBack,
       ),
       _NavBtn(
         svg: NymIcons.chevronRight,
-        tooltip: 'Go forward',
+        tooltip: tr('Go forward'),
         onTap: _canForward ? _forward : null,
         disabled: !_canForward,
       ),
@@ -973,8 +991,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           // (#f5c518) when `.active`.
           svg: isPinned ? NymIcons.starFilled : NymIcons.starOutline,
           tooltip: isDefault
-              ? '#nymchat is always favorited'
-              : (isPinned ? 'Unfavorite channel' : 'Favorite channel'),
+              ? tr('#nymchat is always favorited')
+              : (isPinned ? tr('Unfavorite channel') : tr('Favorite channel')),
           activeColor: isPinned ? const Color(0xFFF5C518) : null,
           disabled: isDefault,
           onTap: isDefault ? null : () => controller.togglePin(channelKey),
@@ -983,19 +1001,19 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           key: TutorialTargets.keyFor(TutorialTarget.shareButton),
           // `.share-channel-btn`: the filled share-NODES glyph (not iOS share).
           svg: NymIcons.shareNodes,
-          tooltip: 'Share channel URL',
+          tooltip: tr('Share channel URL'),
           onTap: () => ShareChannelModal.open(context, channelKey),
         ),
       ] else if (isCall) ...[
         // PM/group only: audio + video (mirrors `_refreshCallButtons`).
         _ActionBtn(
           svg: NymIcons.phone,
-          tooltip: 'Start audio call',
+          tooltip: tr('Start audio call'),
           onTap: () => _startCall(view, video: false),
         ),
         _ActionBtn(
           svg: NymIcons.video,
-          tooltip: 'Start video call',
+          tooltip: tr('Start video call'),
           onTap: () => _startCall(view, video: true),
         ),
       ],
@@ -1055,7 +1073,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           // count badge; no text node.
           _HeaderPill(
             svg: NymIcons.bell,
-            label: 'Notifications',
+            label: tr('Notifications'),
             iconOnly: true,
             iconSize: 16,
             badge: notifEnabled ? unread : 0,
@@ -1063,22 +1081,22 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           ),
           _HeaderPill(
             svg: NymIcons.starFlair,
-            label: 'Flair',
+            label: tr('Flair'),
             onTap: () => ShopModal.open(context),
           ),
           _HeaderPill(
             svg: NymIcons.settings,
-            label: 'Settings',
+            label: tr('Settings'),
             onTap: () => SettingsScreen.open(context),
           ),
           _HeaderPill(
             svg: NymIcons.info,
-            label: 'About',
+            label: tr('About'),
             onTap: () => AboutScreen.open(context),
           ),
           _HeaderPill(
             svg: NymIcons.logout,
-            label: 'Logout',
+            label: tr('Logout'),
             // `data-action="signOut"` → confirm, then real sign-out (app.js
             // `signOut`, 6740-6741). `signOut()` clears the identity and bumps
             // the boot generation so the app remounts the first-run gate.
@@ -1094,8 +1112,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   Future<void> _confirmSignOut() async {
     final ok = await showAppConfirm(
       context,
-      'Sign out and disconnect from Nymchat?',
-      okLabel: 'Sign out',
+      tr('Sign out and disconnect from Nymchat?'),
+      okLabel: tr('Sign out'),
       danger: true,
     );
     if (!ok) return;
@@ -1135,12 +1153,12 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
         );
         return '#${ch.isGeohash ? ch.geohash : ch.channel}';
       case ViewKind.pm:
-        return app.users[view.id]?.nym ?? 'PM';
+        return app.users[view.id]?.nym ?? tr('PM');
       case ViewKind.group:
         for (final g in app.groups) {
           if (g.id == view.id) return g.name;
         }
-        return 'Group';
+        return tr('Group');
     }
   }
 
@@ -1177,7 +1195,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           }
           return now - u.lastSeen < kActiveThresholdMs;
         }).length;
-        return (svg: null, text: '${_abbreviateCount(count)} online nyms');
+        return (
+          svg: null,
+          text: tr('{count} online nyms', {'count': _abbreviateCount(count)})
+        );
       case ViewKind.pm:
         // The bot PM's meta is `E2E encrypted · <botCreditMeta>` (pms.js:
         // 2934-2938 — `#botCreditMeta` starts at 'checking credits…' and
@@ -1187,17 +1208,18 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           final botState = ref.watch(botChatControllerProvider);
           return (
             svg: NymIcons.lock,
-            text: 'E2E encrypted · ${_botCreditMeta(botState)}',
+            text: tr('E2E encrypted · {meta}',
+                {'meta': _botCreditMeta(botState)}),
           );
         }
         return (
           svg: NymIcons.lock,
-          text: 'End-to-end encrypted private message',
+          text: tr('End-to-end encrypted private message'),
         );
       case ViewKind.group:
         return (
           svg: NymIcons.lock,
-          text: 'End-to-end encrypted group chat',
+          text: tr('End-to-end encrypted group chat'),
         );
     }
   }
@@ -1214,7 +1236,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     if (proModel != null) {
       final pro = state.balance.proBalance;
       final proText = state.balanceKnown ? '$pro' : '…';
-      var meta = '$proText Pro credit${pro == 1 ? '' : 's'} · ${proModel.label}';
+      final proCredits = pro == 1
+          ? tr('{n} Pro credit', {'n': proText})
+          : tr('{n} Pro credits', {'n': proText});
+      var meta = '$proCredits · ${proModel.label}';
       final git = state.git;
       if (git != null && git.hasRepo) {
         meta += ' · ${git.repo.split('/').last}';
@@ -1223,14 +1248,16 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     }
     if (!state.balanceKnown) {
       return state.balanceUnavailable
-          ? 'credits unavailable'
-          : 'checking credits…';
+          ? tr('credits unavailable')
+          : tr('checking credits…');
     }
     final std = state.balance.balance;
     final pro = state.balance.proBalance;
     return pro > 0
-        ? '$std standard · $pro Pro credits left'
-        : '$std credit${std == 1 ? '' : 's'} left';
+        ? tr('{std} standard · {pro} Pro credits left', {'std': std, 'pro': pro})
+        : (std == 1
+            ? tr('{n} credit left', {'n': std})
+            : tr('{n} credits left', {'n': std}));
   }
 
   /// Mirrors the PWA `abbreviateNumber` (users.js:2069): <1000 raw; <1M → "N.Nk"

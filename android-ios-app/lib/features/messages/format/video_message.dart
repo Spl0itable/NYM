@@ -19,6 +19,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
+import '../../i18n/i18n.dart';
 
 /// `--radius-sm` (`styles-core.css:87`).
 const double _kVideoRadius = 12;
@@ -340,7 +341,7 @@ class _VideoMessageState extends State<VideoMessage> {
             Icon(Icons.open_in_new, size: 32, color: c.text),
             const SizedBox(height: 6),
             Text(
-              'Open video',
+              tr('Open video'),
               style: TextStyle(color: c.textDim, fontSize: 12),
             ),
           ],

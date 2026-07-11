@@ -11,6 +11,7 @@
 
 import '../../core/utils/nym_utils.dart';
 import '../../models/user.dart';
+import '../i18n/i18n.dart';
 import 'action_rate_limit.dart';
 import 'command_registry.dart';
 import 'help_output.dart';
@@ -191,7 +192,8 @@ class CommandDispatcher {
     final parsed = parseCommand(line);
     final spec = parsed.spec;
     if (spec == null) {
-      engine.systemMessage('Unknown command: ${parsed.token}');
+      engine.systemMessage(
+          tr('Unknown command: {cmd}', {'cmd': parsed.token}));
       return true;
     }
 
@@ -208,9 +210,10 @@ class CommandDispatcher {
   String _gateMessage(CommandSpec spec) {
     switch (spec.id) {
       case 'who':
-        return '/who only works in public channels.';
+        return tr('/who only works in public channels.');
       case 'poll':
-        return 'Polls can only be created in channels, not in private messages.';
+        return tr(
+            'Polls can only be created in channels, not in private messages.');
       case 'groupinfo':
       case 'kick':
       case 'ban':
@@ -218,9 +221,9 @@ class CommandDispatcher {
       case 'addmod':
       case 'removemod':
       case 'transferowner':
-        return 'You must be in a group conversation to use this command.';
+        return tr('You must be in a group conversation to use this command.');
       default:
-        return 'This command is not available here.';
+        return tr('This command is not available here.');
     }
   }
 
@@ -235,8 +238,8 @@ class CommandDispatcher {
         engine.systemMessage(buildHelpMessageText());
       case 'join':
         if (args.isEmpty) {
-          engine.systemMessage(
-              'Usage: /join #channel (e.g., /join #9q5, /join #nymchat, or /join nym)');
+          engine.systemMessage(tr(
+              'Usage: /join #channel (e.g., /join #9q5, /join #nymchat, or /join nym)'));
           return;
         }
         engine.join(args.trim());
@@ -244,7 +247,7 @@ class CommandDispatcher {
         _pm(args);
       case 'nick':
         if (args.isEmpty) {
-          engine.systemMessage('Usage: /nick newnym');
+          engine.systemMessage(tr('Usage: /nick newnym'));
           return;
         }
         engine.setNick(args.trim());
@@ -259,18 +262,18 @@ class CommandDispatcher {
       case 'me':
         _action(args, () {
           if (args.isEmpty) {
-            engine.systemMessage('Usage: /me action');
+            engine.systemMessage(tr('Usage: /me action'));
             return false;
           }
           return true;
         }, () => spec.formatter!(args));
       case 'slap':
         _actionTarget(args, 'slap',
-            'Usage: /slap nym, /slap nym#xxxx, or /slap [pubkey]',
+            tr('Usage: /slap nym, /slap nym#xxxx, or /slap [pubkey]'),
             (mention) => '/me slaps $mention around a bit with a large trout 🐟');
       case 'hug':
         _actionTarget(args, 'hug',
-            'Usage: /hug nym, /hug nym#xxxx, or /hug [pubkey]',
+            tr('Usage: /hug nym, /hug nym#xxxx, or /hug [pubkey]'),
             (mention) => '/me gives $mention a warm hug 🫂');
       case 'bold':
       case 'italic':
@@ -278,14 +281,14 @@ class CommandDispatcher {
       case 'code':
       case 'quote':
         if (args.isEmpty) {
-          engine.systemMessage('Usage: ${spec.name} text');
+          engine.systemMessage(tr('Usage: {cmd} text', {'cmd': spec.name}));
           return;
         }
         engine.sendToCurrentTarget(spec.formatter!(args));
       case 'brb':
         if (args.isEmpty) {
           engine.systemMessage(
-              'Usage: /brb message (e.g., /brb lunch, back in 30)');
+              tr('Usage: /brb message (e.g., /brb lunch, back in 30)'));
           return;
         }
         engine.setAway(args.trim());
@@ -311,38 +314,39 @@ class CommandDispatcher {
         engine.block(args);
       case 'unblock':
         if (args.isEmpty) {
-          engine.systemMessage(
-              'Usage: /unblock nym, /unblock nym#xxxx, /unblock [pubkey], or /unblock #channel');
+          engine.systemMessage(tr(
+              'Usage: /unblock nym, /unblock nym#xxxx, /unblock [pubkey], or /unblock #channel'));
           return;
         }
         engine.unblock(args);
       case 'invite':
-        _hookOrSystem(hooks.invite, args, 'Usage: /invite @nym');
+        _hookOrSystem(hooks.invite, args, tr('Usage: /invite @nym'));
       case 'group':
         _group(args);
       case 'addmember':
-        _hookOrSystem(hooks.addMember, args, 'Usage: /addmember @nym');
+        _hookOrSystem(hooks.addMember, args, tr('Usage: /addmember @nym'));
       case 'groupinfo':
         hooks.groupInfo?.call();
       case 'kick':
-        _modTarget(args, hooks.kick, 'Usage: /kick @nym (or hex pubkey)',
-            blockSelf: "You can't kick yourself.");
+        _modTarget(args, hooks.kick, tr('Usage: /kick @nym (or hex pubkey)'),
+            blockSelf: tr("You can't kick yourself."));
       case 'ban':
-        _modTarget(args, hooks.ban, 'Usage: /ban @nym (or hex pubkey)',
-            blockSelf: "You can't ban yourself.");
+        _modTarget(args, hooks.ban, tr('Usage: /ban @nym (or hex pubkey)'),
+            blockSelf: tr("You can't ban yourself."));
       case 'unban':
-        _modTarget(args, hooks.unban, 'Usage: /unban @nym (or hex pubkey)');
+        _modTarget(args, hooks.unban, tr('Usage: /unban @nym (or hex pubkey)'));
       case 'addmod':
-        _modTarget(args, hooks.addMod, 'Usage: /addmod @nym (or hex pubkey)');
-      case 'removemod':
         _modTarget(
-            args, hooks.removeMod, 'Usage: /removemod @nym (or hex pubkey)');
+            args, hooks.addMod, tr('Usage: /addmod @nym (or hex pubkey)'));
+      case 'removemod':
+        _modTarget(args, hooks.removeMod,
+            tr('Usage: /removemod @nym (or hex pubkey)'));
       case 'transferowner':
         _modTarget(args, hooks.transferOwner,
-            'Usage: /transferowner @nym (or hex pubkey)',
-            blockSelf: "You're already the owner.");
+            tr('Usage: /transferowner @nym (or hex pubkey)'),
+            blockSelf: tr("You're already the owner."));
       default:
-        engine.systemMessage('Unknown command: ${spec.name}');
+        engine.systemMessage(tr('Unknown command: {cmd}', {'cmd': spec.name}));
     }
   }
 
@@ -350,16 +354,17 @@ class CommandDispatcher {
 
   void _pm(String args) {
     if (args.isEmpty) {
-      engine.systemMessage('Usage: /pm @nym, /pm nym#xxxx, or /pm [pubkey]');
+      engine.systemMessage(
+          tr('Usage: /pm @nym, /pm nym#xxxx, or /pm [pubkey]'));
       return;
     }
     final t = resolveTarget(args, engine.users);
     if (t == null) {
-      engine.systemMessage('User ${args.trim()} not found');
+      engine.systemMessage(tr('User {user} not found', {'user': args.trim()}));
       return;
     }
     if (t.pubkey == engine.selfPubkey) {
-      engine.systemMessage("You can't PM yourself");
+      engine.systemMessage(tr("You can't PM yourself"));
       return;
     }
     if (hooks.openPm != null) {
@@ -369,18 +374,19 @@ class CommandDispatcher {
 
   void _zap(String args) {
     if (args.isEmpty) {
-      engine.systemMessage('Usage: /zap @nym, /zap nym#xxxx, or /zap [pubkey]');
+      engine.systemMessage(
+          tr('Usage: /zap @nym, /zap nym#xxxx, or /zap [pubkey]'));
       return;
     }
     final t = resolveTarget(args, engine.users);
     if (t == null) {
-      engine.systemMessage('User ${args.trim()} not found');
+      engine.systemMessage(tr('User {user} not found', {'user': args.trim()}));
       return;
     }
     if (t.pubkey == engine.selfPubkey) {
       // PWA cmdZap blocks self-zapping via the command (zaps.js:1947/2007).
       // Self-zapping your own MESSAGE via the badge is still allowed elsewhere.
-      engine.systemMessage("You can't zap yourself");
+      engine.systemMessage(tr("You can't zap yourself"));
       return;
     }
     hooks.openZap?.call(t.pubkey, t.nym);
@@ -447,8 +453,9 @@ class CommandDispatcher {
     }
     final t = resolveTarget(args, engine.users);
     if (t == null) {
-      engine.systemMessage(
-          'User @${args.trim().replaceFirst(RegExp(r'^@'), '')} not found. Try @nym#xxxx or a hex pubkey.');
+      engine.systemMessage(tr(
+          'User @{user} not found. Try @nym#xxxx or a hex pubkey.',
+          {'user': args.trim().replaceFirst(RegExp(r'^@'), '')}));
       return;
     }
     if (blockSelf != null && t.pubkey == engine.selfPubkey) {

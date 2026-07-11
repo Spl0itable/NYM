@@ -15,6 +15,7 @@ import '../../core/theme/nym_theme.dart' show kMonoFont;
 import '../../models/nostr_event.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
 import 'settings_widgets.dart';
 
@@ -26,7 +27,7 @@ const String _kStaticBase = 'https://github.com/Spl0itable/NYM/blob/main/';
 /// App version string shown in the About header (`#aboutVersion`). Matches the
 /// current PWA constant `NYMCHAT_VERSION` (app.js:4229). The native build can
 /// later override this from its own manifest; until then it tracks the PWA.
-const String kAboutVersion = 'v3.72.517';
+const String kAboutVersion = 'v3.73.519';
 
 /// Warrant-canary source + pinned developer pubkey (canary-verify.js:5-6).
 const String _kCanaryUrl =
@@ -312,7 +313,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                             Container(height: 1, color: c.glassBorder),
                             const SizedBox(height: 20),
                             Text(
-                              'Contact the developer',
+                              tr('Contact the developer'),
                               style: TextStyle(
                                 color: c.text,
                                 fontSize: 14,
@@ -321,38 +322,38 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Send feedback, a question, or a bug report. '
-                              'Your message is delivered as an encrypted '
-                              'private message to the Nymchat developer.',
+                              tr('Send feedback, a question, or a bug report. '
+                                  'Your message is delivered as an encrypted '
+                                  'private message to the Nymchat developer.'),
                               style: TextStyle(
                                   color: c.textDim, fontSize: 11, height: 1.4),
                             ),
                             const SizedBox(height: 16),
                             FormGroup(
-                              label: 'Topic',
+                              label: tr('Topic'),
                               child: FormSelect<String>(
                                 value: _topic,
-                                items: const [
+                                items: [
                                   (
                                     value: 'General feedback',
-                                    label: 'General feedback'
+                                    label: tr('General feedback')
                                   ),
-                                  (value: 'Bug report', label: 'Bug report'),
+                                  (value: 'Bug report', label: tr('Bug report')),
                                   (
                                     value: 'Feature request',
-                                    label: 'Feature request'
+                                    label: tr('Feature request')
                                   ),
-                                  (value: 'Question', label: 'Question'),
+                                  (value: 'Question', label: tr('Question')),
                                   (
                                     value: 'Spam false positive',
-                                    label: 'Spam false positive'
+                                    label: tr('Spam false positive')
                                   ),
                                 ],
                                 onChanged: (v) => setState(() => _topic = v),
                               ),
                             ),
                             FormGroup(
-                              label: 'Message',
+                              label: tr('Message'),
                               child: _messageBox(),
                             ),
                             // Contact status line (`#aboutContactStatus`, F12).
@@ -449,11 +450,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Build integrity',
+              Text(tr('Build integrity'),
                   style: TextStyle(color: c.textDim, fontSize: 12)),
               // Native ships as a signed store binary; verify via the repo.
               // Unclassed `.about-build-status` inherits `var(--text)`, w600.
-              Text('Signed native build',
+              Text(tr('Signed native build'),
                   style: TextStyle(
                     color: c.text,
                     fontSize: 12,
@@ -468,7 +469,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               spacing: 12,
               runSpacing: 4,
               children: [
-                _link(c, 'source', 'https://github.com/Spl0itable/NYM',
+                _link(c, tr('source'), 'https://github.com/Spl0itable/NYM',
                     size: 11),
               ],
             ),
@@ -480,10 +481,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               spacing: 14,
               runSpacing: 4,
               children: [
-                _link(c, 'Build provenance',
+                _link(c, tr('Build provenance'),
                     'https://github.com/Spl0itable/NYM/actions',
                     size: 11),
-                _link(c, 'How to verify',
+                _link(c, tr('How to verify'),
                     'https://github.com/Spl0itable/NYM#verify-build',
                     size: 11),
               ],
@@ -506,22 +507,22 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     String statusText;
     Color statusColor;
     if (_canaryFailed) {
-      statusText = 'Unavailable offline';
+      statusText = tr('Unavailable offline');
       statusColor = c.textDim; // .checking
     } else if (r == null) {
-      statusText = 'Checking…';
+      statusText = tr('Checking…');
       statusColor = c.textDim; // .checking
     } else if (r.state == 'gone') {
-      statusText = '⚠ Canary removed';
+      statusText = tr('⚠ Canary removed');
       statusColor = c.danger; // .gone → var(--danger, #f85149)
     } else if (r.state == 'forged') {
-      statusText = '✗ Signature invalid';
+      statusText = tr('✗ Signature invalid');
       statusColor = c.danger; // .forged
     } else if (r.state == 'ok') {
-      statusText = '✓ All clear';
+      statusText = tr('✓ All clear');
       statusColor = _kSuccess; // .ok
     } else {
-      statusText = r.overdue ? '✗ Update overdue' : '✗ Not all clear';
+      statusText = r.overdue ? tr('✗ Update overdue') : tr('✗ Not all clear');
       statusColor = c.warning; // .stale → var(--warning, #d29922)
     }
 
@@ -529,19 +530,19 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     var note = '';
     if (r != null && !_canaryFailed) {
       if (r.state == 'gone') {
-        note = 'The signed canary is no longer published. '
-            'Treat this as a serious warning.';
+        note = tr('The signed canary is no longer published. '
+            'Treat this as a serious warning.');
       } else if (r.state == 'forged') {
         // 'develper' [sic] — the PWA string, preserved verbatim (app.js:4340).
-        note = 'The canary signature does not match the Nymchat develper key. '
-            'Do not trust this canary.';
+        note = tr('The canary signature does not match the Nymchat develper '
+            'key. Do not trust this canary.');
       } else if (r.state == 'ok') {
         note = r.statement.isNotEmpty
             ? r.statement
-            : 'No secret government requests have been received.';
+            : tr('No secret government requests have been received.');
       } else {
-        note = 'The canary has not been refreshed on schedule — a silenced '
-            'request (NSL/FISA order) cannot be ruled out.';
+        note = tr('The canary has not been refreshed on schedule — a silenced '
+            'request (NSL/FISA order) cannot be ruled out.');
       }
     }
 
@@ -555,18 +556,18 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     String? anchorUrl;
     if (r != null && !_canaryFailed && r.state != 'gone') {
       if (r.sig == 'valid') {
-        sigText = 'signature ✓';
+        sigText = tr('signature ✓');
         sigColor = _kSuccess; // .about-canary-sig.ok
       } else if (r.sig == 'invalid') {
-        sigText = 'signature ✗';
+        sigText = tr('signature ✗');
         sigColor = c.danger; // .about-canary-sig.bad
       } else {
-        sigText = 'unsigned';
+        sigText = tr('unsigned');
       }
       final upd = _fmtCanaryDate(r.updatedAt);
       final due = _fmtCanaryDate(r.dueBy);
-      dateText = (upd.isNotEmpty ? 'updated $upd' : '') +
-          (due.isNotEmpty ? ' · due $due' : '');
+      dateText = (upd.isNotEmpty ? tr('updated {date}', {'date': upd}) : '') +
+          (due.isNotEmpty ? ' · ${tr('due {date}', {'date': due})}' : '');
       if (r.id.isNotEmpty) {
         var ref = r.id;
         try {
@@ -577,7 +578,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         eventUrl = 'https://njump.me/$ref';
       }
       if (r.btcBlockHeight != null) {
-        anchorLabel = 'btc block ${r.btcBlockHeight}';
+        anchorLabel = tr('btc block {height}', {'height': r.btcBlockHeight});
         anchorUrl = 'https://mempool.space/block/${r.btcBlockHash ?? ''}';
       }
     }
@@ -595,7 +596,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Warrant canary',
+              Text(tr('Warrant canary'),
                   style: TextStyle(color: c.textDim, fontSize: 12)),
               Text(
                 statusText,
@@ -624,7 +625,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                _link(c, 'canary',
+                _link(c, tr('canary'),
                     'https://github.com/Spl0itable/NYM/blob/main/canary.json',
                     size: 11),
                 if (sigText.isNotEmpty)
@@ -637,7 +638,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                     ),
                   ),
                 if (eventUrl != null)
-                  _link(c, 'nostr event', eventUrl, size: 11),
+                  _link(c, tr('nostr event'), eventUrl, size: 11),
                 if (anchorUrl != null)
                   _link(c, anchorLabel!, anchorUrl, size: 11),
                 if (dateText.isNotEmpty)
@@ -663,11 +664,12 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       child: Text.rich(
         TextSpan(
           children: [
-            const TextSpan(
-                text: 'A decentralized, pseudonymous chat built on the '),
+            TextSpan(
+                text: tr('A decentralized, pseudonymous chat built on the ')),
             _linkSpan(c, 'Nostr', 'https://nostr.com'),
-            const TextSpan(
-                text: " protocol. Inspired by and bridged with Jack Dorsey's "),
+            TextSpan(
+                text: tr(
+                    " protocol. Inspired by and bridged with Jack Dorsey's ")),
             _linkSpan(c, 'Bitchat', 'https://bitchat.free'),
             const TextSpan(text: '.'),
           ],
@@ -683,8 +685,8 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       runSpacing: 6,
       children: [
         _link(c, 'GitHub', 'https://github.com/Spl0itable/NYM'),
-        _link(c, 'Terms of Service', 'static/tos.html'),
-        _link(c, 'Privacy Policy', 'static/pp.html'),
+        _link(c, tr('Terms of Service'), 'static/tos.html'),
+        _link(c, tr('Privacy Policy'), 'static/pp.html'),
         _link(c, 'DMCA', 'static/dmca.html'),
       ],
     );
@@ -696,7 +698,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   Widget _messageBox() {
     return FormInput(
       controller: _messageController,
-      hint: 'Write your message...',
+      hint: tr('Write your message...'),
       maxLines: 4,
       maxLength: 2000,
     );
@@ -712,7 +714,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           NymOutlineButton(
-            label: 'Close',
+            label: tr('Close'),
             onPressed: () => Navigator.of(context).maybePop(),
           ),
           const SizedBox(width: 10),
@@ -734,7 +736,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                   border: Border.all(color: c.primaryA(0.30)),
                 ),
                 child: Text(
-                  _sending ? 'SENDING...' : 'SEND MESSAGE',
+                  _sending ? tr('SENDING...') : tr('SEND MESSAGE'),
                   style: TextStyle(
                     color: c.primary,
                     fontSize: 12,
@@ -797,7 +799,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final text = _messageController.text.trim();
     if (text.isEmpty) {
       setState(() {
-        _status = 'Please enter a message.';
+        _status = tr('Please enter a message.');
         _statusOk = false;
       });
       return;
@@ -806,7 +808,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final connected = ref.read(appStateProvider).connectedRelays > 0;
     if (!connected) {
       setState(() {
-        _status = 'Not connected to relay. Try again once connected.';
+        _status = tr('Not connected to relay. Try again once connected.');
         _statusOk = false;
       });
       return;
@@ -832,11 +834,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     setState(() {
       _sending = false;
       if (ok) {
-        _status = 'Message sent. Thanks for reaching out!';
+        _status = tr('Message sent. Thanks for reaching out!');
         _statusOk = true;
         _messageController.clear();
       } else {
-        _status = 'Failed to send. Please try again.';
+        _status = tr('Failed to send. Please try again.');
         _statusOk = false;
       }
     });

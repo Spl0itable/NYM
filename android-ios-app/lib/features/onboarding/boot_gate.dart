@@ -9,6 +9,9 @@ import '../../screens/home_shell.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../i18n/i18n.dart';
+import '../i18n/language_select.dart';
+import '../i18n/localization_service.dart';
 import '../identity/setup_modal.dart';
 import '../identity/vault_settings_modal.dart';
 import 'tutorial_overlay.dart';
@@ -36,10 +39,19 @@ class _BootGateState extends ConsumerState<BootGate> {
   /// Null until decided; true => show the setup modal.
   late bool _needsSetup;
 
+  /// Whether the first-run language chooser still needs answering. Gated on the
+  /// device-local `nym_ui_language_chosen` flag so it appears at most once — and
+  /// it now LEADS onboarding (before the welcome/setup modal) so the whole app,
+  /// including that welcome modal, renders in the chosen language from the start.
+  late bool _languageChosen;
+
   @override
   void initState() {
     super.initState();
     _needsSetup = _computeNeedsSetup();
+    final kv = ref.read(keyValueStoreProvider);
+    _languageChosen =
+        kv.getBool(StorageKeys.uiLanguageChosen, defaultValue: false);
   }
 
   /// Mirrors setup-modal-init.js: needs setup when there is no saved login
@@ -58,15 +70,39 @@ class _BootGateState extends ConsumerState<BootGate> {
     setState(() => _needsSetup = false);
   }
 
+  void _onLanguageChosen() {
+    if (!mounted) return;
+    // Start translating the tutorial IMMEDIATELY — at middle priority, so it's
+    // processed right after the welcome/signup modal (which translates on
+    // demand) and ahead of the full-app background sweep. This way it's ready
+    // by the time the user reaches it, rather than waiting until it's shown.
+    LocalizationService.instance.prime(tutorialStringsForPretranslate());
+    setState(() => _languageChosen = true);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 1) Language chooser leads onboarding. Picking here localizes everything
+    //    that follows — the welcome/setup modal, the shell, and the tutorial.
+    if (!_languageChosen) {
+      return LanguageSelectScreen(onComplete: _onLanguageChosen);
+    }
+    // 2) First-run setup (welcome) modal. It's a static modal, so wrap it in a
+    //    version-watching Consumer: as the post-pick translation sweep caches
+    //    its strings, it re-renders in the chosen language (a brief English
+    //    flash first is fine) rather than staying in the source language.
     if (_needsSetup) {
       return Scaffold(
         backgroundColor: context.nym.bg,
-        body: SetupModal(onComplete: _onSetupComplete),
+        body: Consumer(
+          builder: (context, ref, _) {
+            ref.watch(i18nVersionProvider);
+            return SetupModal(onComplete: _onSetupComplete);
+          },
+        ),
       );
     }
-    // Reached the shell: overlay the first-run tutorial above it.
+    // 3) Reached the shell: overlay the first-run tutorial above it.
     return const _ShellWithTutorial();
   }
 }
@@ -113,12 +149,28 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
       await ref.read(nostrControllerProvider).settingsHydrated;
     } catch (_) {}
     if (!mounted) return;
+    // The language chooser has already run in the BootGate (it leads
+    // onboarding), so the shell + tutorial render in the chosen language.
+    _startTutorialAndPrompts();
+  }
+
+  /// Runs after settings hydrate: the tutorial-seen gate + the deferred
+  /// encrypt-at-rest prompt.
+  void _startTutorialAndPrompts() {
+    if (!mounted) return;
     // maybeStartTutorial(false): skip if already seen (now including a flag
     // that just arrived from the remote settings restore).
     final kv = ref.read(keyValueStoreProvider);
     final seen = kv.getString(StorageKeys.tutorialSeen) == 'true' ||
         kv.getBool(StorageKeys.tutorialSeen, defaultValue: false);
     if (!seen) {
+      // Kick a background translation of the ENTIRE tutorial (every step's body
+      // + the Skip/Back/Next/Done labels), not just the few titles that happen
+      // to overlap already-cached shell strings. The overlay is static and only
+      // re-renders via the i18n-version watch in [build], so without this its
+      // unique body text/buttons would stay in English. A brief English flash
+      // before the translations land is fine.
+      LocalizationService.instance.prime(tutorialStringsForPretranslate());
       // The PWA's 300ms settle delay before starting (app.js:446).
       _tutorialDelay = Timer(const Duration(milliseconds: 300), () {
         if (mounted) setState(() => _showTutorial = true);
@@ -192,14 +244,25 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
         HomeShell(key: HomeShell.tutorialKey),
         if (_showTutorial)
           Positioned.fill(
-            // The tutorial renders one frame after the shell mounts (post-frame
-            // setState below), so `tutorialKey.currentState` is populated here.
-            // On narrow layouts the overlay drives the drawer per step; on wide
-            // layouts the driver's open/close are no-ops and targets spotlight
-            // in place.
-            child: TutorialOverlay(
-              onDismiss: _dismissTutorial,
-              sidebar: HomeShell.tutorialKey.currentState,
+            // The tutorial is a STATIC overlay — it never rebuilds on its own,
+            // so on-demand translations that land after it mounts would never
+            // be re-read. Watch the i18n version HERE (scoped to just the
+            // overlay, so the shell below isn't rebuilt on every translation
+            // batch) and rebuild the overlay when new translations cache. The
+            // TutorialOverlay's own State (current step, etc.) is preserved
+            // across these rebuilds since its type/position are unchanged.
+            child: Consumer(
+              builder: (context, ref, _) {
+                ref.watch(i18nVersionProvider);
+                // The tutorial renders one frame after the shell mounts, so
+                // `tutorialKey.currentState` is populated here. On narrow
+                // layouts the overlay drives the drawer per step; on wide
+                // layouts the driver's open/close are no-ops.
+                return TutorialOverlay(
+                  onDismiss: _dismissTutorial,
+                  sidebar: HomeShell.tutorialKey.currentState,
+                );
+              },
             ),
           ),
       ],

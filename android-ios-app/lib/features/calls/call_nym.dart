@@ -23,6 +23,7 @@ import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../widgets/context_menu/profile_badges.dart';
+import '../i18n/i18n.dart';
 
 /// A decorated call nym: `base` + dim `#suffix` + flair/supporter + verified ✓ +
 /// friend badge. Pass [self] (or a pubkey equal to the local identity) to render
@@ -68,7 +69,7 @@ class CallNym extends ConsumerWidget {
     );
 
     if (self || (pubkey.isNotEmpty && pubkey == selfPubkey)) {
-      return Text('You', style: base, maxLines: 1, overflow: TextOverflow.ellipsis);
+      return Text(tr('You'), style: base, maxLines: 1, overflow: TextOverflow.ellipsis);
     }
 
     final users = ref.watch(usersProvider);

@@ -683,12 +683,28 @@ class GroupLogic {
 
   static bool _applyMetadata(
       Group g, List<List<String>> tags, String senderPubkey, int ts) {
-    if (g.createdBy != senderPubkey) return false; // owner-issued only
     // A falsy/zero metadata timestamp is rejected, mirroring groups.js
     // `_applyGroupMetadataTags`: `if (!metaTs || metaTs < grp.metaUpdatedAt)`.
     if (ts <= 0) return false;
-    if (ts < g.metaUpdatedAt) return false;
     var changed = false;
+    // BARE-SHELL HEAL: a member who learned this group from a backfilled MESSAGE
+    // (relay-proxy / D1 gift-wrap archive) has no known owner — `mergeGroupFromMessage`
+    // plants `createdBy: null`. The owner metadata (a `group-metadata` control OR
+    // the `meta_ts` piggyback, both attached ONLY by the owner on the wire — see
+    // [groupMetaPiggybackTags]) is the sole signal that can establish the owner
+    // for such a member, so on a still-ownerless group adopt the sender as owner
+    // and let the appearance converge. This is the documented purpose of the
+    // piggyback (the "group avatar not coming from D1" symptom): without it a
+    // D1-only member's custom avatar/banner stays stuck on the stacked-member
+    // default forever. It intentionally diverges from the PWA's strict
+    // `createdBy === senderPubkey` reject, which leaves that member broken.
+    if (g.createdBy == null || g.createdBy!.isEmpty) {
+      g.createdBy = senderPubkey;
+      changed = true;
+    } else if (g.createdBy != senderPubkey) {
+      return false; // owner-issued only
+    }
+    if (ts < g.metaUpdatedAt) return changed;
     final subject = tagValue(tags, 'subject');
     if (subject != null && subject.isNotEmpty && subject != g.name) {
       g.name = subject;

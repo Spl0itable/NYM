@@ -16,6 +16,7 @@ import '../../features/identity/modal_chrome.dart';
 import '../../services/api/api_client.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../i18n/i18n.dart';
 import 'cosmetics.dart' show CosmeticAura, cosmeticAuraFor;
 import 'shop_catalog.dart';
 import 'shop_controller.dart';
@@ -55,7 +56,7 @@ String _errorMessage(Object e) {
         return j['error'] as String;
       }
     } catch (_) {}
-    return 'Request failed (${e.statusCode})';
+    return tr('Request failed ({code})', {'code': e.statusCode});
   }
   return e.toString();
 }
@@ -183,7 +184,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'FLAIR',
+            tr('FLAIR'),
             style: TextStyle(
               color: c.primary,
               fontSize: 24,
@@ -198,9 +199,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
           Padding(
             padding: const EdgeInsets.only(right: 28),
             child: Text(
-              'Get addon packs to change the styling of your messages '
-              'and nickname that others will see across all channels '
-              '(only in the Nymchat app).',
+              tr('Get addon packs to change the styling of your messages '
+                  'and nickname that others will see across all channels '
+                  '(only in the Nymchat app).'),
               style: TextStyle(
                 color: c.textDim,
                 fontSize: 12,
@@ -227,7 +228,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             style: TextStyle(color: c.text, fontSize: 13),
             decoration: InputDecoration(
               isDense: true,
-              hintText: 'Recovery code',
+              hintText: tr('Recovery code'),
               hintStyle: TextStyle(color: c.textDim, fontSize: 13),
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -255,7 +256,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             ),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           ),
-          child: Text('Restore', style: TextStyle(color: c.primary)),
+          child: Text(tr('Restore'), style: TextStyle(color: c.primary)),
         ),
       ],
     );
@@ -267,7 +268,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     final code = _recoveryController.text.trim();
     if (code.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a recovery code')),
+        SnackBar(content: Text(tr('Enter a recovery code'))),
       );
       return;
     }
@@ -275,14 +276,14 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     final ctrl = ref.read(shopControllerProvider.notifier);
     String message;
     if (identity == null) {
-      message = 'Sign in to restore purchases.';
+      message = tr('Sign in to restore purchases.');
     } else {
       try {
         // Real `shop-redeem` round-trip (shop.js restorePurchases).
         await ctrl.redeem(code, identity: identity);
-        message = '✅ Shop item restored successfully!';
+        message = tr('✅ Shop item restored successfully!');
       } catch (e) {
-        message = '❌ Restore failed: ${_errorMessage(e)}';
+        message = tr('❌ Restore failed: {error}', {'error': _errorMessage(e)});
       }
     }
     if (!mounted) return;
@@ -469,7 +470,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
           // Each section title renders only when its list is non-empty
           // (shop.js:920/927 — `if (limited.length)` / `if (bundles.length)`).
           if (ShopCatalog.limited.isNotEmpty) ...[
-            _categoryTitle(c, 'Limited Editions'),
+            _categoryTitle(c, tr('Limited Editions')),
             const SizedBox(height: 12),
             _cardWrap(
               c,
@@ -481,7 +482,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             const SizedBox(height: 24),
           ],
           if (ShopCatalog.bundles.isNotEmpty) ...[
-            _categoryTitle(c, 'Bundles'),
+            _categoryTitle(c, tr('Bundles')),
             const SizedBox(height: 12),
             _cardWrap(c, state, ShopCatalog.bundles),
           ],
@@ -502,7 +503,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       return Padding(
         padding: const EdgeInsets.all(40),
         child: Text(
-          'No items purchased yet',
+          tr('No items purchased yet'),
           textAlign: TextAlign.center,
           style: TextStyle(color: c.textDim),
         ),
@@ -525,18 +526,18 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _categoryTitle(c, 'My Items'),
+          _categoryTitle(c, tr('My Items')),
           const SizedBox(height: 12),
           _ActiveItemsPreview(active: active),
           if (activeStyle != null)
             _ActiveSummaryBlock(
-              title: 'Active Message Style',
+              title: tr('Active Message Style'),
               // `Active Message Style` chip is name-only (shop.js:984).
               chips: [_ActiveChip(name: activeStyle.name)],
             ),
           if (activeFlairs.isNotEmpty)
             _ActiveSummaryBlock(
-              title: 'Active Nickname Flair',
+              title: tr('Active Nickname Flair'),
               // `${f.name} ${f.icon}` — name then trailing icon (shop.js:993).
               chips: [
                 for (final f in activeFlairs)
@@ -545,7 +546,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             ),
           if (activeCosmetics.isNotEmpty)
             _ActiveSummaryBlock(
-              title: 'Active Special Items',
+              title: tr('Active Special Items'),
               // `${it.icon} ${it.name}` — leading icon then name (shop.js:1003).
               chips: [
                 for (final x in activeCosmetics)
@@ -553,7 +554,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
               ],
             ),
           const SizedBox(height: 8),
-          _categoryTitle(c, 'All Purchased Items'),
+          _categoryTitle(c, tr('All Purchased Items')),
           const SizedBox(height: 12),
           _cardWrap(
             c,
@@ -645,7 +646,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     );
     if (granted == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${item.name} unlocked!')),
+        SnackBar(content: Text(tr('{name} unlocked!', {'name': item.name}))),
       );
     }
   }
@@ -656,16 +657,16 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   Future<void> _gift(ShopItem item) async {
     final identity = _shopIdentity(ref);
     final recipient = await _promptRecipientPubkey(
-      title: 'Gift Item',
+      title: tr('Gift Item'),
       item: item,
-      description:
+      description: tr(
           "Enter the recipient's hex pubkey (64 characters). You pay for the "
-          'item and it lands directly in their inventory.',
+          'item and it lands directly in their inventory.'),
       selfPubkey: identity?.pubkey,
       // shop.js:1650 — the exact self-gift rejection copy.
-      selfMessage: 'Use GET to buy an item for yourself.',
+      selfMessage: tr('Use GET to buy an item for yourself.'),
       // Gift modal: "Continue" CTA + price row (shop.js:1620, 1630).
-      ctaLabel: 'Continue',
+      ctaLabel: tr('Continue'),
       showPrice: true,
     );
     if (recipient == null || !mounted) return;
@@ -683,7 +684,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     // failed payment must NOT report success.
     if (granted == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gift sent: ${item.name}')),
+        SnackBar(content: Text(tr('Gift sent: {name}', {'name': item.name}))),
       );
     }
   }
@@ -695,21 +696,21 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     final identity = _shopIdentity(ref);
     if (identity == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sign in to transfer items.')),
+        SnackBar(content: Text(tr('Sign in to transfer items.'))),
       );
       return;
     }
     final recipient = await _promptRecipientPubkey(
-      title: 'Transfer Item',
+      title: tr('Transfer Item'),
       item: item,
-      description:
+      description: tr(
           "Enter the recipient's hex pubkey (64 characters). The item will be "
-          'revoked from your inventory and assigned to theirs.',
+          'revoked from your inventory and assigned to theirs.'),
       selfPubkey: identity.pubkey,
       // shop.js:1731 — the exact self-transfer rejection copy.
-      selfMessage: 'Cannot transfer to yourself.',
+      selfMessage: tr('Cannot transfer to yourself.'),
       // Transfer modal: "Confirm" CTA + no price (shop.js:1698-1702, 1711).
-      ctaLabel: 'Confirm',
+      ctaLabel: tr('Confirm'),
       showPrice: false,
     );
     if (recipient == null || !mounted) return;
@@ -724,7 +725,10 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '${item.name} transferred to ${recipient.substring(0, 8)}...',
+              tr('{name} transferred to {pk}...', {
+                'name': item.name,
+                'pk': recipient.substring(0, 8),
+              }),
             ),
           ),
         );
@@ -732,7 +736,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Transfer failed: ${_errorMessage(e)}')),
+          SnackBar(
+              content: Text(
+                  tr('Transfer failed: {error}', {'error': _errorMessage(e)}))),
         );
       }
     }
@@ -914,7 +920,8 @@ class _ShopItemCard extends StatelessWidget {
           if (inventory && ownedItem != null) ...[
             const SizedBox(height: 10),
             Text(
-              'Acquired: ${_formatDate(ownedItem!.timestamp)}',
+              tr('Acquired: {date}',
+                  {'date': _formatDate(ownedItem!.timestamp)}),
               style: TextStyle(color: c.textDim, fontSize: 10),
             ),
           ],
@@ -958,7 +965,7 @@ class _ShopItemCard extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: _OrangePillButton(
-                  label: active ? 'DEACTIVATE' : 'ACTIVATE',
+                  label: active ? tr('DEACTIVATE') : tr('ACTIVATE'),
                   onTap: onActivate,
                 ),
               ),
@@ -1021,7 +1028,7 @@ class _ShopItemCard extends StatelessWidget {
         fit: BoxFit.scaleDown,
         alignment: Alignment.centerLeft,
         child: Text(
-          '⚡ ${item.price} sats',
+          tr('⚡ {price} sats', {'price': item.price}),
           style: const TextStyle(
             color: Color(0xFFF7931A),
             fontWeight: FontWeight.bold,
@@ -1039,7 +1046,8 @@ class _ShopItemCard extends StatelessWidget {
       // shop.js:869).
       return [
         price,
-        if (availability == null) _OrangePillButton(label: 'GIFT', onTap: onGift),
+        if (availability == null)
+          _OrangePillButton(label: tr('GIFT'), onTap: onGift),
       ];
     }
     // Limited soon/ended/soldout (not owned): only the availability label,
@@ -1060,8 +1068,8 @@ class _ShopItemCard extends StatelessWidget {
     // Not owned (and every bundle): price, BUY, GIFT (`_shopItemActionsHtml`).
     return [
       price,
-      _OrangePillButton(label: 'BUY', onTap: onBuy),
-      _OrangePillButton(label: 'GIFT', onTap: onGift),
+      _OrangePillButton(label: tr('BUY'), onTap: onBuy),
+      _OrangePillButton(label: tr('GIFT'), onTap: onGift),
     ];
   }
 
@@ -1118,7 +1126,7 @@ class _OwnedBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        '✓ OWNED',
+        tr('✓ OWNED'),
         style: TextStyle(
           color: c.secondary,
           fontSize: 10,
@@ -1192,7 +1200,7 @@ class _TransferButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(
-          'TRANSFER TO PUBKEY',
+          tr('TRANSFER TO PUBKEY'),
           style: TextStyle(
             color: c.textBright,
             fontWeight: FontWeight.w500,
@@ -1232,7 +1240,7 @@ class _ActiveItemsPreview extends ConsumerWidget {
     if (!hasActive) return const SizedBox.shrink();
 
     final id = ref.watch(nostrControllerProvider).identity;
-    final nym = id != null ? stripPubkeySuffix(id.nym) : 'You';
+    final nym = id != null ? stripPubkeySuffix(id.nym) : tr('You');
     final suffix = id != null ? getPubkeySuffix(id.pubkey) : '';
     final flairId = active.flair.isNotEmpty ? active.flair.last : null;
     final isGenesis = flairId == 'flair-genesis';
@@ -1296,7 +1304,7 @@ class _ActiveItemsPreview extends ConsumerWidget {
         ShopCatalog.styleVisuals.containsKey(active.style)) {
       content = ShopStyleBubblePreview(
         styleId: active.style!,
-        text: 'This is how your messages look.',
+        text: tr('This is how your messages look.'),
         bubble: bubble,
         // The active-items block puts the text directly in `.message-content`
         // (a bare body node, shop.js:964) — NOT wrapped in a `<span>` like the
@@ -1307,7 +1315,7 @@ class _ActiveItemsPreview extends ConsumerWidget {
       content = _SupporterContentLine(bubble: bubble);
     } else {
       content = Text(
-        'This is how your messages look.',
+        tr('This is how your messages look.'),
         style: TextStyle(color: c.text, fontSize: 12),
       );
     }
@@ -1348,7 +1356,7 @@ class _ActiveItemsPreview extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Preview',
+          Text(tr('Preview'),
               style: TextStyle(color: c.secondary, fontSize: 14)),
           const SizedBox(height: 10),
           author,
@@ -1375,7 +1383,7 @@ class _SupporterContentLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final isLight = context.nym.isLight;
     final text = Text(
-      'This is how your messages look.',
+      tr('This is how your messages look.'),
       style: TextStyle(
         color: isLight ? const Color(0xFF8A6D00) : const Color(0xFFFFD700),
         fontSize: 12,
@@ -1547,7 +1555,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
   void _submit() {
     final pk = _controller.text.trim().toLowerCase();
     if (!_hexRe.hasMatch(pk)) {
-      setState(() => _error = 'Invalid pubkey. Must be 64 hex characters.');
+      setState(() => _error = tr('Invalid pubkey. Must be 64 hex characters.'));
       return;
     }
     if (widget.selfPubkey != null && pk == widget.selfPubkey) {
@@ -1601,7 +1609,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
                     ),
                     if (widget.showPrice)
                       Text(
-                        '${widget.item.price} sats',
+                        tr('{price} sats', {'price': widget.item.price}),
                         style: const TextStyle(
                           color: Color(0xFFF7931A),
                           fontWeight: FontWeight.w600,
@@ -1620,7 +1628,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
                   autofocus: true,
                   style: TextStyle(color: c.text, fontSize: 13),
                   decoration: InputDecoration(
-                    hintText: 'Recipient hex pubkey (64 chars)',
+                    hintText: tr('Recipient hex pubkey (64 chars)'),
                     hintStyle: TextStyle(color: c.textDim),
                     enabledBorder: OutlineInputBorder(
                       borderSide: BorderSide(color: c.glassBorder),
@@ -1668,7 +1676,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
                           border: Border.all(color: c.glassBorder),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Text('Cancel',
+                        child: Text(tr('Cancel'),
                             style: TextStyle(color: c.textDim)),
                       ),
                     ),
@@ -1751,7 +1759,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
     if (identity == null) {
       setState(() {
         _phase = _BuyPhase.error;
-        _status = 'Sign in to buy flair.';
+        _status = tr('Sign in to buy flair.');
       });
       return;
     }
@@ -1787,7 +1795,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
       if (!mounted) return;
       setState(() {
         _phase = _BuyPhase.error;
-        _status = 'Failed: ${_errorMessage(e)}';
+        _status = tr('Failed: {error}', {'error': _errorMessage(e)});
       });
     }
   }
@@ -1822,7 +1830,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           t.cancel();
           setState(() {
             _phase = _BuyPhase.error;
-            _status = '⏱️ Payment timeout - please check your wallet';
+            _status = tr('⏱️ Payment timeout - please check your wallet');
           });
         }
       });
@@ -1842,8 +1850,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           t.cancel();
           setState(() {
             _phase = _BuyPhase.error;
-            _status = 'Payment not detected yet — if you paid, tap "I\'ve '
-                'paid" or reopen the shop shortly.';
+            _status = tr('Payment not detected yet — if you paid, tap "I\'ve '
+                'paid" or reopen the shop shortly.');
           });
         }
       });
@@ -1873,8 +1881,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
       } else {
         setState(() {
           _phase = _BuyPhase.error;
-          _status =
-              'Payment not detected yet — if you paid, reopen the shop shortly.';
+          _status = tr(
+              'Payment not detected yet — if you paid, reopen the shop shortly.');
         });
       }
     }());
@@ -1901,7 +1909,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
     ref.read(nostrControllerProvider).clearShopReceiptWait();
     setState(() {
       _phase = _BuyPhase.claiming;
-      _status = 'Confirming purchase...';
+      _status = tr('Confirming purchase...');
     });
     try {
       final data = await _ctrl.claim(
@@ -1921,7 +1929,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
       if (!mounted) return;
       setState(() {
         _phase = _BuyPhase.error;
-        _status = 'Purchase confirmation failed: ${_errorMessage(e)}';
+        _status = tr('Purchase confirmation failed: {error}',
+            {'error': _errorMessage(e)});
       });
     }
   }
@@ -1935,7 +1944,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
     if (identity == null || inv == null || inv.invoiceId.isEmpty) return;
     setState(() {
       _phase = _BuyPhase.claiming;
-      _status = 'Checking payment...';
+      _status = tr('Checking payment...');
     });
     try {
       final paid = await _ctrl.checkPaid(inv.invoiceId, identity: identity);
@@ -1946,14 +1955,14 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
       }
       setState(() {
         _phase = _BuyPhase.error;
-        _status =
-            'Not paid yet — complete the payment in your wallet, then tap again.';
+        _status = tr(
+            'Not paid yet — complete the payment in your wallet, then tap again.');
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _phase = _BuyPhase.error;
-        _status = 'Could not check yet — try again in a moment.';
+        _status = tr('Could not check yet — try again in a moment.');
       });
     }
   }
@@ -2027,8 +2036,10 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
                     // `${recipientPubkey ? 'Gifting' : 'Purchasing'}:
                     // <strong>${item.name}</strong>` (shop.js:1172-1174).
                     Text(
-                      '${recipient != null ? 'Gifting' : 'Purchasing'}: '
-                      '${widget.item.name}',
+                      recipient != null
+                          ? tr('Gifting: {name}', {'name': widget.item.name})
+                          : tr('Purchasing: {name}',
+                              {'name': widget.item.name}),
                       style: TextStyle(
                         color: c.text,
                         fontSize: 16,
@@ -2039,8 +2050,13 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
                     // `Price: N sats — gift to <pk8>...` (`.nm-shop-9`:
                     // 12px, warning colour).
                     Text(
-                      'Price: ${widget.item.price} sats'
-                      '${recipient != null ? ' — gift to ${recipient.substring(0, 8)}...' : ''}',
+                      recipient != null
+                          ? tr('Price: {price} sats — gift to {pk}...', {
+                              'price': widget.item.price,
+                              'pk': recipient.substring(0, 8),
+                            })
+                          : tr('Price: {price} sats',
+                              {'price': widget.item.price}),
                       style: TextStyle(color: c.warning, fontSize: 12),
                     ),
                     const SizedBox(height: 16),
@@ -2062,7 +2078,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           const SizedBox(height: 8),
           const CircularProgressIndicator(),
           const SizedBox(height: 12),
-          Text('Generating invoice...',
+          Text(tr('Generating invoice...'),
               style: TextStyle(color: c.textDim, fontSize: 12)),
           const SizedBox(height: 8),
           _cancelButton(c),
@@ -2074,7 +2090,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           const SizedBox(height: 12),
           // 'Confirming purchase...' (handleShopPaymentSuccess) or the manual
           // check's 'Checking payment...' (manualCheckPayment).
-          Text(_status.isNotEmpty ? _status : 'Confirming purchase...',
+          Text(_status.isNotEmpty ? _status : tr('Confirming purchase...'),
               style: TextStyle(color: c.textDim, fontSize: 12)),
         ];
       case _BuyPhase.paid:
@@ -2084,7 +2100,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           const Text('✅', style: TextStyle(fontSize: 24)),
           const SizedBox(height: 8),
           Text(
-            _isGift ? 'Gift sent!' : 'Purchase successful!',
+            _isGift ? tr('Gift sent!') : tr('Purchase successful!'),
             style: TextStyle(color: c.text, fontSize: 15),
           ),
           const SizedBox(height: 4),
@@ -2094,7 +2110,10 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           if (_successEdition != null) ...[
             const SizedBox(height: 10),
             Text(
-              'Edition #$_successEdition of ${_successEditionMax ?? '?'}',
+              tr('Edition #{n} of {max}', {
+                'n': _successEdition,
+                'max': _successEditionMax ?? '?',
+              }),
               style: TextStyle(color: c.text, fontSize: 16),
             ),
           ],
@@ -2102,7 +2121,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           if (_bundleCodes.isNotEmpty)
             _recoveryWarningBlock(
               c,
-              title: '⚠️ SAVE YOUR RECOVERY CODES',
+              title: tr('⚠️ SAVE YOUR RECOVERY CODES'),
               children: [
                 for (final b in _bundleCodes)
                   RecoveryCodeRow(code: b.code, label: b.name),
@@ -2111,10 +2130,10 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           else if (_successCode != null && _successCode!.isNotEmpty)
             _recoveryWarningBlock(
               c,
-              title: '⚠️ SAVE YOUR RECOVERY CODE',
+              title: tr('⚠️ SAVE YOUR RECOVERY CODE'),
               children: [
                 Text(
-                  'Use this code to restore this item on another pubkey:',
+                  tr('Use this code to restore this item on another pubkey:'),
                   style: TextStyle(color: c.textDim, fontSize: 12),
                 ),
                 RecoveryCodeRow(code: _successCode!, label: ''),
@@ -2126,7 +2145,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
             child: FilledButton(
               style: FilledButton.styleFrom(backgroundColor: c.primary),
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Close'),
+              child: Text(tr('Close')),
             ),
           ),
         ];
@@ -2142,7 +2161,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
               Expanded(
                 child: TextButton(
                   onPressed: () => Navigator.of(context).pop(false),
-                  child: Text('Close', style: TextStyle(color: c.textDim)),
+                  child: Text(tr('Close'), style: TextStyle(color: c.textDim)),
                 ),
               ),
               // "I've paid" re-verifies via shop-check → shop-claim
@@ -2153,7 +2172,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
                   child: FilledButton(
                     style: FilledButton.styleFrom(backgroundColor: c.primary),
                     onPressed: _manualCheck,
-                    child: const Text("I've paid"),
+                    child: Text(tr("I've paid")),
                   ),
                 ),
             ],
@@ -2170,7 +2189,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
                 data: pr, size: 200, backgroundColor: Colors.white),
           ),
           const SizedBox(height: 12),
-          Text('Scan with a Lightning wallet to pay.',
+          Text(tr('Scan with a Lightning wallet to pay.'),
               style: TextStyle(color: c.textDim, fontSize: 12)),
           const SizedBox(height: 16),
           Row(
@@ -2178,7 +2197,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
               Expanded(
                 child: OutlinedButton(
                   onPressed: _copy,
-                  child: Text('Copy', style: TextStyle(color: c.primary)),
+                  child: Text(tr('Copy'), style: TextStyle(color: c.primary)),
                 ),
               ),
               const SizedBox(width: 10),
@@ -2186,7 +2205,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
                 child: OutlinedButton(
                   onPressed: _openWallet,
                   child:
-                      Text('Open Wallet', style: TextStyle(color: c.primary)),
+                      Text(tr('Open Wallet'), style: TextStyle(color: c.primary)),
                 ),
               ),
             ],
@@ -2201,7 +2220,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
               if (_invoice!.invoiceId.isNotEmpty)
                 TextButton(
                   onPressed: _manualCheck,
-                  child: Text("I've paid", style: TextStyle(color: c.primary)),
+                  child:
+                      Text(tr("I've paid"), style: TextStyle(color: c.primary)),
                 ),
             ],
           ),
@@ -2211,7 +2231,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
 
   Widget _cancelButton(NymColors c) => TextButton(
         onPressed: () => Navigator.of(context).pop(false),
-        child: Text('Cancel', style: TextStyle(color: c.textDim)),
+        child: Text(tr('Cancel'), style: TextStyle(color: c.textDim)),
       );
 
   /// The prominent "SAVE YOUR RECOVERY CODE(S)" panel (`.nm-shop-12/.nm-shop-13`,

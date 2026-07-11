@@ -14,6 +14,7 @@ import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../i18n/i18n.dart';
 import 'geo_map_painter.dart';
 import 'geo_projection.dart';
 import 'geohash_channel.dart';
@@ -144,7 +145,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
   /// Reverse-geocoded "city, country" for [_selected]; seeded with the PWA's
   /// literal `Loading location...` until the geocode resolves.
-  String _locationInfo = 'Loading location...';
+  String _locationInfo = tr('Loading location...');
 
   /// Monotonic token so a stale geocode response can't overwrite a newer
   /// selection's Location row (mirrors re-selecting in the PWA).
@@ -431,7 +432,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     setState(() {
       _selected = point;
       _hoveredGeohash = point.geohash;
-      _locationInfo = 'Loading location...';
+      _locationInfo = tr('Loading location...');
     });
     _fetchLocation(point.lat, point.lng, token);
   }
@@ -452,9 +453,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       ].firstWhere((x) => x.isNotEmpty, orElse: () => '');
       final country = s(addr['country']);
       result = [city, country].where((x) => x.isNotEmpty).join(', ');
-      if (result.isEmpty) result = 'Unknown location';
+      if (result.isEmpty) result = tr('Unknown location');
     } catch (_) {
-      result = 'Unknown';
+      result = tr('Unknown');
     }
     if (!mounted || token != _geocodeToken) return;
     setState(() => _locationInfo = result);
@@ -489,7 +490,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       _grid = false;
       _selected = null;
       _hoveredGeohash = null;
-      _locationInfo = 'Loading location...';
+      _locationInfo = tr('Loading location...');
       _activeWindowHours = 24;
     });
     // GL-L1/GL-L2 — Reset View clears the session preferences too (the PWA's
@@ -605,7 +606,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
         border: Border(bottom: BorderSide(color: nym.glassBorder)),
       ),
       child: Text(
-        'GEOHASH EXPLORER',
+        tr('GEOHASH EXPLORER'),
         style: TextStyle(
           fontSize: 18,
           color: nym.primary,
@@ -772,7 +773,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
                   _view.zoomedAt(1 / 1.6, size.center(Offset.zero), size), size),
               width: 34),
           const SizedBox(width: 10),
-          _controlBtn('Reset View', onTap: () => _resetView(size)),
+          _controlBtn(tr('Reset View'), onTap: () => _resetView(size)),
         ],
       ),
     );
@@ -786,21 +787,21 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       left: inset,
       child: Row(
         children: [
-          _controlBtn('Heat',
+          _controlBtn(tr('Heat'),
               active: _heatmap,
               onTap: () {
                 setState(() => _heatmap = !_heatmap);
                 _savePrefs();
               }),
           const SizedBox(width: 10),
-          _controlBtn('Day / Night',
+          _controlBtn(tr('Day / Night'),
               active: _daynight,
               onTap: () {
                 setState(() => _daynight = !_daynight);
                 _savePrefs();
               }),
           const SizedBox(width: 10),
-          _controlBtn('Geohash',
+          _controlBtn(tr('Geohash'),
               active: _grid,
               onTap: () {
                 setState(() => _grid = !_grid);
@@ -840,7 +841,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
               dotColor: nym.primary,
               // `.nm-geo-1 { box-shadow: 0 0 5px var(--primary); }`
               glow: nym.primary,
-              label: 'Active',
+              label: tr('Active'),
               fontSize: fontSize,
               trailing: narrow ? _windowSelect(nym) : _windowGroup(nym),
             ),
@@ -848,7 +849,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
               const SizedBox(height: 5),
               _legendRow(
                 dotColor: nym.warning, // `.nm-geo-2 { background: var(--warning); }`
-                label: 'Your Location',
+                label: tr('Your Location'),
                 fontSize: fontSize,
               ),
             ],
@@ -985,13 +986,16 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     final user = _userLocation();
     final distance = user == null
         ? null
-        : '${_distanceKm(user.lat, user.lng, ch.lat, ch.lng).toStringAsFixed(1)} km away';
+        : tr('{km} km away', {
+            'km': _distanceKm(user.lat, user.lng, ch.lat, ch.lng)
+                .toStringAsFixed(1)
+          });
 
     final rows = <Widget>[
-      _infoRow('Coordinates', coords, nym),
-      _infoRow('Location', _locationInfo, nym),
-      if (distance != null) _infoRow('Distance', distance, nym),
-      _infoRow('Messages', '${ch.messages}', nym, isLast: true),
+      _infoRow(tr('Coordinates'), coords, nym),
+      _infoRow(tr('Location'), _locationInfo, nym),
+      if (distance != null) _infoRow(tr('Distance'), distance, nym),
+      _infoRow(tr('Messages'), '${ch.messages}', nym, isLast: true),
     ];
 
     final card = Container(
@@ -1038,7 +1042,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
               child: Text(
                 // PWA: `Go to Channel` when joined, else `Join Channel`
                 // (uppercased by `.geohash-join-btn { text-transform: uppercase }`).
-                ch.isJoined ? 'GO TO CHANNEL' : 'JOIN CHANNEL',
+                ch.isJoined ? tr('GO TO CHANNEL') : tr('JOIN CHANNEL'),
                 style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,

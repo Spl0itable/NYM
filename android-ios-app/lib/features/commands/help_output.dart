@@ -23,6 +23,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../i18n/i18n.dart';
 import 'command_registry.dart';
 
 /// One `/help` category section: the verbatim header label plus its commands
@@ -52,18 +53,18 @@ List<HelpCategoryGroup> buildHelpGroups() {
 }
 
 /// `.help-title` text (commands.js:534).
-const String kHelpTitle = 'Available commands';
+String get kHelpTitle => tr('Available commands');
 
 /// The five `.help-footer` lines, verbatim (commands.js:531-537). Joined with
 /// `<br><br>` in the PWA — i.e. one blank line between each.
-const List<String> kHelpFooterLines = [
-  'Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, > quote',
-  'Type : to quickly pick an emoji',
-  'Type \\ to pick a kaomoji like ¯\\_(ツ)_/¯',
-  'Nyms are shown as name#xxxx where xxxx is the last 4 characters of their '
-      'pubkey',
-  'Click on users for more options',
-];
+List<String> get kHelpFooterLines => [
+      tr('Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, > quote'),
+      tr('Type : to quickly pick an emoji'),
+      tr('Type \\ to pick a kaomoji like ¯\\_(ツ)_/¯'),
+      tr('Nyms are shown as name#xxxx where xxxx is the last 4 characters of their '
+          'pubkey'),
+      tr('Click on users for more options'),
+    ];
 
 /// One `.help-cmd` line: `"/name, /alias — desc"` (commands.js:526).
 String helpCommandLine(CommandSpec spec) =>

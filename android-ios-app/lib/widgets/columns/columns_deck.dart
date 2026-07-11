@@ -14,6 +14,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/i18n/i18n.dart';
 import '../../features/nymbot/nymbot_providers.dart'
     show BotChatController, botChatControllerProvider, mergeBotThreadWithInfo;
 import '../../features/pms/pm_logic.dart';
@@ -507,11 +508,12 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final title = _columnTitle(context, desc);
     final res = await showAppConfirmWithCheckbox(
       context,
-      'Remove the "$title" column? You can add it back anytime.',
-      title: 'Remove column',
-      okLabel: 'Remove',
+      tr('Remove the "{title}" column? You can add it back anytime.',
+          {'title': title}),
+      title: tr('Remove column'),
+      okLabel: tr('Remove'),
       danger: true,
-      checkboxLabel: "Don't ask again",
+      checkboxLabel: tr("Don't ask again"),
     );
     if (!res.confirmed || !mounted) return;
     if (res.checked) kv.setBool(_skipRemoveConfirmKey, true);
@@ -1063,7 +1065,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       if (open.contains(d)) continue;
       out.add((
         desc: d,
-        label: pm.nym.isNotEmpty ? pm.nym : 'Direct message',
+        label: pm.nym.isNotEmpty ? pm.nym : tr('Direct message'),
         icon: _pickerRowIcon(context, d),
       ));
     }
@@ -1072,7 +1074,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       if (open.contains(d)) continue;
       out.add((
         desc: d,
-        label: g.name.isNotEmpty ? g.name : 'Group chat',
+        label: g.name.isNotEmpty ? g.name : tr('Group chat'),
         icon: _pickerRowIcon(context, d),
       ));
     }
@@ -1173,7 +1175,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final result = await showGeneralDialog<_TabsResult>(
       context: context,
       barrierDismissible: true,
-      barrierLabel: 'Columns',
+      barrierLabel: tr('Columns'),
       // `.cv-tabs-overlay` background rgba(0,0,0,0.5).
       barrierColor: Colors.black.withValues(alpha: 0.5),
       transitionDuration: Duration.zero,
@@ -1228,12 +1230,12 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
             ? nym
             : (d.nym.isNotEmpty
                 ? d.nym
-                : (app.users[d.pubkey]?.nym ?? 'Direct message'));
+                : (app.users[d.pubkey]?.nym ?? tr('Direct message')));
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
         return (g.isNotEmpty && g.first.name.isNotEmpty)
             ? g.first.name
-            : 'Group chat';
+            : tr('Group chat');
     }
   }
 
@@ -1292,7 +1294,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           const SizedBox(width: 4),
           VerifiedBadge(
             size: 20,
-            tooltip: isDev ? 'Nymchat Developer' : 'Nymchat Bot',
+            tooltip: isDev ? tr('Nymchat Developer') : tr('Nymchat Bot'),
           ),
         ],
         // `getFriendBadgeHtml`.
@@ -2119,7 +2121,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   /// in BOTH modes. The channel-specific "No recent messages in #&lt;name&gt;" is a
   /// single-view-only string (the `loadChannelFromRelays` path, messages.js:2840)
   /// and is NOT used by columns (08-H1).
-  String _emptyNoteText() => 'No recent messages';
+  String _emptyNoteText() => tr('No recent messages');
 
   /// Strips the `#suffix` off a nym for the `@name` mention token (mirrors
   /// messages_list `_baseNym`).
@@ -2157,7 +2159,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       // `.cv-col-move` prev arrow (columns.js:397 — feather chevron-left).
       children.add(_HeaderIconButton(
         svg: NymIcons.chevronLeft,
-        tooltip: 'Previous column',
+        tooltip: tr('Previous column'),
         enabled: widget.index > 0,
         onTap: widget.onPrev,
       ));
@@ -2165,7 +2167,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       // `.cv-col-move` next arrow (columns.js:398 — feather chevron-right).
       children.add(_HeaderIconButton(
         svg: NymIcons.chevronRight,
-        tooltip: 'Next column',
+        tooltip: tr('Next column'),
         enabled: widget.index < widget.total - 1,
         onTap: widget.onNext,
       ));
@@ -2222,7 +2224,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   /// circle/fill in the PWA.
   Widget _buildCloseButton(NymColors c) {
     Widget btn = _HoverCloseButton(
-      tooltip: 'Remove column',
+      tooltip: tr('Remove column'),
       size: 16,
       hoverColor: c.danger,
       onTap: widget.onClose,
@@ -2538,7 +2540,7 @@ class _PagerState extends State<_Pager> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Tooltip(
-          message: 'Switch columns',
+          message: tr('Switch columns'),
           child: Padding(
             // `.cv-pager` padding: 12px 8px 0.
             padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
@@ -2691,7 +2693,7 @@ class _PickerColumn extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Add a column',
+                    tr('Add a column'),
                     style: TextStyle(
                       color: c.secondary,
                       fontSize: 14,
@@ -2700,7 +2702,7 @@ class _PickerColumn extends StatelessWidget {
                   ),
                 ),
                 _HoverCloseButton(
-                  tooltip: 'Cancel',
+                  tooltip: tr('Cancel'),
                   size: 16,
                   hoverColor: c.danger,
                   onTap: onClose,
@@ -2780,7 +2782,7 @@ class _PickerBodyState extends State<_PickerBody> {
         onChanged: (v) => setState(() => _term = v),
         decoration: InputDecoration(
           isDense: true,
-          hintText: 'Search conversations…',
+          hintText: tr('Search conversations…'),
           hintStyle: TextStyle(color: c.textDim, fontSize: 14),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -2809,7 +2811,7 @@ class _PickerBodyState extends State<_PickerBody> {
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Text(
-                'No conversations',
+                tr('No conversations'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: c.textDim, fontSize: 12),
               ),
@@ -3006,7 +3008,7 @@ class _TabsSheetState extends State<_TabsSheet> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Columns',
+                          tr('Columns'),
                           style: TextStyle(
                             color: c.primary,
                             fontWeight: FontWeight.w600,
@@ -3017,7 +3019,7 @@ class _TabsSheetState extends State<_TabsSheet> {
                       // `.cv-tabs-close` (columns.js:851): X glyph, text-dim →
                       // text-bright on hover.
                       _HoverCloseButton(
-                        tooltip: 'Close',
+                        tooltip: tr('Close'),
                         size: 18,
                         padding: const EdgeInsets.all(4),
                         hoverColor: c.textBright,
@@ -3163,7 +3165,7 @@ class _TabRow extends StatelessWidget {
           // `.cv-tab-close` (columns.js:899): the X glyph itself recolors
           // text-dim → danger on hover (styles-columns.css:753-755).
           _HoverCloseButton(
-            tooltip: 'Remove column',
+            tooltip: tr('Remove column'),
             size: 16,
             padding: const EdgeInsets.all(4),
             hoverColor: c.danger,
@@ -3320,7 +3322,7 @@ class _AddColumnButtonState extends State<_AddColumnButton> {
             fill: (_hover && widget.hoverFill) ? c.primaryA(0.04) : null,
             child: Center(
               child: Text(
-                '+ Add column',
+                tr('+ Add column'),
                 style: TextStyle(
                   color: labelColor,
                   fontSize: 14,

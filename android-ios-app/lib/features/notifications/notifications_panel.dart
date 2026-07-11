@@ -22,6 +22,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../calls/call_nym.dart';
+import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
 
 /// Opens the notifications history as a centered modal (the PWA renders it as a
@@ -278,7 +279,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                     width: double.infinity,
                     padding: const EdgeInsets.fromLTRB(32, 32, 32, 10),
                     child: Text(
-                      'NOTIFICATIONS',
+                      tr('NOTIFICATIONS'),
                       style: TextStyle(
                         color: c.primary,
                         fontSize: 22,
@@ -310,7 +311,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                             // padding 40/20.
                             padding: const EdgeInsets.fromLTRB(20, 40, 20, 40),
                             child: Text(
-                              'No notifications in the last 24 hours',
+                              tr('No notifications in the last 24 hours'),
                               textAlign: TextAlign.center,
                               style:
                                   TextStyle(color: c.textDim, fontSize: 14),
@@ -412,7 +413,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
         children: [
           // `.nm-h-78` — top option, no indent.
           _ToggleRow(
-            label: 'Enable notifications',
+            label: tr('Enable notifications'),
             value: enabled,
             onChanged: (v) {
               // Reactive state so the bell + gate update without a relaunch
@@ -428,7 +429,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
           ),
           // `.nm-h-80` — indented sub-options (margin-top 6, margin-left 20).
           _ToggleRow(
-            label: 'Only notify for mentions in group chats',
+            label: tr('Only notify for mentions in group chats'),
             value: _mentionsOnly,
             indent: true,
             onChanged: (v) {
@@ -437,7 +438,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             },
           ),
           _ToggleRow(
-            label: 'Only notify for messages from friends',
+            label: tr('Only notify for messages from friends'),
             value: _friendsOnly,
             indent: true,
             onChanged: (v) {
@@ -540,7 +541,7 @@ class _MarkReadBtnState extends State<_MarkReadBtn> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           child: Text(
-            'Mark all as read',
+            tr('Mark all as read'),
             style: TextStyle(
               color: c.primary,
               fontSize: 12,
@@ -592,16 +593,16 @@ class _NotificationRow extends ConsumerStatefulWidget {
     if (carried != null && carried.isNotEmpty) return carried;
     switch (entry.type) {
       case 'call':
-        return entry.body.startsWith('Missed') ? null : 'Call';
+        return entry.body.startsWith('Missed') ? null : tr('Call');
       case 'pm':
-        return 'PM';
+        return tr('PM');
       case 'reaction':
-        return 'Reaction';
+        return tr('Reaction');
       case 'mention':
-        return 'Mention';
+        return tr('Mention');
       case 'group':
         // Fallback when no group name was carried on the entry.
-        return 'Group';
+        return tr('Group');
       default:
         return null;
     }

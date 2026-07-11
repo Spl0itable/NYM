@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../features/i18n/i18n.dart';
 import '../../state/settings_provider.dart';
 
 /// Shared confirm / alert / prompt dialog — the native port of the PWA's
@@ -44,8 +45,8 @@ Future<bool> showAppConfirm(
   BuildContext context,
   String message, {
   String? title,
-  String okLabel = 'OK',
-  String cancelLabel = 'Cancel',
+  String? okLabel,
+  String? cancelLabel,
   bool danger = false,
 }) async {
   final res = await showDialog<AppDialogResult>(
@@ -53,9 +54,9 @@ Future<bool> showAppConfirm(
     barrierColor: _barrierColor(context),
     builder: (_) => _AppDialog(
       message: message,
-      title: title ?? 'Confirm',
-      okLabel: okLabel,
-      cancelLabel: cancelLabel,
+      title: title ?? tr('Confirm'),
+      okLabel: okLabel ?? tr('OK'),
+      cancelLabel: cancelLabel ?? tr('Cancel'),
       danger: danger,
     ),
   );
@@ -69,8 +70,8 @@ Future<AppConfirmResult> showAppConfirmWithCheckbox(
   String message, {
   required String checkboxLabel,
   String? title,
-  String okLabel = 'OK',
-  String cancelLabel = 'Cancel',
+  String? okLabel,
+  String? cancelLabel,
   bool danger = false,
 }) async {
   final res = await showDialog<AppDialogResult>(
@@ -78,9 +79,9 @@ Future<AppConfirmResult> showAppConfirmWithCheckbox(
     barrierColor: _barrierColor(context),
     builder: (_) => _AppDialog(
       message: message,
-      title: title ?? 'Confirm',
-      okLabel: okLabel,
-      cancelLabel: cancelLabel,
+      title: title ?? tr('Confirm'),
+      okLabel: okLabel ?? tr('OK'),
+      cancelLabel: cancelLabel ?? tr('Cancel'),
       danger: danger,
       checkboxLabel: checkboxLabel,
     ),
@@ -96,15 +97,15 @@ Future<void> showAppAlert(
   BuildContext context,
   String message, {
   String? title,
-  String okLabel = 'OK',
+  String? okLabel,
 }) {
   return showDialog<void>(
     context: context,
     barrierColor: _barrierColor(context),
     builder: (_) => _AppDialog(
       message: message,
-      title: title ?? 'Notice',
-      okLabel: okLabel,
+      title: title ?? tr('Notice'),
+      okLabel: okLabel ?? tr('OK'),
       alertOnly: true,
     ),
   );
@@ -118,8 +119,8 @@ Future<String?> showAppPrompt(
   BuildContext context,
   String message, {
   String? title,
-  String okLabel = 'OK',
-  String cancelLabel = 'Cancel',
+  String? okLabel,
+  String? cancelLabel,
   String defaultValue = '',
   String placeholder = '',
   int? maxLength,
@@ -130,9 +131,9 @@ Future<String?> showAppPrompt(
     barrierColor: _barrierColor(context),
     builder: (_) => _AppDialog(
       message: message,
-      title: title ?? 'Confirm',
-      okLabel: okLabel,
-      cancelLabel: cancelLabel,
+      title: title ?? tr('Confirm'),
+      okLabel: okLabel ?? tr('OK'),
+      cancelLabel: cancelLabel ?? tr('Cancel'),
       isPrompt: true,
       defaultValue: defaultValue,
       placeholder: placeholder,

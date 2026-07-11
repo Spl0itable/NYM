@@ -10,6 +10,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../features/zaps/zap_modal.dart';
+import '../i18n/i18n.dart';
 import 'quick_react_popup.dart';
 
 /// Builds the gated [QuickContextItem] list for the long-press quick-context-menu
@@ -52,13 +53,13 @@ List<QuickContextItem> buildQuickContextItems(
 
   if (!isSelf && pubkey.isNotEmpty) {
     items.add(QuickContextItem(
-      label: 'Slap with Trout',
+      label: tr('Slap with Trout'),
       svg: ctxActionSvg(CtxAction.slap),
       onTap: () => controller
           .sendCurrent('/me slaps @$fullNym around a bit with a large trout 🐟'),
     ));
     items.add(QuickContextItem(
-      label: 'Give warm Hug',
+      label: tr('Give warm Hug'),
       svg: ctxActionSvg(CtxAction.hug),
       onTap: () => controller.sendCurrent('/me gives @$fullNym a warm hug 🫂'),
     ));
@@ -66,7 +67,7 @@ List<QuickContextItem> buildQuickContextItems(
 
   if (!isSelf && hasMessageId && pubkey.isNotEmpty) {
     items.add(QuickContextItem(
-      label: 'Zap Bitcoin',
+      label: tr('Zap Bitcoin'),
       svg: ctxActionSvg(CtxAction.zap),
       color: QuickContextItemColor.lightning,
       onTap: () => _zap(context, ref, message, baseNym),
@@ -75,25 +76,25 @@ List<QuickContextItem> buildQuickContextItems(
 
   if (hasContent) {
     items.add(QuickContextItem(
-      label: 'Quote Message',
+      label: tr('Quote Message'),
       svg: ctxActionSvg(CtxAction.quote),
       onTap: () => ref
           .read(pendingComposerActionProvider.notifier)
           .requestQuote(fullNym: fullNym, content: content),
     ));
     items.add(QuickContextItem(
-      label: 'Copy Message',
+      label: tr('Copy Message'),
       svg: ctxActionSvg(CtxAction.copyMessage),
       onTap: () async {
         await Clipboard.setData(ClipboardData(text: content));
         ref
             .read(appStateProvider.notifier)
-            .addSystemMessage('Message copied to clipboard');
+            .addSystemMessage(tr('Message copied to clipboard'));
       },
     ));
     if (onTranslate != null) {
       items.add(QuickContextItem(
-        label: 'Translate Message',
+        label: tr('Translate Message'),
         svg: ctxActionSvg(CtxAction.translate),
         onTap: onTranslate,
       ));
@@ -102,7 +103,7 @@ List<QuickContextItem> buildQuickContextItems(
 
   if (isSelf && hasMessageId && hasContent && onEdit != null) {
     items.add(QuickContextItem(
-      label: 'Edit Message',
+      label: tr('Edit Message'),
       svg: ctxActionSvg(CtxAction.edit),
       onTap: onEdit,
     ));
@@ -110,7 +111,7 @@ List<QuickContextItem> buildQuickContextItems(
 
   if (isSelf && hasMessageId) {
     items.add(QuickContextItem(
-      label: 'Delete Message',
+      label: tr('Delete Message'),
       svg: ctxActionSvg(CtxAction.delete),
       color: QuickContextItemColor.danger,
       onTap: () => _confirmDelete(context, ref, message.id),
@@ -129,8 +130,9 @@ Future<void> _zap(
   final user = ref.read(usersProvider)[message.pubkey];
   final lnAddr = user?.profile?.lightningAddress;
   if (lnAddr == null || lnAddr.isEmpty) {
-    ref.read(appStateProvider.notifier).addSystemMessage(
-        '@$baseNym cannot receive zaps (no lightning address set)');
+    ref.read(appStateProvider.notifier).addSystemMessage(tr(
+        '@{user} cannot receive zaps (no lightning address set)',
+        {'user': baseNym}));
     return;
   }
   if (!context.mounted) return;
@@ -155,17 +157,17 @@ Future<void> _confirmDelete(
     builder: (ctx) => AlertDialog(
       backgroundColor: c.bgTertiary,
       content: Text(
-        'Are you sure you want to delete this message? This will send a deletion request to relays.',
+        tr('Are you sure you want to delete this message? This will send a deletion request to relays.'),
         style: TextStyle(color: c.text, fontSize: 14),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(false),
-          child: Text('Cancel', style: TextStyle(color: c.textDim)),
+          child: Text(tr('Cancel'), style: TextStyle(color: c.textDim)),
         ),
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(true),
-          child: Text('Delete', style: TextStyle(color: c.danger)),
+          child: Text(tr('Delete'), style: TextStyle(color: c.danger)),
         ),
       ],
     ),

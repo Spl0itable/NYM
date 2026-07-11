@@ -11,6 +11,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_share.dart' show kNymchatShareHost;
+import '../../features/i18n/i18n.dart';
 import '../../features/pms/new_pm_modal.dart' show resolveRecipientPubkey;
 import '../../models/group.dart';
 import '../../state/app_state.dart';
@@ -61,7 +62,7 @@ class GroupContextMenuPanel extends ConsumerStatefulWidget {
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
-      barrierLabel: 'group context menu',
+      barrierLabel: tr('group context menu'),
       barrierColor: const Color(0x99000000), // rgba(0,0,0,0.6)
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim, _) => const SizedBox.shrink(),
@@ -102,7 +103,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
 
     final body = group == null
         ? Center(
-            child: Text('Group unavailable',
+            child: Text(tr('Group unavailable'),
                 style: TextStyle(color: c.textDim, fontSize: 13)),
           )
         : _content(c, s, group);
@@ -211,8 +212,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
             ),
             child: Text(
               _transferMode
-                  ? 'Select a member to make owner'.toUpperCase()
-                  : 'Members · ${group.members.length}'.toUpperCase(),
+                  ? tr('Select a member to make owner').toUpperCase()
+                  : tr('Members · {count}', {'count': group.members.length})
+                      .toUpperCase(),
               style: TextStyle(
                 color: c.textDim,
                 fontSize: 12,
@@ -281,7 +283,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         children: [
           // Group name (`.context-menu-avatar-nym`): 13px / w600 / secondary.
           Text(
-            group.name.isEmpty ? 'Group' : group.name,
+            group.name.isEmpty ? tr('Group') : group.name,
             textAlign: TextAlign.center,
             style: TextStyle(
               color: c.secondary,
@@ -291,7 +293,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           ),
           const SizedBox(height: 2),
           Text(
-            '${group.members.length} member${group.members.length == 1 ? '' : 's'}',
+            group.members.length == 1
+                ? tr('{count} member', {'count': group.members.length})
+                : tr('{count} members', {'count': group.members.length}),
             style: TextStyle(color: c.textDim, fontSize: 12),
           ),
           // Invite-link row + Copy (owner/inviter only) — fills the same slot as
@@ -392,7 +396,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           await Clipboard.setData(ClipboardData(text: link));
           ref
               .read(appStateProvider.notifier)
-              .addSystemMessage('Copied group invite link to clipboard');
+              .addSystemMessage(tr('Copied group invite link to clipboard'));
           widget.onClose();
         },
       ),
@@ -444,19 +448,19 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     if (iAmOwner) {
       rows.add(_ActionRow(
         svg: NymIcons.ctxEdit,
-        label: 'Edit Group Name',
+        label: tr('Edit Group Name'),
         color: c.text,
         onTap: () => _editName(group),
       ));
       rows.add(_ActionRow(
         svg: NymIcons.groupEditDescription,
-        label: 'Edit Description',
+        label: tr('Edit Description'),
         color: c.text,
         onTap: () => _editDescription(group),
       ));
       rows.add(_ActionRow(
         svg: NymIcons.groupChangeAvatar,
-        label: 'Change Avatar',
+        label: tr('Change Avatar'),
         color: c.text,
         onTap: () => _changeImage(group, avatar: true),
       ));
@@ -465,21 +469,21 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         // change rows); reuse the avatar glyph so the row stays on-brand.
         rows.add(_ActionRow(
           svg: NymIcons.groupChangeAvatar,
-          label: 'Remove Avatar',
+          label: tr('Remove Avatar'),
           color: c.text,
           onTap: () => _removeImage(group, avatar: true),
         ));
       }
       rows.add(_ActionRow(
         svg: NymIcons.groupChangeBanner,
-        label: 'Change Banner',
+        label: tr('Change Banner'),
         color: c.text,
         onTap: () => _changeImage(group, avatar: false),
       ));
       if ((group.banner ?? '').isNotEmpty) {
         rows.add(_ActionRow(
           svg: NymIcons.groupChangeBanner,
-          label: 'Remove Banner',
+          label: tr('Remove Banner'),
           color: c.text,
           onTap: () => _removeImage(group, avatar: false),
         ));
@@ -490,7 +494,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     if (iAmOwner && group.members.length > 1) {
       rows.add(_ActionRow(
         svg: NymIcons.ctxTransferOwner,
-        label: 'Transfer Ownership',
+        label: tr('Transfer Ownership'),
         color: c.text,
         onTap: () => setState(() => _transferMode = true),
       ));
@@ -503,7 +507,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         svg: group.inviteEnabled
             ? NymIcons.checkboxChecked
             : NymIcons.checkboxUnchecked,
-        label: 'Allow joining via invite link',
+        label: tr('Allow joining via invite link'),
         color: c.text,
         onTap: () => _toggleInviteJoin(group),
       ));
@@ -512,7 +516,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       if (group.inviteEnabled) {
         rows.add(_ActionRow(
           svg: NymIcons.groupResetInvite,
-          label: 'Reset Invite Link',
+          label: tr('Reset Invite Link'),
           color: c.text,
           onTap: () => _resetInviteLink(group),
         ));
@@ -526,7 +530,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         svg: group.allowMemberInvites
             ? NymIcons.checkboxChecked
             : NymIcons.checkboxUnchecked,
-        label: 'Allow members to add others',
+        label: tr('Allow members to add others'),
         color: c.text,
         onTap: () => _toggleAllowInvites(group),
       ));
@@ -536,7 +540,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     if (canAdd) {
       rows.add(_ActionRow(
         svg: NymIcons.groupAddMembers,
-        label: 'Add Members',
+        label: tr('Add Members'),
         color: c.text,
         onTap: () => _addMembers(group),
       ));
@@ -545,7 +549,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     // Leave Group — available to every member (danger, confirmed).
     rows.add(_ActionRow(
       svg: NymIcons.groupLeave,
-      label: 'Leave Group',
+      label: tr('Leave Group'),
       color: c.danger,
       onTap: () => _leaveGroup(group),
     ));
@@ -563,9 +567,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final controller = ref.read(nostrControllerProvider);
     final name = await showAppPrompt(
       context,
-      'Enter a new group name:',
-      title: 'Rename Group',
-      okLabel: 'Save',
+      tr('Enter a new group name:'),
+      title: tr('Rename Group'),
+      okLabel: tr('Save'),
       defaultValue: group.name,
       maxLength: 40,
     );
@@ -579,9 +583,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final controller = ref.read(nostrControllerProvider);
     final desc = await showAppPrompt(
       context,
-      'Enter a group description:',
-      title: 'Group Description',
-      okLabel: 'Save',
+      tr('Enter a group description:'),
+      title: tr('Group Description'),
+      okLabel: tr('Save'),
       defaultValue: group.description ?? '',
       maxLength: 150,
       multiline: true,
@@ -650,9 +654,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final controller = ref.read(nostrControllerProvider);
     final ok = await showAppConfirm(
       context,
-      'Reset the invite link? Every link shared so far will stop working.',
-      title: 'Reset Invite Link',
-      okLabel: 'Reset',
+      tr('Reset the invite link? Every link shared so far will stop working.'),
+      title: tr('Reset Invite Link'),
+      okLabel: tr('Reset'),
       danger: true,
     );
     if (!ok) return;
@@ -672,12 +676,13 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   /// Closes the panel first so it isn't left over the (now-gone) group.
   Future<void> _leaveGroup(Group group) async {
     final controller = ref.read(nostrControllerProvider);
-    final name = group.name.isEmpty ? 'this group' : '"${group.name}"';
+    final name = group.name.isEmpty ? tr('this group') : '"${group.name}"';
     final ok = await showAppConfirm(
       context,
-      "Leave $name? You'll stop receiving messages from this group.",
-      title: 'Leave Group',
-      okLabel: 'Leave',
+      tr("Leave {name}? You'll stop receiving messages from this group.",
+          {'name': name}),
+      title: tr('Leave Group'),
+      okLabel: tr('Leave'),
       danger: true,
     );
     if (!ok) return;
@@ -721,7 +726,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         imageUrl: user?.profile?.picture,
         label: base.isNotEmpty ? base[0] : null,
       ),
-      base: base.isEmpty ? '(unknown)' : base,
+      base: base.isEmpty ? tr('(unknown)') : base,
       suffix: '#$suffix',
       isSelf: isSelf,
       roleBadge: isOwner ? 'Owner' : (isMod ? 'Mod' : null),
@@ -765,8 +770,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     // privileges.\`, { danger: true, okLabel: 'Transfer' })` (groups.js:3136).
     final ok = await showAppConfirm(
       context,
-      'Transfer group ownership to $base? You will lose owner privileges.',
-      okLabel: 'Transfer',
+      tr('Transfer group ownership to {name}? You will lose owner privileges.',
+          {'name': base}),
+      okLabel: tr('Transfer'),
       danger: true,
     );
     if (ok) {
@@ -882,7 +888,7 @@ class _CopyInviteRowState extends State<_CopyInviteRow> {
             children: [
               Icon(Icons.copy, size: 12, color: color),
               const SizedBox(width: 2),
-              Text('Copy Invite Link',
+              Text(tr('Copy Invite Link'),
                   style: TextStyle(color: color, fontSize: 11)),
             ],
           ),
@@ -959,7 +965,7 @@ class _MemberTileState extends State<_MemberTile> {
                       if (widget.isSelf) ...[
                         const WidgetSpan(child: SizedBox(width: 6)),
                         TextSpan(
-                          text: 'you',
+                          text: tr('you'),
                           style: TextStyle(color: c.textDim, fontSize: 11),
                         ),
                       ],
@@ -1004,7 +1010,7 @@ class _RoleBadge extends StatelessWidget {
         borderRadius: const BorderRadius.all(Radius.circular(10)),
       ),
       child: Text(
-        label.toUpperCase(),
+        tr(label).toUpperCase(),
         style: TextStyle(
           color: fg,
           fontSize: 10,
@@ -1092,7 +1098,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
-                    child: Text('Add Members',
+                    child: Text(tr('Add Members'),
                         style: TextStyle(
                             color: c.text,
                             fontSize: 18,
@@ -1131,7 +1137,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                                 onSubmitted: (_) => _add(),
                                 decoration: InputDecoration(
                                   isDense: true,
-                                  hintText: 'nym, pubkey, or npub',
+                                  hintText: tr('nym, pubkey, or npub'),
                                   hintStyle: TextStyle(color: c.textDim),
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 12, vertical: 11),
@@ -1159,7 +1165,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                             const SizedBox(width: 8),
                             TextButton(
                               onPressed: _add,
-                              child: Text('Add',
+                              child: Text(tr('Add'),
                                   style: TextStyle(color: c.primary)),
                             ),
                           ],
@@ -1174,7 +1180,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                       children: [
                         TextButton(
                           onPressed: () => Navigator.of(context).pop(),
-                          child: Text('Cancel',
+                          child: Text(tr('Cancel'),
                               style: TextStyle(color: c.textDim)),
                         ),
                         const SizedBox(width: 8),
@@ -1187,7 +1193,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                               ? null
                               : () => Navigator.of(context).pop(
                                   _picked.map((r) => r.pubkey).toList()),
-                          child: const Text('Add'),
+                          child: Text(tr('Add')),
                         ),
                       ],
                     ),

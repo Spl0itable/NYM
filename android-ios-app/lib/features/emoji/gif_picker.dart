@@ -23,6 +23,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../services/api/api_client.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/nym_icons.dart';
+import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import 'modal_close_chip.dart';
 
@@ -367,7 +368,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
         cursorColor: c.isLight ? Colors.black : Colors.white,
         decoration: InputDecoration(
           isDense: true,
-          hintText: 'Search GIFs...',
+          hintText: tr('Search GIFs...'),
           hintStyle: TextStyle(color: c.textDim, fontSize: 12),
           filled: true,
           fillColor: focused
@@ -414,7 +415,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
       // (ui-context.js:2056); search → "Searching GIFs..." (:2073).
       return _centered(
         c,
-        _searchMode ? 'Searching GIFs...' : 'Loading trending GIFs...',
+        _searchMode ? tr('Searching GIFs...') : tr('Loading trending GIFs...'),
         isError: false,
       );
     }
@@ -423,8 +424,8 @@ class _GifPickerState extends ConsumerState<GifPicker>
       // Trending fail → "Failed to load GIFs" (:2066); search empty → "No GIFs
       // found" (:2079); search FAIL → "Failed to search GIFs" (:2084).
       final msg = _searchMode
-          ? (_searchFailed ? 'Failed to search GIFs' : 'No GIFs found')
-          : 'Failed to load GIFs';
+          ? (_searchFailed ? tr('Failed to search GIFs') : tr('No GIFs found'))
+          : tr('Failed to load GIFs');
       return _centered(c, msg, isError: true);
     }
 
@@ -433,9 +434,9 @@ class _GifPickerState extends ConsumerState<GifPicker>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (showFavs) ...[
-            _sectionLabel(c, 'Favorites'),
+            _sectionLabel(c, tr('Favorites')),
             _grid(_favorites),
-            if (_gifs.isNotEmpty) _sectionLabel(c, 'Trending'),
+            if (_gifs.isNotEmpty) _sectionLabel(c, tr('Trending')),
           ],
           _grid(_gifs),
         ],
@@ -499,7 +500,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
         ),
         child: Text.rich(
           TextSpan(
-            text: 'Powered by ',
+            text: tr('Powered by '),
             style: TextStyle(color: c.textDim, fontSize: 10),
             children: [
               WidgetSpan(

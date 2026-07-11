@@ -342,12 +342,28 @@ const Map<String, String> kBuiltinEmoji = {
 class NymFormat {
   const NymFormat._();
 
-  /// Strips the trailing game-state token `\n[gc:BASE64]` that PWA hides with
+  /// Strips the game-state token `[gc:BASE64]` that the PWA hides with
   /// `.game-token { display:none }` (`message-format.js:279`,
-  /// `styles-chat.css:1330-1332`). The token is kept in the PWA DOM only for the
-  /// game module to read; visually it is invisible, so we elide it entirely to
-  /// avoid leaking a literal `[gc:…]` blob into the body.
-  static final RegExp _rxGameToken = RegExp(r'\n\[gc:[A-Za-z0-9+/=]+\]');
+  /// `styles-chat.css:1330-1332`). The token rides the WIRE (the game module +
+  /// the `?guess` router read it back off a quoted reply), but must never be
+  /// visible. The PWA token sits on its own trailing line (`\n[gc:…]`); the extra
+  /// `(?:>[ \t]*)*` here also elides it when it rides a QUOTE line — quoting the
+  /// Nymbot prepends `> ` to every quoted line (`_composeOutgoing`), turning the
+  /// token line into `> [gc:…]`, which the bare `\n[gc:…]` pattern missed and so
+  /// leaked a literal `[gc:…]` blob into the rendered quote (the reported bug).
+  static final RegExp _rxGameToken =
+      RegExp(r'\n[ \t]*(?:>[ \t]*)*\[gc:[A-Za-z0-9+/=]+\]');
+
+  /// Removes every hidden game-state token (see [_rxGameToken]) from [content]
+  /// for DISPLAY. Never call this on content bound for the wire — the token is
+  /// what routes a quoted reply to `?guess`. A leading token (no preceding
+  /// newline) is also caught so a quote whose first line is the token is clean.
+  static String stripGameTokens(String content) {
+    if (!content.contains('[gc:')) return content;
+    return content
+        .replaceAll(_rxGameToken, '')
+        .replaceAll(RegExp(r'^[ \t]*(?:>[ \t]*)*\[gc:[A-Za-z0-9+/=]+\]'), '');
+  }
 
   /// Parse-result LRU cache. [format] is called for every visible message row
   /// on every widget rebuild (a busy channel rebuilds the whole list on each
@@ -385,10 +401,9 @@ class NymFormat {
   }
 
   static List<FormatBlock> _formatUncached(String content, FormatContext c) {
-    // Elide the hidden game-state token first (matches PWA `display:none`).
-    if (content.contains('[gc:')) {
-      content = content.replaceAll(_rxGameToken, '');
-    }
+    // Elide the hidden game-state token first (matches PWA `display:none`),
+    // including when it rides a quoted (`> [gc:…]`) line.
+    content = stripGameTokens(content);
 
     // Fast path: no trigger chars -> plain paragraphs split on blank lines,
     // keeping single newlines inside a paragraph.

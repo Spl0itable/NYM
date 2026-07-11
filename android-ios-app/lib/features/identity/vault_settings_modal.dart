@@ -11,6 +11,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../services/storage/secure_store.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../i18n/i18n.dart';
 import 'identity_vault.dart';
 import 'modal_chrome.dart';
 
@@ -104,10 +105,11 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _modalHeader(c, 'Identity encryption'),
+        _modalHeader(c, tr('Identity encryption')),
         // `.nm-vault-text`: 13px, line-height 1.5.
         Text(
-          'Your identity key is encrypted at rest (${vault.method}).',
+          tr('Your identity key is encrypted at rest ({method}).',
+              {'method': vault.method}),
           style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
         ),
         if (_error != null) ...[
@@ -120,10 +122,10 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ModalChrome.iconButton(
-                c, 'Close', () => Navigator.of(context).pop()),
+                c, tr('Close'), () => Navigator.of(context).pop()),
             const SizedBox(width: 10),
             // `.send-btn.danger` (NOT a solid fill).
-            ModalChrome.sendButton(c, 'Turn off',
+            ModalChrome.sendButton(c, tr('Turn off'),
                 _busy ? null : () => _disable(vault),
                 danger: true),
           ],
@@ -158,16 +160,16 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _modalHeader(c, 'Encrypt identity key'),
+        _modalHeader(c, tr('Encrypt identity key')),
         // `.nm-vault-text`: 13px, line-height 1.5.
         Text(
-          "Protect your saved identity so it can't be read from this device "
-          'without unlocking.',
+          tr("Protect your saved identity so it can't be read from this device "
+              'without unlocking.'),
           style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
         ),
         const SizedBox(height: 16),
         // `.form-label`.
-        ModalChrome.formLabel(c, 'Method'),
+        ModalChrome.formLabel(c, tr('Method')),
         const SizedBox(height: 8),
         ModalChrome.focusRing(
           c,
@@ -181,13 +183,13 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
             style: TextStyle(color: c.text, fontSize: 14),
             decoration: _decoration(c, ''),
             items: [
-              const DropdownMenuItem(
-                  value: 'password', child: Text('Password')),
-              const DropdownMenuItem(value: 'pin', child: Text('PIN')),
+              DropdownMenuItem(
+                  value: 'password', child: Text(tr('Password'))),
+              DropdownMenuItem(value: 'pin', child: Text(tr('PIN'))),
               if (_bioAvailable)
-                const DropdownMenuItem(
+                DropdownMenuItem(
                     value: 'biometric',
-                    child: Text('Biometric (Face/Touch ID)')),
+                    child: Text(tr('Biometric (Face/Touch ID)'))),
             ],
             onChanged: (v) => setState(() => _method = v ?? 'password'),
           ),
@@ -206,7 +208,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
                   isPin ? [FilteringTextInputFormatter.digitsOnly] : null,
               style: TextStyle(color: c.textBright, fontSize: 15),
               decoration: _decoration(
-                  c, isPin ? 'Choose a PIN code' : 'Choose a password'),
+                  c, isPin ? tr('Choose a PIN code') : tr('Choose a password')),
             ),
           ),
           const SizedBox(height: 10),
@@ -219,15 +221,15 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
               inputFormatters:
                   isPin ? [FilteringTextInputFormatter.digitsOnly] : null,
               style: TextStyle(color: c.textBright, fontSize: 15),
-              decoration: _decoration(c, 'Confirm'),
+              decoration: _decoration(c, tr('Confirm')),
             ),
           ),
         ] else
           Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Text(
-              "You'll be asked for your biometric to unlock the app on next "
-              'launch.',
+              tr("You'll be asked for your biometric to unlock the app on next "
+                  'launch.'),
               style: TextStyle(color: c.textDim, fontSize: 11),
             ),
           ),
@@ -241,11 +243,11 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ModalChrome.iconButton(
-                c, 'Cancel', () => Navigator.of(context).pop()),
+                c, tr('Cancel'), () => Navigator.of(context).pop()),
             const SizedBox(width: 10),
             ModalChrome.sendButton(
               c,
-              'Enable',
+              tr('Enable'),
               _busy ? null : () => _enable(vault),
               child: _busy
                   ? SizedBox(
@@ -275,17 +277,17 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       // and derive from a generated device secret stored in secure storage.
       final ok = await _biometricAuth();
       if (!ok) {
-        setState(() => _error = 'Biometric authentication failed.');
+        setState(() => _error = tr('Biometric authentication failed.'));
         return;
       }
       password = await _deviceBiometricSecret();
     } else {
       if (_pw.text.length < 4) {
-        setState(() => _error = 'Use at least 4 characters.');
+        setState(() => _error = tr('Use at least 4 characters.'));
         return;
       }
       if (_pw.text != _pw2.text) {
-        setState(() => _error = 'The two entries do not match.');
+        setState(() => _error = tr('The two entries do not match.'));
         return;
       }
       password = _pw.text;
@@ -304,8 +306,8 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       // PWA uses a modal `_vaultAlert`, not a transient toast (key-vault.js:599).
       await showAppAlert(
         context,
-        "Identity encryption enabled and verified. You'll be asked to unlock "
-        'on next launch.',
+        tr("Identity encryption enabled and verified. You'll be asked to unlock "
+            'on next launch.'),
       );
     } catch (e) {
       setState(() {
@@ -322,7 +324,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       // Passkey/biometric: fresh authenticator challenge (`_vaultReauth`).
       final ok = await _biometricAuth();
       if (!ok) {
-        setState(() => _error = 'Biometric authentication failed.');
+        setState(() => _error = tr('Biometric authentication failed.'));
         return;
       }
       password = await _deviceBiometricSecret();
@@ -332,17 +334,17 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       // inline field. Verify the factor, then disable only on success.
       final entered = await showAppPrompt(
         context,
-        'Enter your password or PIN to turn off identity encryption.',
-        title: "Confirm it's you",
-        okLabel: 'Confirm',
-        placeholder: 'Password or PIN',
+        tr('Enter your password or PIN to turn off identity encryption.'),
+        title: tr("Confirm it's you"),
+        okLabel: tr('Confirm'),
+        placeholder: tr('Password or PIN'),
       );
       if (entered == null) return; // cancelled
       final ok = await vault.verifyPassword(entered);
       if (!mounted) return;
       if (!ok) {
         setState(() =>
-            _error = 'Re-authentication failed. Encryption was not turned off.');
+            _error = tr('Re-authentication failed. Encryption was not turned off.'));
         return;
       }
       password = entered;
@@ -353,11 +355,11 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       if (!mounted) return;
       Navigator.of(context).pop();
       // PWA modal `_vaultAlert` "Encryption turned off." (key-vault.js:527).
-      await showAppAlert(context, 'Encryption turned off.');
+      await showAppAlert(context, tr('Encryption turned off.'));
     } catch (e) {
       setState(() {
         _busy = false;
-        _error = 'Re-authentication failed. Encryption was not turned off.';
+        _error = tr('Re-authentication failed. Encryption was not turned off.');
       });
     }
   }
@@ -366,7 +368,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     try {
       final auth = LocalAuthentication();
       return await auth.authenticate(
-        localizedReason: 'Unlock your Nymchat identity',
+        localizedReason: tr('Unlock your Nymchat identity'),
         options: const AuthenticationOptions(biometricOnly: true),
       );
     } catch (_) {
@@ -432,12 +434,12 @@ Future<bool> maybePromptEncryptAtRest(
 
   final setUp = await showAppConfirm(
     context,
-    'You protect your identity key with encryption on another device. Set it '
-    "up on this device as well so your saved key can't be read without "
-    "unlocking. You'll choose a password, PIN, or passkey for this device.",
-    title: 'Protect your identity here too?',
-    okLabel: 'Set up',
-    cancelLabel: 'Not now',
+    tr('You protect your identity key with encryption on another device. Set it '
+        "up on this device as well so your saved key can't be read without "
+        "unlocking. You'll choose a password, PIN, or passkey for this device."),
+    title: tr('Protect your identity here too?'),
+    okLabel: tr('Set up'),
+    cancelLabel: tr('Not now'),
   );
   if (setUp && context.mounted) {
     await VaultSettingsModal.open(context);

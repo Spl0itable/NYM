@@ -12,6 +12,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../state/app_state.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
+import '../i18n/i18n.dart';
 import 'call_nym.dart';
 import 'call_providers.dart';
 import 'call_signaling.dart';
@@ -28,7 +29,7 @@ class IncomingCallModal extends ConsumerWidget {
 
     final c = context.nym;
     final service = ref.read(callServiceProvider);
-    final nym = call.peerNym ?? 'Someone';
+    final nym = call.peerNym ?? tr('Someone');
     final hasPubkey = call.peerPubkey != null && call.peerPubkey!.isNotEmpty;
     // Identicon seed is the caller PUBKEY (stable across nym changes, matches
     // the PWA `generateAvatarSvg(pubkey)`); fall back to the nym only when no
@@ -38,9 +39,10 @@ class IncomingCallModal extends ConsumerWidget {
     final picture = hasPubkey
         ? ref.watch(usersProvider)[call.peerPubkey!]?.profile?.picture
         : null;
-    final label =
-        'Incoming ${call.kind == CallKind.video ? 'video' : 'audio'} call'
-        '${call.isGroup ? ' (group)' : ''}';
+    final kind = call.kind == CallKind.video ? tr('video') : tr('audio');
+    final label = call.isGroup
+        ? tr('Incoming {kind} call (group)', {'kind': kind})
+        : tr('Incoming {kind} call', {'kind': kind});
 
     return Material(
       // `.modal` backdrop: solid-ui (default) dark `rgba(0,0,0,0.75)` →
@@ -139,7 +141,7 @@ class IncomingCallModal extends ConsumerWidget {
                     // `.incoming-call-btn.decline` — feather phone rotated 135°.
                     svg: NymIcons.phone,
                     rotation: 0.375,
-                    tooltip: 'Decline',
+                    tooltip: tr('Decline'),
                     onTap: service.reject,
                   ),
                   const SizedBox(width: 36),
@@ -148,7 +150,7 @@ class IncomingCallModal extends ConsumerWidget {
                     iconColor: c.bg,
                     // `.incoming-call-btn.accept` — feather phone, primary bg.
                     svg: NymIcons.phone,
-                    tooltip: 'Accept',
+                    tooltip: tr('Accept'),
                     onTap: () => service.answer(),
                   ),
                 ],

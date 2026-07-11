@@ -4,6 +4,7 @@ import '../../core/constants/storage_keys.dart';
 import '../../models/channel.dart';
 import '../../services/storage/key_value_store.dart';
 import '../../state/app_state.dart';
+import '../i18n/i18n.dart';
 
 /// Helpers backing the Settings modal's data-completeness features (gap report
 /// 06): the geohash-location label, the landing-channel autocomplete model, the
@@ -119,7 +120,7 @@ List<LandingChannelOption> buildLandingChannelOptions(
   for (final g in commonGeohashes) {
     if (!seen.add(g)) continue;
     out.add(LandingChannelOption(
-      group: 'Common Geohash Channels',
+      group: tr('Common Geohash Channels'),
       value: LandingChannel(geohash: g),
     ));
   }
@@ -131,7 +132,7 @@ List<LandingChannelOption> buildLandingChannelOptions(
     if (commonGeohashes.contains(key)) continue;
     if (!seen.add(key)) continue;
     out.add(LandingChannelOption(
-      group: 'Joined Geohash Channels',
+      group: tr('Joined Geohash Channels'),
       value: LandingChannel(geohash: key),
     ));
   }
@@ -162,10 +163,10 @@ String normalizeIndicatorScope(String? value,
 String? validateTransferPubkey(String input, {required String selfPubkey}) {
   final pk = input.trim().toLowerCase();
   if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(pk)) {
-    return 'Invalid pubkey. Must be 64 hex characters.';
+    return tr('Invalid pubkey. Must be 64 hex characters.');
   }
   if (selfPubkey.isNotEmpty && pk == selfPubkey.toLowerCase()) {
-    return 'Cannot transfer settings to yourself.';
+    return tr('Cannot transfer settings to yourself.');
   }
   return null;
 }
@@ -208,13 +209,16 @@ String cacheReadoutFor(AppState s, {int realBytes = 0}) {
   final totalItems = channels + pms + profiles + reactions;
   // The PWA's empty state requires BOTH zero items and zero bytes
   // (app.js:3701); a non-zero estimate still renders the sized breakdown.
-  if (totalItems == 0 && sizeBytes <= 0) return 'No cached data on device yet';
+  if (totalItems == 0 && sizeBytes <= 0) {
+    return tr('No cached data on device yet');
+  }
 
   String plural(int n, String unit) => '$n $unit${n == 1 ? '' : 's'}';
   final breakdown =
-      '${plural(channels, 'channel')}, ${plural(pms, 'PM/group thread')}, '
-      '${plural(profiles, 'profile')}, ${plural(reactions, 'reaction record')}';
-  return '${formatCacheBytes(sizeBytes)} cached on device — $breakdown';
+      '${plural(channels, tr('channel'))}, ${plural(pms, tr('PM/group thread'))}, '
+      '${plural(profiles, tr('profile'))}, ${plural(reactions, tr('reaction record'))}';
+  return tr('{size} cached on device — {breakdown}',
+      {'size': formatCacheBytes(sizeBytes), 'breakdown': breakdown});
 }
 
 /// Formats a byte count as a fixed-unit "MB" string. Retained for tests; the

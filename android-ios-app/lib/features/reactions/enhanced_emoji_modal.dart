@@ -32,6 +32,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/nym_icons.dart';
 import '../emoji/custom_emoji.dart';
 import '../emoji/emoji_data.dart';
+import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
 
@@ -182,7 +183,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
         .toList();
     if (recents.isNotEmpty) {
       sections.add(_Section(
-        title: 'Recently Used',
+        title: tr('Recently Used'),
         cells: recents.map((e) {
           final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
           if (m != null) {
@@ -237,7 +238,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       final star = (isOwn(pack) || isSubscribed(pack)) ? ' ★' : '';
       // `pack.title || 'Emoji pack'` (emoji.js:507) — an empty/missing cached
       // title still gets a section header.
-      final packTitle = pack.title.isEmpty ? 'Emoji pack' : pack.title;
+      final packTitle = pack.title.isEmpty ? tr('Emoji pack') : pack.title;
       sections.add(_Section(
         title: '$packTitle$star',
         cells: cells,
@@ -340,7 +341,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       cursorColor: c.isLight ? Colors.black : Colors.white,
       decoration: InputDecoration(
         isDense: true,
-        hintText: 'Search emoji by name...',
+        hintText: tr('Search emoji by name...'),
         hintStyle: TextStyle(color: c.textDim, fontSize: 12),
         filled: true,
         fillColor: fill,
@@ -558,7 +559,7 @@ class _FavStar extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     return Tooltip(
-      message: active ? 'Unfavorite' : 'Favorite',
+      message: active ? tr('Unfavorite') : tr('Favorite'),
       child: InkWell(
         onTap: onTap,
         borderRadius: NymRadius.rxs,

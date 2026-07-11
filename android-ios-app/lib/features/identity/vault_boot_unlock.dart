@@ -6,6 +6,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../services/storage/secure_store.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../i18n/i18n.dart';
 import 'identity_vault.dart' show SecureStoreLike;
 import 'modal_chrome.dart';
 import 'vault_settings_modal.dart' show identityVaultProvider;
@@ -86,13 +87,13 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         // path) we gate on local_auth and derive from a per-device secret. This
         // is a platform-equivalence choice, not a 1:1 port of the PRF scheme.
         final ok = await _biometricAuth();
-        if (!ok) throw StateError('Biometric unlock was cancelled.');
+        if (!ok) throw StateError(tr('Biometric unlock was cancelled.'));
         password = await _deviceBiometricSecret();
       } else {
         password = _pw.text;
         // `unlockVault`'s own guard (key-vault.js:257) — like every unlock
         // failure it surfaces through the "Unlock failed" card, not inline.
-        if (password.isEmpty) throw StateError('Enter your password or PIN.');
+        if (password.isEmpty) throw StateError(tr('Enter your password or PIN.'));
       }
       // `unlockVault` derives the key, verifies the check token (throws on a
       // wrong factor) and returns the decrypted secrets. We hand them to the
@@ -123,7 +124,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
             : e is ArgumentError
                 ? e.message?.toString()
                 : null;
-    return (m == null || m.isEmpty) ? 'Unlock failed.' : m;
+    return (m == null || m.isEmpty) ? tr('Unlock failed.') : m;
   }
 
   /// "Try again" on the error modal — the boot loop prompts again with a fresh
@@ -154,10 +155,10 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     // Shared danger-confirm (`.app-dialog`, the F6 component).
     return showAppConfirm(
       context,
-      'This permanently deletes the encrypted identity on this device and '
-      'starts a fresh one. Continue?',
-      title: 'Forget identity',
-      okLabel: 'Forget',
+      tr('This permanently deletes the encrypted identity on this device and '
+          'starts a fresh one. Continue?'),
+      title: tr('Forget identity'),
+      okLabel: tr('Forget'),
       danger: true,
     );
   }
@@ -166,7 +167,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     try {
       final auth = LocalAuthentication();
       return await auth.authenticate(
-        localizedReason: 'Unlock your Nymchat identity',
+        localizedReason: tr('Unlock your Nymchat identity'),
         options: const AuthenticationOptions(biometricOnly: true),
       );
     } catch (_) {
@@ -254,12 +255,14 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   /// `_vaultPromptModal` — "Unlock your identity" with the factor field.
   List<Widget> _promptChildren(NymColors c, bool isBio) {
     return [
-      _header(c, 'Unlock your identity'),
+      _header(c, tr('Unlock your identity')),
       // `.form-hint.nm-vault-text`: 13px, line-height 1.5, left,
       // `margin: 0 0 16px`.
       Text(
-        'Your Nymchat identity key is encrypted on this device.'
-        '${isBio ? ' Use your biometric to unlock.' : ''}',
+        isBio
+            ? tr('Your Nymchat identity key is encrypted on this device. '
+                'Use your biometric to unlock.')
+            : tr('Your Nymchat identity key is encrypted on this device.'),
         style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
       ),
       const SizedBox(height: 16),
@@ -273,7 +276,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
             enabled: !_busy,
             keyboardType: TextInputType.visiblePassword,
             onSubmitted: (_) => _unlock(),
-            decoration: ModalChrome.inputDecoration(c, 'Password or PIN'),
+            decoration: ModalChrome.inputDecoration(c, tr('Password or PIN')),
             style: TextStyle(color: c.textBright, fontSize: 15),
           ),
         ),
@@ -292,13 +295,13 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         children: [
           Flexible(
               child: ModalChrome.iconButton(
-                  c, 'Forget identity', _busy ? null : _forget,
+                  c, tr('Forget identity'), _busy ? null : _forget,
                   height: 42)),
           const SizedBox(width: 10),
           Flexible(
             child: ModalChrome.sendButton(
               c,
-              'Unlock',
+              tr('Unlock'),
               _busy ? null : _unlock,
               child: _busy
                   ? SizedBox(
@@ -320,7 +323,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   /// (`.icon-btn`, no re-confirm) / "Try again" (`.send-btn`).
   List<Widget> _errorChildren(NymColors c) {
     return [
-      _header(c, 'Unlock failed'),
+      _header(c, tr('Unlock failed')),
       Text(
         _failMessage!,
         style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
@@ -332,10 +335,10 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         children: [
           Flexible(
               child: ModalChrome.iconButton(
-                  c, 'Forget identity', _forgetFromError,
+                  c, tr('Forget identity'), _forgetFromError,
                   height: 42)),
           const SizedBox(width: 10),
-          Flexible(child: ModalChrome.sendButton(c, 'Try again', _retry)),
+          Flexible(child: ModalChrome.sendButton(c, tr('Try again'), _retry)),
         ],
       ),
     ];

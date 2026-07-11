@@ -5,6 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
+import '../i18n/i18n.dart';
 import 'translate_language_prompt.dart';
 import 'translate_languages.dart';
 import 'translate_service.dart';
@@ -74,8 +75,8 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
     final notifier = ref.read(appStateProvider.notifier);
     future.then<void>((_) {}, onError: (Object err) {
       final msg = err is TranslateException ? err.message : err.toString();
-      notifier.addSystemMessage(
-          'Translation failed: ${msg.isEmpty ? 'Unknown error' : msg}');
+      notifier.addSystemMessage(tr('Translation failed: {error}',
+          {'error': msg.isEmpty ? tr('Unknown error') : msg}));
     });
     _future = future;
   }
@@ -124,7 +125,7 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
             // `.translation-loading`: STATIC italic dim@0.6 — the PWA has NO
             // pulse on the inline message translation (styles-features.css:4333).
             return Text(
-              'Translating...',
+              tr('Translating...'),
               style: TextStyle(
                 color: c.textDim.withValues(alpha: 0.6),
                 fontStyle: FontStyle.italic,
@@ -136,7 +137,7 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
           if (snap.hasError) {
             // `.translation-error { font-size: 0.85em }` of the block base.
             return Text(
-              'Translation failed',
+              tr('Translation failed'),
               style: TextStyle(
                   color: c.danger, fontSize: baseSize * 0.85, height: 1.4),
             );
@@ -153,8 +154,8 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
                 children: [
                   const TextSpan(text: '🌐 '),
                   TextSpan(
-                    text:
-                        'Already in ${languageName(_target)} (nothing to translate)',
+                    text: tr('Already in {lang} (nothing to translate)',
+                        {'lang': languageName(_target)}),
                     // `.translation-error`: 0.85em of the block base.
                     style: TextStyle(
                         color: c.danger, fontSize: baseSize * 0.85),

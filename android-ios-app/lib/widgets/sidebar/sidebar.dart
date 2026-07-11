@@ -13,6 +13,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_manager.dart';
 import '../../features/globe/geohash_explorer.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/i18n/i18n.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/identity/panic_overlay.dart';
 import '../../features/identity/panic_wipe.dart';
@@ -429,7 +430,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           return _NavSection(
             key: const ValueKey('section-channels'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.channelList),
-            title: 'Public Channels',
+            title: tr('Public Channels'),
             open: !_collapsed.contains(s),
             searching: _channelSearch,
             reorderMode: _reorderMode,
@@ -448,10 +449,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
             leadingIcon: _MiniIcon(
               key: TutorialTargets.keyFor(TutorialTarget.discoverIcon),
               svg: NymIcons.globe,
-              tooltip: 'Explore geohash channels',
+              tooltip: tr('Explore geohash channels'),
               onTap: _openDiscover,
             ),
-            searchHint: 'Search channels...',
+            searchHint: tr('Search channels...'),
             children: [
               for (final ch in r.rows)
                 ChannelListItem(
@@ -531,7 +532,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           return _NavSection(
             key: const ValueKey('section-pms'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.pmList),
-            title: 'Private Messages',
+            title: tr('Private Messages'),
             open: !_collapsed.contains(s),
             searching: _pmSearch,
             reorderMode: _reorderMode,
@@ -549,13 +550,13 @@ class _SidebarState extends ConsumerState<Sidebar> {
             // `.new-pm-btn` (plus) → new PM / group (gap F15).
             leadingIcon: _MiniIcon(
               svg: NymIcons.plus,
-              tooltip: 'New message',
+              tooltip: tr('New message'),
               onTap: () {
                 widget.onItemSelected?.call();
                 NewPmModal.open(context);
               },
             ),
-            searchHint: 'Search PMs...',
+            searchHint: tr('Search PMs...'),
             children: [
               // NO fixed Nymbot row: the PWA's `#pmList` only ever contains
               // real conversations inserted by `addPMConversation`
@@ -632,7 +633,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
             key: const ValueKey('section-nyms'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.userList),
             // Dynamic "Nyms (N online)" (`abbreviateNumber(activeCount)`).
-            title: 'Nyms (${_abbreviateNumber(nymActiveCount)} online)',
+            title: tr('Nyms ({count} online)',
+                {'count': _abbreviateNumber(nymActiveCount)}),
             open: !_collapsed.contains(s),
             searching: _nymSearch,
             reorderMode: _reorderMode,
@@ -648,7 +650,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             }),
             onSearchChanged: (v) => setState(() => _nymTerm = v),
             onLongPressTitle: _toggleReorderMode,
-            searchHint: 'Search nyms...',
+            searchHint: tr('Search nyms...'),
             children: [
               // `.ssk-nym` ×5 (index.html:577-582; widths w3/w1/w4/w2/w3).
               if (!_skelTimedOut && onlineUsers.isEmpty)
@@ -837,7 +839,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
                     // 10px uppercase ls 1.5 textDim weight 500, centered. Copy is
                     // "Your Nym (click to edit)" in the PWA (gap F16).
                     Text(
-                      'YOUR NYM (CLICK TO EDIT)',
+                      tr('YOUR NYM (CLICK TO EDIT)'),
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: c.textDim,
@@ -1087,8 +1089,9 @@ class _ConnectionStatusIndicator extends StatelessWidget {
     // relays shows `Connected (N relays)` (primary dot); otherwise
     // `Connecting...` with the `--warning` dot. The `Disconnected`/`--danger`
     // state only exists in the non-proxy branch, which never runs by default.
-    final label =
-        connected ? 'Connected ($connectedCount relays)' : 'Connecting...';
+    final label = connected
+        ? tr('Connected ({count} relays)', {'count': connectedCount})
+        : tr('Connecting...');
     final dotColor = connected ? c.primary : c.warning;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -1145,7 +1148,7 @@ class _SidebarActions extends ConsumerWidget {
           _ActionButton(
             // `.sidebar-actions` Flair → the feather star polygon (index.html:442).
             svg: NymIcons.starFlair,
-            label: 'Flair',
+            label: tr('Flair'),
             onTap: () {
               onItemSelected?.call();
               ShopModal.open(context);
@@ -1155,7 +1158,7 @@ class _SidebarActions extends ConsumerWidget {
           const SizedBox(width: 6),
           _ActionButton(
             svg: NymIcons.settings,
-            label: 'Settings',
+            label: tr('Settings'),
             onTap: () {
               onItemSelected?.call();
               SettingsScreen.open(context);
@@ -1164,7 +1167,7 @@ class _SidebarActions extends ConsumerWidget {
           const SizedBox(width: 6),
           _ActionButton(
             svg: NymIcons.info,
-            label: 'About',
+            label: tr('About'),
             onTap: () {
               onItemSelected?.call();
               AboutScreen.open(context);
@@ -1173,7 +1176,7 @@ class _SidebarActions extends ConsumerWidget {
           const SizedBox(width: 6),
           _ActionButton(
             svg: NymIcons.logout,
-            label: 'Logout',
+            label: tr('Logout'),
             // `.icon-btn` Logout → `signOut()` (app.js `signOut`, 6740-6741):
             // close the drawer (inline-bindings `signOutAndCloseSidebar`), then
             // confirm and disconnect. `signOut()` clears the identity + persisted
@@ -1184,8 +1187,8 @@ class _SidebarActions extends ConsumerWidget {
               onItemSelected?.call();
               final ok = await showAppConfirm(
                 context,
-                'Sign out and disconnect from Nymchat?',
-                okLabel: 'Sign out',
+                tr('Sign out and disconnect from Nymchat?'),
+                okLabel: tr('Sign out'),
                 danger: true,
               );
               if (!ok) return;
@@ -1399,7 +1402,7 @@ class _NavSection extends StatelessWidget {
                   // (styles-shell.css:189-214; no active-state rule).
                   _MiniIcon(
                     svg: NymIcons.search,
-                    tooltip: 'Search',
+                    tooltip: tr('Search'),
                     onTap: onToggleSearch,
                   ),
                   const SizedBox(width: 10),
@@ -1407,7 +1410,7 @@ class _NavSection extends StatelessWidget {
                   // (the PWA rotates the same glyph -90° → chevronRight).
                   _MiniIcon(
                     svg: open ? NymIcons.chevronDown : NymIcons.chevronRight,
-                    tooltip: open ? 'Collapse section' : 'Expand section',
+                    tooltip: open ? tr('Collapse section') : tr('Expand section'),
                     onTap: onToggleOpen,
                   ),
                 ],
@@ -1725,7 +1728,7 @@ class _GroupListItem extends ConsumerWidget {
   void _leaveMenu(BuildContext context, WidgetRef ref, Offset at) {
     showSidebarQuickMenu(context, at, [
       SidebarQuickMenuItem(
-        label: 'Leave conversation',
+        label: tr('Leave conversation'),
         // PWA `leaveSvg` is the feather log-out (== NymIcons.logout).
         svg: NymIcons.logout,
         danger: true,
@@ -1735,9 +1738,9 @@ class _GroupListItem extends ConsumerWidget {
           if (!context.mounted) return;
           final ok = await showAppConfirm(
             context,
-            'Leave and delete this group conversation?',
+            tr('Leave and delete this group conversation?'),
             danger: true,
-            okLabel: 'Leave',
+            okLabel: tr('Leave'),
           );
           if (!ok || !context.mounted) return;
           await ref.read(nostrControllerProvider).leaveGroup(group.id);
@@ -1750,7 +1753,7 @@ class _GroupListItem extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final avatarUrl = proxiedAvatarUrl(group.avatar);
-    final name = group.name.isEmpty ? 'Group' : group.name;
+    final name = group.name.isEmpty ? tr('Group') : group.name;
     final otherMembers =
         group.members.where((pk) => pk != selfPubkey).toList(growable: false);
 
@@ -2045,9 +2048,12 @@ class _ViewMoreButtonState extends State<_ViewMoreButton> {
     // PWA labels use three ASCII periods, not U+2026 ('View N more...' /
     // 'Show N more...', users.js:1707/1715).
     final label = widget.more > 0
-        ? '${widget.stepMore ? 'SHOW' : 'VIEW'} '
-            '${_abbreviateNumber(widget.more)} MORE...'
-        : 'SHOW LESS';
+        ? (widget.stepMore
+            ? tr('SHOW {count} MORE...',
+                {'count': _abbreviateNumber(widget.more)})
+            : tr('VIEW {count} MORE...',
+                {'count': _abbreviateNumber(widget.more)}))
+        : tr('SHOW LESS');
     return Padding(
       // `margin: 6px 10px`.
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2111,8 +2117,8 @@ class _SearchCreatePromptState extends State<_SearchCreatePrompt> {
     // geohash → `Join geohash channel "term" (location)`; else `Join channel
     // "term"`. The location suffix mirrors the PWA's resolved geohash label.
     final label = isGeo
-        ? 'Join geohash channel "${widget.term}"'
-        : 'Join channel "${widget.term}"';
+        ? tr('Join geohash channel "{term}"', {'term': widget.term})
+        : tr('Join channel "{term}"', {'term': widget.term});
     final loc = isGeo ? geohashLocationLabel(widget.term) : '';
     return Padding(
       // `margin-top: 5` + the section's 10px horizontal gutter.

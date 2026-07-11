@@ -10,6 +10,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../widgets/chat/message_row.dart' show abbreviateNumber;
 import '../../widgets/context_menu/interaction_hooks.dart';
+import '../i18n/i18n.dart';
 import 'zap_modal.dart';
 
 /// The lightning bolt fill color (`--lightning`, `#f7931a`).
@@ -94,10 +95,19 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     // gift-wrapped, zapper-signed announcement not validated against the
     // recipient's LNURL provider pubkey).
     final unverifiedSats = zaps.unverifiedSats;
-    final tooltip =
-        '${abbreviateNumber(zappers)} zapper${zappers == 1 ? '' : 's'} • '
-        '${abbreviateNumber(total)} sats total'
-        '${unverifiedSats > 0 ? ' (${abbreviateNumber(unverifiedSats)} unverified)' : ''}';
+    final zapperLabel = zappers == 1
+        ? tr('{n} zapper', {'n': abbreviateNumber(zappers)})
+        : tr('{n} zappers', {'n': abbreviateNumber(zappers)});
+    final tooltip = unverifiedSats > 0
+        ? tr('{zappers} • {total} sats total ({u} unverified)', {
+            'zappers': zapperLabel,
+            'total': abbreviateNumber(total),
+            'u': abbreviateNumber(unverifiedSats),
+          })
+        : tr('{zappers} • {total} sats total', {
+            'zappers': zapperLabel,
+            'total': abbreviateNumber(total),
+          });
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -248,12 +258,14 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
   Future<void> _quickZap(BuildContext context) async {
     final baseNym = stripPubkeySuffix(message.author);
     final notifier = ref.read(appStateProvider.notifier);
-    notifier.addSystemMessage('Checking if @$baseNym can receive zaps...');
+    notifier.addSystemMessage(
+        tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
     final controller = ref.read(nostrControllerProvider);
     final lnAddr = await controller.resolveLightningAddressForZap(message.pubkey);
     if (lnAddr == null || lnAddr.isEmpty) {
-      notifier.addSystemMessage(
-          '@$baseNym cannot receive zaps (no lightning address set)');
+      notifier.addSystemMessage(tr(
+          '@{nym} cannot receive zaps (no lightning address set)',
+          {'nym': baseNym}));
       return;
     }
     if (!context.mounted) return;
@@ -278,7 +290,7 @@ class _QuickZapBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     return Tooltip(
-      message: 'Quick zap',
+      message: tr('Quick zap'),
       child: GestureDetector(
         onTap: onTap,
         child: Opacity(

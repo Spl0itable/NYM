@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../features/i18n/i18n.dart';
 
 /// Cryptographic-verification state of a sealed (NIP-17/NIP-59) message,
 /// mirroring the PWA's tri-state `senderVerified` (`messages.js:732-757`):
@@ -146,29 +147,29 @@ class _LockPainter extends CustomPainter {
 void showVerificationPopup(BuildContext context, CryptoVerifyState state) {
   final (title, titleColor, body) = switch (state) {
     CryptoVerifyState.verified => (
-        'Cryptographically verified',
+        tr('Cryptographically verified'),
         const Color(0xFF2ECC71),
-        "The seal wrapping this message (NIP-17 / NIP-59 kind 13) was signed by "
+        tr("The seal wrapping this message (NIP-17 / NIP-59 kind 13) was signed by "
             "the sender's long-term identity key, and that signer matches the "
             "author the message claims. The displayed identity is "
             "cryptographically authenticated and cannot be forged by a relay or "
-            "third party.",
+            "third party."),
       ),
     CryptoVerifyState.unknown => (
-        'Verification unknown',
+        tr('Verification unknown'),
         const Color(0xFF9AA0A6),
-        "This message's sender could not be cryptographically verified on this "
+        tr("This message's sender could not be cryptographically verified on this "
             "device — its verification seal isn't available (for example, it was "
             "restored from saved history). The displayed identity is unconfirmed: "
-            "don't assume it is authenticated.",
+            "don't assume it is authenticated."),
       ),
     CryptoVerifyState.unverified => (
-        'Unverified sender',
+        tr('Unverified sender'),
         const Color(0xFFE74C3C),
-        "This message uses a Bitchat-format seal signed with a throwaway, "
+        tr("This message uses a Bitchat-format seal signed with a throwaway, "
             "per-message key that has no binding to any long-term identity. The "
             "displayed sender is an unverified, self-asserted claim — treat the "
-            "identity with caution, as it could be spoofed.",
+            "identity with caution, as it could be spoofed."),
       ),
   };
 

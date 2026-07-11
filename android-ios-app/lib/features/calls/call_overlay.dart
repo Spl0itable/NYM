@@ -27,6 +27,7 @@ import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/context_menu/context_menu_panel.dart';
 import '../../widgets/nym_icons.dart';
 import '../emoji/emoji_picker.dart';
+import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
 import '../shop/cosmetics.dart';
 import '../reactions/quick_react_popup.dart';
@@ -272,7 +273,7 @@ class _Top extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    final kindLabel = call.kind == CallKind.video ? 'Video call' : 'Audio call';
+    final kindLabel = call.kind == CallKind.video ? tr('Video call') : tr('Audio call');
 
     Widget id;
     if (call.isGroup) {
@@ -280,7 +281,7 @@ class _Top extends ConsumerWidget {
       // group roster.
       final app = ref.watch(appStateProvider);
       final selfPk = app.selfPubkey;
-      String name = 'Group call';
+      String name = tr('Group call');
       List<String> others = const [];
       for (final g in app.groups) {
         if (g.id == call.groupId) {
@@ -352,7 +353,7 @@ class _Top extends ConsumerWidget {
         ],
       );
     } else {
-      id = Text(call.peerNym ?? 'Call',
+      id = Text(call.peerNym ?? tr('Call'),
           style: TextStyle(
               color: c.textBright,
               fontSize: 16.8, // `.call-title` 1.05rem
@@ -547,7 +548,7 @@ class _Tile extends StatelessWidget {
               Positioned(
                 top: 8,
                 right: 8,
-                child: _Badge(text: 'Presenting', color: c.primary, fg: c.bg),
+                child: _Badge(text: tr('Presenting'), color: c.primary, fg: c.bg),
               ),
             // `.call-tile-name`: bottom-left, black@0.55, radius 8, decorated,
             // `max-width: calc(100% - 16px)` (styles-features.css:4756-4769) —
@@ -568,8 +569,9 @@ class _Tile extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: self || pubkey.isEmpty
-                      ? const Text('You',
-                          style: TextStyle(color: Colors.white, fontSize: 12))
+                      ? Text(tr('You'),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 12))
                       // Tile name → shared user context menu (PWA
                       // `callNickMenu` / `showCallUserMenu`, calls.js:1566).
                       : GestureDetector(
@@ -914,7 +916,7 @@ class _ChatPanel extends ConsumerWidget {
             ),
             child: Row(
               children: [
-                Text('Chat',
+                Text(tr('Chat'),
                     style: TextStyle(
                         color: c.textBright, fontWeight: FontWeight.w600)),
                 const Spacer(),
@@ -984,7 +986,7 @@ class _ChatRow extends ConsumerWidget {
     final contextItems = (!msg.isSelf && msg.pubkey.isNotEmpty)
         ? [
             QuickContextItem(
-              label: 'User options',
+              label: tr('User options'),
               svg: NymIcons.info,
               onTap: () => showCallUserMenu(context, msg.pubkey),
             ),
@@ -1145,7 +1147,7 @@ class _ChatRow extends ConsumerWidget {
           // `.call-chat-from`: decorated nym (non-self primary, self dim
           // "You"), `font-size: 0.75rem` = 12px (styles-features.css:4874-4877).
           if (msg.isSelf)
-            Text('You',
+            Text(tr('You'),
                 style: TextStyle(
                     color: c.textDim,
                     fontSize: 12,
@@ -1362,7 +1364,7 @@ class _Receipt extends ConsumerWidget {
       anchorRect: anchor,
       emoji: '',
       // `.reactors-modal-header`: "Seen by <count>".
-      title: 'Seen by ${abbreviateNumber(msg.readers.length)}',
+      title: tr('Seen by {count}', {'count': abbreviateNumber(msg.readers.length)}),
       reactors: [
         for (final e in msg.readers.entries)
           ReactorEntry(
@@ -1487,16 +1489,18 @@ class _TypingLine extends StatelessWidget {
 
     final List<Widget> parts;
     if (pubkeys.length == 1) {
-      parts = [nym(pubkeys[0]), Text(' is typing', style: style)];
+      parts = [nym(pubkeys[0]), Text(tr(' is typing'), style: style)];
     } else if (pubkeys.length == 2) {
       parts = [
         nym(pubkeys[0]),
-        Text(' and ', style: style),
+        Text(tr(' and '), style: style),
         nym(pubkeys[1]),
-        Text(' are typing', style: style),
+        Text(tr(' are typing'), style: style),
       ];
     } else {
-      parts = [Text('${pubkeys.length} people are typing', style: style)];
+      parts = [
+        Text(tr('{n} people are typing', {'n': pubkeys.length}), style: style)
+      ];
     }
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 2, 14, 4),
@@ -1662,7 +1666,7 @@ class _InputRowState extends ConsumerState<_InputRow> {
                     maxLines: 4,
                     onChanged: _onChanged,
                     decoration: InputDecoration(
-                      hintText: 'Message',
+                      hintText: tr('Message'),
                       hintStyle: TextStyle(color: c.textDim),
                       filled: true,
                       fillColor: c.bgTertiary,
@@ -1886,7 +1890,7 @@ class _PresenterMenu extends ConsumerWidget {
         call.presentRequests.where(members.contains).toList();
 
     String nameOf(String pk) =>
-        pk == selfPubkey ? 'You' : stripPubkeySuffix(users[pk]?.nym ?? pk);
+        pk == selfPubkey ? tr('You') : stripPubkeySuffix(users[pk]?.nym ?? pk);
 
     return Material(
       color: Colors.transparent,
@@ -1930,7 +1934,7 @@ class _PresenterMenu extends ConsumerWidget {
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text('Only the presenter can share',
+                        child: Text(tr('Only the presenter can share'),
                             style: TextStyle(
                                 color: c.textBright, fontSize: 14)),
                       ),
@@ -1939,23 +1943,23 @@ class _PresenterMenu extends ConsumerWidget {
                 ),
               ),
               if (requests.isNotEmpty) ...[
-                _Head(text: 'Requests'),
+                _Head(text: tr('Requests')),
                 for (final pk in requests)
                   _PresenterRow(
                     name: nameOf(pk),
                     isPresenter: call.presenter == pk,
-                    actionLabel: 'Approve',
+                    actionLabel: tr('Approve'),
                     onAction: () => onAssign(pk),
                     onClear: () => onAssign(null),
                   ),
               ],
-              _Head(text: 'Participants'),
+              _Head(text: tr('Participants')),
               for (final pk in members)
                 _PresenterRow(
                   name: nameOf(pk) +
-                      (call.presenter == pk ? ' · presenter' : ''),
+                      (call.presenter == pk ? tr(' · presenter') : ''),
                   isPresenter: call.presenter == pk,
-                  actionLabel: 'Make presenter',
+                  actionLabel: tr('Make presenter'),
                   onAction: () => onAssign(pk),
                   onClear: () => onAssign(null),
                 ),
@@ -2020,7 +2024,7 @@ class _PresenterRow extends StatelessWidget {
           const SizedBox(width: 8),
           if (isPresenter)
             _PresenterAction(
-                label: 'Clear', color: c.danger, onTap: onClear)
+                label: tr('Clear'), color: c.danger, onTap: onClear)
           else
             _PresenterAction(
                 label: actionLabel, color: c.primary, onTap: onAction),
@@ -2080,8 +2084,8 @@ class _SwitchCamButtonState extends State<_SwitchCamButton> {
     final c = context.nym;
     return Tooltip(
       message: widget.facingMode == 'environment'
-          ? 'Switch to front camera'
-          : 'Switch to rear camera',
+          ? tr('Switch to front camera')
+          : tr('Switch to rear camera'),
       // `.call-switch-cam-btn:hover { transform: scale(1.08) }` with
       // `transition: transform 0.15s` (styles-features.css:4626-4629);
       // `:disabled { transform: none }` (4630) suppresses the scale.
@@ -2169,7 +2173,7 @@ class _Controls extends StatelessWidget {
             // PWA toggles `.active` (red) on the SAME mic glyph when muted.
             svg: NymIcons.callMic,
             active: call.muted,
-            tooltip: call.muted ? 'Unmute microphone' : 'Mute microphone',
+            tooltip: call.muted ? tr('Unmute microphone') : tr('Mute microphone'),
             onTap: onMute,
           ),
           if (isVideo)
@@ -2178,7 +2182,7 @@ class _Controls extends StatelessWidget {
               // (red) when the camera is off.
               svg: NymIcons.video,
               active: call.cameraOff,
-              tooltip: call.cameraOff ? 'Turn on camera' : 'Turn off camera',
+              tooltip: call.cameraOff ? tr('Turn on camera') : tr('Turn off camera'),
               onTap: onCamera,
             ),
           _CtrlBtn(
@@ -2187,8 +2191,8 @@ class _Controls extends StatelessWidget {
             // request-mode: primary outline when we can't share (calls.js).
             requestMode: !call.sharing && !call.canShareScreen,
             tooltip: call.sharing
-                ? 'Stop sharing screen'
-                : (call.canShareScreen ? 'Share screen' : 'Request to present'),
+                ? tr('Stop sharing screen')
+                : (call.canShareScreen ? tr('Share screen') : tr('Request to present')),
             onTap: onShare,
           ),
           // Presenter button — mods only, badge = pending requests.
@@ -2196,20 +2200,20 @@ class _Controls extends StatelessWidget {
             _CtrlBtn(
               svg: NymIcons.callPresenter,
               active: presenterOpen,
-              tooltip: 'Presenter controls',
+              tooltip: tr('Presenter controls'),
               badge: call.presentRequests.length,
               onTap: onPresenter,
             ),
           _CtrlBtn(
             svg: NymIcons.callReact,
             active: reactionsOpen,
-            tooltip: 'React',
+            tooltip: tr('React'),
             onTap: onReact,
           ),
           _CtrlBtn(
             svg: NymIcons.callChat,
             active: chatOpen,
-            tooltip: 'Chat',
+            tooltip: tr('Chat'),
             badge: call.chatUnread,
             onTap: onChat,
           ),
@@ -2218,7 +2222,7 @@ class _Controls extends StatelessWidget {
             // glyph), danger bg, white icon.
             svg: NymIcons.phone,
             rotation: 0.375,
-            tooltip: 'End call',
+            tooltip: tr('End call'),
             background: c.danger,
             foreground: Colors.white,
             onTap: onEnd,

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../features/i18n/i18n.dart';
 import '../../features/pms/pm_logic.dart';
 import '../../models/channel.dart';
 import '../../state/app_state.dart';
@@ -368,14 +369,14 @@ Future<void> showPmContextMenu(
 
   final items = <SidebarQuickMenuItem>[
     SidebarQuickMenuItem(
-      label: isBlocked ? 'Unblock user' : 'Block user',
+      label: isBlocked ? tr('Unblock user') : tr('Block user'),
       // PWA uses the same `blockSvg` for both block + unblock states.
       svg: NymIcons.sidebarBlock,
       danger: !isBlocked,
       onSelected: () => controller.toggleBlockUser(pubkey),
     ),
     SidebarQuickMenuItem(
-      label: 'Leave conversation',
+      label: tr('Leave conversation'),
       // PWA `leaveSvg` is the feather log-out (== NymIcons.logout).
       svg: NymIcons.logout,
       danger: true,
@@ -384,9 +385,9 @@ Future<void> showPmContextMenu(
         // `deletePM` (pms.js:2849): danger confirm before anything happens.
         final ok = await showAppConfirm(
           context,
-          'Delete this PM conversation?',
+          tr('Delete this PM conversation?'),
           danger: true,
-          okLabel: 'Delete',
+          okLabel: tr('Delete'),
         );
         if (!ok || !context.mounted) return;
         final notifier = ref.read(appStateProvider.notifier);
@@ -404,7 +405,7 @@ Future<void> showPmContextMenu(
         // "If currently viewing this PM, switch to bar":
         // `switchChannel('nymchat','nymchat')`.
         if (wasViewing) controller.switchChannel(kDefaultChannel);
-        notifier.addSystemMessage('PM conversation deleted');
+        notifier.addSystemMessage(tr('PM conversation deleted'));
       },
     ),
   ];

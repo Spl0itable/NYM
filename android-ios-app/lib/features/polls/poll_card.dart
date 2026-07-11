@@ -19,6 +19,7 @@ import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/context_menu/context_menu_panel.dart';
 import '../../widgets/context_menu/profile_badges.dart';
 import '../../widgets/nym_icons.dart';
+import '../i18n/i18n.dart';
 import '../reactions/reaction_picker.dart';
 import '../shop/cosmetics.dart';
 import '../shop/shop_widgets.dart';
@@ -239,7 +240,7 @@ class _PollCardState extends ConsumerState<PollCard> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              '📊 POLL',
+              tr('📊 POLL'),
               style: TextStyle(
                 color: c.textDim,
                 fontSize: 11,
@@ -556,7 +557,7 @@ class _PollHoverButtons extends StatelessWidget {
         _PollHoverActionButton(
           svg: NymIcons.translate,
           onTap: onTranslate,
-          tooltip: 'Translate',
+          tooltip: tr('Translate'),
         ),
       ],
     );
@@ -1015,7 +1016,9 @@ class _PollFooterState extends State<_PollFooter> {
   Widget build(BuildContext context) {
     final c = context.nym;
     // `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}` — the raw integer.
-    final label = '${widget.total} vote${widget.total == 1 ? '' : 's'}';
+    final label = widget.total == 1
+        ? tr('1 vote')
+        : tr('{n} votes', {'n': widget.total});
     return Transform.translate(
       // `.poll-footer { margin-left: -6px }`.
       offset: const Offset(-6, 0),
@@ -1192,7 +1195,7 @@ class _PollVotersModal extends ConsumerWidget {
               child: Row(
                 children: [
                   Text(
-                    '📊 Voters',
+                    tr('📊 Voters'),
                     style: TextStyle(fontSize: 16, color: c.text),
                   ),
                   const SizedBox(width: 6),
@@ -1216,7 +1219,7 @@ class _PollVotersModal extends ConsumerWidget {
                         context,
                         users,
                         e.key,
-                        optionLabel[e.value] ?? 'Option ${e.value + 1}',
+                        optionLabel[e.value] ?? tr('Option {n}', {'n': e.value + 1}),
                       ),
                     // `.reactors-modal-more` — "+N more" (polls.js:482-483).
                     if (overflow > 0)
@@ -1224,7 +1227,7 @@ class _PollVotersModal extends ConsumerWidget {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 14, vertical: 8),
                         child: Text(
-                          '+$overflow more',
+                          tr('+{n} more', {'n': overflow}),
                           style: TextStyle(
                             fontSize: 12,
                             color: c.textDim,
@@ -1291,7 +1294,7 @@ class _PollVotersModal extends ConsumerWidget {
             if (isYou) ...[
               const SizedBox(width: 6),
               Text(
-                'you',
+                tr('you'),
                 style: TextStyle(
                   fontSize: 10,
                   color: c.primary.withValues(alpha: 0.7),
@@ -1385,7 +1388,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
             // `.translation-loading`: static italic dim@0.6 (no pulse, matching
             // the inline message translation, styles-features.css:4333).
             return Text(
-              'Translating...',
+              tr('Translating...'),
               style: TextStyle(
                 color: c.textDim.withValues(alpha: 0.6),
                 fontStyle: FontStyle.italic,
@@ -1395,7 +1398,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
           }
           if (snap.hasError) {
             return Text(
-              'Translation failed',
+              tr('Translation failed'),
               style: TextStyle(color: c.danger, fontSize: 12),
             );
           }
@@ -1417,8 +1420,8 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
               TextSpan(children: [
                 const TextSpan(text: '🌐 '),
                 TextSpan(
-                  text:
-                      'Already in ${languageName(_target)} (nothing to translate)',
+                  text: tr('Already in {lang} (nothing to translate)',
+                      {'lang': languageName(_target)}),
                   style: TextStyle(color: c.danger, fontSize: 13 * 0.85),
                 ),
               ]),

@@ -28,6 +28,7 @@ import '../../widgets/nym_icons.dart';
 import '../emoji/emoji_data.dart';
 import '../emoji/emoji_picker.dart';
 import '../emoji/gif_picker.dart';
+import '../i18n/i18n.dart';
 import '../reactions/reaction_picker.dart';
 import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
@@ -125,7 +126,14 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     // or the modal would open twice.
 
     return Scaffold(
-      backgroundColor: c.bg,
+      // Transparent so the shell's fixed `#wallpaperLayer` (mounted behind the
+      // pane in home_shell) shows through the bot chat exactly like the canonical
+      // ChatPane, which is itself transparent. The opaque base still comes from
+      // the shell Scaffold (`c.bg`); the AppBar/composer paint their own glass
+      // surfaces and the messages area only a translucent wash, so the wallpaper
+      // (default pattern or custom upload) reads through the bot thread too.
+      // Painting an opaque `c.bg` here covered the wallpaper for the whole view.
+      backgroundColor: Colors.transparent,
       appBar: _header(context, c, state),
       body: Column(
         children: [
@@ -195,7 +203,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       leading: widget.onOpenSidebar == null
           ? null
           : IconButton(
-              tooltip: 'Menu',
+              tooltip: tr('Menu'),
               icon: NymSvgIcon(NymIcons.menu, size: 20, color: c.primary),
               onPressed: widget.onOpenSidebar,
             ),
@@ -253,16 +261,22 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                             TextSpan(
                               text: '#${getPubkeySuffix(kNymbotPubkey)}',
                               // `.nym-suffix`: opacity 0.7 / 0.9em / weight 100.
+                              // Tinted from `--primary` like every other 1:1 PM
+                              // header nym (chat_pane.dart `_titleLine` pm case),
+                              // NOT `--text-bright` (which read as a different
+                              // colour from every other PM header).
                               style: TextStyle(
-                                color: c.textBright.withValues(alpha: 0.7),
+                                color: c.primary.withValues(alpha: 0.7),
                                 fontSize: 16 * 0.9,
                                 fontWeight: FontWeight.w100,
                               ),
                             ),
                           ]),
                           overflow: TextOverflow.ellipsis,
+                          // Base nym in `--primary` to match the canonical PM
+                          // header (chat_pane.dart:445), not `--text-bright`.
                           style: TextStyle(
-                              color: c.textBright,
+                              color: c.primary,
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                               letterSpacing: 0.2),
@@ -276,7 +290,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                 // `.pm-last-seen` presence line — the bot's is the fixed
                 // 'Always at your service' (pms.js:37).
                 Text(
-                  'Always at your service',
+                  tr('Always at your service'),
                   style: TextStyle(color: c.textDim, fontSize: 12, height: 1.2),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -288,7 +302,8 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                     const SizedBox(width: 4),
                     Flexible(
                       child: Text(
-                        'E2E encrypted · ${_botCreditMeta(state)}',
+                        tr('E2E encrypted · {meta}',
+                            {'meta': _botCreditMeta(state)}),
                         style: TextStyle(
                             color: c.textDim, fontSize: 11, height: 1.2),
                         overflow: TextOverflow.ellipsis,
@@ -303,12 +318,12 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       ),
       actions: [
         IconButton(
-          tooltip: 'Balance',
+          tooltip: tr('Balance'),
           icon: Icon(Icons.account_balance_wallet_outlined, color: c.text),
           onPressed: () => _showBalance(context),
         ),
         IconButton(
-          tooltip: 'Connect git repo',
+          tooltip: tr('Connect git repo'),
           icon: Icon(Icons.source_outlined,
               color: (state.git?.hasRepo ?? false) ? c.primary : c.text),
           onPressed: () => _showGitConnect(context),
@@ -326,7 +341,11 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     if (proModel != null) {
       final pro = state.balance.proBalance;
       final proText = state.balanceKnown ? '$pro' : '…';
-      var meta = '$proText Pro credit${pro == 1 ? '' : 's'} · ${proModel.label}';
+      var meta = pro == 1
+          ? tr('{n} Pro credit · {model}',
+              {'n': proText, 'model': proModel.label})
+          : tr('{n} Pro credits · {model}',
+              {'n': proText, 'model': proModel.label});
       final git = state.git;
       if (git != null && git.hasRepo) {
         meta += ' · ${git.repo.split('/').last}';
@@ -336,13 +355,18 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     if (!state.balanceKnown) {
       // A failed check with no cached count settles on 'credits unavailable'
       // (`_refreshBotCreditMeta`, pms.js:2382-2389).
-      return state.balanceUnavailable ? 'credits unavailable' : 'checking credits…';
+      return state.balanceUnavailable
+          ? tr('credits unavailable')
+          : tr('checking credits…');
     }
     final std = state.balance.balance;
     final pro = state.balance.proBalance;
     return pro > 0
-        ? '$std standard · $pro Pro credits left'
-        : '$std credit${std == 1 ? '' : 's'} left';
+        ? tr('{std} standard · {pro} Pro credits left',
+            {'std': std, 'pro': pro})
+        : std == 1
+            ? tr('{n} credit left', {'n': std})
+            : tr('{n} credits left', {'n': std});
   }
 
   /// Header name tap → the bot's profile context menu (the PWA's
@@ -485,15 +509,15 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Credit balance',
+            Text(tr('Credit balance'),
                 style: TextStyle(
                     color: c.textBright,
                     fontSize: 16,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
-            _balanceRow('Standard', b.balance, '10 sats each', c),
+            _balanceRow(tr('Standard'), b.balance, tr('10 sats each'), c),
             const SizedBox(height: 8),
-            _balanceRow('Pro', b.proBalance, '100 sats each', c,
+            _balanceRow(tr('Pro'), b.proBalance, tr('100 sats each'), c,
                 accent: c.primary),
             const SizedBox(height: 20),
             SizedBox(
@@ -503,7 +527,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                   Navigator.pop(context);
                   _showBuy(context);
                 },
-                child: const Text('Buy credits'),
+                child: Text(tr('Buy credits')),
               ),
             ),
           ],
@@ -547,7 +571,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                   fontSize: 20,
                   fontWeight: FontWeight.w700)),
           const SizedBox(width: 4),
-          Text('cr', style: TextStyle(color: c.textDim, fontSize: 11)),
+          Text(tr('cr'), style: TextStyle(color: c.textDim, fontSize: 11)),
         ],
       ),
     );
@@ -578,22 +602,22 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Row(
                 children: [
-                  Text('Pro model',
+                  Text(tr('Pro model'),
                       style: TextStyle(
                           color: c.textBright,
                           fontSize: 16,
                           fontWeight: FontWeight.w600)),
                   const Spacer(),
-                  Text('100 sats / credit',
+                  Text(tr('100 sats / credit'),
                       style: TextStyle(color: c.textDim, fontSize: 11)),
                 ],
               ),
             ),
             ListTile(
               leading: Icon(Icons.auto_awesome, color: c.blue),
-              title: Text('Standard (auto-routed)',
+              title: Text(tr('Standard (auto-routed)'),
                   style: TextStyle(color: c.text)),
-              subtitle: Text('Best model per task · 10 sats each',
+              subtitle: Text(tr('Best model per task · 10 sats each'),
                   style: TextStyle(color: c.textDim, fontSize: 11)),
               trailing: current == null
                   ? Icon(Icons.check, color: c.primary)
@@ -745,9 +769,11 @@ class _TierSwitch extends StatelessWidget {
         children: [
           // PWA `.bot-credit-tier-btn.active`: both segments use the lightning
           // accent (orange) — fill @0.12, border @0.5, text --lightning bold.
-          _segment('Standard', !isPro, onTapStandard, c),
+          _segment(tr('Standard'), !isPro, onTapStandard, c),
           _segment(
-            isPro && proLabel != null ? 'Pro · $proLabel' : 'Pro',
+            isPro && proLabel != null
+                ? tr('Pro · {label}', {'label': proLabel})
+                : tr('Pro'),
             isPro,
             onTapPro,
             c,
@@ -1257,7 +1283,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         continue;
       }
       if (bytes.length > maxUpload) {
-        _systemLine('Files must be under 50MB.');
+        _systemLine(tr('Files must be under 50MB.'));
         continue;
       }
       final contentType = file.mimeType ?? _guessMime(file.name);
@@ -1277,7 +1303,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       if (!mounted) return;
       if (_uploadCancelled) break;
       if (url == null) {
-        _systemLine('Failed to upload media.');
+        _systemLine(tr('Failed to upload media.'));
         continue;
       }
       urls.add(url);
@@ -1316,7 +1342,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final file = result.files.first;
     final bytes = file.bytes;
     if (bytes == null) {
-      _systemLine('Could not read the selected file.');
+      _systemLine(tr('Could not read the selected file.'));
       return;
     }
     await ref.read(nostrControllerProvider).shareP2PFile(
@@ -1324,7 +1350,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
           name: file.name,
           type: _guessMime(file.name),
         );
-    if (mounted) _systemLine('File offered for P2P download.');
+    if (mounted) _systemLine(tr('File offered for P2P download.'));
   }
 
   static String _guessMime(String name) {
@@ -1345,10 +1371,12 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   Widget _uploadBar(BuildContext context) {
     final c = widget.colors;
     final isVideo = (_uploadMime ?? '').startsWith('video/');
-    final kind = isVideo ? 'video' : 'image';
     final label = _uploadTotal > 1
-        ? 'Uploading $_uploadIndex of $_uploadTotal...'
-        : 'Uploading $kind...';
+        ? tr('Uploading {i} of {n}...',
+            {'i': _uploadIndex, 'n': _uploadTotal})
+        : isVideo
+            ? tr('Uploading video...')
+            : tr('Uploading image...');
     final fraction = (_uploadProgress ?? 0.1).clamp(0.0, 1.0);
     final solidUi = ref.watch(settingsProvider.select((s) => s.solidUi));
     return Container(
@@ -1567,7 +1595,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                         cursorColor: c.isLight ? Colors.black : Colors.white,
                         decoration: InputDecoration(
                           isDense: true,
-                          hintText: 'Search languages...',
+                          hintText: tr('Search languages...'),
                           hintStyle: TextStyle(color: c.textDim, fontSize: 13),
                           filled: true,
                           fillColor: c.isLight
@@ -1595,7 +1623,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                       child: langs.isEmpty
                           ? Padding(
                               padding: const EdgeInsets.all(14),
-                              child: Text('No languages found',
+                              child: Text(tr('No languages found'),
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                       color: c.textDim, fontSize: 13)),
@@ -1643,8 +1671,8 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       // the original (detected language already matches the target) —
       // `translateInputText` (translate.js:479-483).
       if (out.trim().isEmpty || out.trim() == text) {
-        _systemLine(
-            'Nothing to translate (text may already be in the target language).');
+        _systemLine(tr(
+            'Nothing to translate (text may already be in the target language).'));
         return;
       }
       _controller.text = out;
@@ -1657,7 +1685,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       if (mounted) {
         _systemLine(e is TranslateException
             ? e.message
-            : 'Translation failed: Unknown error');
+            : tr('Translation failed: Unknown error'));
       }
     } finally {
       if (mounted) setState(() => _translating = false);
@@ -1807,7 +1835,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       decoration: InputDecoration(
         isDense: true,
         // The shared input placeholder (index.html `data-placeholder`).
-        hintText: 'Message, / for commands, ? for Nymbot...',
+        hintText: tr('Message, / for commands, ? for Nymbot...'),
         hintStyle: TextStyle(
             color:
                 (c.isLight ? Colors.black : Colors.white).withValues(alpha: 0.4),
@@ -1856,7 +1884,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final buttons = <Widget>[
       _BotIconBtn(
         svg: NymIcons.composerImage,
-        tooltip: 'Upload Image/Video',
+        tooltip: tr('Upload Image/Video'),
         expand: compact,
         // Inert until relays connect (same `sendEnabled` as SEND), then the
         // in-upload guard takes over.
@@ -1865,7 +1893,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       ),
       _BotIconBtn(
         svg: NymIcons.composerFile,
-        tooltip: 'Share File (P2P)',
+        tooltip: tr('Share File (P2P)'),
         expand: compact,
         enabled: sendEnabled,
         onTap: _pickAndShareFile,
@@ -1916,7 +1944,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         ),
         child: _BotIconBtn(
           svg: NymIcons.composerEmoji,
-          tooltip: 'Emoji',
+          tooltip: tr('Emoji'),
           expand: expand,
           enabled: enabled,
           onTap: _toggleEmojiPicker,
@@ -1945,7 +1973,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         },
         child: _BotIconBtn(
           label: 'GIF',
-          tooltip: 'GIF',
+          tooltip: tr('GIF'),
           expand: expand,
           enabled: enabled,
           onTap: _toggleGifPicker,
@@ -2330,7 +2358,7 @@ class _BotSendButtonState extends State<_BotSendButton> {
                   : null,
             ),
             child: Text(
-              'SEND',
+              tr('SEND'),
               style: TextStyle(
                 color: c.primary,
                 fontSize: widget.phone ? 11 : 12,
@@ -2410,7 +2438,7 @@ class _BotTranslateButtonState extends State<_BotTranslateButton>
     return Opacity(
       opacity: widget.enabled ? (_hover ? 1.0 : 0.6) : 0.4,
       child: Tooltip(
-        message: 'Translate text',
+        message: tr('Translate text'),
         child: MouseRegion(
           cursor: widget.enabled
               ? SystemMouseCursors.click
@@ -2604,17 +2632,17 @@ class _GitConnectModalState extends State<_GitConnectModal> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Connect a git repo',
+            Text(tr('Connect a git repo'),
                 style: TextStyle(
                     color: c.textBright,
                     fontSize: 16,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             Text(
-              'Pro replies can read your code and, with writes on, commit, '
-              'branch, and open PRs. Your access token is stored only on this '
-              'device (Panic Mode wipes it) and sent per request — never stored '
-              'server-side.',
+              tr('Pro replies can read your code and, with writes on, commit, '
+                  'branch, and open PRs. Your access token is stored only on this '
+                  'device (Panic Mode wipes it) and sent per request — never stored '
+                  'server-side.'),
               style: TextStyle(color: c.textDim, fontSize: 12, height: 1.4),
             ),
             const SizedBox(height: 16),
@@ -2634,14 +2662,14 @@ class _GitConnectModalState extends State<_GitConnectModal> {
               ],
             ),
             const SizedBox(height: 14),
-            _field(_host, 'Host', 'github.com', c),
+            _field(_host, tr('Host'), 'github.com', c),
             const SizedBox(height: 10),
-            _field(_token, 'Personal access token (PAT)', 'ghp_… / glpat-… ',
+            _field(_token, tr('Personal access token (PAT)'), 'ghp_… / glpat-… ',
                 c, obscure: true),
             const SizedBox(height: 10),
-            _field(_repo, 'Repository', 'owner/repo', c),
+            _field(_repo, tr('Repository'), 'owner/repo', c),
             const SizedBox(height: 10),
-            _field(_branch, 'Branch (optional)', 'main', c),
+            _field(_branch, tr('Branch (optional)'), 'main', c),
             const SizedBox(height: 12),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -2650,9 +2678,10 @@ class _GitConnectModalState extends State<_GitConnectModal> {
                 if (states.contains(WidgetState.selected)) return c.primary;
                 return null;
               }),
-              title: Text('Allow writes',
+              title: Text(tr('Allow writes'),
                   style: TextStyle(color: c.text, fontSize: 14)),
-              subtitle: Text('commit, create branches, open pull/merge requests',
+              subtitle: Text(
+                  tr('commit, create branches, open pull/merge requests'),
                   style: TextStyle(color: c.textDim, fontSize: 11)),
               onChanged: (v) => setState(() => _allowWrites = v),
             ),
@@ -2666,14 +2695,14 @@ class _GitConnectModalState extends State<_GitConnectModal> {
                         widget.onDisconnect();
                         Navigator.pop(context);
                       },
-                      child: const Text('Disconnect'),
+                      child: Text(tr('Disconnect')),
                     ),
                   ),
                 if (widget.existing != null) const SizedBox(width: 8),
                 Expanded(
                   child: FilledButton(
                     onPressed: _canConnect ? _connect : null,
-                    child: const Text('Connect'),
+                    child: Text(tr('Connect')),
                   ),
                 ),
               ],

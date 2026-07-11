@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../features/i18n/i18n.dart';
 
 /// `#reportModal` (index.html lines 361-405; ui-context.js `openReportModal` /
 /// `submitReport`). Report a user/content: a type select + optional details +
@@ -135,7 +136,7 @@ class _ReportModalState extends State<ReportModal> {
                     decoration: BoxDecoration(
                       border: Border(bottom: BorderSide(color: c.glassBorder)),
                     ),
-                    child: Text('REPORT USER/CONTENT',
+                    child: Text(tr('REPORT USER/CONTENT'),
                         style: TextStyle(
                             color: c.primary,
                             // `.modal-header h2` overrides the 22px parent to
@@ -148,7 +149,7 @@ class _ReportModalState extends State<ReportModal> {
                   // is `.nm-primary`.
                   Text.rich(TextSpan(children: [
                     TextSpan(
-                        text: 'Reporting: ',
+                        text: tr('Reporting: '),
                         style: TextStyle(color: c.textDim, fontSize: 15)),
                     TextSpan(
                         text: widget.targetNym,
@@ -156,7 +157,7 @@ class _ReportModalState extends State<ReportModal> {
                   ])),
                   const SizedBox(height: 15),
                   // `.nm-h-8` label — block, text-dim, body-size, mb10.
-                  Text('Report Type:',
+                  Text(tr('Report Type:'),
                       style: TextStyle(color: c.textDim, fontSize: 15)),
                   const SizedBox(height: 10),
                   // `.nm-h-9` select — padding 10, bg white/0.05, color --text,
@@ -178,7 +179,7 @@ class _ReportModalState extends State<ReportModal> {
                       style: TextStyle(color: c.text, fontSize: 15),
                       items: [
                         for (final t in ReportModal.types)
-                          DropdownMenuItem(value: t.$1, child: Text(t.$2)),
+                          DropdownMenuItem(value: t.$1, child: Text(tr(t.$2))),
                       ],
                       onChanged: (v) => setState(() => _type = v ?? _type),
                     ),
@@ -186,15 +187,15 @@ class _ReportModalState extends State<ReportModal> {
                   const SizedBox(height: 20), // `.nm-h-7` block margin-bottom
                   // `.nm-h-8` label with `.nm-h-2` lowercase "(optional)" + ":".
                   Text.rich(TextSpan(
-                    text: 'Additional Details',
+                    text: tr('Additional Details'),
                     style: TextStyle(color: c.textDim, fontSize: 15),
-                    children: const [
+                    children: [
                       TextSpan(
-                        text: ' (optional)',
-                        style: TextStyle(
+                        text: tr(' (optional)'),
+                        style: const TextStyle(
                             fontWeight: FontWeight.w400, letterSpacing: 0),
                       ),
-                      TextSpan(text: ':'),
+                      const TextSpan(text: ':'),
                     ],
                   )),
                   const SizedBox(height: 10),
@@ -206,7 +207,7 @@ class _ReportModalState extends State<ReportModal> {
                     style: TextStyle(color: c.text, fontSize: 15),
                     decoration: InputDecoration(
                       hintText:
-                          'Provide any additional context for this report...',
+                          tr('Provide any additional context for this report...'),
                       hintStyle: TextStyle(color: c.textDim),
                       isDense: true,
                       contentPadding: const EdgeInsets.all(10),
@@ -251,7 +252,7 @@ class _ReportModalState extends State<ReportModal> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Report specific message (if unchecked, reports the user profile)',
+                            tr('Report specific message (if unchecked, reports the user profile)'),
                             style: TextStyle(color: c.textDim, fontSize: 15),
                           ),
                         ),
@@ -335,7 +336,7 @@ class _ReportModalState extends State<ReportModal> {
           borderRadius: NymRadius.rxs,
         ),
         child: Text(
-          'CANCEL',
+          tr('CANCEL'),
           style: TextStyle(
             // `body.light-mode .icon-btn` recolors the label to --primary
             // (styles-themes-responsive.css:595-599); --text in dark.
@@ -366,7 +367,7 @@ class _ReportModalState extends State<ReportModal> {
           borderRadius: NymRadius.rsm,
         ),
         child: Text(
-          'SUBMIT REPORT',
+          tr('SUBMIT REPORT'),
           style: TextStyle(
             color: c.primary,
             fontSize: 12,

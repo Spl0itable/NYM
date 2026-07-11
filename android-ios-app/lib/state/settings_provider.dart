@@ -305,7 +305,49 @@ class SettingsController extends StateNotifier<Settings> {
     _syncedChanged();
   }
 
+  /// The app's static-text UI language (empty ⇒ English). Persisted and synced
+  /// like the message-translation target so a user's chosen app language
+  /// follows them across devices. The root widget listens for changes and
+  /// drives `LocalizationService.setLanguage`, so this setter stays UI-agnostic.
+  void setUiLanguage(String lang) {
+    _kv.setString(StorageKeys.uiLanguage, lang);
+    // Choosing a language (even English) answers the first-run picker.
+    _kv.setBool(StorageKeys.uiLanguageChosen, true);
+    // Default the message-translation target to the chosen app language too, so
+    // translating/auto-translating messages is ready to go without a second
+    // setting. English ('') maps to the translate dropdown's Disabled ('').
+    _kv.setString(StorageKeys.translateLanguage, lang);
+    state = state.copyWith(uiLanguage: lang, translateLanguage: lang);
+    _syncedChanged();
+  }
+
   void setTimestamps(bool v) => setShowTimestamps(v);
+
+  /// Auto-translate master switch + per-conversation-type gates. Synced like the
+  /// other messaging preferences so the choice follows the user across devices.
+  void setAutoTranslate(bool v) {
+    _kv.setBool(StorageKeys.autoTranslate, v);
+    state = state.copyWith(autoTranslate: v);
+    _syncedChanged();
+  }
+
+  void setAutoTranslateChannels(bool v) {
+    _kv.setBool(StorageKeys.autoTranslateChannels, v);
+    state = state.copyWith(autoTranslateChannels: v);
+    _syncedChanged();
+  }
+
+  void setAutoTranslatePMs(bool v) {
+    _kv.setBool(StorageKeys.autoTranslatePms, v);
+    state = state.copyWith(autoTranslatePMs: v);
+    _syncedChanged();
+  }
+
+  void setAutoTranslateGroups(bool v) {
+    _kv.setBool(StorageKeys.autoTranslateGroups, v);
+    state = state.copyWith(autoTranslateGroups: v);
+    _syncedChanged();
+  }
 
   // --- Channels -------------------------------------------------------------
 

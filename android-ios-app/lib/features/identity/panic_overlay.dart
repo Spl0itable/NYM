@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../i18n/i18n.dart';
 import 'panic_wipe.dart';
 
 /// Full-screen "Encrypting" scramble overlay shown during a panic wipe
@@ -57,7 +58,7 @@ class _PanicOverlayState extends State<PanicOverlay>
   Timer? _scrambleTimer;
   late final AnimationController _barController;
   String _grid = '';
-  String _status = 'Initializing…';
+  String _status = tr('Initializing…');
 
   @override
   void initState() {
@@ -86,7 +87,7 @@ class _PanicOverlayState extends State<PanicOverlay>
     await widget.wipe.wipe(onStatus: (status) {
       if (mounted) setState(() => _status = status);
     });
-    if (mounted) setState(() => _status = 'Keys destroyed.');
+    if (mounted) setState(() => _status = tr('Keys destroyed.'));
     // Hold the animation a minimum so the effect reads as deliberate (PWA: 1.5s).
     final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
     final wait = max(250, 1500 - elapsed);
@@ -137,7 +138,7 @@ class _PanicOverlayState extends State<PanicOverlay>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    'ENCRYPTING',
+                    tr('ENCRYPTING'),
                     style: TextStyle(
                       // `.nm-panic-title`: primary, opacity 0.9, mono, no weight.
                       color: c.primary.withValues(alpha: 0.9),

@@ -11,6 +11,7 @@ import '../../models/user.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/context_menu/profile_badges.dart';
 import '../emoji/custom_emoji.dart';
+import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
 import '../shop/cosmetics.dart';
@@ -394,7 +395,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
                 color: c.primary,
                 borderRadius: const BorderRadius.all(Radius.circular(8)),
               ),
-              child: Text('current',
+              child: Text(tr('current'),
                   maxLines: 1,
                   overflow: TextOverflow.clip,
                   softWrap: false,
@@ -424,7 +425,9 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
             Expanded(
               flex: 2,
               child: Text(
-                '${ch.messageCount} msg${ch.messageCount != 1 ? 's' : ''}',
+                ch.messageCount != 1
+                    ? tr('{n} msgs', {'n': ch.messageCount})
+                    : tr('{n} msg', {'n': ch.messageCount}),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
@@ -504,7 +507,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   Widget _header(NymColors c, String label) => Padding(
         padding: const EdgeInsets.fromLTRB(10, 6, 10, 2),
         child: Text(
-          label.toUpperCase(),
+          tr(label).toUpperCase(),
           style: TextStyle(
             color: c.textDim,
             fontSize: 10,
