@@ -677,6 +677,26 @@
                 </div>
             </header>
 
+            <!-- Premium Nymbot control bar -->
+            <div class="bot-control-bar nm-hidden" id="botControlBar">
+                <div class="bot-tier-switch" id="botTierSwitch" role="tablist" aria-label="Nymbot tier">
+                    <button class="bot-tier-btn" type="button" data-action="botSetTier" data-tier="standard" role="tab" aria-selected="true">Standard</button>
+                    <button class="bot-tier-btn" type="button" data-action="botSetTier" data-tier="pro" role="tab" aria-selected="false">Pro</button>
+                </div>
+                <button class="bot-ctrl-btn" type="button" id="botModelBtn" data-action="openBotModelModal" title="Choose Pro model">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path></svg>
+                    <span class="bot-ctrl-label" id="botModelBtnLabel">Auto-routed</span>
+                </button>
+                <button class="bot-ctrl-btn" type="button" id="botGitBtn" data-action="openBotGitModal" title="Connect a git repo">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+                    <span class="bot-ctrl-label" id="botGitBtnLabel">Git</span>
+                </button>
+                <button class="bot-ctrl-btn bot-ctrl-buy" type="button" id="botBuyBtn" data-action="openBotCreditsModal" title="Buy Nymbot credits">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                    <span class="bot-ctrl-label">Buy</span>
+                </button>
+            </div>
+
             <div class="messages-container" id="messagesScroller"><div class="messages-list" id="messagesContainer"></div></div>
             <div class="cv-strip" id="columnsStrip">
                 <div class="cv-column cv-skeleton-col"><div class="cv-column-header"><span class="cv-col-icon"><span class="sk-bar sk-colicon"></span></span><span class="cv-col-title"><span class="sk-bar sk-coltitle"></span></span></div><div class="cv-column-scroller messages-container cv-scroller"><div class="cv-column-list messages-list cv-list"></div></div></div>
@@ -2138,6 +2158,67 @@
                 <button class="icon-btn" data-action="closeZapModal">Cancel</button>
                 <button class="send-btn nm-hidden" id="zapPaidBtn" data-action="manualCheckPayment">I've paid</button>
                 <button class="send-btn nm-hidden" id="zapSendBtn"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Nymbot Pro Model Picker Modal -->
+    <div class="modal" id="botModelModal">
+        <div class="modal-content bot-model-modal-content">
+            <button class="modal-close" data-action="closeModal" data-modal-id="botModelModal">✕</button>
+            <div class="modal-header">Nymbot Pro Model</div>
+            <p class="bot-model-sub">Pick a frontier model to power every reply in this chat. Pro replies use separate Pro credits (100 sats each); standard routing picks the best model per task and uses standard credits.</p>
+            <div class="bot-model-list" id="botModelList"></div>
+        </div>
+    </div>
+
+    <!-- Nymbot Connect Git Repo Modal -->
+    <div class="modal" id="botGitModal">
+        <div class="modal-content">
+            <button class="modal-close" data-action="closeModal" data-modal-id="botGitModal">✕</button>
+            <div class="modal-header">Connect Git Repo</div>
+            <p class="bot-git-intro">Pro replies can read your code and, with writes on, commit, branch, and open pull/merge requests — Claude Code-style. Your access token is stored only on this device (Panic Mode wipes it) and sent to the Nymbot worker per request — never stored server-side or published to relays.</p>
+            <div class="form-group">
+                <label class="form-label">Provider</label>
+                <div class="bot-git-providers" id="botGitProviders">
+                    <button class="bot-git-provider" type="button" data-action="botGitSetProvider" data-provider="github" data-no-i18n>GitHub</button>
+                    <button class="bot-git-provider" type="button" data-action="botGitSetProvider" data-provider="gitlab" data-no-i18n>GitLab</button>
+                    <button class="bot-git-provider" type="button" data-action="botGitSetProvider" data-provider="gitea" data-no-i18n>Gitea/Forgejo</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="botGitHost">Host</label>
+                <input type="text" class="form-input" id="botGitHost" placeholder="github.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="botGitToken">Personal access token</label>
+                <input type="password" class="form-input" id="botGitToken" placeholder="ghp_… / glpat-… / token" autocomplete="off" autocapitalize="off" spellcheck="false">
+                <div class="form-hint" id="botGitTokenHint"></div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="botGitRepo">Repository</label>
+                <input type="text" class="form-input" id="botGitRepo" placeholder="owner/repo" list="botGitRepoList" autocomplete="off" autocapitalize="off" spellcheck="false">
+                <datalist id="botGitRepoList"></datalist>
+                <button class="bot-git-load-repos" type="button" data-action="botGitLoadRepos">List repos this token can access</button>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="botGitBranch">Branch <span class="bot-git-optional">(optional)</span></label>
+                <input type="text" class="form-input" id="botGitBranch" placeholder="default branch" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="form-group bot-git-writes-row">
+                <div class="bot-git-writes-text">
+                    <div class="bot-git-writes-title">Allow writes</div>
+                    <div class="form-hint">commit, create branches, open pull/merge requests</div>
+                </div>
+                <label class="nym-switch">
+                    <input type="checkbox" id="botGitWrites">
+                    <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
+                </label>
+            </div>
+            <div class="bot-git-status nm-hidden" id="botGitStatus"></div>
+            <div class="modal-actions">
+                <button class="icon-btn bot-git-disconnect nm-hidden" id="botGitDisconnectBtn" data-action="botGitDisconnect">Disconnect</button>
+                <button class="send-btn" id="botGitConnectBtn" data-action="botGitConnect">Connect</button>
             </div>
         </div>
     </div>

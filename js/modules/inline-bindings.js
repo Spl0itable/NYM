@@ -403,6 +403,17 @@ window.nymHapticTap = function (ms) {
         'openInWallet':               function () { nym().openInWallet(); },
         'manualCheckPayment':         function () { nym().manualCheckPayment(); },
 
+        // Premium Nymbot control bar + model/git modals
+        'botSetTier':                 function (_e, t) { nym().botSetTier(t.dataset.tier); },
+        'openBotModelModal':          function () { nym().openBotModelModal(); },
+        'botSelectModel':             function (_e, t) { nym()._botSelectModel(t.dataset.model || ''); },
+        'openBotGitModal':            function () { nym().openBotGitModal(); },
+        'botGitSetProvider':          function (_e, t) { nym()._botGitSetProvider(t.dataset.provider); },
+        'botGitLoadRepos':            function () { nym()._botGitLoadRepos(); },
+        'botGitConnect':              function () { nym()._botGitConnect(); },
+        'botGitDisconnect':           function () { nym()._botGitDisconnect(); },
+        'openBotCreditsModal':        function () { nym().openBotCreditsModal(); },
+
         // Share modal
         'copyShareUrl':               function () { nym().copyShareUrl(); },
 

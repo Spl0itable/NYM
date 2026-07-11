@@ -1267,6 +1267,309 @@ body.chat-bubbles .read-more-btn {
     font-weight: bold;
 }
 
+.bot-control-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--glass-bg);
+    border-bottom: 1px solid var(--glass-border);
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+}
+
+.bot-control-bar::-webkit-scrollbar {
+    display: none;
+}
+
+.bot-tier-switch {
+    display: inline-flex;
+    gap: 3px;
+    padding: 3px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    flex-shrink: 0;
+}
+
+.bot-tier-btn {
+    padding: 5px 14px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: all var(--transition);
+    white-space: nowrap;
+}
+
+.bot-tier-btn:hover {
+    color: var(--text);
+}
+
+.bot-tier-btn.active {
+    background: rgb(from var(--lightning) r g b / 0.14);
+    color: var(--lightning);
+    box-shadow: inset 0 0 0 1px rgb(from var(--lightning) r g b / 0.4);
+}
+
+.bot-ctrl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.bot-ctrl-btn:hover {
+    color: var(--text);
+    border-color: rgb(from var(--primary) r g b / 0.4);
+}
+
+.bot-ctrl-btn.active {
+    color: var(--primary);
+    border-color: rgb(from var(--primary) r g b / 0.5);
+    background: rgb(from var(--primary) r g b / 0.1);
+}
+
+.bot-ctrl-label {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bot-ctrl-buy {
+    margin-left: auto;
+    color: var(--lightning);
+    border-color: rgb(from var(--lightning) r g b / 0.4);
+    background: rgb(from var(--lightning) r g b / 0.1);
+}
+
+.bot-ctrl-buy:hover {
+    color: var(--lightning);
+    border-color: rgb(from var(--lightning) r g b / 0.6);
+    background: rgb(from var(--lightning) r g b / 0.16);
+}
+
+@media (max-width: 600px) {
+    .bot-control-bar {
+        gap: 6px;
+        padding: 7px 12px;
+    }
+
+    .bot-ctrl-btn {
+        padding: 6px 10px;
+    }
+
+    .bot-ctrl-label {
+        max-width: 96px;
+    }
+}
+
+.bot-model-modal-content {
+    max-width: 460px;
+}
+
+.bot-model-sub {
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.5;
+    margin: -10px 0 18px;
+}
+
+.bot-model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bot-model-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.bot-model-row:hover {
+    border-color: rgb(from var(--primary) r g b / 0.4);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.bot-model-row.selected {
+    border-color: rgb(from var(--primary) r g b / 0.6);
+    background: rgb(from var(--primary) r g b / 0.1);
+}
+
+.bot-model-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.bot-model-row-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+}
+
+.bot-model-row-tag {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 4px;
+}
+
+.bot-model-row-desc {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.35;
+}
+
+.bot-model-check {
+    flex-shrink: 0;
+    width: 16px;
+    color: var(--primary);
+    display: flex;
+}
+
+.bot-git-intro {
+    color: var(--text-dim);
+    font-size: 12.5px;
+    line-height: 1.5;
+    margin: -10px 0 20px;
+}
+
+.bot-git-providers {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.bot-git-provider {
+    padding: 7px 14px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    color: var(--text-dim);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.bot-git-provider:hover {
+    color: var(--text);
+    border-color: rgb(from var(--primary) r g b / 0.4);
+}
+
+.bot-git-provider.active {
+    color: var(--primary);
+    border-color: var(--primary);
+    background: rgb(from var(--primary) r g b / 0.12);
+    font-weight: 600;
+}
+
+.bot-git-optional {
+    color: var(--text-dim);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.bot-git-load-repos {
+    margin-top: 8px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.bot-git-load-repos:hover {
+    opacity: 0.8;
+}
+
+.bot-git-writes-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.bot-git-writes-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.bot-git-writes-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 2px;
+}
+
+.bot-git-status {
+    margin: 0 0 16px;
+    padding: 9px 12px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    font-size: 12.5px;
+    line-height: 1.4;
+}
+
+.bot-git-status.warn {
+    border-color: rgb(from var(--warning) r g b / 0.4);
+    background: rgb(from var(--warning) r g b / 0.1);
+    color: var(--warning);
+}
+
+.bot-git-status.ok {
+    border-color: rgb(from var(--primary) r g b / 0.4);
+    background: rgb(from var(--primary) r g b / 0.08);
+    color: var(--text);
+}
+
+.bot-git-status.loading {
+    color: var(--text-dim);
+}
+
+.bot-git-disconnect {
+    color: var(--danger);
+}
+
 .message-content blockquote {
     border-left: 3px solid rgb(from var(--primary) r g b / 0.4);
     padding-left: 12px;

@@ -598,6 +598,39 @@ body.light-mode .icon-btn {
     color: var(--primary);
 }
 
+body.light-mode .bot-ctrl-btn,
+body.light-mode .bot-model-row,
+body.light-mode .bot-git-provider,
+body.light-mode .bot-git-status {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.03);
+}
+
+body.light-mode .bot-ctrl-btn:hover,
+body.light-mode .bot-model-row:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .bot-ctrl-btn.active {
+    background: rgb(from var(--primary) r g b / 0.1);
+}
+
+body.light-mode .bot-ctrl-buy {
+    background: rgb(from var(--lightning) r g b / 0.1);
+}
+
+body.light-mode .bot-model-row.selected {
+    background: rgb(from var(--primary) r g b / 0.1);
+}
+
+body.light-mode .bot-git-provider.active {
+    background: rgb(from var(--primary) r g b / 0.12);
+}
+
+body.light-mode .bot-git-status.warn {
+    background: rgb(from var(--warning) r g b / 0.12);
+}
+
 body.light-mode .icon-btn:hover {
     background: rgba(0, 0, 0, 0.06);
     color: var(--primary);

@@ -965,6 +965,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _renderChannelTitle(channel, geohash) {
         const titleEl = document.getElementById('currentChannel');
         if (!titleEl) return;
+        if (typeof this._hideBotControlBar === 'function') this._hideBotControlBar();
         delete titleEl.dataset.pmHeaderSig;
         delete titleEl.dataset.groupHeaderSig;
 

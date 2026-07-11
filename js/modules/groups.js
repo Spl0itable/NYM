@@ -3280,6 +3280,7 @@ Object.assign(NYM.prototype, {
     // out of openGroup so column-view focus can show the same header.
     _renderGroupHeader(groupId) {
         const channelEl = document.getElementById('currentChannel');
+        if (typeof this._hideBotControlBar === 'function') this._hideBotControlBar();
         channelEl.innerHTML = this._buildGroupHeaderHtml(groupId);
         channelEl.dataset.groupHeaderSig = this._groupHeaderSig(groupId);
         delete channelEl.dataset.pmHeaderSig;

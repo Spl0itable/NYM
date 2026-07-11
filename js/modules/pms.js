@@ -2192,8 +2192,10 @@ Object.assign(NYM.prototype, {
         return host === 'github.com' ? 'https://api.github.com' : `https://${host}/api/v3`;
     },
 
-    async _gitApi(path) {
-        const cfg = this._getGitConfig();
+    async _gitApi(path, cfgOverride) {
+        // cfgOverride lets the connect modal verify a token/repo the user just
+        // typed but hasn't saved yet; without it we use the stored config.
+        const cfg = cfgOverride || this._getGitConfig();
         if (!cfg || !cfg.token) return { ok: false, status: 0, data: null };
         try {
             const headers = { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/json' };
@@ -2354,6 +2356,265 @@ Object.assign(NYM.prototype, {
         ].join('<br>'));
     },
 
+    // A small inline check mark for the selected model / provider rows.
+    _botCheckSvg() {
+        return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    },
+
+    // Reveal the control bar for the open Nymbot chat and refresh its labels.
+    _showBotControlBar() {
+        const bar = document.getElementById('botControlBar');
+        if (!bar) return;
+        bar.classList.remove('nm-hidden');
+        this._refreshBotControlBar();
+    },
+
+    _hideBotControlBar() {
+        const bar = document.getElementById('botControlBar');
+        if (bar) bar.classList.add('nm-hidden');
+    },
+
+    // Sync the control bar's tier switch + model/git chip labels with state.
+    // Never toggles visibility (that's _showBotControlBar / _hideBotControlBar),
+    // so it's safe to call from _renderBotCreditMeta after any state change.
+    _refreshBotControlBar() {
+        const bar = document.getElementById('botControlBar');
+        if (!bar) return;
+        const proModel = this._getBotProModel();
+        const git = this._getGitConfig();
+        const isPro = !!proModel;
+        bar.querySelectorAll('.bot-tier-btn').forEach(btn => {
+            const active = (btn.dataset.tier === 'pro') === isPro;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        const modelBtn = document.getElementById('botModelBtn');
+        const modelLabel = document.getElementById('botModelBtnLabel');
+        if (modelLabel) {
+            modelLabel.textContent = proModel ? proModel.label : 'Auto-routed';
+            // A pinned model is a brand name — never localize it; "Auto-routed"
+            // is UI copy that should follow the app language.
+            modelLabel.toggleAttribute('data-no-i18n', !!proModel);
+        }
+        if (modelBtn) modelBtn.classList.toggle('active', isPro);
+        const gitBtn = document.getElementById('botGitBtn');
+        const gitLabel = document.getElementById('botGitBtnLabel');
+        const connected = !!(git && git.token && git.repo);
+        if (gitLabel) {
+            gitLabel.textContent = connected ? git.repo.split('/').pop() : 'Git';
+            // A connected repo name is user content — never localize it; the
+            // "Git" fallback is UI copy that should follow the app language.
+            gitLabel.toggleAttribute('data-no-i18n', connected);
+        }
+        if (gitBtn) {
+            gitBtn.classList.toggle('active', connected);
+            gitBtn.title = connected
+                ? `Connected: ${git.repo}${git.allowWrites ? ' (writes on)' : ' (read-only)'}`
+                : 'Connect a git repo';
+        }
+    },
+
+    // Tier switch: Standard drops to multi-model routing; Pro opens the picker
+    // so the user chooses a specific frontier model (matches the Flutter tabs).
+    botSetTier(tier) {
+        if (tier === 'pro') {
+            this.openBotModelModal();
+            return;
+        }
+        if (this._getBotProModel()) {
+            this._setBotProModel(null);
+            this.displaySystemMessage('Nymbot Pro off — back to standard multi-model routing (standard credits).');
+        }
+        this._refreshBotControlBar();
+    },
+
+    // Buy/balance chip → the existing credit purchase modal, preselecting the
+    // Pro tier when a Pro model is pinned.
+    openBotCreditsModal() {
+        this.showBotCreditsModal(null, this._getBotProModel() ? 'pro' : 'standard');
+    },
+
+    // Model picker modal — Standard (auto-routed) + every Pro model with its
+    // per-reply price and a check on the current selection.
+    openBotModelModal() {
+        const list = document.getElementById('botModelList');
+        const modal = document.getElementById('botModelModal');
+        if (!list || !modal) return;
+        const current = this._getBotProModel();
+        const check = this._botCheckSvg();
+        const rows = [];
+        rows.push(`<button class="bot-model-row${!current ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="">
+                <span class="bot-model-row-main">
+                    <span class="bot-model-row-name">Standard <span class="bot-model-row-tag">auto-routed</span></span>
+                    <span class="bot-model-row-desc">Best model per task · 10 sats each (standard credits)</span>
+                </span>
+                <span class="bot-model-check">${!current ? check : ''}</span>
+            </button>`);
+        for (const m of this._botProModels) {
+            const sel = !!(current && current.key === m.key);
+            rows.push(`<button class="bot-model-row bot-model-row-pro${sel ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="${m.key}">
+                <span class="bot-model-row-main">
+                    <span class="bot-model-row-name" data-no-i18n>${this.escapeHtml(m.label)}</span>
+                    <span class="bot-model-row-desc">${this.escapeHtml(this._botProPriceLabel(m))}</span>
+                </span>
+                <span class="bot-model-check">${sel ? check : ''}</span>
+            </button>`);
+        }
+        list.innerHTML = rows.join('');
+        modal.classList.add('active');
+    },
+
+    _botSelectModel(key) {
+        const prev = this._getBotProModel();
+        const picked = key ? this._botProModels.find(m => m.key === key) : null;
+        if (key && !picked) return;
+        this._setBotProModel(picked ? picked.key : null);
+        if (picked) {
+            this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it (${this._botProPriceLabel(picked)}). Type ?model off to switch back.`);
+        } else if (prev) {
+            this.displaySystemMessage('Nymbot Pro off — back to standard multi-model routing (standard credits).');
+        }
+        this._refreshBotControlBar();
+        window.closeModal('botModelModal');
+    },
+
+    // Git connect modal ------------------------------------------------------
+
+    _setBotGitStatus(msg, kind) {
+        const el = document.getElementById('botGitStatus');
+        if (!el) return;
+        if (!msg) { el.className = 'bot-git-status nm-hidden'; el.textContent = ''; return; }
+        el.className = 'bot-git-status' + (kind ? ' ' + kind : '');
+        if (kind === 'loading') el.innerHTML = '<span class="loader"></span> ' + this.escapeHtml(msg);
+        else el.textContent = msg;
+    },
+
+    openBotGitModal() {
+        const modal = document.getElementById('botGitModal');
+        if (!modal) return;
+        const cfg = this._getGitConfig() || { provider: 'github', host: 'github.com' };
+        const provider = cfg.provider || 'github';
+        this._botGitDraftProvider = provider;
+        document.querySelectorAll('#botGitProviders .bot-git-provider').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.provider === provider);
+        });
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+        set('botGitHost', cfg.host || this._gitProviders[provider].host);
+        set('botGitToken', cfg.token || '');
+        set('botGitRepo', cfg.repo || '');
+        set('botGitBranch', cfg.branch || '');
+        const writes = document.getElementById('botGitWrites');
+        if (writes) writes.checked = !!cfg.allowWrites;
+        const hint = document.getElementById('botGitTokenHint');
+        if (hint) hint.textContent = this._gitProviders[provider].tokenHint;
+        const list = document.getElementById('botGitRepoList');
+        if (list) list.innerHTML = '';
+        const disc = document.getElementById('botGitDisconnectBtn');
+        if (disc) disc.classList.toggle('nm-hidden', !(cfg.token || cfg.repo));
+        if (!this._getBotProModel()) {
+            this._setBotGitStatus('Tip: repo mode needs a Pro model — pick one with the Pro tab first.', 'warn');
+        } else {
+            this._setBotGitStatus('');
+        }
+        modal.classList.add('active');
+    },
+
+    _botGitSetProvider(name) {
+        if (!this._gitProviders[name]) return;
+        this._botGitDraftProvider = name;
+        document.querySelectorAll('#botGitProviders .bot-git-provider').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.provider === name);
+        });
+        const host = document.getElementById('botGitHost');
+        if (host) {
+            const known = Object.values(this._gitProviders).map(p => p.host);
+            const cur = host.value.trim();
+            if (!cur || known.includes(cur)) host.value = this._gitProviders[name].host;
+        }
+        const hint = document.getElementById('botGitTokenHint');
+        if (hint) hint.textContent = this._gitProviders[name].tokenHint;
+        const list = document.getElementById('botGitRepoList');
+        if (list) list.innerHTML = '';
+    },
+
+    _botGitDraftCfg() {
+        const provider = this._botGitDraftProvider || 'github';
+        const provInfo = this._gitProviders[provider];
+        const val = id => (document.getElementById(id)?.value || '').trim();
+        return {
+            provider,
+            provInfo,
+            host: val('botGitHost') || provInfo.host,
+            token: val('botGitToken'),
+            repo: val('botGitRepo'),
+            branch: val('botGitBranch'),
+            allowWrites: !!document.getElementById('botGitWrites')?.checked
+        };
+    },
+
+    async _botGitLoadRepos() {
+        const d = this._botGitDraftCfg();
+        if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d.host)) { this._setBotGitStatus('Invalid host name.', 'warn'); return; }
+        if (!d.token) { this._setBotGitStatus(`Enter your ${d.provInfo.label} token first, then list repos.`, 'warn'); return; }
+        this._setBotGitStatus('Loading repos…', 'loading');
+        const draft = { provider: d.provider, host: d.host, token: d.token };
+        const res = await this._gitApi(this._gitReposPath(draft), draft);
+        if (!res.ok || !Array.isArray(res.data)) {
+            this._setBotGitStatus(`Could not list repos (HTTP ${res.status || '?'}). Check the token and host.`, 'warn');
+            return;
+        }
+        if (!res.data.length) { this._setBotGitStatus(`The token can't see any repos. Grant it repository access on ${d.provInfo.label}.`, 'warn'); return; }
+        const list = document.getElementById('botGitRepoList');
+        if (list) {
+            list.innerHTML = res.data
+                .map(r => this._gitRepoFullName(draft, r))
+                .filter(Boolean)
+                .map(name => `<option value="${this.escapeHtml(name)}"></option>`)
+                .join('');
+        }
+        this._setBotGitStatus(`Loaded ${res.data.length} repo${res.data.length === 1 ? '' : 's'} — start typing in Repository to pick one.`, 'ok');
+    },
+
+    async _botGitConnect() {
+        const d = this._botGitDraftCfg();
+        const provInfo = d.provInfo;
+        if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d.host)) { this._setBotGitStatus('Invalid host name.', 'warn'); return; }
+        const draft = { provider: d.provider, host: d.host };
+        if (!this._gitTokenValid(draft, d.token)) {
+            this._setBotGitStatus(`That doesn't look like a valid ${provInfo.label} token. Create a ${provInfo.tokenHint}.`, 'warn');
+            return;
+        }
+        if (!this._gitRepoRe(draft).test(d.repo)) { this._setBotGitStatus('Repository must be in owner/name form (run “List repos” to see options).', 'warn'); return; }
+        if (d.branch && !/^[\w./-]{1,100}$/.test(d.branch)) { this._setBotGitStatus('Invalid branch name.', 'warn'); return; }
+        this._setBotGitStatus('Verifying token and repo…', 'loading');
+        draft.token = d.token;
+        const who = await this._gitApi(this._gitUserPath(), draft);
+        if (who.ok) { const login = this._gitUserLogin(draft, who.data); if (login) draft.login = login; }
+        const res = await this._gitApi(this._gitRepoPath(draft, d.repo), draft);
+        if (!res.ok || !res.data) {
+            this._setBotGitStatus(`Can't access ${d.repo} (HTTP ${res.status || '?'}). Check the name and the token's repo access.`, 'warn');
+            return;
+        }
+        draft.repo = this._gitRepoFullName(draft, res.data) || d.repo;
+        draft.branch = d.branch;
+        draft.allowWrites = d.allowWrites;
+        this._saveGitConfig(draft);
+        this._refreshBotControlBar();
+        const proModel = this._getBotProModel();
+        const branchLabel = d.branch || `${res.data.default_branch} (default)`;
+        this.displaySystemMessage(`Repo connected: ${draft.repo} on branch ${branchLabel}, ${d.allowWrites ? 'writes enabled' : 'read-only'}. Every Pro reply now works inside this repo.` +
+            (proModel ? '' : ' Pick a Pro model first (Pro tab) — repo mode needs one.'));
+        window.closeModal('botGitModal');
+    },
+
+    _botGitDisconnect() {
+        this._saveGitConfig(null);
+        this._botGitDraftProvider = 'github';
+        this._refreshBotControlBar();
+        this.displaySystemMessage('Git provider disconnected — token and repo selection removed from this device.');
+        window.closeModal('botGitModal');
+    },
+
     // Update the cached Nymbot credit count and the chat-header indicator
     _setBotCreditDisplay(balance) {
         if (typeof balance === 'number') this._lastBotCredits = balance;
@@ -2366,6 +2627,9 @@ Object.assign(NYM.prototype, {
     },
 
     _renderBotCreditMeta() {
+        // Keep the header control bar's chips in sync with any state change,
+        // whether it came from the GUI or a ?model / ?git text command.
+        this._refreshBotControlBar();
         const el = document.getElementById('botCreditMeta');
         if (!el) return;
         const proModel = this._getBotProModel();
@@ -2941,9 +3205,11 @@ Object.assign(NYM.prototype, {
         if (this.isVerifiedBot(pubkey)) {
             document.getElementById('channelMeta').innerHTML =
                 `${lockSvgPM}E2E encrypted · <span id="botCreditMeta">checking credits…</span>`;
+            this._showBotControlBar();
             this._refreshBotCreditMeta();
         } else {
             document.getElementById('channelMeta').innerHTML = `${lockSvgPM}End-to-end encrypted private message`;
+            this._hideBotControlBar();
         }
 
         this._ensurePMHeaderTimer();

@@ -694,6 +694,8 @@ Object.assign(NYM.prototype, {
     _refreshListRowNym(row, pubkey) {
         const user = this.users.get(pubkey);
         const baseNym = this.parseNymFromDisplay(user ? user.nym : this.getNymFromPubkey(pubkey));
+        // Never clobber an authoritative nym the row already shows
+        if (baseNym === 'nym') return;
         const suffix = this.getPubkeySuffix(pubkey);
         const nameHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
         const reactorEl = row.querySelector('.reactors-modal-nym');
