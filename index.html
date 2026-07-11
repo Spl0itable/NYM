@@ -1378,6 +1378,14 @@
                     </div>
 
                     <div class="form-group">
+                        <label class="form-label">App Language</label>
+                        <select class="form-select" id="uiLanguageSelect" data-no-i18n>
+                            <option value="">English (default)</option>
+                        </select>
+                        <div class="form-hint">Translate the entire app interface into your language. Message text is handled separately by the translation settings below.</div>
+                    </div>
+
+                    <div class="form-group">
                         <label class="form-label">Theme</label>
                         <select class="form-select" id="themeSelect">
                             <option value="bitchat">Bitchat (Multicolor)</option>
@@ -1749,6 +1757,42 @@
                             <option value="ur">Urdu</option>
                         </select>
                         <div class="form-hint">Choose your preferred language for translating messages via the context menu.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Auto-translate Messages</label>
+                        <select class="form-select" id="autoTranslateSelect">
+                            <option value="false">Disabled</option>
+                            <option value="true">Enabled</option>
+                        </select>
+                        <div class="form-hint">Automatically translate messages in the conversation you are viewing that are not already in your translation language. Requires a translation language above.</div>
+                    </div>
+
+                    <div class="form-group" id="autoTranslateSubOptions" style="display:none;">
+                        <label class="form-label">Auto-translate In</label>
+                        <div class="auto-translate-scope">
+                            <label class="auto-translate-scope-row">
+                                <span>Channels</span>
+                                <select class="form-select" id="autoTranslateChannelsSelect">
+                                    <option value="true">Enabled</option>
+                                    <option value="false">Disabled</option>
+                                </select>
+                            </label>
+                            <label class="auto-translate-scope-row">
+                                <span>Direct Messages</span>
+                                <select class="form-select" id="autoTranslatePMsSelect">
+                                    <option value="true">Enabled</option>
+                                    <option value="false">Disabled</option>
+                                </select>
+                            </label>
+                            <label class="auto-translate-scope-row">
+                                <span>Groups</span>
+                                <select class="form-select" id="autoTranslateGroupsSelect">
+                                    <option value="true">Enabled</option>
+                                    <option value="false">Disabled</option>
+                                </select>
+                            </label>
+                        </div>
                     </div>
 
                     <div class="form-group">
@@ -2249,6 +2293,7 @@
     <script defer src="js/modules/p2p.js"></script>
     <script defer src="js/modules/calls.js"></script>
     <script defer src="js/modules/translate.js"></script>
+    <script defer src="js/modules/i18n.js"></script>
     <script defer src="js/modules/sidebar-sections.js"></script>
     <script defer src="js/modules/columns.js"></script>
     <script defer src="js/modules/polls.js"></script>

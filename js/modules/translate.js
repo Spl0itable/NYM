@@ -1,5 +1,9 @@
 // translate.js - Message and input translation (auto-detect, language selection)
 
+// Material "translate" glyph (same icon as the composer translate button),
+// used for the auto-translation footer to match the native app.
+const NYM_TRANSLATE_ICON_SVG = '<svg class="autotr-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>';
+
 // Full set of languages supported by Google Translate.
 const NYM_TRANSLATE_LANGUAGES = [
     { code: 'af', name: 'Afrikaans' }, { code: 'sq', name: 'Albanian' },
@@ -582,6 +586,392 @@ Object.assign(NYM.prototype, {
                 dropdown.classList.remove('active');
             }
         });
+    },
+
+    // Automatically translate on-screen messages that aren't already in the
+    // user's translation language. Gated by a master switch plus per-type
+    // (channel / PM / group) toggles, mirroring the native app.
+
+    // Strip HTML, quoted replies and trailing timestamps from raw message
+    // content so language detection sees only the author's own text.
+    _plainTextForTranslate(content) {
+        if (!content) return '';
+        let t = String(content).replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, ' ');
+        t = t.replace(/<[^>]+>/g, '');
+        t = t.split('\n').filter(line => !line.trim().startsWith('>')).join('\n').trim();
+        t = t.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+        return t;
+    },
+
+    _autoTranslateAppliesTo(message) {
+        const s = this.settings;
+        if (!s || !s.autoTranslate) return false;
+        if (!s.translateLanguage) return false;
+        if (!message || message.isOwn) return false;
+        if (message.isPM) {
+            return message.isGroup ? (s.autoTranslateGroups !== false) : (s.autoTranslatePMs !== false);
+        }
+        return s.autoTranslateChannels !== false;
+    },
+
+    _maybeAutoTranslate(messageEl, message) {
+        try {
+            if (!this._autoTranslateAppliesTo(message)) return;
+            if (!messageEl || messageEl.classList.contains('system-message')) return;
+            // During a bulk/historical render (e.g. opening a conversation) don't
+            // queue every message — coalesce into a single bounded pass over the
+            // most recent on-screen messages once the render settles.
+            if (this._bulkAppending || message.isHistorical) {
+                this.retranslateVisibleMessages();
+                return;
+            }
+            const msgId = messageEl.getAttribute('data-message-id') || message.id;
+            if (!msgId) return;
+            const source = this._plainTextForTranslate(message.content);
+            if (!source || source.length < 2) return;
+            const target = this.settings.translateLanguage;
+
+            const cache = this._autoTranslateCache || (this._autoTranslateCache = new Map());
+            const prev = cache.get(msgId);
+            if (prev && prev.lang === target && prev.source === source) {
+                // Already handled for this language/content — just re-attach the
+                // rendered translation if the row was re-created.
+                if (prev.status === 'ready' && messageEl.isConnected) this._renderAutoTranslation(messageEl, prev);
+                return;
+            }
+            const q = this._autoTranslateQueue || (this._autoTranslateQueue = []);
+            q.push({ el: messageEl, msgId, source, target });
+            this._pumpAutoTranslate();
+        } catch (_) { }
+    },
+
+    _pumpAutoTranslate() {
+        const q = this._autoTranslateQueue || (this._autoTranslateQueue = []);
+        if (this._autoTranslateActive == null) this._autoTranslateActive = 0;
+        const MAX = 4;
+        while (this._autoTranslateActive < MAX && q.length) {
+            const job = q.shift();
+            this._autoTranslateActive++;
+            this._runAutoTranslateJob(job).catch(() => { }).then(() => {
+                this._autoTranslateActive--;
+                this._pumpAutoTranslate();
+            });
+        }
+    },
+
+    async _runAutoTranslateJob(job) {
+        const { el, msgId, source, target } = job;
+        // Bail if the language changed or the row is gone.
+        if (!el || !el.isConnected) return;
+        if (this.settings.translateLanguage !== target) return;
+        const cache = this._autoTranslateCache || (this._autoTranslateCache = new Map());
+        const existing = cache.get(msgId);
+        if (existing && existing.lang === target && existing.source === source && existing.status !== 'loading') {
+            if (existing.status === 'ready') this._renderAutoTranslation(el, existing);
+            return;
+        }
+        cache.set(msgId, { lang: target, source, status: 'loading' });
+        try {
+            const { translatedText, detectedLanguage } = await this._translatePreservingMentions(source, target);
+            // Silent no-op when the message is already in the target language:
+            // no icon, no error, no footer — just leave the original.
+            const noop = !translatedText || !translatedText.trim()
+                || translatedText.trim() === source.trim()
+                || (detectedLanguage && detectedLanguage !== 'auto' && detectedLanguage === target);
+            const entry = {
+                lang: target, source,
+                status: noop ? 'noop' : 'ready',
+                translated: translatedText,
+                detected: detectedLanguage || 'auto',
+            };
+            cache.set(msgId, entry);
+            if (!noop && el.isConnected) this._renderAutoTranslation(el, entry);
+        } catch (_) {
+            cache.set(msgId, { lang: target, source, status: 'error' });
+        }
+    },
+
+    // Replace the message text in place with the translation (keeping media,
+    // quotes, timestamp and hover buttons), and add a "Show original" toggle —
+    // matching the native app, rather than showing a separate manual-style row.
+    _renderAutoTranslation(messageEl, entry) {
+        const contentEl = messageEl.querySelector('.message-content');
+        if (!contentEl) return;
+        // Don't touch a message the user manually translated.
+        if (messageEl.querySelector(':scope > .message-translation:not(.auto)')) return;
+
+        // Already showing an auto-translation: refresh only if the DOM was
+        // rebuilt or the target language changed.
+        if (messageEl._autoTr) {
+            const st = messageEl._autoTr;
+            if (st.transWrap && st.transWrap.isConnected && st.lang === entry.lang) return;
+            this._restoreAutoTranslation(messageEl);
+        }
+
+        // Posted media, link previews, file offers and quotes are KEPT in place
+        // exactly as rendered — re-rendering them from the (machine-translated)
+        // text would break image/video loading, mangle media URLs, and drop the
+        // async-unfurled rich-link previews. Only the message TEXT is swapped.
+        const MEDIA_SEL = 'img.msg-img, img.message-image, video, .video-container,'
+            + ' audio, .link-preview-container, .link-preview, .file-offer, .media-container';
+        const KEEP = 'blockquote, ' + MEDIA_SEL;
+        const timeEl = contentEl.querySelector(':scope > .bubble-time-inner');
+        const hoverEl = contentEl.querySelector(':scope > .msg-hover-buttons');
+
+        // If the reply was truncated ("Read more"), unwrap it first so any media
+        // nested inside the truncation wrapper becomes a direct child again and
+        // is kept in place. We re-apply the same truncation to the translated
+        // text below, so the translated view is truncated just like the original.
+        const wasTruncated = contentEl.classList.contains('has-truncation')
+            || !!contentEl.querySelector(':scope > .truncated-inner');
+        contentEl.querySelectorAll(':scope > .truncated-inner').forEach(inner => {
+            while (inner.firstChild) contentEl.insertBefore(inner.firstChild, inner);
+            inner.remove();
+        });
+        contentEl.querySelectorAll(':scope > .read-more-btn').forEach(b => b.remove());
+        contentEl.classList.remove('has-truncation');
+
+        // Move the original body's text (everything except timestamp, hover
+        // buttons and kept media/quotes) into a hidden wrapper we can restore.
+        const origWrap = document.createElement('span');
+        origWrap.className = 'mt-original';
+        origWrap.style.display = 'none';
+        for (const n of Array.from(contentEl.childNodes)) {
+            if (n === timeEl || n === hoverEl) continue;
+            if (n.nodeType === 1 && n.matches && n.matches(KEEP)) continue; // keep in place
+            origWrap.appendChild(n); // moves the node out of the flow
+        }
+
+        const transWrap = document.createElement('span');
+        transWrap.className = 'mt-translated';
+        // Render the translation through the message formatter so links stay
+        // clickable, @mentions keep their chips, and emoji/markdown render —
+        // falling back to escaped text if formatting fails.
+        let translatedHtml;
+        try {
+            translatedHtml = (typeof this.formatMessage === 'function')
+                ? this.formatMessage(entry.translated)
+                : this.escapeHtml(entry.translated).replace(/\n/g, '<br>');
+        } catch (_) {
+            translatedHtml = this.escapeHtml(entry.translated).replace(/\n/g, '<br>');
+        }
+        transWrap.innerHTML = translatedHtml;
+        // Strip any media the formatter embedded from the translated text — the
+        // originals are kept above, so this avoids duplicates and broken URLs.
+        transWrap.querySelectorAll(MEDIA_SEL).forEach(el => el.remove());
+
+        const before = timeEl || hoverEl || null;
+        contentEl.insertBefore(transWrap, before);
+        contentEl.insertBefore(origWrap, before); // hidden; kept for exact restore
+
+        // Mirror the original's "Read more" truncation on the translated text so
+        // both languages collapse the same way.
+        if (wasTruncated) this._truncateTranslated(transWrap);
+
+        // Footer BELOW the message: translate icon + "Show original" toggle, and
+        // a revealed "Original (Language): …" block. Matches the native app.
+        const detected = entry.detected;
+        const srcLang = (detected && detected !== 'auto') ? this._languageName(detected) : '';
+        const origLabel = srcLang ? `Original (${srcLang}):` : 'Original:';
+        const footer = document.createElement('div');
+        footer.className = 'message-autotr-footer';
+        // Collapsed by default (the .autotr-original block is hidden via CSS
+        // until the toggle adds .expanded).
+        footer.innerHTML =
+            `<button type="button" class="autotr-toggle">${NYM_TRANSLATE_ICON_SVG}`
+            + `<span class="autotr-toggle-text">Show original</span></button>`
+            + `<div class="autotr-original">`
+            + `<span class="autotr-original-label">${this.escapeHtml(origLabel)}</span> `
+            + `<span class="autotr-original-text">${this.escapeHtml(entry.source).replace(/\n/g, '<br>')}</span></div>`;
+        contentEl.after(footer);
+
+        const btn = footer.querySelector('.autotr-toggle');
+        const txt = footer.querySelector('.autotr-toggle-text');
+        const orig = footer.querySelector('.autotr-original');
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const show = !orig.classList.contains('expanded');
+            orig.classList.toggle('expanded', show);
+            txt.textContent = show ? 'Hide original' : 'Show original';
+        });
+
+        messageEl.classList.add('has-auto-translation');
+        messageEl._autoTr = { lang: entry.lang, origWrap, transWrap, footer };
+    },
+
+    // Wrap the translated text in a collapsible "Read more" block, mirroring
+    // the reply-truncation in _finalizeMessageContent so a long translation
+    // collapses just like the long original did.
+    _truncateTranslated(wrap) {
+        try {
+            const inner = document.createElement('span');
+            inner.className = 'truncated-inner';
+            while (wrap.firstChild) inner.appendChild(wrap.firstChild);
+            wrap.appendChild(inner);
+            const btn = document.createElement('button');
+            btn.className = 'read-more-btn';
+            btn.textContent = 'Read more';
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const expanded = inner.classList.toggle('truncated-expanded');
+                btn.textContent = expanded ? 'Show less' : 'Read more';
+            });
+            wrap.appendChild(btn);
+            wrap.classList.add('has-truncation');
+            // Height-based (same as the original): if it already fits, drop the
+            // toggle and leave it expanded.
+            if (inner.clientHeight > 0 && inner.scrollHeight <= inner.clientHeight + 2) {
+                btn.remove();
+                wrap.classList.remove('has-truncation');
+                inner.classList.add('truncated-expanded');
+            }
+        } catch (_) { }
+    },
+
+    // Undo an in-place auto-translation, moving the original text back.
+    _restoreAutoTranslation(messageEl) {
+        const st = messageEl._autoTr;
+        if (!st) return;
+        const contentEl = messageEl.querySelector('.message-content');
+        if (contentEl && st.origWrap && st.origWrap.parentNode === contentEl) {
+            while (st.origWrap.firstChild) contentEl.insertBefore(st.origWrap.firstChild, st.origWrap);
+        }
+        if (st.origWrap) st.origWrap.remove();
+        if (st.transWrap) st.transWrap.remove();
+        if (st.footer) st.footer.remove();
+        messageEl.classList.remove('has-auto-translation');
+        messageEl._autoTr = null;
+    },
+
+    // Re-run (or clear) auto-translation across the currently rendered messages.
+    // Called when the auto-translate settings change. Conversation type is
+    // inferred from the active view since all visible rows share it.
+    retranslateVisibleMessages() {
+        if (this._retranslateTimer) clearTimeout(this._retranslateTimer);
+        this._retranslateTimer = setTimeout(() => {
+            this._retranslateTimer = null;
+            const s = this.settings || {};
+            const on = !!(s.autoTranslate && s.translateLanguage);
+            const els = document.querySelectorAll('[data-message-id]');
+            if (!on) {
+                els.forEach(el => {
+                    if (el._autoTr) this._restoreAutoTranslation(el);
+                    const auto = el.querySelector('.message-translation.auto');
+                    if (auto) auto.remove(); // legacy row form
+                });
+                return;
+            }
+            const type = this.inPMMode ? (this.currentGroup ? 'group' : 'pm') : 'channel';
+            // Bound the batch so switching this on in a long backlog doesn't
+            // fire hundreds of requests at once.
+            const list = Array.prototype.slice.call(els, -40);
+            list.forEach(el => {
+                const msg = {
+                    id: el.getAttribute('data-message-id'),
+                    isOwn: el.classList.contains('self'),
+                    isPM: type !== 'channel',
+                    isGroup: type === 'group',
+                    content: el.dataset.rawContent || '',
+                };
+                this._maybeAutoTranslate(el, msg);
+            });
+        }, 150);
+    },
+
+    // The Nymbot premium welcome is a local HTML bubble (not routed through
+    // displayMessage), so translate it into the user's chosen APP language —
+    // independent of the message auto-translate toggle — preserving formatting
+    // and literal <code> commands, with a Show original toggle.
+
+    // Translate one <br>-joined HTML line, shielding tags and literal commands.
+    async _translateHtmlSegment(segment, target) {
+        if (!segment || !segment.trim()) return segment;
+        const tokens = [];
+        const stash = (m) => { tokens.push(m); return `PLH${tokens.length - 1}PLH`; };
+        const shielded = String(segment)
+            .replace(/<code>[\s\S]*?<\/code>/gi, stash)  // literal commands (keep as-is)
+            .replace(/<\/?[a-z][^>]*>/gi, stash)         // other inline tags
+            .replace(/&[a-z#0-9]+;/gi, stash);           // html entities
+        if (!/\p{L}/u.test(shielded.replace(/PLH\d+PLH/g, ''))) return segment; // nothing to translate
+        let out;
+        try {
+            const res = await this._doTranslate(shielded, target);
+            out = res && res.translatedText;
+        } catch (_) { return segment; }
+        if (!out || !out.trim()) return segment;
+        return out.replace(/PLH(\d+)PLH/g, (_, i) => tokens[+i] != null ? tokens[+i] : '');
+    },
+
+    async _translateBotHtml(html, target) {
+        const segments = String(html).split('<br>');
+        const translated = await Promise.all(segments.map(seg => this._translateHtmlSegment(seg, target)));
+        return translated.join('<br>');
+    },
+
+    // Public: translate a Nymbot welcome bubble in place (with a toggle) into
+    // the user's app language. No-op for English.
+    translateBotWelcomeBubble(el, originalHtml) {
+        try {
+            const lang = (typeof this.getUiLanguage === 'function' && this.getUiLanguage()) || '';
+            if (!lang || lang === 'en' || !el) return;
+            this._renderBotWelcomeTranslation(el, originalHtml, lang).catch(() => { });
+        } catch (_) { }
+    },
+
+    async _renderBotWelcomeTranslation(el, originalHtml, lang) {
+        const cache = this._botWelcomeI18n || (this._botWelcomeI18n = {});
+        if (cache[lang] == null) cache[lang] = await this._translateBotHtml(originalHtml, lang);
+        const translated = cache[lang];
+        if (!translated || translated.trim() === originalHtml.trim()) return;
+        if (!el.isConnected || el._autoTr) return;
+        const contentEl = el.querySelector('.message-content');
+        if (!contentEl) return;
+        const timeEl = contentEl.querySelector(':scope > .bubble-time-inner');
+
+        // Hide the original body (keep the timestamp), show the translation.
+        const origWrap = document.createElement('span');
+        origWrap.className = 'mt-original';
+        origWrap.style.display = 'none';
+        for (const n of Array.from(contentEl.childNodes)) {
+            if (n === timeEl) continue;
+            origWrap.appendChild(n);
+        }
+        const transWrap = document.createElement('span');
+        transWrap.className = 'mt-translated';
+        transWrap.innerHTML = translated;
+        contentEl.insertBefore(transWrap, timeEl);
+        contentEl.insertBefore(origWrap, timeEl);
+
+        const footer = document.createElement('div');
+        footer.className = 'message-autotr-footer';
+        footer.innerHTML = `<button type="button" class="autotr-toggle">${NYM_TRANSLATE_ICON_SVG}`
+            + `<span class="autotr-toggle-text">Show original</span></button>`;
+        contentEl.after(footer);
+        const btn = footer.querySelector('.autotr-toggle');
+        const txt = footer.querySelector('.autotr-toggle-text');
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const showingTrans = transWrap.style.display !== 'none';
+            transWrap.style.display = showingTrans ? 'none' : '';
+            origWrap.style.display = showingTrans ? '' : 'none';
+            txt.textContent = showingTrans ? 'Show translation' : 'Show original';
+        });
+        el.classList.add('has-auto-translation');
+        el._autoTr = { lang, origWrap, transWrap, footer };
+    },
+
+    // Reflect the current auto-translate settings into the Settings-modal
+    // controls (used after a cross-device settings sync).
+    _syncAutoTranslateSettingsUI() {
+        const s = this.settings || {};
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+        set('autoTranslateSelect', s.autoTranslate ? 'true' : 'false');
+        set('autoTranslateChannelsSelect', s.autoTranslateChannels !== false ? 'true' : 'false');
+        set('autoTranslatePMsSelect', s.autoTranslatePMs !== false ? 'true' : 'false');
+        set('autoTranslateGroupsSelect', s.autoTranslateGroups !== false ? 'true' : 'false');
+        const sub = document.getElementById('autoTranslateSubOptions');
+        if (sub) sub.style.display = s.autoTranslate ? '' : 'none';
     },
 
     // Show/hide the translate input button based on whether the input has text.

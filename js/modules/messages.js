@@ -1041,6 +1041,10 @@ Object.assign(NYM.prototype, {
 
         this._updateBubbleGrouping(messageEl);
 
+        // Auto-translate on-screen messages that aren't already in the user's
+        // translation language (gated by the auto-translate settings).
+        if (typeof this._maybeAutoTranslate === 'function') this._maybeAutoTranslate(messageEl, message);
+
         if (!this._bulkAppending && !message.isHistorical &&
             this._isBubbleGroupedWithPrev(messageEl) &&
             document.body.classList.contains('chat-bubbles')) {
@@ -2946,6 +2950,9 @@ Object.assign(NYM.prototype, {
                 });
             }
         }
+        // The cached fragment is inserted without going through displayMessage,
+        // so trigger auto-translate over the restored messages here.
+        if (typeof this.retranslateVisibleMessages === 'function') this.retranslateVisibleMessages();
         return true;
     },
 

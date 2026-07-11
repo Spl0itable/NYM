@@ -1810,11 +1810,17 @@ Object.assign(NYM.prototype, {
         container.appendChild(el);
         this._updateBubbleGrouping(el);
         this._scheduleScrollToBottom();
+        return el;
     },
 
     // Render the Nymbot welcome as a message bubble from Nymbot itself
     _displayBotWelcomeMessage() {
-        this._displayBotInfoMessage(this._botWelcomeHtml(), 'nymbot-welcome');
+        const html = this._botWelcomeHtml();
+        const el = this._displayBotInfoMessage(html, 'nymbot-welcome');
+        // Translate the welcome into the user's chosen app language.
+        if (el && typeof this.translateBotWelcomeBubble === 'function') {
+            this.translateBotWelcomeBubble(el, html);
+        }
     },
 
     // Slightly-edited welcome used for the proactive first-contact PM that brand-new

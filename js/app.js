@@ -293,6 +293,12 @@
             state.btnPrev.disabled = state.idx === 0;
             state.btnNext.textContent = (step.final || state.idx === state.steps.length - 1) ? 'Done' : 'Next';
 
+            // Swap in cached translations for this step immediately (no flash of
+            // English) when the app UI is being translated.
+            try {
+                if (window.nym && typeof nym.i18nApplyNow === 'function') nym.i18nApplyNow(state.card);
+            } catch (_) { }
+
             positionStep();
         };
 
@@ -362,6 +368,16 @@
         if (setupActive) return;
 
         buildSteps();
+
+        // If the UI is being translated, pre-translate the whole tutorial script
+        // at high priority so each step is ready as the user advances.
+        try {
+            if (window.nym && typeof nym.i18nPrioritize === 'function' && Array.isArray(state.steps)) {
+                const strings = [];
+                state.steps.forEach(s => { if (s.title) strings.push(s.title); if (s.body) strings.push(s.body); });
+                nym.i18nPrioritize(strings);
+            }
+        } catch (_) { }
 
         state.overlay = document.getElementById('tutorialOverlay');
         state.card = document.getElementById('tutorialCard');
@@ -437,6 +453,18 @@
         state.started = false;
     }
 
+    // All tutorial step strings (title + body), so the i18n layer can
+    // pre-translate the whole tour at high priority as soon as a language is
+    // chosen — even though the tutorial is lazy-rendered later.
+    window.nymTutorialStrings = function () {
+        try {
+            buildSteps();
+            const out = [];
+            (state.steps || []).forEach(s => { if (s.title) out.push(s.title); if (s.body) out.push(s.body); });
+            return out;
+        } catch (_) { return []; }
+    };
+
     // Expose helper to app
     window.maybeStartTutorial = function (force = false) {
         try {
@@ -444,8 +472,20 @@
                 const seen = localStorage.getItem('nym_tutorial_seen') === 'true';
                 if (seen) return;
             }
-            // Delay a bit to let UI settle after login/restore
-            setTimeout(() => startTutorial(), 300);
+            const startNow = () => setTimeout(() => startTutorial(), 300);
+            const nymRef = window.nym;
+            const needPicker = !force && nymRef &&
+                typeof nymRef.showUiLanguagePicker === 'function' &&
+                typeof nymRef._uiLanguageChosen === 'function' && !nymRef._uiLanguageChosen();
+            if (needPicker) {
+                setTimeout(() => {
+                    nymRef.showUiLanguagePicker({ dismissible: true })
+                        .then(() => { nymRef._markUiLanguageChosen(); startNow(); })
+                        .catch(() => { nymRef._markUiLanguageChosen(); startNow(); });
+                }, 400);
+                return;
+            }
+            startNow();
         } catch (_) {
             setTimeout(() => startTutorial(), 300);
         }
@@ -3261,6 +3301,33 @@ async function showSettings() {
         translateLangSelect.value = nym.settings.translateLanguage || '';
     }
 
+    // App-wide UI language selector
+    if (typeof nym.populateUiLanguageSelect === 'function') nym.populateUiLanguageSelect();
+    const uiLangSelect = document.getElementById('uiLanguageSelect');
+    if (uiLangSelect) {
+        uiLangSelect.value = nym.getUiLanguage ? nym.getUiLanguage() : '';
+        uiLangSelect.onchange = function () {
+            const code = uiLangSelect.value || '';
+            if (typeof nym.applyUiLanguage === 'function') {
+                nym.applyUiLanguage(code).catch(() => { });
+            }
+            // Adopt the app language as the message translation language too.
+            if (typeof nym._syncTranslateLanguageToUi === 'function') nym._syncTranslateLanguageToUi(code);
+            if (typeof nym._markUiLanguageChosen === 'function') nym._markUiLanguageChosen();
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        };
+    }
+
+    // Auto-translate messages settings
+    if (typeof nym._syncAutoTranslateSettingsUI === 'function') nym._syncAutoTranslateSettingsUI();
+    const autoTrSelect = document.getElementById('autoTranslateSelect');
+    if (autoTrSelect) {
+        autoTrSelect.onchange = function () {
+            const sub = document.getElementById('autoTranslateSubOptions');
+            if (sub) sub.style.display = autoTrSelect.value === 'true' ? '' : 'none';
+        };
+    }
+
     const gesturesEnabledSelect = document.getElementById('gesturesEnabledSelect');
     const swipeLeftSelect = document.getElementById('swipeLeftActionSelect');
     const swipeRightSelect = document.getElementById('swipeRightActionSelect');
@@ -3793,6 +3860,46 @@ async function saveSettings() {
         localStorage.setItem('nym_translate_language', translateLangEl.value);
     }
 
+    // Read and save app-wide UI language (already applied live via onchange,
+    // this just guarantees persistence if the select changed programmatically)
+    const uiLangEl = document.getElementById('uiLanguageSelect');
+    if (uiLangEl) {
+        const uiLang = uiLangEl.value || '';
+        if (uiLang !== (nym.getUiLanguage ? nym.getUiLanguage() : '')) {
+            if (typeof nym.applyUiLanguage === 'function') {
+                nym.applyUiLanguage(uiLang).catch(() => { });
+            }
+            if (typeof nym._syncTranslateLanguageToUi === 'function') nym._syncTranslateLanguageToUi(uiLang);
+        }
+        nym.settings.uiLanguage = uiLang;
+    }
+
+    // Read and save auto-translate settings
+    let autoTranslateChanged = false;
+    const autoTrEl = document.getElementById('autoTranslateSelect');
+    if (autoTrEl) {
+        const on = autoTrEl.value === 'true';
+        if (on !== !!nym.settings.autoTranslate) autoTranslateChanged = true;
+        nym.settings.autoTranslate = on;
+        localStorage.setItem('nym_auto_translate', String(on));
+    }
+    const autoTrScope = [
+        ['autoTranslateChannelsSelect', 'autoTranslateChannels', 'nym_auto_translate_channels'],
+        ['autoTranslatePMsSelect', 'autoTranslatePMs', 'nym_auto_translate_pms'],
+        ['autoTranslateGroupsSelect', 'autoTranslateGroups', 'nym_auto_translate_groups'],
+    ];
+    for (const [elId, key, lsKey] of autoTrScope) {
+        const el = document.getElementById(elId);
+        if (!el) continue;
+        const on = el.value === 'true';
+        if (on !== (nym.settings[key] !== false)) autoTranslateChanged = true;
+        nym.settings[key] = on;
+        localStorage.setItem(lsKey, String(on));
+    }
+    if (autoTranslateChanged && typeof nym.retranslateVisibleMessages === 'function') {
+        nym.retranslateVisibleMessages();
+    }
+
     const VALID_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
     const gesturesEnabledEl = document.getElementById('gesturesEnabledSelect');
     if (gesturesEnabledEl) {
@@ -4226,7 +4333,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.72.519';
+const NYMCHAT_VERSION = 'v3.73.519';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6690,6 +6797,37 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_translate_favorites', JSON.stringify(nym._translateFavorites));
         if (typeof nym._renderTranslateDropdownList === 'function') nym._renderTranslateDropdownList();
     }
+
+    // App-wide UI language — adopt a language chosen on another device.
+    if (typeof s.uiLanguage === 'string' && s.uiLanguage !== (nym.getUiLanguage ? nym.getUiLanguage() : '')) {
+        if (typeof nym.applyUiLanguage === 'function') {
+            nym.applyUiLanguage(s.uiLanguage).catch(() => { });
+        } else {
+            nym.settings.uiLanguage = s.uiLanguage;
+            try { localStorage.setItem('nym_ui_language', s.uiLanguage); } catch (_) { }
+        }
+        if (typeof nym.populateUiLanguageSelect === 'function') nym.populateUiLanguageSelect();
+    }
+
+    // Auto-translate incoming messages (master + per-conversation-type gates)
+    if (typeof s.autoTranslate === 'boolean') {
+        nym.settings.autoTranslate = s.autoTranslate;
+        localStorage.setItem('nym_auto_translate', String(s.autoTranslate));
+    }
+    if (typeof s.autoTranslateChannels === 'boolean') {
+        nym.settings.autoTranslateChannels = s.autoTranslateChannels;
+        localStorage.setItem('nym_auto_translate_channels', String(s.autoTranslateChannels));
+    }
+    if (typeof s.autoTranslatePMs === 'boolean') {
+        nym.settings.autoTranslatePMs = s.autoTranslatePMs;
+        localStorage.setItem('nym_auto_translate_pms', String(s.autoTranslatePMs));
+    }
+    if (typeof s.autoTranslateGroups === 'boolean') {
+        nym.settings.autoTranslateGroups = s.autoTranslateGroups;
+        localStorage.setItem('nym_auto_translate_groups', String(s.autoTranslateGroups));
+    }
+    if (typeof nym._syncAutoTranslateSettingsUI === 'function') nym._syncAutoTranslateSettingsUI();
+    if (typeof nym.retranslateVisibleMessages === 'function') nym.retranslateVisibleMessages();
 
     // Favorite custom emoji packs
     if (Array.isArray(s.emojiPackFavorites)) {

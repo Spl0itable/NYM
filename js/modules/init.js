@@ -58,6 +58,9 @@ Object.assign(NYM.prototype, {
             this.setupMobileGestures();
             this.setupTranslateInput();
             this.populateTranslateLanguageSelect();
+            this.populateUiLanguageSelect();
+            this.setupUiLanguage();
+            this._maybeFirstRunLanguagePicker();
             this.setupSidebarSectionReorder();
             this.setupSidebarSectionCollapse();
             this.setupSidebarItemMenus();
