@@ -499,7 +499,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
         final cosmetics = ref.watch(userCosmeticsProvider(view.id));
 
         // `.pm-header-avatar`: 26px round, margin-right 10, with a 7px status dot
-        // (bottom-right -2) ringed by a 2px ring. Hidden status drops the dot.
+        // (bottom-right -2) ringed by the bg. Hidden status drops the dot.
         final row = Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -515,27 +515,13 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
                   Positioned(
                     right: -2,
                     bottom: -2,
-                    // `.user-status-dot` is `box-sizing: content-box`, so the 7px
-                    // is the COLOURED size and the 2px ring sits OUTSIDE (11px
-                    // box) — matching the sidebar `_AvatarWithStatus`. Drawing the
-                    // border INSIDE a 7px box (Flutter's default) left only a ~3px
-                    // colour centre, which read as "too small". Ring colour is the
-                    // hardcoded `#0a0a0f` dark / `#f5f5f2` light, not `--bg`.
                     child: Container(
-                      width: 11,
-                      height: 11,
-                      padding: const EdgeInsets.all(2),
+                      width: 7,
+                      height: 7,
                       decoration: BoxDecoration(
-                        color: c.isLight
-                            ? const Color(0xFFF5F5F2)
-                            : const Color(0xFF0A0A0F),
+                        color: statusColor(status),
                         shape: BoxShape.circle,
-                      ),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: statusColor(status),
-                          shape: BoxShape.circle,
-                        ),
+                        border: Border.all(color: c.bg, width: 2),
                       ),
                     ),
                   ),

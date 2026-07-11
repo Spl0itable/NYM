@@ -20,8 +20,6 @@
 	<string>Nymchat needs microphone access for voice and video calls.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Nymchat uses your location only to sort nearby geohash channels by proximity when you enable that setting.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Nymchat uses your location only while you're using the app, to sort nearby geohash channels by proximity when you enable that setting. It never tracks your location in the background.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Nymchat needs photo library access to select images and files to share.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

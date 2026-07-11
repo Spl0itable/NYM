@@ -14,7 +14,6 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../common/css_focus_ring.dart';
-import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import '../../features/autocomplete/autocomplete_dropdown.dart';
 import '../../features/autocomplete/autocomplete_queries.dart';
@@ -294,15 +293,7 @@ class _ComposerState extends ConsumerState<Composer> {
       case MentionAction(:final fullNym):
         final existing = _controller.text;
         final needsSpace = existing.isNotEmpty && !existing.endsWith(' ');
-        final lead = needsSpace ? ' ' : '';
-        // Resolve the nym to a pubkey so the injected mention carries the user's
-        // avatar + flair chip (like autocomplete picks); unresolved → literal.
-        final target = resolveTarget(fullNym, ref.read(usersProvider));
-        final ch = target == null
-            ? null
-            : _controller.mentionSentinel(
-                fullNym: fullNym, pubkey: target.pubkey);
-        final insert = ch != null ? '$lead$ch ' : '$lead@$fullNym ';
+        final insert = '${needsSpace ? ' ' : ''}@$fullNym ';
         _controller.text = existing + insert;
         _controller.selection =
             TextSelection.collapsed(offset: _controller.text.length);
@@ -942,19 +933,6 @@ class _ComposerState extends ConsumerState<Composer> {
     _onInputChanged();
   }
 
-  /// Inserts a picked @mention as an inline avatar + nym + flair chip: allocate
-  /// a sentinel char for the user (kept as ONE caret slot) and splice it — plus
-  /// a trailing space — over the trigger token. Falls back to the literal
-  /// `@base#suffix ` when the PUA space is exhausted. The sentinel expands back
-  /// to `@base#suffix` on the wire ([EmojiSentinelController.expand]), so the
-  /// SENT message text is byte-for-byte what it was before the chip.
-  void _selectMention(MentionResult m) {
-    final fullNym = '${m.baseNym}#${m.suffix}';
-    final ch =
-        _controller.mentionSentinel(fullNym: fullNym, pubkey: m.pubkey);
-    _replaceTriggerToken(ch != null ? '$ch ' : m.insertText);
-  }
-
   void _completeCommand(CommandSpec spec) {
     // selectCommand inserts `"<command> "` then hides the palette.
     _controller.value = TextEditingValue(
@@ -1009,7 +987,7 @@ class _ComposerState extends ConsumerState<Composer> {
     switch (v.kind) {
       case AutocompleteKind.mention:
         if (_selectedIndex < v.mentions.length) {
-          _selectMention(v.mentions[_selectedIndex]);
+          _replaceTriggerToken(v.mentions[_selectedIndex].insertText);
         }
       case AutocompleteKind.channel:
         if (_selectedIndex < v.channels.length) {
@@ -1779,7 +1757,7 @@ class _ComposerState extends ConsumerState<Composer> {
             custom: _customEmojis,
             badgesFor: _mentionBadges,
             cosmeticsFor: (pk) => resolveCosmetics(ref, pk),
-            onSelectMention: _selectMention,
+            onSelectMention: (m) => _replaceTriggerToken(m.insertText),
             onSelectChannel: (ch) => _replaceTriggerToken(ch.insertText),
             onSelectEmoji: _onEmojiAutocompletePicked,
             onSelectKaomoji: (k) => _replaceTriggerToken(kaomojiInsertText(k)),
@@ -2860,11 +2838,8 @@ class _ChipSlideInState extends State<_ChipSlideIn>
 }
 
 /// `.quote-preview`: author (primary 12/w600 with a muted `#suffix`) over the
-/// truncated quoted text (dim 12, ellipsis). The author line leads with the
-/// quoted user's avatar and trails their flair/supporter badge — parity with
-/// the rendered reply blockquote (`_quoteAuthor`, message_content.dart) and the
-/// @mention chip, both of which the user extended to carry avatar + flair.
-class _QuotePreviewChip extends ConsumerWidget {
+/// truncated quoted text (dim 12, ellipsis).
+class _QuotePreviewChip extends StatelessWidget {
   const _QuotePreviewChip({
     required this.author,
     required this.text,
@@ -2876,15 +2851,11 @@ class _QuotePreviewChip extends ConsumerWidget {
   final VoidCallback onClose;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final c = context.nym;
     final split = splitNymSuffix(author);
     final base = split.base;
     final suffix = split.suffix;
-    // Resolve the quoted author's nym to a pubkey so the chip can show their
-    // real avatar + flair; an unresolved author renders plain (like the PWA).
-    final users = ref.watch(usersProvider);
-    final t = resolveTarget(author, users);
     return _PreviewChip(
       barColor: c.primary,
       onClose: onClose,
@@ -2900,19 +2871,6 @@ class _QuotePreviewChip extends ConsumerWidget {
               style: TextStyle(
                   color: c.primary, fontSize: 12, fontWeight: FontWeight.w600),
               children: [
-                // Leading avatar before the quoted author's nym.
-                if (t != null)
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.middle,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 3),
-                      child: NymAvatar(
-                        seed: t.pubkey,
-                        size: 12,
-                        imageUrl: users[t.pubkey]?.profile?.picture,
-                      ),
-                    ),
-                  ),
                 TextSpan(text: base),
                 if (suffix.isNotEmpty)
                   TextSpan(
@@ -2923,16 +2881,6 @@ class _QuotePreviewChip extends ConsumerWidget {
                       color: c.primary.withValues(alpha: 0.7),
                       fontWeight: FontWeight.w100,
                       fontSize: 12 * 0.9,
-                    ),
-                  ),
-                // Flair + supporter badge after the nym (self-hides when none).
-                if (t != null)
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.middle,
-                    child: CosmeticNymBadges(
-                      cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
-                      flairSize: 12,
-                      supporterHeight: 12,
                     ),
                   ),
               ],
@@ -3312,16 +3260,6 @@ class EmojiSentinelController extends TextEditingController {
   /// shortcode present in the draft, reused across occurrences.
   final Map<String, String> _sentinelToCode = {};
   final Map<String, String> _codeToSentinel = {};
-
-  /// sentinel char → @mention and the inverse (`fullNym` = `base#suffix`, no
-  /// `@`). Same technique + PUA space as the emoji sentinels: an @mention the
-  /// user picks from autocomplete / the context menu is kept as ONE sentinel
-  /// char (rendered as an inline avatar + nym + flair chip by [buildTextSpan]),
-  /// so caret / backspace treat the whole mention atomically and [expand] maps
-  /// it back to the wire form `@base#suffix`. One sentinel per DISTINCT mention,
-  /// reused across occurrences.
-  final Map<String, _MentionSentinel> _sentinelToMention = {};
-  final Map<String, String> _mentionToSentinel = {};
   int _nextSentinel = _kSentinelBase;
 
   /// Allocates (or reuses) the sentinel char for [code]. Returns null only if the
@@ -3337,38 +3275,14 @@ class EmojiSentinelController extends TextEditingController {
     return ch;
   }
 
-  /// Allocates (or reuses) the sentinel char for the mention [fullNym]
-  /// (`base#suffix`, no leading `@`) resolving to [pubkey]. Returns null when the
-  /// PUA space is exhausted, so the caller inserts the literal `@fullNym` text
-  /// instead (no chip, but still correct on the wire). Reused per distinct
-  /// mention so repeat mentions of one user share a char.
-  String? mentionSentinel({required String fullNym, required String pubkey}) {
-    final existing = _mentionToSentinel[fullNym];
-    if (existing != null) return existing;
-    if (_nextSentinel > _kSentinelEnd) return null;
-    final ch = String.fromCharCode(_nextSentinel++);
-    _mentionToSentinel[fullNym] = ch;
-    _sentinelToMention[ch] = _MentionSentinel(fullNym: fullNym, pubkey: pubkey);
-    return ch;
-  }
-
-  /// Maps every sentinel char in [input] back to its literal wire form: a
-  /// `:shortcode:` for an emoji sentinel or `@base#suffix` for a mention
-  /// sentinel. The wire-safety primitive: the composer expands the draft through
-  /// this before it reaches the relay / translate / history, so a PUA sentinel
-  /// NEVER leaves the composer. Non-sentinel text passes verbatim.
+  /// Maps every sentinel char in [input] back to its literal `:shortcode:`. The
+  /// wire-safety primitive: the composer expands the draft through this before it
+  /// reaches the relay / translate / history. Non-sentinel text passes verbatim.
   String expand(String input) {
-    if (input.isEmpty ||
-        (_sentinelToCode.isEmpty && _sentinelToMention.isEmpty)) {
-      return input;
-    }
+    if (input.isEmpty || _sentinelToCode.isEmpty) return input;
     return input.replaceAllMapped(_rxSentinel, (m) {
-      final ch = m[0]!;
-      final code = _sentinelToCode[ch];
-      if (code != null) return ':$code:';
-      final mention = _sentinelToMention[ch];
-      if (mention != null) return '@${mention.fullNym}';
-      return ch;
+      final code = _sentinelToCode[m[0]];
+      return code != null ? ':$code:' : m[0]!;
     });
   }
 
@@ -3447,8 +3361,7 @@ class EmojiSentinelController extends TextEditingController {
     // the sentinel allocations so a fresh draft starts from U+E000 and stale
     // mappings can't leak. (`clear()` also resets, but text can empty via a
     // direct value/`text=` assignment too.)
-    if (newValue.text.isEmpty &&
-        (_sentinelToCode.isNotEmpty || _sentinelToMention.isNotEmpty)) {
+    if (newValue.text.isEmpty && _sentinelToCode.isNotEmpty) {
       _resetSentinels();
     }
     super.value = newValue;
@@ -3457,8 +3370,6 @@ class EmojiSentinelController extends TextEditingController {
   void _resetSentinels() {
     _sentinelToCode.clear();
     _codeToSentinel.clear();
-    _sentinelToMention.clear();
-    _mentionToSentinel.clear();
     _nextSentinel = _kSentinelBase;
   }
 
@@ -3474,10 +3385,9 @@ class EmojiSentinelController extends TextEditingController {
     required bool withComposing,
   }) {
     final src = text;
-    // Fast path: no sentinel of either kind → defer to the framework's default
-    // (also keeps composing-region underlines intact while typing plain text).
-    if ((_sentinelToCode.isEmpty && _sentinelToMention.isEmpty) ||
-        !_rxSentinel.hasMatch(src)) {
+    // Fast path: no sentinel → defer to the framework's default (also keeps
+    // composing-region underlines intact while typing plain text).
+    if (_sentinelToCode.isEmpty || !_rxSentinel.hasMatch(src)) {
       return super.buildTextSpan(
           context: context, style: style, withComposing: withComposing);
     }
@@ -3496,31 +3406,16 @@ class EmojiSentinelController extends TextEditingController {
 
     for (final rune in src.runes) {
       final isSentinel = rune >= _kSentinelBase && rune <= _kSentinelEnd;
-      final chStr = isSentinel ? String.fromCharCode(rune) : null;
-      final code = chStr == null ? null : _sentinelToCode[chStr];
+      final code =
+          isSentinel ? _sentinelToCode[String.fromCharCode(rune)] : null;
       final url = code == null ? null : _codeToUrl[code];
-      final mention = chStr == null ? null : _sentinelToMention[chStr];
-      if ((code == null || url == null) && mention == null) {
-        // Plain char — OR an emoji sentinel whose url is somehow gone: render the
+      if (code == null || url == null) {
+        // Plain char — OR a sentinel whose mapping/url is somehow gone: render the
         // literal `:code:` (never a bare PUA glyph) so nothing visually leaks.
         buf.write(code != null ? ':$code:' : String.fromCharCode(rune));
         continue;
       }
       flushText();
-      if (mention != null) {
-        // An @mention picked from autocomplete / the context menu: an inline
-        // avatar + `@nym#suffix` + flair chip, matching the rendered-message
-        // mention (`_MentionChip`, message_content.dart). One caret slot.
-        children.add(WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: _InputMentionChip(
-            pubkey: mention.pubkey,
-            fullNym: mention.fullNym,
-            baseStyle: baseStyle,
-          ),
-        ));
-        continue;
-      }
       // `div.message-input .custom-emoji { vertical-align: -0.3em }`
       // (styles-chat.css:1703-1708): baseline-aligned with the image bottom
       // 0.3em below the alphabetic baseline.
@@ -3532,7 +3427,7 @@ class EmojiSentinelController extends TextEditingController {
           child: EmojiBaselineDrop(
             drop: (baseStyle.fontSize ?? 14) * 0.3,
             child: InlineNetworkImage(
-              url: proxiedMedia(url!, emoji: true),
+              url: proxiedMedia(url, emoji: true),
               width: side,
               height: side,
               fit: BoxFit.contain,
@@ -3547,75 +3442,5 @@ class EmojiSentinelController extends TextEditingController {
     }
     flushText();
     return TextSpan(style: baseStyle, children: children);
-  }
-}
-
-/// The wire form + resolved pubkey a mention sentinel stands for. [fullNym] is
-/// `base#suffix` (no leading `@`); [expand] emits `@$fullNym` for the wire and
-/// [buildTextSpan] renders [pubkey]'s avatar + flair chip.
-class _MentionSentinel {
-  const _MentionSentinel({required this.fullNym, required this.pubkey});
-  final String fullNym;
-  final String pubkey;
-}
-
-/// The inline @mention chip painted for a mention sentinel in the composer
-/// field: the mentioned user's avatar, their `@nym#suffix`, and their flair /
-/// supporter badge — the composer-input counterpart of the rendered-message
-/// `_MentionChip` (message_content.dart). Watches the user's picture + cosmetics
-/// so a profile that lands after insertion fills the avatar/flair in place.
-class _InputMentionChip extends ConsumerWidget {
-  const _InputMentionChip({
-    required this.pubkey,
-    required this.fullNym,
-    required this.baseStyle,
-  });
-
-  final String pubkey;
-
-  /// `base#suffix` — no leading `@`.
-  final String fullNym;
-  final TextStyle baseStyle;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final c = context.nym;
-    final split = splitNymSuffix(fullNym);
-    final base = split.base;
-    final suffix = split.suffix; // includes the leading '#'
-    final size = baseStyle.fontSize ?? 14;
-    final picture =
-        ref.watch(usersProvider.select((m) => m[pubkey]?.profile?.picture));
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        NymAvatar(seed: pubkey, size: size, imageUrl: picture),
-        const SizedBox(width: 3),
-        Text.rich(
-          TextSpan(
-            style: baseStyle,
-            children: [
-              TextSpan(text: '@$base'),
-              if (suffix.isNotEmpty)
-                // `.nym-suffix`: opacity 0.7, 0.9em, weight 100.
-                TextSpan(
-                  text: suffix,
-                  style: baseStyle.copyWith(
-                    color: (baseStyle.color ?? c.text).withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w100,
-                    fontSize: size * 0.9,
-                  ),
-                ),
-            ],
-          ),
-        ),
-        // Nickname flair + supporter badge (self-hides when the user has none).
-        CosmeticNymBadges(
-          cosmetics: ref.watch(userCosmeticsProvider(pubkey)),
-          flairSize: size,
-          supporterHeight: size,
-        ),
-      ],
-    );
   }
 }

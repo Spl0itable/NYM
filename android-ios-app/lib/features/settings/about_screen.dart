@@ -26,7 +26,7 @@ const String _kStaticBase = 'https://github.com/Spl0itable/NYM/blob/main/';
 /// App version string shown in the About header (`#aboutVersion`). Matches the
 /// current PWA constant `NYMCHAT_VERSION` (app.js:4229). The native build can
 /// later override this from its own manifest; until then it tracks the PWA.
-const String kAboutVersion = 'v3.72.519';
+const String kAboutVersion = 'v3.72.517';
 
 /// Warrant-canary source + pinned developer pubkey (canary-verify.js:5-6).
 const String _kCanaryUrl =

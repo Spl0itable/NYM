@@ -54,18 +54,12 @@ bool isBotCommand(String text) {
 bool isNymbotMention(String text) =>
     _nymbotMention.hasMatch(text);
 
-/// `@Nymbot` as a word (not part of a longer handle like `@Nymbotz`),
-/// optionally carrying the `#xxxx` pubkey discriminator the mention flair now
-/// serializes on the wire (`@Nymbot#4bb2`, autocomplete_queries.dart). Without
-/// swallowing that suffix, [stripNymbotMention] left `#4bb2` behind and the bot
-/// answered its own discriminator instead of the intended question.
+/// `@Nymbot` as a word (not part of a longer handle like `@Nymbotz`).
 final RegExp _nymbotMention =
-    RegExp(r'(^|[^A-Za-z0-9_])@Nymbot(?:#[0-9a-f]{4})?\b', caseSensitive: false);
+    RegExp(r'(^|[^A-Za-z0-9_])@Nymbot\b', caseSensitive: false);
 
-/// Strips a leading `@Nymbot` mention (and its optional `#xxxx` discriminator)
-/// and returns the remaining question text, for turning `@Nymbot what is nostr`
-/// into the `?ask` args `what is nostr`. A bare `@Nymbot#4bb2` (mention only)
-/// yields the empty string so [routeToBot] falls back to the quoted text.
+/// Strips a leading `@Nymbot` mention and returns the remaining question text,
+/// for turning `@Nymbot what is nostr` into the `?ask` args `what is nostr`.
 String stripNymbotMention(String text) =>
     text.replaceFirst(_nymbotMention, '').trim();
 

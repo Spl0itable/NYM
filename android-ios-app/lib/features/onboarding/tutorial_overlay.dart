@@ -308,19 +308,13 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     _remeasure();
   }
 
-  /// Scrolls the step's target into view — the native analogue of the PWA
-  /// `positionStep`'s `scrollIntoView` (app.js:216-227). Without this, a
-  /// sidebar-anchored step lower down the scroll list (Private Messages, Active
-  /// Nyms) never scrolls into view and its spotlight lands off-screen.
-  ///
-  /// Fires whenever the target isn't ALREADY fully on-screen (top above the
-  /// viewport, bottom below it, or entirely off) — not only when fully
-  /// off-screen — so a section body whose first row sits just below the fold is
-  /// pulled fully into view. It aligns toward the target's TOP rather than
-  /// centering: a section body (e.g. `#pmList`) is the whole stack of rows with
-  /// the newest/highlighted conversation FIRST, so the Nymbot welcome PM lives
-  /// at the top — centering a multi-row list would push that top row away from
-  /// where the spotlight lands.
+  /// Scrolls the step's target into view when it's off-screen — the native
+  /// analogue of the PWA `positionStep`'s `scrollIntoView({block:'center'})`
+  /// (app.js:216-227). Without this, a sidebar-anchored step lower down the
+  /// scroll list (Private Messages, Active Nyms) never scrolls into view and
+  /// its spotlight lands off-screen, so the tour appears to skip that section.
+  /// Only fires when the target is fully off-screen (the PWA's
+  /// `fullyOutVert`/`fullyOutHorz` gate); a visible target is left where it is.
   Future<void> _ensureTargetVisible(TutorialStep step) async {
     final target = step.target;
     if (target == null) return;
@@ -328,19 +322,16 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     if (ctx == null) return;
     final screen = MediaQuery.of(context).size;
     final rect = TutorialTargets.rectOf(target);
-    final fullyOnScreen = rect != null &&
-        rect.top >= 0 &&
-        rect.bottom <= screen.height &&
-        rect.left >= 0 &&
-        rect.right <= screen.width;
-    if (fullyOnScreen) return;
+    final offscreen = rect == null ||
+        rect.bottom <= 0 ||
+        rect.top >= screen.height ||
+        rect.right <= 0 ||
+        rect.left >= screen.width;
+    if (!offscreen) return;
     try {
       await Scrollable.ensureVisible(
         ctx,
-        // Sit the target's top ~12% down the viewport so the FIRST row (the
-        // Nymbot welcome PM for `#pmList`) is prominently shown with headroom,
-        // even when the section is taller than the viewport.
-        alignment: 0.12,
+        alignment: 0.5, // center, matching `block: 'center'`
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );

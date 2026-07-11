@@ -128,22 +128,11 @@ Nip46Socket _defaultSocketFactory(String relayUrl) {
 Nip46SocketFactory _makeDefaultFactory(PoolTransport? Function()? poolProvider) {
   return (relayUrl) {
     final pool = poolProvider?.call();
-    if (pool != null &&
-        RelayConfig.defaultRelays.contains(_canonicalRelayUrl(relayUrl))) {
+    if (pool != null && RelayConfig.defaultRelays.contains(relayUrl)) {
       return _PoolNip46Socket(pool);
     }
     return _defaultSocketFactory(relayUrl);
   };
-}
-
-/// Canonicalizes a relay URL for pool matching: trims whitespace and drops a
-/// single trailing `/`. Amber emits `bunker://…?relay=wss://relay.primal.net/`
-/// (trailing slash); without this that wouldn't match the pool's
-/// `wss://relay.primal.net` and would fall to a proxy-bypassing raw socket that
-/// fails in proxy mode.
-String _canonicalRelayUrl(String url) {
-  final t = url.trim();
-  return t.endsWith('/') ? t.substring(0, t.length - 1) : t;
 }
 
 /// A [Nip46Socket] backed by the app's shared relay [PoolTransport] instead of a
@@ -403,9 +392,7 @@ class Nip46Service implements Nip46Signer {
     return Nip46ConnectionUri(
       scheme: scheme,
       pubkey: host.toLowerCase(),
-      // Canonicalize so a trailing-slash relay (Amber's bunker URIs) matches the
-      // pool and persists/restores consistently.
-      relay: relay != null ? _canonicalRelayUrl(relay) : RelayConfig.nip46Relay,
+      relay: relay ?? RelayConfig.nip46Relay,
       secret: secret,
       metadataName: metadataName,
     );

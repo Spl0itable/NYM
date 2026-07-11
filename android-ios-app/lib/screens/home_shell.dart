@@ -262,19 +262,6 @@ class HomeShellState extends ConsumerState<HomeShell>
       _bindBotEngine();
     });
 
-    // Switching the active conversation — via a sidebar tap OR a context-menu
-    // action like "Private Message" from the nyms list — closes the mobile
-    // drawer so the chosen view is revealed, matching the PWA (any conversation
-    // switch collapses the mobile sidebar). Direct taps already fire
-    // `onItemSelected`; this covers the context-menu path that bypasses it.
-    // Guarded on a real view change (ChatView has value equality) so unrelated
-    // rebuilds can't force the drawer shut while the user is browsing it.
-    ref.listen(appStateProvider.select((s) => s.view), (prev, next) {
-      if (prev != next && _narrow && _drawerOpen && mounted) {
-        setState(() => _drawerOpen = false);
-      }
-    });
-
     final c = context.nym;
     final width = MediaQuery.of(context).size.width;
     // Off-canvas drawer governs the whole 0–1024 range; fixed two-pane is

@@ -30,7 +30,6 @@ import '../../../widgets/common/nym_avatar.dart';
 import '../../../widgets/context_menu/context_menu_actions.dart';
 import '../../../widgets/context_menu/context_menu_panel.dart';
 import '../../commands/command_handler.dart' show resolveTarget;
-import '../../shop/cosmetics.dart';
 import '../inline_network_image.dart';
 import '../media_fallbacks.dart';
 import 'link_preview.dart';
@@ -74,6 +73,7 @@ class MessageContent extends ConsumerWidget {
     this.blurImages = false,
     this.glyphShadows,
     this.monospace = false,
+    this.enrichMentionAvatars = false,
   });
 
   final String content;
@@ -104,6 +104,13 @@ class MessageContent extends ConsumerWidget {
 
   /// Render the body in a monospace family (the CRT style). (`F13`.)
   final bool monospace;
+
+  /// Render a leading inline avatar on each `@mention` chip, resolved from
+  /// `usersProvider`. Mirrors the PWA's `_enrichActionMentions`
+  /// (messages.js:1369-1403), which decorates the mentions INSIDE a `/me`
+  /// action with the mentioned user's avatar. Off everywhere else (a plain
+  /// mention chip carries no avatar). (`F01-7`.)
+  final bool enrichMentionAvatars;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -291,6 +298,7 @@ class MessageContent extends ConsumerWidget {
           emojiOnly: emojiOnly,
           shadows: glyphShadows,
           monospace: monospace,
+          enrichMentionAvatars: enrichMentionAvatars,
           onChannelRef: onChannelRef,
           onMentionTap: onMentionTap,
         );
@@ -302,6 +310,7 @@ class MessageContent extends ConsumerWidget {
           color: c.primary,
           size: size * scale,
           weight: FontWeight.w700,
+          enrichMentionAvatars: enrichMentionAvatars,
           onChannelRef: onChannelRef,
           onMentionTap: onMentionTap,
         );
@@ -403,6 +412,7 @@ class _RichInline extends StatelessWidget {
     this.emojiOnly = false,
     this.shadows,
     this.monospace = false,
+    this.enrichMentionAvatars = false,
     this.onChannelRef,
     this.onMentionTap,
   });
@@ -420,6 +430,10 @@ class _RichInline extends StatelessWidget {
 
   /// Render glyphs in a monospace family (CRT).
   final bool monospace;
+
+  /// Render a leading inline avatar on each mention chip (`/me` action
+  /// enrichment, `_enrichActionMentions`). Off elsewhere. (`F01-7`.)
+  final bool enrichMentionAvatars;
 
   /// Switches the active channel when a `#ref` / `app.nym.bar/#…` link is tapped.
   final void Function(String name, bool isGeohash)? onChannelRef;
@@ -537,6 +551,7 @@ class _RichInline extends StatelessWidget {
             node: node,
             size: size,
             onTap: onMentionTap,
+            withAvatar: enrichMentionAvatars,
           ),
         );
       case ChannelRefNode(:final name, :final isGeohash):
@@ -631,6 +646,7 @@ class _MentionChip extends ConsumerWidget {
     required this.node,
     required this.size,
     this.onTap,
+    this.withAvatar = false,
   });
   final MentionNode node;
   final double size;
@@ -638,6 +654,12 @@ class _MentionChip extends ConsumerWidget {
   /// Tapping the chip opens the mentioned user's context menu
   /// (`.nm-mention { cursor:pointer }`, ui-context.js:859-870). Null → inert.
   final void Function(MentionNode node)? onTap;
+
+  /// Prepend the mentioned user's inline avatar (the `.action-mention` form the
+  /// PWA produces inside a `/me` action, `_enrichActionMentions`). When the
+  /// mention can't be resolved to a known user the avatar is dropped and the
+  /// chip renders plain — exactly like the PWA keeps the plain rendering.
+  final bool withAvatar;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -669,34 +691,28 @@ class _MentionChip extends ConsumerWidget {
       ),
     );
 
-    // Resolve the mention to a known user (same matcher the tap path uses) so we
-    // can decorate EVERY mention — not just those inside a /me action — with the
-    // mentioned user's inline avatar and nickname flair, mirroring the PWA's
-    // `_enrichActionMentions` (`getAvatarUrl` + `getFlairForUser`, messages.js:
-    // 1395-1396). An unresolved mention renders plain, like the PWA.
-    final users = ref.watch(usersProvider);
-    final raw = node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
-    final t = resolveTarget(raw, users);
     Widget chip = text;
-    if (t != null) {
-      chip = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // `.avatar-message` inline avatar — sized to the mention text.
-          NymAvatar(
-              seed: t.pubkey,
-              size: size,
-              imageUrl: users[t.pubkey]?.profile?.picture),
-          const SizedBox(width: 3),
-          text,
-          // Nickname flair + supporter badge (self-hides when the user has none).
-          CosmeticNymBadges(
-            cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
-            flairSize: size,
-            supporterHeight: size,
-          ),
-        ],
-      );
+    if (withAvatar) {
+      // Resolve the mention to a known user (same matcher the tap path uses) and
+      // pull its kind-0 avatar; NymAvatar falls back to the identicon when the
+      // profile carries no picture. Mirrors `getAvatarUrl(pubkey)` in
+      // `_enrichActionMentions` (messages.js:1395).
+      final users = ref.watch(usersProvider);
+      final raw =
+          node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
+      final t = resolveTarget(raw, users);
+      if (t != null) {
+        final pic = users[t.pubkey]?.profile?.picture;
+        chip = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // `.avatar-message` inline avatar — sized to the mention text.
+            NymAvatar(seed: t.pubkey, size: size, imageUrl: pic),
+            const SizedBox(width: 3),
+            text,
+          ],
+        );
+      }
     }
 
     if (onTap == null) return chip;
@@ -1555,7 +1571,7 @@ class _QuoteBox extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (block.author != null) _quoteAuthor(c, ref, block.author!),
+        if (block.author != null) _quoteAuthor(c, block.author!),
         for (final child in block.children) _quoteChild(context, c, child),
       ],
     );
@@ -1694,38 +1710,18 @@ class _QuoteBox extends ConsumerWidget {
 
   /// The `<span class="quote-author">author#suffix:</span>` header, splitting
   /// the base nym (secondary 600) from a dimmed `.nym-suffix` (`#xxxx`).
-  Widget _quoteAuthor(NymColors c, WidgetRef ref, String author) {
+  Widget _quoteAuthor(NymColors c, String author) {
     final split = splitNymSuffix(author);
     final base = split.base;
     final suffix = split.suffix.isEmpty ? null : split.suffix;
-    // Resolve the quoted author's nym to a pubkey so their avatar can lead and
-    // their flair can follow the name — the PWA `_resolveQuoteFlair` →
-    // `.quote-author …${flairHtml}:` (message-format.js:318), plus the inline
-    // avatar mentions/quotes carry. Unknown author → plain name.
-    final users = ref.watch(usersProvider);
-    final t = resolveTarget(author, users);
-    final authorSize = size - 1;
     return Text.rich(
       TextSpan(
         children: [
-          // Leading avatar before the quoted author's nym.
-          if (t != null)
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: Padding(
-                padding: const EdgeInsets.only(right: 3),
-                child: NymAvatar(
-                  seed: t.pubkey,
-                  size: authorSize,
-                  imageUrl: users[t.pubkey]?.profile?.picture,
-                ),
-              ),
-            ),
           TextSpan(
             text: base,
             style: TextStyle(
               color: c.secondary,
-              fontSize: authorSize,
+              fontSize: size - 1,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1734,25 +1730,15 @@ class _QuoteBox extends ConsumerWidget {
               text: suffix,
               style: TextStyle(
                 color: c.secondaryA(0.7),
-                fontSize: authorSize * 0.9,
+                fontSize: (size - 1) * 0.9,
                 fontWeight: FontWeight.w100,
-              ),
-            ),
-          // Flair sits AFTER the nym/suffix and BEFORE the ':' (PWA order).
-          if (t != null)
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: CosmeticNymBadges(
-                cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
-                flairSize: authorSize,
-                supporterHeight: authorSize,
               ),
             ),
           TextSpan(
             text: ':',
             style: TextStyle(
               color: c.secondary,
-              fontSize: authorSize,
+              fontSize: size - 1,
               fontWeight: FontWeight.w600,
             ),
           ),

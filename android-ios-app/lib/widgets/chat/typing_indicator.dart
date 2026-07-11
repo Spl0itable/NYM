@@ -5,11 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
-import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/nym_avatar.dart';
-import '../context_menu/profile_badges.dart';
 
 /// The `.typing-indicator` row pinned at the bottom of the active conversation
 /// (`_renderTypingInto`, `styles-features.css:4227`): hidden (height 0 / opacity
@@ -83,19 +81,11 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
       return (nym != null && nym.isNotEmpty) ? nym : 'Someone';
     }
 
-    final controller = ref.read(nostrControllerProvider);
-
     // `fmtTyper` (nostr-core.js:1432-1437): the trailing `#xxxx` renders in a
     // dimmed `.nym-suffix` span (opacity .7, 0.9em, weight 100); a nym with no
-    // trailing 4-hex suffix (or a '#' inside the name) renders whole. The PWA
-    // then appends `getFlairForUser(pk)` (nickname flair + supporter badge) and
-    // shows the verified ✓ for the developer / Nymbot — mirrored here via
-    // [CosmeticNymBadges] + [VerifiedBadge], inlined as WidgetSpans so they sit
-    // on the typing line.
+    // trailing 4-hex suffix (or a '#' inside the name) renders whole.
     List<InlineSpan> typerSpans(String pk) {
       final split = splitNymSuffix(nymOf(pk));
-      final isVerified =
-          controller.isVerifiedDeveloper(pk) || controller.isVerifiedBot(pk);
       return [
         TextSpan(text: split.base),
         if (split.suffix.isNotEmpty)
@@ -105,23 +95,6 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
               color: c.textDim.withValues(alpha: 0.7),
               fontSize: 12 * 0.9,
               fontWeight: FontWeight.w100,
-            ),
-          ),
-        // Nickname flair + supporter badge (self-hides when the user has none).
-        WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: CosmeticNymBadges(
-            cosmetics: ref.watch(userCosmeticsProvider(pk)),
-            flairSize: 14,
-            supporterHeight: 14,
-          ),
-        ),
-        if (isVerified)
-          const WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: Padding(
-              padding: EdgeInsets.only(left: 4),
-              child: VerifiedBadge(size: 14),
             ),
           ),
       ];

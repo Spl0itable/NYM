@@ -72,21 +72,11 @@ void main() {
       expect(isNymbotMention('ping @NYMBOT'), isTrue);
       expect(isNymbotMention('nymbot without at'), isFalse);
       expect(isNymbotMention('email me@nymbotz.com'), isFalse);
-      // The mention flair now serializes the pubkey discriminator on the wire.
-      expect(isNymbotMention('@Nymbot#4bb2 what is nostr'), isTrue);
-      expect(isNymbotMention('@Nymbot#4bb2'), isTrue);
     });
 
     test('stripNymbotMention returns the question text', () {
       expect(stripNymbotMention('@Nymbot what is nostr'), 'what is nostr');
       expect(stripNymbotMention('hey @nymbot help'), 'hey help');
-      // The `#xxxx` discriminator must be swallowed with the mention — not left
-      // behind as the question (else the bot answers its own suffix "#4bb2").
-      expect(stripNymbotMention('@Nymbot#4bb2 what is nostr'), 'what is nostr');
-      // A bare mention (reply/quote case) yields empty so routeToBot falls back
-      // to the quoted text instead of asking about "#4bb2".
-      expect(stripNymbotMention('@Nymbot#4bb2'), '');
-      expect(stripNymbotMention('@Nymbot'), '');
     });
   });
 
