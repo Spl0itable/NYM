@@ -291,7 +291,12 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const messageAge = Date.now() - (event.created_at * 1000);
+        // D1 backfill tags events with the pool's receipt time (stored_at, ms)
+        const _storedAtMs = (Number.isFinite(event.stored_at) && event.stored_at > 0)
+            ? event.stored_at : 0;
+        const _eventMs = event.created_at * 1000;
+        const _effectiveMs = (_storedAtMs && _storedAtMs < _eventMs) ? _storedAtMs : _eventMs;
+        const messageAge = Date.now() - _effectiveMs;
         const isHistorical = messageAge > 10000; // Older than 10 seconds
 
         if (event.pubkey === this.pubkey) {
@@ -454,8 +459,12 @@ Object.assign(NYM.prototype, {
             const eventCreatedAt = Math.floor(event.created_at) || 0;
             const nowSec = Math.floor(Date.now() / 1000);
 
-            // Guard against clock skew: cap at current time (no future messages)
-            let correctedCreatedAt = Math.min(eventCreatedAt, nowSec);
+            // Guard against clock skew
+            let ceilingSec = nowSec;
+            if (eventCreatedAt > nowSec && _storedAtMs) {
+                ceilingSec = Math.min(nowSec, Math.floor(_storedAtMs / 1000));
+            }
+            let correctedCreatedAt = Math.min(eventCreatedAt, ceilingSec);
 
             // Reconstruct quote display from nymquote tag (NYM-specific quote reply)
             // On the wire, quotes are sent as @mention + nymquote tag so other clients

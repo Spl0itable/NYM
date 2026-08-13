@@ -1004,7 +1004,7 @@ async function handleChannelAction(context, body) {
     try {
       var cph = reqChannels.map(function () { return "?"; }).join(",");
       rows = (await replica(env.DB_CHANNELS).prepare(
-        "SELECT id, kind, json FROM events WHERE channel IN (" + cph + ") AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
+        "SELECT id, kind, json, stored_at FROM events WHERE channel IN (" + cph + ") AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
       ).bind(...reqChannels, floorSec, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
     var zapRows = [];
@@ -1026,7 +1026,13 @@ async function handleChannelAction(context, body) {
     var stream = new ReadableStream({
       start(controller) {
         for (var i = 0; i < rows.length; i++) {
-          var line = rows[i].json + "\n";
+          var evJson = rows[i].json;
+          var sa = rows[i].stored_at;
+          if (typeof evJson === "string" && typeof sa === "number" && sa > 0 &&
+              evJson.charCodeAt(0) === 123 && evJson.charCodeAt(1) !== 125) {
+            evJson = '{"stored_at":' + sa + ',' + evJson.slice(1);
+          }
+          var line = evJson + "\n";
           controller.enqueue(encoder.encode(line));
           if (cacheBuf) cacheBuf.push(line);
         }

@@ -3324,7 +3324,7 @@ async function showSettings() {
     if (autoTrSelect) {
         autoTrSelect.onchange = function () {
             const sub = document.getElementById('autoTranslateSubOptions');
-            if (sub) sub.style.display = autoTrSelect.value === 'true' ? '' : 'none';
+            if (sub) sub.classList.toggle('nm-hidden', autoTrSelect.value !== 'true');
         };
     }
 
@@ -4333,7 +4333,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.73.519';
+const NYMCHAT_VERSION = 'v3.73.520';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 

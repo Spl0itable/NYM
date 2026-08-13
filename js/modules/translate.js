@@ -971,7 +971,7 @@ Object.assign(NYM.prototype, {
         set('autoTranslatePMsSelect', s.autoTranslatePMs !== false ? 'true' : 'false');
         set('autoTranslateGroupsSelect', s.autoTranslateGroups !== false ? 'true' : 'false');
         const sub = document.getElementById('autoTranslateSubOptions');
-        if (sub) sub.style.display = s.autoTranslate ? '' : 'none';
+        if (sub) sub.classList.toggle('nm-hidden', !s.autoTranslate);
     },
 
     // Show/hide the translate input button based on whether the input has text.
