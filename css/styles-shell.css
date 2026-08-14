@@ -369,7 +369,6 @@ body.sidebar-reorder-mode .nav-title {
     .channel-item:hover,
     .pm-item:hover {
         background: rgba(255, 255, 255, 0.06);
-        padding-left: 14px;
     }
 }
 
