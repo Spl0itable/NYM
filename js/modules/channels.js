@@ -1411,7 +1411,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
+        // Duplicate guard keyed on the logical channel identity (geohash || channel)
+        const alreadyPresent = list &&
+            Array.from(list.querySelectorAll('.channel-item'))
+                .some(el => (el.dataset.geohash || el.dataset.channel) === key);
+
+        if (!alreadyPresent) {
             this._clearSidebarSkel('channelList');
             const item = document.createElement('div');
             item.className = 'channel-item list-item';
