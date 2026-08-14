@@ -3,7 +3,7 @@ Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'
 X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
 Referrer-Policy: strict-origin-when-cross-origin
-Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=(), interest-cohort=()
+Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=(), browsing-topics=()
 Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Resource-Policy: same-origin
