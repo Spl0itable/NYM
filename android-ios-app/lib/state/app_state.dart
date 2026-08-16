@@ -431,6 +431,14 @@ class AppState {
     // tripped a blocked keyword (hidden locally though still sent — the PWA's
     // own-message `return`, messages.js:640-641).
     if (hasBlockedKeyword(m.content, m.author)) return true;
+    // A Bluetooth-mesh message comes from a physically-nearby, deliberately
+    // paired peer — NOT the open Nostr relay network the heuristic spam filter
+    // and web-of-trust gate were built to police. Applying them here hid every
+    // received mesh message whose sender wasn't a friend / known nymchat
+    // identity (a mesh peer never is), which is exactly why received #mesh and
+    // PM messages landed in the store but never rendered. Explicit user
+    // blocks / blocked keywords (above) still apply; the automatic gates do not.
+    if (m.viaMesh) return false;
     // Heuristic content spam — incoming-only (own-message spam is surfaced as a
     // self-only system notice instead, see [sendLocal]). Mirrors the `spamHit`
     // term of the PWA's non-own hide branch (messages.js:636,648).
@@ -2570,6 +2578,66 @@ class AppStateNotifier extends StateNotifier<AppState> {
     return true;
   }
 
+  /// Ingests a pre-built channel [m] (used by the Bluetooth-mesh bridge, which
+  /// has no NostrEvent — the message arrives over BLE). Mirrors the core of
+  /// [_ingestChannelMessage] for the Message path: dedup, sorted insert, channel
+  /// registration, seen-user tracking, activity + unread bookkeeping. [channelKey]
+  /// is the `#…` storage key; the bare channel name is [m.channel]. Returns true
+  /// when the message landed (false on dedup).
+  bool ingestMeshChannelMessage(Message m, {required String channelKey}) {
+    if (m.id.isNotEmpty && !_seenIds.add(m.id)) return false;
+    if (suppressDeletedMessage(m)) return false;
+    m.seq = _ingestSeq++;
+    final list = state.messages.putIfAbsent(channelKey, () => <Message>[]);
+
+    // Reconcile our own optimistic echo (same pubkey + content within a small
+    // window) so a self-send that round-trips back isn't shown twice.
+    if (!m.isOwn) {
+      for (var i = 0; i < list.length; i++) {
+        final ex = list[i];
+        if ((ex.optimistic || ex.id.startsWith('_optim_')) &&
+            ex.pubkey == m.pubkey &&
+            ex.content == m.content &&
+            (ex.createdAt - m.createdAt).abs() < 60) {
+          return false; // our echo already represents it
+        }
+      }
+    }
+
+    _insertMessageSorted(channelKey, list, m);
+    _capChannelHistory(list);
+
+    if (!m.isOwn) {
+      final u = state.users.putIfAbsent(
+        m.pubkey,
+        () => User(pubkey: m.pubkey, nym: m.author),
+      );
+      if (m.author.isNotEmpty) u.nym = m.author;
+      u.lastSeen = m.timestamp;
+      final memberKey = (m.channel ?? '').toLowerCase();
+      if (memberKey.isNotEmpty) u.channels.add(memberKey);
+    }
+
+    if (m.timestamp > (state.channelLastActivity[channelKey] ?? 0)) {
+      state.channelLastActivity[channelKey] = m.timestamp;
+    }
+
+    final regKey = (m.channel ?? '').toLowerCase();
+    if (regKey.isNotEmpty && !state.channels.any((c) => c.key == regKey)) {
+      state.channels.add(ChannelEntry(channel: m.channel!));
+    }
+
+    final seen = _isConversationSeen(channelKey);
+    if (!seen &&
+        state.countsTowardUnread(m) &&
+        _isUnreadByWatermark(channelKey, m)) {
+      state.unreadCounts[channelKey] =
+          (state.unreadCounts[channelKey] ?? 0) + 1;
+    }
+    _scheduleEmit();
+    return true;
+  }
+
   /// Registers/updates a [Group] in the store (on create or on receiving a
   /// `group-invite`). Replaces any existing entry with the same id.
   void upsertGroup(Group group) {
@@ -3310,6 +3378,30 @@ class AppStateNotifier extends StateNotifier<AppState> {
     state.unreadCounts.remove(PmLogic.pmStorageKey(peerPubkey));
     onClosedPmsChanged?.call();
     _scheduleEmit();
+  }
+
+  /// Seeds or updates a user's display nym. Used by the Bluetooth-mesh bridge so
+  /// a peer's announced nickname drives the PM header, sidebar row, and message
+  /// author even before any message is exchanged (otherwise the header falls
+  /// back to a bare "PM"). Also refreshes the PM conversation row's nym.
+  void upsertUserNym(String pubkey, String nym) {
+    if (pubkey.isEmpty || nym.isEmpty) return;
+    var changed = false;
+    final u = state.users[pubkey];
+    if (u == null) {
+      state.users[pubkey] = User(pubkey: pubkey, nym: nym);
+      changed = true;
+    } else if (u.nym != nym) {
+      u.nym = nym;
+      changed = true;
+    }
+    for (final c in state.pmConversations) {
+      if (c.pubkey == pubkey && c.nym != nym) {
+        c.nym = nym;
+        changed = true;
+      }
+    }
+    if (changed) _scheduleEmit();
   }
 
   /// Opens (or creates) a PM conversation entry for [peerPubkey] without a

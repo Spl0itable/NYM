@@ -11,6 +11,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/mesh/mesh_controller.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/translate/translate_language_prompt.dart';
@@ -160,6 +161,10 @@ class ContextMenuPanel extends ConsumerWidget {
     final cosmetics = ref.watch(userCosmeticsProvider(target.pubkey));
     final user = ref.watch(usersProvider)[target.pubkey];
     final about = user?.profile?.about ?? '';
+    // A mesh peer's presence is "Mesh" (reachable over Bluetooth), not the
+    // Nostr online/away/offline word — it has no relay presence.
+    final isMeshPeer = ref.watch(meshControllerProvider
+        .select((s) => s.meshPmPubkeys.contains(target.pubkey)));
 
     final panel = Material(
       // `.context-menu` is `var(--bg-tertiary)` by default, but `body.solid-ui`
@@ -185,6 +190,7 @@ class ContextMenuPanel extends ConsumerWidget {
                 () => ref
                     .read(appStateProvider.notifier)
                     .addSystemMessage(tr('Copied pubkey to clipboard')),
+                isMeshPeer,
               ),
               // Bio block (`.context-menu-bio`) — sibling below the header, its
               // own bottom border; collapses when empty (:empty).
@@ -305,6 +311,7 @@ class ContextMenuPanel extends ConsumerWidget {
     User? user,
     NostrController controller,
     VoidCallback onCopied,
+    bool isMeshPeer,
   ) {
     final bannerUrl = proxiedAvatarUrl(user?.profile?.banner);
     final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
@@ -453,8 +460,23 @@ class ContextMenuPanel extends ConsumerWidget {
               ),
             ),
           // Status row (`.ctx-status-row`): dot + word, hidden when status is
-          // hidden (ui-context.js:445-464).
-          if (status != UserStatus.hidden) ...[
+          // hidden (ui-context.js:445-464). A mesh peer always shows a "Mesh"
+          // presence (reachable over Bluetooth) instead of the Nostr status.
+          if (isMeshPeer) ...[
+            const SizedBox(height: 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                StatusDot(status: UserStatus.online, size: 8),
+                const SizedBox(width: 6),
+                Text(
+                  tr('Mesh'),
+                  style: TextStyle(color: c.textDim, fontSize: 12),
+                ),
+              ],
+            ),
+          ] else if (status != UserStatus.hidden) ...[
             const SizedBox(height: 6),
             Row(
               mainAxisSize: MainAxisSize.min,

@@ -874,11 +874,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// Quick React emoji "Change" (F5): open the emoji picker; a pick commits
   /// IMMEDIATELY (app.js:3294-3303 — the picker callback sets
   /// `nym.settings.swipeReactEmoji` + localStorage `nym_swipe_react_emoji` at
-  /// once, so the choice survives Cancel). No `nostrSettingsSave` fires at
-  /// pick time, so the write goes through `ctrl.update` (raw KV + live state,
-  /// no synced publish); Save later re-sends the same value through the
-  /// synced setter, like the PWA's `saveSettings`. The draft is kept in step
-  /// so Save persists what was picked.
+  /// once, so the choice survives Cancel).
+  ///
+  /// The pick goes through the SYNCED setter ([SettingsController
+  /// .setSwipeReactEmoji]) so it persists AND publishes right away. An earlier
+  /// version wrote only KV + live state (no publish) on the theory that Save
+  /// would republish it — but the pick already commits outside the Save-gated
+  /// draft (it "survives Cancel"), so a user who never pressed Save had their
+  /// choice silently reverted on the next launch: boot re-applies the last
+  /// *published* settings wrap (`_applySyncedSettings`), which still held the
+  /// default ❤️, clobbering the un-published local pick. Publishing on pick
+  /// advances the server wrap immediately, so it can never be reverted. The
+  /// draft is kept in step so a later Save is a no-op re-send.
   void _openSwipeReactPicker(SettingsController ctrl) {
     final c = context.nym;
     final recents = ref.read(recentEmojisProvider);
@@ -900,12 +907,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             recents: recents,
             onSelect: (emoji) {
               Navigator.of(dialogCtx).maybePop();
-              // Immediate commit (app.js:3298-3300): persisted key + live
-              // state, no sync publish at pick time.
-              ref
-                  .read(keyValueStoreProvider)
-                  .setString(StorageKeys.swipeReactEmoji, emoji);
-              ctrl.update((s) => s.copyWith(swipeReactEmoji: emoji));
+              // Immediate commit (app.js:3298-3300): persisted KV key + live
+              // state AND a synced publish, so the pick can't be reverted by a
+              // later boot/cross-device settings apply. Keep the draft in step.
+              ctrl.setSwipeReactEmoji(emoji);
               _mutate((d) => d.copyWith(swipeReactEmoji: emoji));
               ref.read(recentEmojisProvider.notifier).record(emoji);
             },

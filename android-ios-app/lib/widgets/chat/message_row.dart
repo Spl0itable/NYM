@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -657,6 +658,17 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         seedChannelName: isNamedChannel ? v.id : null,
       );
     }
+    // A locally-stored attachment (Bluetooth-mesh media/file transfer) renders
+    // inline in place of the text body — an inline picture for images, a tappable
+    // file card otherwise.
+    if (message.hasLocalMedia) {
+      return _LocalMediaBody(
+        path: message.localMediaPath!,
+        mime: message.localMediaMime,
+        name: message.localMediaName,
+        colors: context.nym,
+      );
+    }
     // cosmetic-redacted (`shop.js:498-512`): the REAL text shows for 10s, then a
     // `.cosmetic-redacted-message` translucent bar replaces it (bg white@0.15,
     // radius-xs, min-width 120, min-height 1.2em, content hidden).
@@ -1230,6 +1242,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                 // `.message-time` after the clock (PM/group only).
                 if (_cryptoState != null)
                   CryptoVerifiedBadge(state: _cryptoState!),
+                if (message.viaMesh) _MeshBadge(color: context.nym.primary),
               ],
             ),
           )
@@ -1736,6 +1749,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         // `.crypto-lock-bubble`: the verification lock follows the in-bubble
         // time (PM/group only).
         if (_cryptoState != null) CryptoVerifiedBadge(state: _cryptoState!),
+        if (message.viaMesh) _MeshBadge(color: context.nym.primary),
       ],
     );
     // `.bubble-time-inner { display:block; width:fit-content; margin-left:
@@ -5157,5 +5171,207 @@ class _TightLongPressGestureRecognizer extends LongPressGestureRecognizer {
       return;
     }
     super.handleEvent(event);
+  }
+}
+
+/// A small Bluetooth glyph shown beside the crypto padlock on a message that
+/// was delivered over the mesh rather than the internet ([Message.viaMesh]).
+class _MeshBadge extends StatelessWidget {
+  const _MeshBadge({required this.color});
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 3),
+      child: NymSvgIcon(NymIcons.bluetooth, size: 11, color: color),
+    );
+  }
+}
+
+/// Inline body for a locally-stored attachment received/sent over the Bluetooth
+/// mesh (there is no server URL to embed, so the file lives on disk and is read
+/// with the web-safe [XFile] API). Images render as a tappable inline picture
+/// (fullscreen on tap); everything else renders as a tappable file card that
+/// shares/saves the file via the platform share sheet.
+class _LocalMediaBody extends StatelessWidget {
+  const _LocalMediaBody({
+    required this.path,
+    required this.mime,
+    required this.name,
+    required this.colors,
+  });
+
+  final String path;
+  final String? mime;
+  final String? name;
+  final NymColors colors;
+
+  bool get _isImage => mime?.startsWith('image/') ?? false;
+
+  /// Memoized file reads, keyed by path. Without this the [FutureBuilder] below
+  /// started a FRESH `readAsBytes()` on every rebuild — i.e. every scroll frame
+  /// — so the image reverted to the loading placeholder and flickered
+  /// constantly. Reusing the completed future keeps the decoded bytes stable
+  /// (and the [MemoryImage] cache warm), so the picture paints once and holds.
+  static final Map<String, Future<Uint8List>> _bytesCache = {};
+
+  static Future<Uint8List> _read(String path) {
+    final cached = _bytesCache[path];
+    if (cached != null) return cached;
+    // Soft cap so a long session can't grow the cache unbounded.
+    if (_bytesCache.length > 80) _bytesCache.clear();
+    return _bytesCache[path] = XFile(path).readAsBytes();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isImage) {
+      return FutureBuilder<Uint8List>(
+        future: _read(path),
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return _placeholder();
+          }
+          final bytes = snap.data;
+          if (bytes == null || bytes.isEmpty) return _fileCard(context);
+          return GestureDetector(
+            onTap: () => _openFullscreen(context, bytes),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                    maxWidth: 260, maxHeight: 320, minWidth: 80),
+                child: Image.memory(bytes,
+                    fit: BoxFit.cover, gaplessPlayback: true),
+              ),
+            ),
+          );
+        },
+      );
+    }
+    return _fileCard(context);
+  }
+
+  Widget _placeholder() => Container(
+        width: 160,
+        height: 120,
+        decoration: BoxDecoration(
+          color: colors.bg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: colors.border),
+        ),
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: colors.textDim),
+          ),
+        ),
+      );
+
+  Widget _fileCard(BuildContext context) {
+    final label = (name != null && name!.isNotEmpty) ? name! : 'File';
+    return GestureDetector(
+      onTap: () => _shareFile(),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 260),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: colors.bg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: colors.border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NymSvgIcon(NymIcons.fileOffer, size: 20, color: colors.primary),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: colors.text, fontWeight: FontWeight.w500),
+              ),
+            ),
+            const SizedBox(width: 8),
+            NymSvgIcon(NymIcons.shareNodes, size: 16, color: colors.textDim),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareFile() async {
+    try {
+      await Share.shareXFiles(
+        [XFile(path, mimeType: mime, name: name)],
+      );
+    } catch (_) {
+      // Sharing unavailable (desktop/test) — silently ignore.
+    }
+  }
+
+  void _openFullscreen(BuildContext context, Uint8List bytes) {
+    Navigator.of(context).push(PageRouteBuilder<void>(
+      opaque: false,
+      barrierColor: Colors.black87,
+      pageBuilder: (_, __, ___) => _FullscreenImage(
+        bytes: bytes,
+        onShare: _shareFile,
+        colors: colors,
+      ),
+    ));
+  }
+}
+
+/// A fullscreen, pinch-zoomable viewer for a mesh image, with a share/save
+/// affordance and a tap-to-dismiss backdrop.
+class _FullscreenImage extends StatelessWidget {
+  const _FullscreenImage({
+    required this.bytes,
+    required this.onShare,
+    required this.colors,
+  });
+
+  final Uint8List bytes;
+  final Future<void> Function() onShare;
+  final NymColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.of(context).maybePop(),
+            child: InteractiveViewer(
+              minScale: 1,
+              maxScale: 5,
+              child: Center(child: Image.memory(bytes)),
+            ),
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            right: 8,
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.share, color: Colors.white),
+                  onPressed: () => onShare(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

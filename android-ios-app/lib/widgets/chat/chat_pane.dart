@@ -17,7 +17,8 @@ import '../../features/nymbot/nymbot_providers.dart'
     show BotChatState, botChatControllerProvider;
 import '../../features/onboarding/tutorial_overlay.dart';
 import '../../features/settings/about_screen.dart';
-import '../../features/settings/settings_helpers.dart' show geohashLocationLabel;
+import '../../features/settings/settings_helpers.dart'
+    show geohashLocationLabel;
 import '../../features/settings/settings_screen.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/shop/shop_modal.dart';
@@ -111,7 +112,32 @@ class ChatPane extends ConsumerWidget {
     // (sidebar tap, new-PM, notification, deep link, boot restore).
     final view = ref.watch(currentViewProvider);
     if (view.kind == ViewKind.pm && view.id.toLowerCase() == kNymbotPubkey) {
-      return BotChatScreen(onOpenSidebar: onOpenSidebar);
+      // The premium Nymbot chat keeps the SHARED `_ChatHeader` (back/forward
+      // nav, audio/video call buttons, notification bell + hamburger on the
+      // right, presence + `E2E encrypted · <credits>` meta, verified badge) —
+      // the same header the PWA renders for the bot PM — and swaps only the
+      // body below it for the paid surface ([BotChatScreen]: control bar +
+      // thread + bot composer). This keeps the single header instance (so its
+      // back/forward history survives entering/leaving the bot) and fixes the
+      // mobile divergence where BotChatScreen's own AppBar put the hamburger on
+      // the wrong side and dropped the notif bell + nav/call buttons. Applies
+      // in both single-pane and columns mode (the deck is replaced by the bot
+      // body when the bot column is focused, exactly as before).
+      return Container(
+        color: Colors.transparent,
+        child: Column(
+          children: [
+            _ChatHeader(
+              onOpenSidebar: onOpenSidebar,
+              compact: compact,
+              onStartCall: onStartCall,
+              onStartGroupCall: onStartGroupCall,
+              columnsMode: useColumns,
+            ),
+            Expanded(child: BotChatScreen(onOpenSidebar: onOpenSidebar)),
+          ],
+        ),
+      );
     }
 
     return Container(
@@ -308,7 +334,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     // `.channel-info { gap: 15 }` (controls→title) + `.channel-title-wrap`
     // margins: 20/20 on desktop, 10/0 below 768px (the PWA phone breakpoint —
     // narrower than the ≤1024 `compact` chrome, so key off the real width).
-    final phone = MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint;
+    final phone =
+        MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint;
     final titleLeftGap = 15.0 + (phone ? 10.0 : 20.0);
     final titleRightGap = phone ? 0.0 : 20.0;
     // `.channel-title { min-height: calc((user-text-size + 3) * 1.4 + 19px) }`
@@ -379,42 +406,43 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
                 child: Padding(
                   padding: EdgeInsets.only(right: titleRightGap),
                   child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // `.channel-title` (#currentChannel): a plain `#name` for a
-                    // channel; `.pm-header-row` (26px avatar + status dot + name)
-                    // for a PM; `.group-header-row` (group glyph + stacked member
-                    // avatars + name) for a group. The PWA nests a second
-                    // `.channel-location` line (12px) inside `#currentChannel`
-                    // beneath the title row, so it lives in this same block.
-                    _titleLine(c, app, view, title, titleSize),
-                    _locationLine(c, app, view),
-                    // `.channel-meta` (#channelMeta): the 11px line below the
-                    // title block — online-nym count (channel) or the E2E lock
-                    // notice (PM/group).
-                    if (metaText.isNotEmpty)
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Lock glyph prefix for E2E PM/group meta (PWA
-                          // `lockSvg`, 12px). Channel meta has no glyph.
-                          if (meta.svg != null) ...[
-                            NymSvgIcon(meta.svg!, size: 12, color: c.textDim),
-                            const SizedBox(width: 4),
-                          ],
-                          Flexible(
-                            child: Text(
-                              metaText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: c.textDim, fontSize: 11),
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // `.channel-title` (#currentChannel): a plain `#name` for a
+                      // channel; `.pm-header-row` (26px avatar + status dot + name)
+                      // for a PM; `.group-header-row` (group glyph + stacked member
+                      // avatars + name) for a group. The PWA nests a second
+                      // `.channel-location` line (12px) inside `#currentChannel`
+                      // beneath the title row, so it lives in this same block.
+                      _titleLine(c, app, view, title, titleSize),
+                      _locationLine(c, app, view),
+                      // `.channel-meta` (#channelMeta): the 11px line below the
+                      // title block — online-nym count (channel) or the E2E lock
+                      // notice (PM/group).
+                      if (metaText.isNotEmpty)
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Lock glyph prefix for E2E PM/group meta (PWA
+                            // `lockSvg`, 12px). Channel meta has no glyph.
+                            if (meta.svg != null) ...[
+                              NymSvgIcon(meta.svg!, size: 12, color: c.textDim),
+                              const SizedBox(width: 4),
+                            ],
+                            Flexible(
+                              child: Text(
+                                metaText,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style:
+                                    TextStyle(color: c.textDim, fontSize: 11),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
+                          ],
+                        ),
+                    ],
+                  ),
                 ),
               ),
               if (compact)
@@ -612,9 +640,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
             const double avatarStep = 14; // 18px avatar minus the 4px overlap
             // Reserve room for the glyph + a minimum name width; fit as many
             // avatars as the rest allows (cap 4).
-            final avail = constraints.maxWidth.isFinite
-                ? constraints.maxWidth
-                : 9999.0;
+            final avail =
+                constraints.maxWidth.isFinite ? constraints.maxWidth : 9999.0;
             final budget = avail - iconW - 40; // 40 ≈ minimum name slot
             var fit = others.length;
             if (budget < fit * avatarStep) {
@@ -1025,15 +1052,27 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     // favorite/share (or audio/video) beneath. A `Wrap` would keep them on one
     // row whenever the header is wide enough, so stack explicit 2-up Rows in a
     // Column instead to force the 2×2 grid at every width.
+    // Each grid cell is a FIXED 28px column (the action buttons' footprint, and
+    // the widest a nav button ever gets) with the button CENTERED inside it.
+    // This is what the PWA's `grid-template-columns: auto auto` yields: the two
+    // columns share a width, so column 1 (back / favorite・audio) and column 2
+    // (forward / share・video) line up vertically. Without the fixed cell the
+    // top row collapses to the nav buttons' 24px phone width while the bottom
+    // row stays 28px, and the forward arrow drifts left of the share/call icon
+    // beneath it (the reported off-centre glyph).
+    const cell = 28.0;
+    Widget gridCell(Widget child) =>
+        SizedBox(width: cell, child: Center(child: child));
+
     final rows = <Widget>[
       for (var i = 0; i < buttons.length; i += 2)
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            buttons[i],
+            gridCell(buttons[i]),
             if (i + 1 < buttons.length) ...[
               const SizedBox(width: 2), // column-gap
-              buttons[i + 1],
+              gridCell(buttons[i + 1]),
             ],
           ],
         ),
@@ -1208,8 +1247,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
           final botState = ref.watch(botChatControllerProvider);
           return (
             svg: NymIcons.lock,
-            text: tr('E2E encrypted · {meta}',
-                {'meta': _botCreditMeta(botState)}),
+            text: tr(
+                'E2E encrypted · {meta}', {'meta': _botCreditMeta(botState)}),
           );
         }
         return (
@@ -1254,7 +1293,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     final std = state.balance.balance;
     final pro = state.balance.proBalance;
     return pro > 0
-        ? tr('{std} standard · {pro} Pro credits left', {'std': std, 'pro': pro})
+        ? tr(
+            '{std} standard · {pro} Pro credits left', {'std': std, 'pro': pro})
         : (std == 1
             ? tr('{n} credit left', {'n': std})
             : tr('{n} credits left', {'n': std}));
@@ -1520,9 +1560,7 @@ class _HeaderPillState extends State<_HeaderPill> {
         child: InkWell(
           onTap: widget.onTap,
           borderRadius: NymRadius.rxs,
-          child: widget.badge > 0
-              ? _withBadge(pill, widget.badge)
-              : pill,
+          child: widget.badge > 0 ? _withBadge(pill, widget.badge) : pill,
         ),
       ),
     );
@@ -1562,9 +1600,8 @@ class _MobileToggle extends StatelessWidget {
             : const Color(0xCC141423), // rgba(20,20,35,0.8)
         borderRadius: NymRadius.rsm,
         border: Border.all(
-          color: c.isLight
-              ? Colors.black.withValues(alpha: 0.08)
-              : c.glassBorder,
+          color:
+              c.isLight ? Colors.black.withValues(alpha: 0.08) : c.glassBorder,
         ),
       ),
       child: NymSvgIcon(svg, size: 20, color: c.primary),
@@ -1655,9 +1692,8 @@ class _FriendBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = context.nym.isLight
-        ? const Color(0xFF0288D1)
-        : const Color(0xFF4FC3F7);
+    final color =
+        context.nym.isLight ? const Color(0xFF0288D1) : const Color(0xFF4FC3F7);
     return NymSvgIcon(NymIcons.friendBadge, size: size, color: color);
   }
 }

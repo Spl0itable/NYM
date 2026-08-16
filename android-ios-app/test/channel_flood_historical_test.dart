@@ -62,6 +62,69 @@ void main() {
     });
   });
 
+  group('future-dated created_at anchors to stored_at (D1 backfill)', () {
+    test(
+        'a future created_at with a PAST stored_at maps to stored_at, not now, '
+        'and is historical', () {
+      final storedAtMs =
+          DateTime.now().millisecondsSinceEpoch - 3600000; // 1h ago
+      // Sender's clock is ahead: created_at is 5 minutes in the future.
+      final futureSec = nowSec() + 300;
+      final ev = NostrEvent(
+        id: 'future1',
+        pubkey: sender,
+        createdAt: futureSec,
+        kind: EventKind.namedChannel,
+        tags: const [
+          ['d', 'room'],
+          ['n', 'someone'],
+        ],
+        content: 'from the future',
+        storedAt: storedAtMs,
+      );
+      final m = EventMapper.channelMessage(ev, selfPubkey: self)!;
+      // Sort key anchors to the stable stored_at second, not the volatile now.
+      expect(m.createdAt, storedAtMs ~/ 1000);
+      // Display/age time also anchors to stored_at (no ms tag present).
+      expect(m.timestamp, (storedAtMs ~/ 1000) * 1000);
+      // Treated as backlog, so it doesn't pin to the bottom or flood-dim.
+      expect(m.isHistorical, isTrue);
+    });
+
+    test(
+        'a future created_at WITHOUT stored_at still caps to now (unchanged)',
+        () {
+      final futureSec = nowSec() + 300;
+      final m = EventMapper.channelMessage(
+        _chan('room', 'future2', 'from the future',
+            pubkey: sender, createdAtSec: futureSec),
+        selfPubkey: self,
+      )!;
+      // No stored_at → the old behavior: capped to ~now.
+      expect((m.createdAt - nowSec()).abs() <= 1, isTrue);
+    });
+
+    test('a normal PAST event ignores stored_at (created_at preserved)', () {
+      final pastSec = nowSec() - 120;
+      final ev = NostrEvent(
+        id: 'past1',
+        pubkey: sender,
+        createdAt: pastSec,
+        kind: EventKind.namedChannel,
+        tags: const [
+          ['d', 'room'],
+          ['n', 'someone'],
+        ],
+        content: 'ordinary',
+        // A stored_at is present but the event isn't future-dated, so it must
+        // not override the real created_at.
+        storedAt: DateTime.now().millisecondsSinceEpoch - 3600000,
+      );
+      final m = EventMapper.channelMessage(ev, selfPubkey: self)!;
+      expect(m.createdAt, pastSec);
+    });
+  });
+
   group('backfill provenance overrides the timestamp-age guess', () {
     AppStateNotifier fresh() {
       final n = AppStateNotifier()..goLive(self, 'me#0001');

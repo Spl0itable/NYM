@@ -6,6 +6,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../features/channels/channel_context_menu.dart';
 import '../../features/settings/settings_helpers.dart';
 import '../../models/channel.dart';
+import '../nym_icons.dart';
 import 'sidebar_row_gestures.dart';
 
 /// The grey "pinned/favorited" tint the PWA paints on a `.channel-item.pinned`
@@ -35,6 +36,7 @@ class ChannelListItem extends ConsumerWidget {
     required this.unread,
     required this.textSize,
     required this.onTap,
+    this.mesh = false,
   });
 
   final ChannelEntry entry;
@@ -43,6 +45,9 @@ class ChannelListItem extends ConsumerWidget {
   final int unread;
   final double textSize;
   final VoidCallback onTap;
+
+  /// True when this channel is Bluetooth-mesh-backed — shows a small glyph.
+  final bool mesh;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -128,6 +133,10 @@ class ChannelListItem extends ConsumerWidget {
                 ),
                 child: Row(
                   children: [
+                    if (mesh) ...[
+                      NymSvgIcon(NymIcons.bluetooth, size: 12, color: c.primary),
+                      const SizedBox(width: 6),
+                    ],
                     Expanded(
                       // `.channel-name` inherits `--text` weight normal even
                       // when active (active changes bg/border/bar only).

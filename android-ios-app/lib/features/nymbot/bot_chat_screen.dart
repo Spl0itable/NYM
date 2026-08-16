@@ -17,14 +17,17 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/chat/composer.dart'
     show ComposerDrafts, EmojiSentinelController;
-import '../../widgets/chat/message_row.dart' show MessageGroup, MessageGroupEntry;
+import '../../widgets/chat/message_row.dart'
+    show MessageGroup, MessageGroupEntry;
 import '../../widgets/chat/typing_indicator.dart';
-import '../../widgets/common/nym_avatar.dart';
-import '../../widgets/context_menu/context_menu_actions.dart';
-import '../../widgets/context_menu/context_menu_panel.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
-import '../../widgets/context_menu/profile_badges.dart' show VerifiedBadge;
 import '../../widgets/nym_icons.dart';
+import '../autocomplete/autocomplete_dropdown.dart';
+import '../autocomplete/autocomplete_queries.dart' show queryEmoji, EmojiResult;
+import '../autocomplete/autocomplete_triggers.dart';
+import '../commands/command_palette.dart'
+    show buildPaletteRows, commandItemRow, paletteCommands, CommandPalette, PaletteRow;
+import '../commands/command_registry.dart' show CommandSpec;
 import '../emoji/emoji_data.dart';
 import '../emoji/emoji_picker.dart';
 import '../emoji/gif_picker.dart';
@@ -125,263 +128,69 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     // always-mounted listeners in home_shell.dart — no second listener here,
     // or the modal would open twice.
 
-    return Scaffold(
-      // Transparent so the shell's fixed `#wallpaperLayer` (mounted behind the
-      // pane in home_shell) shows through the bot chat exactly like the canonical
-      // ChatPane, which is itself transparent. The opaque base still comes from
-      // the shell Scaffold (`c.bg`); the AppBar/composer paint their own glass
-      // surfaces and the messages area only a translucent wash, so the wallpaper
-      // (default pattern or custom upload) reads through the bot thread too.
-      // Painting an opaque `c.bg` here covered the wallpaper for the whole view.
-      backgroundColor: Colors.transparent,
-      appBar: _header(context, c, state),
-      body: Column(
-        children: [
-          _TierSwitch(
-            isPro: state.isPro,
-            proLabel: state.proModel?.label,
-            colors: c,
-            onTapStandard: () => ref
-                .read(botChatControllerProvider.notifier)
-                .setModelDirect(null),
-            onTapPro: () => _showModelPicker(context),
-          ),
-          Expanded(
-            // Tap on the messages region drops focus (dismisses the keyboard)
-            // when no interactive child consumes it — same wiring as the
-            // canonical ChatPane; the browser gives the PWA this for free.
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () => FocusScope.of(context).unfocus(),
-              child: _buildMessagesArea(c),
-            ),
-          ),
-          // The shared `.typing-indicator` strip pinned above the composer —
-          // "Nymbot is thinking" with the 18px avatar + bouncing dots
-          // (pms.js `_setBotTyping` → `_renderTypingInto`).
-          const TypingIndicatorRow(
-              storageKey: 'pm-$kNymbotPubkey'),
-          _BotComposer(
-            colors: c,
-            onSubmit: (content) {
-              ref
-                  .read(botChatControllerProvider.notifier)
-                  .sendUserBotPM(content);
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) _scrollToBottom();
-              });
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Header (`_renderPMHeader`, pms.js:2905-2941)
-  // ---------------------------------------------------------------------------
-
-  PreferredSizeWidget _header(
-      BuildContext context, NymColors c, BotChatState state) {
-    final botUser = ref.watch(usersProvider)[kNymbotPubkey];
-    return AppBar(
-      // `.chat-header`: bg --glass-bg + a bottom hairline (chat_pane.dart:
-      // 330-334), NOT --bg-secondary (an opaque surface that reads differently
-      // from the rest of the app's headers in both themes). Kill Material's
-      // elevation/scroll tint so the header stays flat glass in light AND dark.
-      backgroundColor: c.glassBg,
-      surfaceTintColor: Colors.transparent,
-      elevation: 0,
-      scrolledUnderElevation: 0,
-      shape: Border(bottom: BorderSide(color: c.glassBorder)),
-      foregroundColor: c.textBright,
-      titleSpacing: 0,
-      toolbarHeight: 68,
-      automaticallyImplyLeading: false,
-      // Compact layouts keep the hamburger so the off-canvas sidebar stays
-      // reachable from the bot PM (the shared `.mobile-menu-toggle`).
-      leading: widget.onOpenSidebar == null
-          ? null
-          : IconButton(
-              tooltip: tr('Menu'),
-              icon: NymSvgIcon(NymIcons.menu, size: 20, color: c.primary),
-              onPressed: widget.onOpenSidebar,
-            ),
-      title: Row(
-        children: [
-          // `.pm-header-avatar`: 26px avatar with a 7px status dot — the bot is
-          // always online (pms.js `getEffectiveUserStatus` bot override).
-          SizedBox(
-            width: 30,
-            height: 30,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                NymAvatar(
-                  seed: kNymbotPubkey,
-                  size: 26,
-                  imageUrl: botUser?.profile?.picture,
-                ),
-                Positioned(
-                  // `.pm-header-avatar .user-status-dot`: 7px, bottom/right -2.
-                  right: 2,
-                  bottom: 2,
-                  child: Container(
-                    width: 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      // `.status-online` #22c55e ringed by 2px --bg.
-                      color: const Color(0xFF22C55E),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: c.bg, width: 2),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // `.pm-header-row` is `header-clickable`: tapping the name opens
-                // the bot's profile context menu (pms.js:2929-2932).
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _openHeaderMenu(context),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text.rich(
-                          TextSpan(children: [
-                            const TextSpan(text: 'Nymbot'),
-                            TextSpan(
-                              text: '#${getPubkeySuffix(kNymbotPubkey)}',
-                              // `.nym-suffix`: opacity 0.7 / 0.9em / weight 100.
-                              // Tinted from `--primary` like every other 1:1 PM
-                              // header nym (chat_pane.dart `_titleLine` pm case),
-                              // NOT `--text-bright` (which read as a different
-                              // colour from every other PM header).
-                              style: TextStyle(
-                                color: c.primary.withValues(alpha: 0.7),
-                                fontSize: 16 * 0.9,
-                                fontWeight: FontWeight.w100,
-                              ),
-                            ),
-                          ]),
-                          overflow: TextOverflow.ellipsis,
-                          // Base nym in `--primary` to match the canonical PM
-                          // header (chat_pane.dart:445), not `--text-bright`.
-                          style: TextStyle(
-                              color: c.primary,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.2),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      const VerifiedBadge(size: 16),
-                    ],
-                  ),
-                ),
-                // `.pm-last-seen` presence line — the bot's is the fixed
-                // 'Always at your service' (pms.js:37).
-                Text(
-                  tr('Always at your service'),
-                  style: TextStyle(color: c.textDim, fontSize: 12, height: 1.2),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                // `#channelMeta` for the bot PM: 12px lock +
-                // 'E2E encrypted · <botCreditMeta>' (pms.js:2934-2938).
-                Row(
-                  children: [
-                    NymSvgIcon(NymIcons.lock, size: 12, color: c.textDim),
-                    const SizedBox(width: 4),
-                    Flexible(
-                      child: Text(
-                        tr('E2E encrypted · {meta}',
-                            {'meta': _botCreditMeta(state)}),
-                        style: TextStyle(
-                            color: c.textDim, fontSize: 11, height: 1.2),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        IconButton(
-          tooltip: tr('Balance'),
-          icon: Icon(Icons.account_balance_wallet_outlined, color: c.text),
-          onPressed: () => _showBalance(context),
+    // ChatPane renders the SHARED `_ChatHeader` above this widget (back/forward
+    // nav, audio/video call buttons, notification bell + hamburger, presence +
+    // `E2E encrypted · <credits>` meta, verified badge) — the exact header the
+    // PWA uses for the bot PM. This widget renders only the paid surface BELOW
+    // that header: the premium control bar, the thread, the typing strip and
+    // the bot composer. (No Scaffold/AppBar of its own — the shell Scaffold
+    // supplies the opaque base and keyboard insets, and the region stays
+    // transparent so the `#wallpaperLayer` reads through, like the canonical
+    // ChatPane body.)
+    return Column(
+      children: [
+        _BotControlBar(
+          isPro: state.isPro,
+          // Pinned Pro model → its brand label; otherwise the "Auto-routed"
+          // UI copy (pms.js `_refreshBotControlBar`, model chip).
+          modelLabel: state.proModel?.label ?? tr('Auto-routed'),
+          // Git chip → connected repo's short name, else the "Git" fallback.
+          gitConnected: state.git?.hasRepo ?? false,
+          gitLabel: _gitChipLabel(state),
+          colors: c,
+          onTapStandard: () =>
+              ref.read(botChatControllerProvider.notifier).setModelDirect(null),
+          // Both the Pro pill and the model chip open the picker (botSetTier
+          // 'pro' + openBotModelModal, pms.js:2419/2438).
+          onTapModel: () => _showModelPicker(context),
+          onTapGit: () => _showGitConnect(context),
+          onTapBuy: () => _showBuy(context),
         ),
-        IconButton(
-          tooltip: tr('Connect git repo'),
-          icon: Icon(Icons.source_outlined,
-              color: (state.git?.hasRepo ?? false) ? c.primary : c.text),
-          onPressed: () => _showGitConnect(context),
+        Expanded(
+          // Tap on the messages region drops focus (dismisses the keyboard)
+          // when no interactive child consumes it — same wiring as the
+          // canonical ChatPane; the browser gives the PWA this for free.
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => FocusScope.of(context).unfocus(),
+            child: _buildMessagesArea(c),
+          ),
+        ),
+        // The shared `.typing-indicator` strip pinned above the composer —
+        // "Nymbot is thinking" with the 18px avatar + bouncing dots
+        // (pms.js `_setBotTyping` → `_renderTypingInto`).
+        const TypingIndicatorRow(storageKey: 'pm-$kNymbotPubkey'),
+        _BotComposer(
+          colors: c,
+          onSubmit: (content) {
+            ref.read(botChatControllerProvider.notifier).sendUserBotPM(content);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _scrollToBottom();
+            });
+          },
         ),
       ],
     );
   }
 
-  /// The `#botCreditMeta` text (`_renderBotCreditMeta`, pms.js:2361-2380):
-  /// Pro pinned → `'<n> Pro credit(s) · <model> [· <repoName>]'`; otherwise the
-  /// standard count (`'<n> credit(s) left'`, or both pools when Pro credits
-  /// exist). 'checking credits…' until the first balance lands.
-  String _botCreditMeta(BotChatState state) {
-    final proModel = state.proModel;
-    if (proModel != null) {
-      final pro = state.balance.proBalance;
-      final proText = state.balanceKnown ? '$pro' : '…';
-      var meta = pro == 1
-          ? tr('{n} Pro credit · {model}',
-              {'n': proText, 'model': proModel.label})
-          : tr('{n} Pro credits · {model}',
-              {'n': proText, 'model': proModel.label});
-      final git = state.git;
-      if (git != null && git.hasRepo) {
-        meta += ' · ${git.repo.split('/').last}';
-      }
-      return meta;
-    }
-    if (!state.balanceKnown) {
-      // A failed check with no cached count settles on 'credits unavailable'
-      // (`_refreshBotCreditMeta`, pms.js:2382-2389).
-      return state.balanceUnavailable
-          ? tr('credits unavailable')
-          : tr('checking credits…');
-    }
-    final std = state.balance.balance;
-    final pro = state.balance.proBalance;
-    return pro > 0
-        ? tr('{std} standard · {pro} Pro credits left',
-            {'std': std, 'pro': pro})
-        : std == 1
-            ? tr('{n} credit left', {'n': std})
-            : tr('{n} credits left', {'n': std});
-  }
-
-  /// Header name tap → the bot's profile context menu (the PWA's
-  /// `showContextMenu(e, nym, pubkey, null, null, true)` — profile mode).
-  void _openHeaderMenu(BuildContext context) {
-    ContextMenuPanel.show(
-      context,
-      target: const CtxTarget(
-        pubkey: kNymbotPubkey,
-        nym: 'Nymbot',
-        isSelf: false,
-        isBot: true,
-        profileOnly: true,
-      ),
-    );
+  /// The Git chip label: a connected repo's short name (last path segment),
+  /// else the localizable "Git" fallback — `_refreshBotControlBar`'s
+  /// `git.repo.split('/').pop()` (pms.js:2404).
+  String _gitChipLabel(BotChatState state) {
+    final repo = state.git?.repo;
+    if (repo == null || repo.isEmpty) return tr('Git');
+    final tail = repo.split('/').last;
+    return tail.isEmpty ? tr('Git') : tail;
   }
 
   // ---------------------------------------------------------------------------
@@ -497,86 +306,6 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   // Modals (premium surfaces kept on top of the canonical chat)
   // ---------------------------------------------------------------------------
 
-  void _showBalance(BuildContext context) {
-    final c = _colors(context);
-    final b = ref.read(botChatControllerProvider).balance;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: c.bgSecondary,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(tr('Credit balance'),
-                style: TextStyle(
-                    color: c.textBright,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 16),
-            _balanceRow(tr('Standard'), b.balance, tr('10 sats each'), c),
-            const SizedBox(height: 8),
-            _balanceRow(tr('Pro'), b.proBalance, tr('100 sats each'), c,
-                accent: c.primary),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _showBuy(context);
-                },
-                child: Text(tr('Buy credits')),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _balanceRow(String label, int value, String hint, NymColors c,
-      {Color? accent}) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: c.bgTertiary,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: c.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-                color: accent ?? c.blue, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: TextStyle(
-                        color: c.textBright, fontWeight: FontWeight.w600)),
-                Text(hint, style: TextStyle(color: c.textDim, fontSize: 11)),
-              ],
-            ),
-          ),
-          Text('$value',
-              style: TextStyle(
-                  color: c.textBright,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700)),
-          const SizedBox(width: 4),
-          Text(tr('cr'), style: TextStyle(color: c.textDim, fontSize: 11)),
-        ],
-      ),
-    );
-  }
-
   void _showBuy(BuildContext context) {
     // Buy mode of the shared credits modal (PWA: same modal as gift, no
     // recipient). Pro tier preselected when a Pro model is pinned.
@@ -619,11 +348,12 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                   style: TextStyle(color: c.text)),
               subtitle: Text(tr('Best model per task · 10 sats each'),
                   style: TextStyle(color: c.textDim, fontSize: 11)),
-              trailing: current == null
-                  ? Icon(Icons.check, color: c.primary)
-                  : null,
+              trailing:
+                  current == null ? Icon(Icons.check, color: c.primary) : null,
               onTap: () {
-                ref.read(botChatControllerProvider.notifier).setModelDirect(null);
+                ref
+                    .read(botChatControllerProvider.notifier)
+                    .setModelDirect(null);
                 Navigator.pop(context);
               },
             ),
@@ -633,8 +363,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                 leading: Icon(Icons.bolt, color: c.primary),
                 title: Text(m.label, style: TextStyle(color: c.text)),
                 // PWA `?model` list: the human price-range phrase, not the id.
-                subtitle: Text(
-                    m.priceLabel,
+                subtitle: Text(m.priceLabel,
                     style: TextStyle(color: c.textDim, fontSize: 11)),
                 trailing: current?.key == m.key
                     ? Icon(Icons.check, color: c.primary)
@@ -693,9 +422,8 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
     final fill = _hover
         ? c.primaryA(0.15)
         : (light ? const Color(0xD9FFFFFF) /* white @ 0.85 */ : c.glassBg);
-    final border = _hover
-        ? c.primaryA(0.30)
-        : (light ? c.primaryA(0.20) : c.glassBorder);
+    final border =
+        _hover ? c.primaryA(0.30) : (light ? c.primaryA(0.20) : c.glassBorder);
     final shadow = light
         ? const BoxShadow(
             color: Color(0x26000000), // black @ 0.15
@@ -736,82 +464,275 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
 }
 
 // =============================================================================
-// Tier switch (Standard / Pro) — intentional premium addition
+// Premium Nymbot control bar (`.bot-control-bar`, styles-chat.css:1270-1382 /
+// index.html:680-697). A single glass strip under the header holding the tier
+// switch (Standard / Pro), the auto-routed/model chip, the git chip and the
+// buy chip — the PWA's unified control row that replaced the old header action
+// icons. Labels + active states track `_refreshBotControlBar` (pms.js:2381).
 // =============================================================================
 
-class _TierSwitch extends StatelessWidget {
-  const _TierSwitch({
+/// Feather sparkle glyph for the model chip (index.html:684 `#botModelBtn`).
+const String _kSvgSparkle =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21'
+    'l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>';
+
+/// Feather git-branch glyph for the git chip (index.html:688 `#botGitBtn`).
+const String _kSvgGitBranch =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<line x1="6" y1="3" x2="6" y2="15"/>'
+    '<circle cx="18" cy="6" r="3"/>'
+    '<circle cx="6" cy="18" r="3"/>'
+    '<path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+
+/// Feather lightning-bolt polygon for the buy chip (index.html:692 `#botBuyBtn`).
+const String _kSvgBolt =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+
+class _BotControlBar extends StatelessWidget {
+  const _BotControlBar({
     required this.isPro,
-    required this.proLabel,
+    required this.modelLabel,
+    required this.gitConnected,
+    required this.gitLabel,
     required this.colors,
     required this.onTapStandard,
-    required this.onTapPro,
+    required this.onTapModel,
+    required this.onTapGit,
+    required this.onTapBuy,
   });
 
   final bool isPro;
-  final String? proLabel;
+  final String modelLabel;
+  final bool gitConnected;
+  final String gitLabel;
   final NymColors colors;
   final VoidCallback onTapStandard;
-  final VoidCallback onTapPro;
+  final VoidCallback onTapModel;
+  final VoidCallback onTapGit;
+  final VoidCallback onTapBuy;
 
   @override
   Widget build(BuildContext context) {
     final c = colors;
+    // `@media (max-width: 600px)`: tighter gaps/padding + a shorter label clamp.
+    final compact = MediaQuery.sizeOf(context).width <= 600;
+    final gap = compact ? 6.0 : 8.0;
+    final labelMax = compact ? 96.0 : 150.0;
+
+    // The left cluster (tier switch + model + git) scrolls horizontally when it
+    // can't fit — the PWA's `overflow-x: auto` — while the Buy chip stays pinned
+    // to the trailing edge (its `margin-left: auto`), the premium CTA always in
+    // reach even on the narrowest phone.
+    final left = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const ClampingScrollPhysics(),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _tierSwitch(c),
+          SizedBox(width: gap),
+          _CtrlButton(
+            svg: _kSvgSparkle,
+            label: modelLabel,
+            active: isPro,
+            labelMaxWidth: labelMax,
+            colors: c,
+            compact: compact,
+            onTap: onTapModel,
+          ),
+          SizedBox(width: gap),
+          _CtrlButton(
+            svg: _kSvgGitBranch,
+            label: gitLabel,
+            active: gitConnected,
+            labelMaxWidth: labelMax,
+            colors: c,
+            compact: compact,
+            onTap: onTapGit,
+          ),
+        ],
+      ),
+    );
+
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-      padding: const EdgeInsets.all(3),
+      // `.bot-control-bar`: glass fill + a bottom hairline, 8px 16px padding.
+      padding: EdgeInsets.symmetric(
+          horizontal: compact ? 12 : 16, vertical: compact ? 7 : 8),
       decoration: BoxDecoration(
-        color: c.bgTertiary,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: c.border),
+        color: c.glassBg,
+        border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
       child: Row(
         children: [
-          // PWA `.bot-credit-tier-btn.active`: both segments use the lightning
-          // accent (orange) — fill @0.12, border @0.5, text --lightning bold.
-          _segment(tr('Standard'), !isPro, onTapStandard, c),
-          _segment(
-            isPro && proLabel != null
-                ? tr('Pro · {label}', {'label': proLabel})
-                : tr('Pro'),
-            isPro,
-            onTapPro,
-            c,
+          Expanded(child: left),
+          SizedBox(width: gap),
+          // `.bot-ctrl-buy`: the lightning-accented purchase chip.
+          _CtrlButton(
+            svg: _kSvgBolt,
+            label: tr('Buy'),
+            active: false,
+            buy: true,
+            labelMaxWidth: labelMax,
+            colors: c,
+            compact: compact,
+            onTap: onTapBuy,
           ),
         ],
       ),
     );
   }
 
-  Widget _segment(String label, bool active, VoidCallback onTap, NymColors c) {
-    return Expanded(
+  /// `.bot-tier-switch`: a 2-segment pill group. The active segment lights up in
+  /// the lightning accent (fill @0.14, text --lightning, inset 1px ring @0.4);
+  /// tapping Standard drops back to auto-routing, Pro opens the model picker.
+  Widget _tierSwitch(NymColors c) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: c.bgTertiary,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.glassBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _tierBtn(tr('Standard'), !isPro, onTapStandard, c),
+          const SizedBox(width: 3),
+          _tierBtn(tr('Pro'), isPro, onTapModel, c),
+        ],
+      ),
+    );
+  }
+
+  Widget _tierBtn(String label, bool active, VoidCallback onTap, NymColors c) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        decoration: BoxDecoration(
+          color:
+              active ? c.lightning.withValues(alpha: 0.14) : Colors.transparent,
+          borderRadius: BorderRadius.circular(7),
+          // `.bot-tier-btn.active`: `box-shadow: inset 0 0 0 1px lightning@0.4`.
+          border: Border.all(
+            color: active
+                ? c.lightning.withValues(alpha: 0.4)
+                : Colors.transparent,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: active ? c.lightning : c.textDim,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// `.bot-ctrl-btn` / `.bot-ctrl-buy`: an icon + label chip with a hover-lit
+/// border (desktop) and an `.active` state that switches to the primary accent.
+class _CtrlButton extends StatefulWidget {
+  const _CtrlButton({
+    required this.svg,
+    required this.label,
+    required this.active,
+    required this.labelMaxWidth,
+    required this.colors,
+    required this.compact,
+    required this.onTap,
+    this.buy = false,
+  });
+
+  final String svg;
+  final String label;
+  final bool active;
+  final bool buy;
+  final double labelMaxWidth;
+  final NymColors colors;
+  final bool compact;
+  final VoidCallback onTap;
+
+  @override
+  State<_CtrlButton> createState() => _CtrlButtonState();
+}
+
+class _CtrlButtonState extends State<_CtrlButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    // Resolve fill / border / foreground across the three states, buy chip
+    // first (lightning), then active (primary), then the neutral resting chip.
+    final Color fill;
+    final Color border;
+    final Color fg;
+    if (widget.buy) {
+      // `.bot-ctrl-buy`: lightning text + fill @0.1 / border @0.4 (@0.6 hover).
+      fill = c.lightning.withValues(alpha: _hover ? 0.16 : 0.1);
+      border = c.lightning.withValues(alpha: _hover ? 0.6 : 0.4);
+      fg = c.lightning;
+    } else if (widget.active) {
+      // `.bot-ctrl-btn.active`: primary text + fill @0.1 / border @0.5.
+      fill = c.primary.withValues(alpha: 0.1);
+      border = c.primary.withValues(alpha: 0.5);
+      fg = c.primary;
+    } else {
+      // Resting chip: mode-aware inset fill (white@0.05 in the PWA) + the glass
+      // hairline; hover lifts the text to --text and the border to primary@0.4.
+      fill = c.insetFill;
+      border = _hover ? c.primary.withValues(alpha: 0.4) : c.glassBorder;
+      fg = _hover ? c.text : c.textDim;
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: onTap,
+        onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: EdgeInsets.symmetric(
+              horizontal: widget.compact ? 10 : 12, vertical: 6),
           decoration: BoxDecoration(
-            color: active
-                ? c.lightning.withValues(alpha: 0.12)
-                // Inactive fill: white@0.04 dark / black@0.04 light. `insetFill`
-                // is mode-aware so the pill stays visible in light mode.
-                : c.insetFill,
-            // `.bot-credit-tier-btn`: radius --radius-sm (12).
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: active ? c.lightning.withValues(alpha: 0.5) : c.border,
-              width: 1,
-            ),
+            color: fill,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: border),
           ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: active ? c.lightning : c.textDim,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w400,
-              fontSize: 13,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              NymSvgIcon(widget.svg, size: 15, color: fg),
+              const SizedBox(width: 6),
+              // `.bot-ctrl-label`: clamp + ellipsis so a long model / repo name
+              // can't blow out the bar.
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: widget.labelMaxWidth),
+                child: Text(
+                  widget.label,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 12,
+                    // Buy is the standalone CTA (w500 like the PWA); the neutral
+                    // chips also sit at w500 per `.bot-ctrl-btn`.
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -850,6 +771,27 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   /// The currently-filtered `?…` suggestions (empty → palette hidden).
   List<BotPMCommand> _suggestions = const [];
 
+  /// Which trigger (if any) is live, and the derived palette contents for the
+  /// `/` command palette and the `:` emoji autocomplete. The Nymbot PM now
+  /// supports all three (`/`, `?`, `:`) via the shared [detectTrigger].
+  TriggerMatch _trigger = const TriggerMatch.none();
+  List<PaletteRow> _cmdRows = const [];
+  AutocompleteView? _acView;
+
+  /// True when any palette (command / bot / emoji) is live and not suppressed.
+  bool get _paletteActive =>
+      !_suppressPalette &&
+      (_suggestions.isNotEmpty ||
+          _cmdRows.isNotEmpty ||
+          (_acView != null && !_acView!.isEmpty));
+
+  /// The number of selectable rows in the active palette (for ↑/↓ nav).
+  int get _paletteLength {
+    if (_cmdRows.isNotEmpty) return paletteCommands(_cmdRows).length;
+    if (_acView != null && !_acView!.isEmpty) return _acView!.itemCount;
+    return _suggestions.length;
+  }
+
   /// Highlighted palette row — reset to the first row on every input change,
   /// like `showBotCommandPalette` (`commandPaletteIndex = 0`, commands.js:464).
   int _paletteIndex = 0;
@@ -864,17 +806,21 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   /// the conversation above the input container, never growing it).
   final _acAnchor = LayerLink();
   final _acPortal = OverlayPortalController();
+
+  /// Groups the input field with its `?` palette so a tap outside both dismisses
+  /// it (like the app's other modals), while a tap on a row still selects it.
+  final Object _acGroupId = Object();
   final _inputKey = GlobalKey();
 
   /// Aligns the portal's visibility with the palette state. Deferred to a
   /// post-frame callback because it's invoked from build (show()/hide() mark
   /// the overlay dirty, which is illegal mid-build).
   void _syncPalettePortal() {
-    final want = _suggestions.isNotEmpty && !_suppressPalette;
+    final want = _paletteActive;
     if (want == _acPortal.isShowing) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final show = _suggestions.isNotEmpty && !_suppressPalette;
+      final show = _paletteActive;
       if (show && !_acPortal.isShowing) _acPortal.show();
       if (!show && _acPortal.isShowing) _acPortal.hide();
     });
@@ -897,7 +843,10 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         alignment: Alignment.bottomLeft,
         child: Material(
           type: MaterialType.transparency,
-          child: SizedBox(width: width, child: _palette(widget.colors)),
+          child: TapRegion(
+            groupId: _acGroupId,
+            child: SizedBox(width: width, child: _palette(widget.colors)),
+          ),
         ),
       ),
     );
@@ -1003,31 +952,53 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final text = _controller.text;
     final textChanged = text != _lastText;
     _lastText = text;
-    final next = text.startsWith('?')
-        ? filterBotPMCommands(text)
-        : const <BotPMCommand>[];
+
+    // The bot PM now supports all three input palettes: `/` commands, `?` Nymbot
+    // commands (with multi-step subcommands), and `:` emoji — resolved by the
+    // shared trigger detector (botPM: true keeps `?` alive past a space).
+    final sel = _controller.selection;
+    final caret = sel.isValid ? sel.start : text.length;
+    _trigger = detectTrigger(text, caret: caret, botPM: true);
+
+    var nextBot = const <BotPMCommand>[];
+    var nextCmd = const <PaletteRow>[];
+    AutocompleteView? nextAc;
+    switch (_trigger.kind) {
+      case TriggerKind.command:
+        nextCmd = buildPaletteRows(_trigger.query);
+        break;
+      case TriggerKind.botCommand:
+        nextBot = filterBotPMCommands(text);
+        break;
+      case TriggerKind.emoji:
+        final results = queryEmoji(
+          search: _trigger.query,
+          recents: _recents,
+          custom: ref.read(liveCustomEmojiProvider),
+        );
+        if (results.isNotEmpty) nextAc = AutocompleteView.emoji(results);
+        break;
+      case TriggerKind.none:
+      case TriggerKind.mention:
+      case TriggerKind.channel:
+      case TriggerKind.kaomoji:
+        break;
+    }
+
     if (textChanged) {
       // Every input event re-shows the palette (after an Escape) and
       // re-highlights the first row (showBotCommandPalette).
       _suppressPalette = false;
       _paletteIndex = 0;
     }
-    if (!_sameCommands(next, _suggestions)) {
-      setState(() => _suggestions = next);
-    } else {
-      // Rebuild for the SEND-affordance / translate-style hooks keyed on text.
-      setState(() {});
-    }
+    setState(() {
+      _suggestions = nextBot;
+      _cmdRows = nextCmd;
+      _acView = nextAc;
+    });
   }
 
   /// Cheap equality on the (small) suggestion lists, by command name+order.
-  bool _sameCommands(List<BotPMCommand> a, List<BotPMCommand> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].name != b[i].name) return false;
-    }
-    return true;
-  }
 
   void _pick(BotPMCommand cmd) {
     final text = '${cmd.name} ';
@@ -1039,6 +1010,46 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     // subcommands; a leaf command just hides the palette.
     _onTextChanged();
     _focus.requestFocus();
+  }
+
+  /// Completes a `/` slash command (inserts `"<command> "`).
+  void _completeCommand(CommandSpec spec) {
+    _controller.value = TextEditingValue(
+      text: '${spec.name} ',
+      selection: TextSelection.collapsed(offset: spec.name.length + 1),
+    );
+    _onTextChanged();
+    _focus.requestFocus();
+  }
+
+  /// Completes a `:` emoji autocomplete, splicing the emoji over the `:token`.
+  void _completeEmoji(EmojiResult result) {
+    final start = _trigger.triggerIndex;
+    final text = _controller.text;
+    final sel = _controller.selection;
+    final caret = sel.isValid ? sel.start : text.length;
+    if (start < 0 || start > caret) return;
+    final next = text.replaceRange(start, caret, result.insertText);
+    _controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + result.insertText.length),
+    );
+    _onTextChanged();
+    _focus.requestFocus();
+  }
+
+  /// Applies the selected row of whichever palette is active.
+  void _completeSelected() {
+    final i = _paletteIndex.clamp(0, (_paletteLength - 1).clamp(0, 1 << 30));
+    if (_cmdRows.isNotEmpty) {
+      final cmds = paletteCommands(_cmdRows);
+      if (i < cmds.length) _completeCommand(cmds[i]);
+    } else if (_acView != null && !_acView!.isEmpty) {
+      final emoji = _acView!.emoji;
+      if (i < emoji.length) _completeEmoji(emoji[i]);
+    } else if (i < _suggestions.length) {
+      _pick(_suggestions[i]);
+    }
   }
 
   // --- Quote-reply chip (mention/quote mailbox from swipe / menu / dbl-tap) ---
@@ -1069,10 +1080,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     for (final line in text.split('\n')) {
       if (!line.startsWith('>')) kept.add(line);
     }
-    return kept
-        .join('\n')
-        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-        .trim();
+    return kept.join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
   }
 
   /// The chip's cleaned preview text: strip HTML/markdown punctuation, cap 120
@@ -1129,18 +1137,18 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     }
     final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
-    if (_suggestions.isNotEmpty && !_suppressPalette) {
-      final n = _suggestions.length;
-      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+    if (_paletteActive) {
+      final n = _paletteLength;
+      if (n > 0 && event.logicalKey == LogicalKeyboardKey.arrowDown) {
         setState(() => _paletteIndex = (_paletteIndex + 1) % n);
         return KeyEventResult.handled;
       }
-      if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      if (n > 0 && event.logicalKey == LogicalKeyboardKey.arrowUp) {
         setState(() => _paletteIndex = (_paletteIndex - 1 + n) % n);
         return KeyEventResult.handled;
       }
       if (isEnter || event.logicalKey == LogicalKeyboardKey.tab) {
-        _pick(_suggestions[_paletteIndex.clamp(0, n - 1)]);
+        _completeSelected();
         return KeyEventResult.handled;
       }
       if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -1372,8 +1380,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final c = widget.colors;
     final isVideo = (_uploadMime ?? '').startsWith('video/');
     final label = _uploadTotal > 1
-        ? tr('Uploading {i} of {n}...',
-            {'i': _uploadIndex, 'n': _uploadTotal})
+        ? tr('Uploading {i} of {n}...', {'i': _uploadIndex, 'n': _uploadTotal})
         : isVideo
             ? tr('Uploading video...')
             : tr('Uploading image...');
@@ -1630,8 +1637,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                             )
                           : ListView.builder(
                               shrinkWrap: true,
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.symmetric(vertical: 4),
                               itemCount: langs.length,
                               itemBuilder: (_, i) {
                                 final e = langs[i];
@@ -1824,6 +1830,12 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final field = TextField(
       controller: _controller,
       focusNode: _focus,
+      groupId: _acGroupId,
+      onTapOutside: (_) {
+        if (_suggestions.isNotEmpty && !_suppressPalette) {
+          setState(() => _suppressPalette = true);
+        }
+      },
       maxLines: 5,
       minLines: 1,
       textInputAction: TextInputAction.newline,
@@ -1837,8 +1849,8 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         // The shared input placeholder (index.html `data-placeholder`).
         hintText: tr('Message, / for commands, ? for Nymbot...'),
         hintStyle: TextStyle(
-            color:
-                (c.isLight ? Colors.black : Colors.white).withValues(alpha: 0.4),
+            color: (c.isLight ? Colors.black : Colors.white)
+                .withValues(alpha: 0.4),
             fontSize: phone ? 16 : 15),
         filled: true,
         fillColor: flatFill,
@@ -2034,6 +2046,27 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   /// `.command-item.selected` highlights [_paletteIndex] (first row on open,
   /// then ↑/↓-navigable), bgTertiary surface.
   Widget _palette(NymColors c) {
+    // `/` command palette and `:` emoji autocomplete reuse the shared widgets;
+    // the `?` Nymbot palette keeps its bespoke rows below.
+    if (_cmdRows.isNotEmpty) {
+      return CommandPalette(
+        rows: _cmdRows,
+        selectedIndex: _paletteIndex.clamp(0, (_paletteLength - 1).clamp(0, 1 << 30)),
+        onSelect: _completeCommand,
+      );
+    }
+    final ac = _acView;
+    if (ac != null && !ac.isEmpty) {
+      return AutocompleteDropdown(
+        view: ac,
+        selectedIndex: _paletteIndex,
+        custom: ref.watch(liveCustomEmojiProvider),
+        onSelectMention: (_) {},
+        onSelectChannel: (_) {},
+        onSelectKaomoji: (_) {},
+        onSelectEmoji: _completeEmoji,
+      );
+    }
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       // `.command-palette`: bg rgba(20,20,35,0.9), radius 16/16/0/0, padding 6,
@@ -2063,45 +2096,16 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         itemCount: _suggestions.length,
         itemBuilder: (_, i) {
           final cmd = _suggestions[i];
-          final selected = i == _paletteIndex;
-          return InkWell(
+          // Reuse the shared `.command-item` row (same chrome as the `/` and
+          // main `?` palettes): the command name sizes to content, the
+          // description fills the full remaining width, wraps, and is localized
+          // via `tr()` — fixing the previously cramped/untranslated rows here.
+          return commandItemRow(
+            c,
+            name: cmd.name,
+            desc: cmd.desc,
+            selected: i == _paletteIndex,
             onTap: () => _pick(cmd),
-            child: Container(
-              decoration: BoxDecoration(
-                // `.command-item.selected`: background white@0.08 dark, flipped to
-                // black@0.06 in light mode — `hoverOverlay` is mode-aware. Radius
-                // xs (8).
-                color: selected ? c.hoverOverlay : null,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // `.command-name`: --primary, bold (not monospace).
-                  Flexible(
-                    child: Text(cmd.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            color: c.primary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold)),
-                  ),
-                  const SizedBox(width: 10),
-                  // `.command-desc`: 12px; brightens to --text when selected.
-                  Flexible(
-                    child: Text(
-                      cmd.desc,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                          color: selected ? c.text : c.textDim, fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           );
         },
       ),
@@ -2138,7 +2142,8 @@ class _QuotePreviewChip extends StatelessWidget {
             const BorderRadius.vertical(top: Radius.circular(NymRadius.md)),
         // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5).
         boxShadow: const [
-          BoxShadow(color: Color(0x80000000), blurRadius: 32, offset: Offset(0, 8)),
+          BoxShadow(
+              color: Color(0x80000000), blurRadius: 32, offset: Offset(0, 8)),
         ],
       ),
       child: Row(
@@ -2295,9 +2300,7 @@ class _BotIconBtnState extends State<_BotIconBtn> {
                     ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
                     : null,
               ),
-              child: widget.expand
-                  ? Center(child: child)
-                  : child,
+              child: widget.expand ? Center(child: child) : child,
             ),
           ),
         ),
@@ -2664,8 +2667,9 @@ class _GitConnectModalState extends State<_GitConnectModal> {
             const SizedBox(height: 14),
             _field(_host, tr('Host'), 'github.com', c),
             const SizedBox(height: 10),
-            _field(_token, tr('Personal access token (PAT)'), 'ghp_… / glpat-… ',
-                c, obscure: true),
+            _field(_token, tr('Personal access token (PAT)'),
+                'ghp_… / glpat-… ', c,
+                obscure: true),
             const SizedBox(height: 10),
             _field(_repo, tr('Repository'), 'owner/repo', c),
             const SizedBox(height: 10),
@@ -2719,7 +2723,8 @@ class _GitConnectModalState extends State<_GitConnectModal> {
   void _connect() {
     widget.onConnect(GitConfig(
       provider: _provider,
-      host: _host.text.trim().isEmpty ? _provider.defaultHost : _host.text.trim(),
+      host:
+          _host.text.trim().isEmpty ? _provider.defaultHost : _host.text.trim(),
       token: _token.text.trim(),
       repo: _repo.text.trim(),
       branch: _branch.text.trim().isEmpty ? null : _branch.text.trim(),
@@ -2728,8 +2733,8 @@ class _GitConnectModalState extends State<_GitConnectModal> {
     Navigator.pop(context);
   }
 
-  Widget _field(TextEditingController ctrl, String label, String hint,
-      NymColors c,
+  Widget _field(
+      TextEditingController ctrl, String label, String hint, NymColors c,
       {bool obscure = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

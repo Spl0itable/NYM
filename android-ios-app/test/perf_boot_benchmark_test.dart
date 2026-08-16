@@ -1,8 +1,6 @@
 @Tags(['perf'])
 library;
 
-import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/core/constants/event_kinds.dart';
 import 'package:nym_bar/core/crypto/keys.dart' as keys;

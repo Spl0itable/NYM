@@ -47,6 +47,7 @@ class StorageKeys {
   static const wallpaperType = 'nym_wallpaper_type';
   static const wallpaperCustomUrl = 'nym_wallpaper_custom_url';
   static const lowDataMode = 'nym_low_data_mode';
+  static const meshEnabled = 'nym_mesh_enabled';
   static const groupchatPmOnlyMode = 'nym_groupchat_pm_only_mode';
   static const nickStyle = 'nym_nick_style';
   static const pinnedLandingChannel = 'nym_pinned_landing_channel';

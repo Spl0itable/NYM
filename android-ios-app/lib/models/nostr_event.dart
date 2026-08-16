@@ -13,6 +13,7 @@ class NostrEvent {
     this.tags = const [],
     this.content = '',
     this.sig = '',
+    this.storedAt = 0,
   });
 
   String id;
@@ -22,6 +23,15 @@ class NostrEvent {
   final List<List<String>> tags;
   final String content;
   String sig;
+
+  /// Pool receipt time in milliseconds, injected by the D1 `channel-get`
+  /// endpoint (the archive row's `stored_at`). 0 when absent — it's only
+  /// present on events restored from the D1 backfill, not on live or
+  /// direct-relay events. Not part of NIP-01, so it is excluded from
+  /// [computeId] and [toJson] and never affects id hashing or signature
+  /// verification; it's an inbound-only annotation used as a stable ceiling
+  /// for future-dated timestamps.
+  final int storedAt;
 
   /// NIP-01 serialization used for computing the event id:
   /// `[0, pubkey, created_at, kind, tags, content]` → sha256 hex.
@@ -71,6 +81,7 @@ class NostrEvent {
           .toList(),
       content: (j['content'] ?? '') as String,
       sig: (j['sig'] ?? '') as String,
+      storedAt: (j['stored_at'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -82,6 +93,7 @@ class NostrEvent {
     List<List<String>>? tags,
     String? content,
     String? sig,
+    int? storedAt,
   }) {
     return NostrEvent(
       id: id ?? this.id,
@@ -91,6 +103,7 @@ class NostrEvent {
       tags: tags ?? this.tags,
       content: content ?? this.content,
       sig: sig ?? this.sig,
+      storedAt: storedAt ?? this.storedAt,
     );
   }
 }

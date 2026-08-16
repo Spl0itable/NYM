@@ -33,6 +33,7 @@ class Settings {
     this.chatViewMode = 'single',
     this.columnsWallpaper = false,
     this.lowDataMode = false,
+    this.meshEnabled = true,
     this.textSize = 15,
     this.transparencyEnabled = false,
     this.groupChatPMOnlyMode = false,
@@ -75,6 +76,10 @@ class Settings {
   final String chatViewMode; // 'single' | 'columns'
   final bool columnsWallpaper;
   final bool lowDataMode;
+
+  /// When true, the Bluetooth mesh transport (bitchat-compatible offline mesh)
+  /// is active alongside the Nostr relays. Persisted as [StorageKeys.meshEnabled].
+  final bool meshEnabled;
   final int textSize;
   final bool transparencyEnabled;
   final bool groupChatPMOnlyMode;
@@ -158,6 +163,7 @@ class Settings {
     String? chatViewMode,
     bool? columnsWallpaper,
     bool? lowDataMode,
+    bool? meshEnabled,
     int? textSize,
     bool? transparencyEnabled,
     bool? groupChatPMOnlyMode,
@@ -202,6 +208,7 @@ class Settings {
       chatViewMode: chatViewMode ?? this.chatViewMode,
       columnsWallpaper: columnsWallpaper ?? this.columnsWallpaper,
       lowDataMode: lowDataMode ?? this.lowDataMode,
+      meshEnabled: meshEnabled ?? this.meshEnabled,
       textSize: textSize ?? this.textSize,
       transparencyEnabled: transparencyEnabled ?? this.transparencyEnabled,
       groupChatPMOnlyMode: groupChatPMOnlyMode ?? this.groupChatPMOnlyMode,
@@ -303,6 +310,9 @@ class Settings {
       columnsWallpaper:
           kv.getBool(StorageKeys.columnsWallpaper, defaultValue: false),
       lowDataMode: kv.getBool(StorageKeys.lowDataMode, defaultValue: false),
+      // Mesh runs by default; the radio only actually starts once Bluetooth
+      // permission is granted. Users who explicitly turn it off keep it off.
+      meshEnabled: kv.getBool(StorageKeys.meshEnabled, defaultValue: true),
       textSize: kv.getInt(StorageKeys.textSize, defaultValue: 15),
       transparencyEnabled:
           kv.getBool(StorageKeys.transparencyEnabled, defaultValue: false),

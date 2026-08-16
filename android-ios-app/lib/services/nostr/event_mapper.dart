@@ -43,10 +43,26 @@ class EventMapper {
     final author = getNymFromPubkey(baseNym, e.pubkey);
     final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
 
-    // Clamp future timestamps to now (mirrors the PWA).
+    // Clamp future timestamps to a stable ceiling (mirrors the PWA).
+    //
+    // When a sender's clock is ahead, their event's `created_at` is in the
+    // future. Capping to the volatile "now" at load time means an archived
+    // event gets re-stamped to the new "now" on every reload (channel dedup
+    // isn't persisted across reloads), so it never settles and always sorts as
+    // newest — the "stale D1 messages resurface as now" bug. The D1 backfill
+    // injects the archive row's `stored_at` (the pool's real receipt time, ms)
+    // which is a STABLE value once the event was archived. So for a
+    // future-dated event carrying a valid past `stored_at`, anchor to it
+    // instead of `nowMs`. Everything else (normal past events, events within
+    // 60s of now, live events, and any event without a `stored_at`) falls back
+    // to `nowMs`, exactly as before.
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nowSec = nowMs ~/ 1000;
-    final createdAt = e.createdAt > nowSec + 60 ? nowSec : e.createdAt;
+    final storedAtMs = e.storedAt > 0 ? e.storedAt : 0;
+    final future = e.createdAt > nowSec + 60;
+    final ceilingMs =
+        (future && storedAtMs > 0 && storedAtMs < nowMs) ? storedAtMs : nowMs;
+    final createdAt = future ? ceilingMs ~/ 1000 : e.createdAt;
 
     // Authoritative display/age timestamp (PWA `_extractEventMs` + `message.
     // timestamp`): the `ms` tag is the sender's REAL millisecond send time and is
@@ -59,7 +75,8 @@ class EventMapper {
     // to opacity 0.2 (the reported bug, seen only in a very busy channel). The `ms`
     // tag rides untouched in the event body, so it recovers the true time. Falls
     // back to `created_at` seconds for non-Nymchat senders that carry no `ms` tag.
-    final effectiveMs = ms > 0 ? (ms < nowMs ? ms : nowMs) : createdAt * 1000;
+    final effectiveMs =
+        ms > 0 ? (ms < ceilingMs ? ms : ceilingMs) : createdAt * 1000;
 
     // A replayed-backlog message (PWA `messageAge > 10000` / [_isHistorical]):
     // older than 10s by its REAL send time. Marking it historical keeps D1/relay

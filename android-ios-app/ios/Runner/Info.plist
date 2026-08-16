@@ -29,9 +29,9 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Nymchat uses Face ID to unlock your encrypted identity vault.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Nymchat uses Bluetooth so calls can route audio to nearby headsets.</string>
+	<string>Nymchat uses Bluetooth for the offline mesh — discovering nearby people and relaying end-to-end-encrypted messages without internet — and to route call audio to nearby headsets.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Nymchat uses Bluetooth so calls can route audio to nearby headsets.</string>
+	<string>Nymchat uses Bluetooth for the offline mesh — discovering nearby people and relaying end-to-end-encrypted messages without internet — and to route call audio to nearby headsets.</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

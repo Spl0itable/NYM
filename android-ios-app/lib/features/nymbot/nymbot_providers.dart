@@ -29,6 +29,7 @@ import '../../state/nostr_controller.dart' show nostrControllerProvider;
 import '../../state/settings_provider.dart';
 import '../../widgets/context_menu/interaction_hooks.dart'
     show giftCreditsRequestProvider;
+import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
 import '../shop/shop_controller.dart' show shopControllerProvider;
 import 'bot_commands.dart';
@@ -418,8 +419,15 @@ class BotChatController extends StateNotifier<BotChatState> {
       stripPubkeySuffix(_appState.users[kNymbotPubkey]?.nym ?? 'Nymbot');
 
   /// Centered system line in the bot conversation (PWA `displaySystemMessage`).
+  ///
+  /// Localized at the sink: every caller builds an English sentence (often with
+  /// interpolated costs / model labels / nyms), so routing it through [tr] here
+  /// localizes all of them into the active UI language without threading a
+  /// template + args through ~40 call sites. `tr` is a synchronous no-op for
+  /// English and returns the source immediately for other languages while the
+  /// translation caches in the background.
   void _system(String text) =>
-      _app.addSystemMessage(text, storageKey: conversationKey);
+      _app.addSystemMessage(tr(text), storageKey: conversationKey);
 
   /// A transient bot-styled info bubble (welcome, `?help` guide, command
   /// outputs) that looks like a message from Nymbot — the PWA's
@@ -833,7 +841,10 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
       final signer = _signer;
       if (signer != null) {
-        return giftwrap.nip59WrapAsync(
+        // Awaited (not just returned) so a failure in the remote-signer seal is
+        // caught by this try/catch rather than escaping as an unhandled async
+        // error.
+        return await giftwrap.nip59WrapAsync(
           rumor: rumor,
           senderSigner: signer,
           recipientPubkey: recipientPubkey,

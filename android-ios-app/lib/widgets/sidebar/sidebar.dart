@@ -12,6 +12,8 @@ import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_manager.dart';
 import '../../features/globe/geohash_explorer.dart';
+import '../../features/mesh/mesh_controller.dart';
+import '../../features/mesh/mesh_screen.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/nick_edit_modal.dart';
@@ -315,6 +317,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final users = ref.watch(usersProvider);
     final unread = ref.watch(unreadCountsProvider);
 
+    // Bluetooth-mesh markers: mesh-only DM peers get a small Bluetooth glyph on
+    // their PM row (channels are dual-transport, so they carry no glyph).
+    final meshPmPubkeys =
+        ref.watch(meshControllerProvider.select((s) => s.meshPmPubkeys));
+
     // Groups + 1:1 PMs share the PRIVATE MESSAGES list, ordered newest-first by
     // last-message time (PWA `insertPMInOrder` keys both off `lastMessageTime`).
     final pmEntries = <_PmEntry>[
@@ -587,6 +594,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
                     active: view.kind == ViewKind.pm && view.id == e.pm!.pubkey,
                     unread: unread[e.pm!.pubkey] ?? 0,
                     textSize: textSize,
+                    mesh: meshPmPubkeys.contains(e.pm!.pubkey.toLowerCase()),
                     onTap: () => select(ChatView.pm(e.pm!.pubkey)),
                   ),
               if (r.more > 0)
@@ -881,6 +889,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           // `margin-top:10px` is the gap below the nym box.
           const SizedBox(height: 10),
           _ConnectionStatusIndicator(connectedCount: connectedRelays),
+          _MeshStatusIndicator(onItemSelected: widget.onItemSelected),
         ],
       ),
     );
@@ -1117,6 +1126,69 @@ class _ConnectionStatusIndicator extends StatelessWidget {
               style: TextStyle(color: c.textDim, fontSize: 11),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A Bluetooth-mesh status line under the connected-relays indicator: a glyph +
+/// peer/link count when active. Tapping opens the mesh view (peers + the #mesh
+/// public channel). Renders nothing on platforms without mesh support.
+class _MeshStatusIndicator extends ConsumerWidget {
+  const _MeshStatusIndicator({this.onItemSelected});
+
+  /// Closes the mobile off-canvas drawer this row lives in *before* the mesh
+  /// screen is pushed — otherwise the drawer stays open behind it and is
+  /// revealed (looking like it re-opened) when the mesh screen pops back to a
+  /// conversation.
+  final VoidCallback? onItemSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.nym;
+    final mesh = ref.watch(meshControllerProvider);
+    if (!MeshController.isSupportedPlatform) return const SizedBox.shrink();
+
+    final active = mesh.running;
+    final peerCount = mesh.peers.length;
+    final label = !active
+        ? tr('Mesh off')
+        : (peerCount == 0
+            ? tr('Mesh · no peers')
+            : tr('Mesh · {count} peer(s)', {'count': peerCount}));
+    final color = active ? c.primary : c.textDim;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () {
+            onItemSelected?.call();
+            Navigator.of(context).push(MeshScreen.route());
+          },
+          // A generous, full-width tap target (like the connected-relays row),
+          // so the mesh status line is easy to hit instead of a thin text strip.
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                NymSvgIcon(NymIcons.bluetooth, size: 12, color: color),
+                const SizedBox(width: 5),
+                Text(label, style: TextStyle(color: c.textDim, fontSize: 11)),
+                if (active && mesh.linkCount > 0) ...[
+                  const SizedBox(width: 6),
+                  Text('${mesh.linkCount} link(s)',
+                      style: TextStyle(
+                          color: c.textDim.withValues(alpha: 0.7),
+                          fontSize: 10)),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );

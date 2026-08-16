@@ -17,6 +17,15 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
 
+    <!-- Bluetooth LE mesh (bitchat-compatible): scan for and advertise the mesh
+         GATT service, and act as both central and peripheral. SCAN declares
+         neverForLocation since mesh discovery filters by service UUID and does
+         not derive device location. ADMIN/legacy names cover pre-Android-12. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>
+
     <!-- Keep the connection/call alive -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 

@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../i18n/i18n.dart';
 import 'command_registry.dart';
 
 /// A flat, navigable palette row (either a category header or a command).
@@ -132,7 +133,8 @@ class _CommandPaletteState extends State<CommandPalette> {
   Widget _header(NymColors c, String label) => Padding(
         padding: const EdgeInsets.fromLTRB(10, 6, 10, 2),
         child: Text(
-          label.toUpperCase(),
+          // Category labels are UI copy — localize before upper-casing.
+          tr(label).toUpperCase(),
           style: TextStyle(
             // `.command-category` — text-dim @0.7 opacity.
             color: c.textDim.withValues(alpha: 0.7),
@@ -307,12 +309,23 @@ Widget commandItemRow(
           color: selected ? c.hoverOverlay : null,
           borderRadius: const BorderRadius.all(Radius.circular(8)),
         ),
+        // Top-aligned so a wrapped multi-line description keeps the command
+        // name pinned to the first line (the PWA row is a single flex line, but
+        // on a narrow phone the description must WRAP to stay fully readable
+        // rather than ellipsize down to a stub).
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Flexible(
+            // The command token (`?ask`, `/help`) is syntax — never localized.
+            // It sizes to its CONTENT (capped so a long alias list ellipsizes
+            // rather than starving the description) so the description gets ALL
+            // the remaining width — not just half, which is what an equal-flex
+            // Flexible/Expanded pair would force.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 175),
               child: Text(
                 name,
+                softWrap: false,
                 style: TextStyle(
                   color: c.primary,
                   fontWeight: FontWeight.bold,
@@ -321,13 +334,19 @@ Widget commandItemRow(
               ),
             ),
             const SizedBox(width: 12),
-            Flexible(
+            // The description fills ALL remaining width and is right-anchored
+            // like the PWA's space-between `.command-desc`, wrapping so the
+            // whole localized text shows. Localized via `tr()` here (both
+            // palettes' catalogues store English source).
+            Expanded(
               child: Text(
-                desc,
+                tr(desc),
+                textAlign: TextAlign.end,
                 style: TextStyle(
                   color: selected ? c.text : c.textDim,
                   fontSize: 12,
                 ),
+                maxLines: 3,
                 overflow: TextOverflow.ellipsis,
               ),
             ),

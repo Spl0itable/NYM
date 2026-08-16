@@ -9,6 +9,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/nym_avatar.dart';
 import '../context_menu/profile_badges.dart';
+import '../nym_icons.dart';
 import 'pm_context_menu.dart';
 import 'sidebar_row_gestures.dart';
 
@@ -31,6 +32,7 @@ class PMListItem extends ConsumerWidget {
     required this.unread,
     required this.textSize,
     required this.onTap,
+    this.mesh = false,
   });
 
   final String nym;
@@ -39,6 +41,9 @@ class PMListItem extends ConsumerWidget {
   final int unread;
   final double textSize;
   final VoidCallback onTap;
+
+  /// True when this conversation is Bluetooth-mesh-backed — shows a glyph.
+  final bool mesh;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -149,6 +154,15 @@ class PMListItem extends ConsumerWidget {
                                 child: Padding(
                                   padding: EdgeInsets.only(left: 2),
                                   child: FriendBadge(size: 14),
+                                ),
+                              ),
+                            if (mesh)
+                              WidgetSpan(
+                                alignment: PlaceholderAlignment.middle,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(left: 4),
+                                  child: NymSvgIcon(NymIcons.bluetooth,
+                                      size: 12, color: c.primary),
                                 ),
                               ),
                           ],

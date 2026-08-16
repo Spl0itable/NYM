@@ -8,6 +8,7 @@ import 'core/theme/nym_theme.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/i18n/i18n.dart';
 import 'features/i18n/localization_service.dart';
+import 'features/mesh/mesh_controller.dart';
 import 'features/onboarding/boot_gate.dart';
 import 'services/firebase_messaging_service.dart';
 import 'services/notification_service.dart';
@@ -151,6 +152,10 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   Widget build(BuildContext context) {
     final colors = ref.watch(nymColorsProvider);
     final bootEpoch = ref.watch(bootEpochProvider);
+    // Keep the Bluetooth mesh alive app-wide so it starts at launch when the
+    // setting is enabled (and reacts to toggles) rather than only when the mesh
+    // screen is open. The controller no-ops on unsupported platforms.
+    ref.watch(meshControllerProvider);
     // Rebuild the whole tree when a batch of UI-string translations lands (or
     // the language changes), so every `tr()` call re-reads the fresh cache.
     ref.watch(i18nVersionProvider);

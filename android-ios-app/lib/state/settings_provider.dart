@@ -115,6 +115,14 @@ class SettingsController extends StateNotifier<Settings> {
     _syncedChanged();
   }
 
+  /// Enables/disables the Bluetooth mesh transport. The [MeshController] reacts
+  /// to this flag to start or stop the radio.
+  void setMeshEnabled(bool v) {
+    _kv.setBool(StorageKeys.meshEnabled, v);
+    state = state.copyWith(meshEnabled: v);
+    _syncedChanged();
+  }
+
   void setShowTimestamps(bool v) {
     _kv.setBool(StorageKeys.timestamps, v);
     state = state.copyWith(showTimestamps: v);

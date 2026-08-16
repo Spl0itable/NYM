@@ -112,6 +112,29 @@ class InlineNetworkImage extends StatefulWidget {
   /// fetch+compile and bad URLs aren't retried into a crash loop).
   static final Map<String, Future<_Decoded?>> _cache = {};
 
+  /// Returns decoded RASTER bytes for an already-proxied [url] when available:
+  /// from the in-memory decode cache (so it works offline for any emoji/GIF the
+  /// app has already rendered or prefetched) or, when [fetchIfMissing] is set,
+  /// by fetching now and caching the result. Returns null on a cache miss (when
+  /// not fetching), for an SVG/vector source (which has no raster bytes), or for
+  /// an undecodable/unreachable URL.
+  ///
+  /// The Bluetooth-mesh composer uses this to ship a locally-cached custom emoji
+  /// or favourite GIF as a file (there is no shared server for peers to fetch it
+  /// from), reusing the exact cache the display path already populated.
+  static Future<Uint8List?> resolveBytes(String url,
+      {bool fetchIfMissing = true}) async {
+    if (url.isEmpty) return null;
+    if (_cache[url] == null && !fetchIfMissing) return null;
+    _Decoded? decoded;
+    try {
+      decoded = await _decode(url);
+    } catch (_) {
+      return null;
+    }
+    return decoded?.raster;
+  }
+
   static Future<_Decoded?> _decode(String url) {
     // Return the SAME cached Future every call. The old code wrapped the cached
     // future in a fresh `.then(...)` per call, so each rebuild handed the

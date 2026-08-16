@@ -147,9 +147,23 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final media = MediaQuery.of(context);
+    // The on-screen keyboard's height. Pad the bottom by it so the centered
+    // modal shifts UP (re-centering in the visible area above the keyboard)
+    // and cap the modal's height to what stays visible — otherwise tapping a
+    // lower field (Bio / Lightning) leaves it hidden behind the keyboard. The
+    // inner SingleChildScrollView then auto-scrolls the focused field into view.
+    final keyboardInset = media.viewInsets.bottom;
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: 20 + keyboardInset,
+        ),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 500),
           child: Material(
@@ -160,7 +174,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                   c,
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(context).size.height * 0.9,
+                      maxHeight: (media.size.height - keyboardInset) * 0.9,
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,

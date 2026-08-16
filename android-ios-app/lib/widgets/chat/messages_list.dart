@@ -14,6 +14,7 @@ import '../../features/reactions/reaction_picker.dart';
 import '../../models/channel.dart';
 import '../../models/message.dart';
 import '../../models/poll.dart';
+import '../../features/mesh/mesh_diagnostics.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
 import '../nym_icons.dart';
@@ -211,6 +212,18 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         : const Color(0x26000000); // black @ 0.15
 
     if (messages.isEmpty && polls.isEmpty) {
+      // DIAGNOSTIC: the widget is about to render the empty note. Record what
+      // the WIDGET sees for this view's store, so a "bridge stored N but the
+      // widget's store for the same key shows M" mismatch is captured from the
+      // RENDER side. Gated to mesh-relevant views (#channels + PMs) to avoid
+      // logging every empty Nostr conversation.
+      final key = view.storageKey;
+      if (key.startsWith('#') || key.startsWith('pm-')) {
+        final rawCount = ref.read(appStateProvider).messages[key]?.length ?? 0;
+        MeshDiagnostics.instance.log(
+            'RENDER empty view=$key widgetStore=$rawCount visible=0 '
+            'rev=${ref.read(appStateProvider).displayRev}');
+      }
       // PWA shows the shimmer skeleton FIRST while the conversation loads, then
       // settles an empty channel/PM into the "No recent messages" note after a
       // grace period (`messages.js:_showMessageSkeleton` → `_appendEmptyNote`,

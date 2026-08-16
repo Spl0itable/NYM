@@ -17,6 +17,7 @@ import '../core/theme/nym_colors.dart';
 import '../core/utils/nym_utils.dart';
 import '../features/calls/call_providers.dart';
 import '../features/commands/action_rate_limit.dart';
+import '../features/mesh/mesh_controller.dart';
 import '../features/commands/command_handler.dart';
 import '../features/commands/command_registry.dart';
 import '../features/emoji/custom_emoji.dart';
@@ -1923,6 +1924,36 @@ class NostrController {
     } catch (_) {
       // History store may be unavailable in teardown; alerting still happened.
     }
+  }
+
+  /// Public entry for the Bluetooth-mesh bridge to surface a mesh PM or channel
+  /// @-mention through the SAME notification pipeline (bell history + loud
+  /// alert) as internet-delivered events — so mesh notifications appear in the
+  /// notifications modal exactly like Nostr ones.
+  void dispatchMeshNotification({
+    required String title,
+    required String body,
+    required String senderPubkey,
+    required bool isMention,
+    String historyType = 'pm',
+    String? route,
+    int? tsMs,
+    String? eventId,
+    String? contextLabel,
+  }) {
+    final isFriend = _ref.read(appStateProvider).friends.contains(senderPubkey);
+    _dispatchNotification(
+      title: title,
+      body: body,
+      senderPubkey: senderPubkey,
+      isFriend: isFriend,
+      isMention: isMention,
+      historyType: historyType,
+      route: route,
+      eventId: eventId,
+      tsMs: tsMs,
+      contextLabel: contextLabel,
+    );
   }
 
   /// Notifies + records history when someone reacts to OUR message (reactions.js
@@ -3971,6 +4002,15 @@ class NostrController {
     final view = state.view;
     _markDirty(view.storageKey);
 
+    // Transport routing: with no internet, an outgoing message goes over the
+    // Bluetooth mesh instead of Nostr relays (and a DM to a mesh-only peer
+    // always does). When online, everything — including #mesh — goes to Nostr.
+    final meshBridge = _ref.read(meshControllerProvider.notifier).bridge;
+    if (meshBridge != null && meshBridge.shouldSendOverMesh(view)) {
+      await meshBridge.sendFromComposer(view, trimmed);
+      return;
+    }
+
     if (view.kind == ViewKind.channel) {
       // Optimistic local echo with a temp `_optim_*` id (messages.js sendMessage).
       final echo = appState.sendLocal(trimmed);
@@ -5976,6 +6016,17 @@ class NostrController {
       reactorNym: state.selfNym,
     );
 
+    // Bluetooth-mesh routing: a reaction in a mesh conversation goes out over
+    // BLE (broadcast for a channel, encrypted for a DM) instead of to relays.
+    final meshBridge = _ref.read(meshControllerProvider.notifier).bridge;
+    if (meshBridge != null && meshBridge.shouldSendOverMesh(state.view)) {
+      final wireId = (kind == '1059' || kind == '14')
+          ? (appState.messageById(messageId)?.nymMessageId ?? messageId)
+          : messageId;
+      meshBridge.sendReaction(state.view, wireId, emoji, remove: remove);
+      return true;
+    }
+
     final service = _service;
     if (service == null || !service.canSign) return false;
 
@@ -6296,7 +6347,19 @@ class NostrController {
               final ev = entry.value;
               if (ev.isEmpty) continue; // cache hit, no event payload
               try {
-                appState.ingestEvent(NostrEvent.fromJson(ev));
+                final parsed = NostrEvent.fromJson(ev);
+                appState.ingestEvent(parsed);
+                // Cache the FULL self kind-0 so a later profile save merges
+                // against the user's REAL profile instead of an empty map.
+                // Unlike the live relay path ([_onEvent]), this D1-first fetch
+                // ingests straight into AppState and would otherwise never
+                // populate `_cachedKind0Profile` — leaving `saveProfile` to
+                // drop every unmanaged field (nip05, website, lud06, …) and
+                // overwrite the kind-0 wholesale on the first in-app edit.
+                if (parsed.kind == EventKind.profile &&
+                    parsed.pubkey == _identity?.pubkey) {
+                  _adoptSelfKind0(parsed);
+                }
               } catch (_) {}
             }
           });

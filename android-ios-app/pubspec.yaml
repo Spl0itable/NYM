@@ -1,7 +1,7 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 1.0.1+159
+version: 1.0.1+191
 
 environment:
   sdk: ^3.6.0
@@ -41,6 +41,7 @@ dependencies:
   file_picker: ^8.1.2
   file_selector: ^1.0.0
   cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.4.1
   share_plus: ^10.0.2
   url_launcher: any
   # Inline video playback for video messages / galleries (PWA <video>).
@@ -51,7 +52,7 @@ dependencies:
 
   # Notifications
   flutter_local_notifications: ^18.0.0
-  permission_handler: any
+  permission_handler: ^11.3.1
   # Foreground playback of the synthesized notification tones (notifications.js
   # Web Audio equivalent — we feed it the rendered WAV bytes).
   audioplayers: ^6.0.0
@@ -89,6 +90,7 @@ dependencies:
   webview_flutter_android: ^4.0.0
   webview_flutter_wkwebview: ^3.0.0
   webview_flutter_web: any
+  bluetooth_low_energy: ^6.1.0
 
 dev_dependencies:
   flutter_test:

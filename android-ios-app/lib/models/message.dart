@@ -97,6 +97,10 @@ class Message {
     this.geohash,
     this.isFileOffer = false,
     this.fileOffer,
+    this.localMediaPath,
+    this.localMediaMime,
+    this.localMediaName,
+    this.viaMesh = false,
     this.isBot = false,
     this.thinking,
     this.optimistic = false,
@@ -159,6 +163,23 @@ class Message {
 
   bool isFileOffer;
   Map<String, dynamic>? fileOffer;
+
+  /// On-disk path of a locally-stored attachment (Bluetooth-mesh media/file
+  /// transfer), rendered inline in place of the text body. Session-local — not
+  /// serialised. [localMediaMime] selects the presentation (an `image/*` mime
+  /// renders the picture inline; anything else renders a file card).
+  String? localMediaPath;
+  String? localMediaMime;
+  String? localMediaName;
+
+  bool get hasLocalMedia =>
+      localMediaPath != null && localMediaPath!.isNotEmpty;
+  bool get isLocalImage => localMediaMime?.startsWith('image/') ?? false;
+
+  /// True when this message was delivered over the Bluetooth mesh rather than
+  /// the internet (Nostr relays). Drives the small Bluetooth glyph shown beside
+  /// the padlock on mesh PMs/group messages. Session-local — not serialised.
+  bool viaMesh;
 
   bool isBot;
 

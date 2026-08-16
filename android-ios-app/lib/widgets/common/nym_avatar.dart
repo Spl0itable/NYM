@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../features/messages/inline_network_image.dart';
 import '../../models/user.dart';
 import '../../services/api/api_client.dart';
+import '../../services/mesh/mesh_avatar_registry.dart';
 
 /// Stateless [ApiClient] for avatar/banner proxy URL construction (pure, no
 /// network). Mirrors the PWA's `getProxiedMediaUrl` (users.js:485).
@@ -114,6 +115,32 @@ class _NymAvatarState extends State<NymAvatar> {
 
   @override
   Widget build(BuildContext context) {
+    // A mesh-transferred avatar (registered under this seed) wins over the
+    // network/identicon path so peers reached only over Bluetooth still show
+    // their real picture in canonical message rows. Reactive: rebuilds when the
+    // registry gains an entry for this seed.
+    return ValueListenableBuilder<int>(
+      valueListenable: MeshAvatarRegistry.instance.revision,
+      builder: (context, _, __) {
+        final meshBytes = MeshAvatarRegistry.instance.bytesFor(widget.seed);
+        if (meshBytes != null) {
+          return ClipOval(
+            child: Image.memory(
+              meshBytes,
+              width: widget.size,
+              height: widget.size,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => _identicon(context),
+            ),
+          );
+        }
+        return _buildNetwork(context);
+      },
+    );
+  }
+
+  Widget _buildNetwork(BuildContext context) {
     final proxied = proxiedAvatarUrl(widget.imageUrl);
     final fallback = _identicon(context);
     if (proxied == null) return fallback;

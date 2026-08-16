@@ -163,6 +163,12 @@ class NymIcons {
       '<circle cx="8.5" cy="8.5" r="1.5"/>'
       '<polyline points="21 15 16 10 5 21"/></svg>';
 
+  /// Bluetooth glyph (feather bluetooth; stroke) — mesh status + title.
+  static const String bluetooth =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"/></svg>';
+
   /// `.input-btn` "Share File (P2P)" (`selectP2PFile`) — feather file-out (stroke).
   static const String composerFile =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
