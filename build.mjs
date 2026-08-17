@@ -139,6 +139,9 @@ async function run() {
   // robots.txt verbatim.
   await emit('robots.txt', await fs.readFile(path.join(root, 'robots.txt')));
 
+  // Vulnerability-disclosure pointer (RFC 9116) verbatim.
+  await emit('.well-known/security.txt', await fs.readFile(path.join(root, '.well-known', 'security.txt')));
+
   // Service worker: stamp a per-build cache version so each deploy gets a fresh
   // cache and old ones are pruned on activate.
   const swVersion = sha8([...assetMap.values()].sort().join('|'));

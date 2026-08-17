@@ -451,14 +451,35 @@
                     if (lastTs > 0) this.channelLastActivity.set(key, lastTs);
                 }
 
-                // PM/group messages
+                // PM/group messages. Records come in two shapes: legacy
+                // plaintext ({key, messages}) and vault-encrypted
+                // ({key, enc:'v1', payload}). Encrypted records need the vault
+                // key (unlockVaultAtBoot runs before hydration); if the vault
+                // is off or the key is unavailable they are skipped — history
+                // re-fetches from D1/relays rather than sitting unreadable.
+                // Plaintext records found while the vault is on are re-written
+                // encrypted (in-place migration).
                 if (cachePMsAllowed) {
+                    const pmVaultOn = typeof this.vaultEnabled === 'function' && this.vaultEnabled();
+                    const migrateKeys = [];
                     for (const p of pms) {
-                        if (!p || !p.key || !Array.isArray(p.messages)) continue;
+                        if (!p || !p.key) continue;
+                        let rawMsgs = null;
+                        if (p.enc === 'v1' && typeof p.payload === 'string') {
+                            if (!pmVaultOn || !this._vaultKey) continue;
+                            try {
+                                rawMsgs = JSON.parse(await this._vaultDecrypt(p.payload));
+                            } catch (_) { continue; }
+                        } else if (Array.isArray(p.messages)) {
+                            rawMsgs = p.messages;
+                            if (pmVaultOn && this._vaultKey) migrateKeys.push(p.key);
+                        }
+                        if (!Array.isArray(rawMsgs)) continue;
                         if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
-                        const msgs = p.messages.map(m => this._hydrateMessage(m));
+                        const msgs = rawMsgs.map(m => this._hydrateMessage(m));
                         this.pmMessages.set(p.key, msgs);
                     }
+                    for (const k of migrateKeys) this.persistPMMessages(k);
                     // Rebuild peer-format sets from cached messages — receipt
                     // sending and reply wrapping consult these, and relay copies
                     // are dedup-dropped so they never repopulate after a reload
@@ -656,10 +677,21 @@
                 }
                 const limit = this.pmStorageLimit || 500;
                 const trimmed = messages.length > limit ? messages.slice(-limit) : messages;
-                this._cachePut('pms', {
-                    key,
-                    messages: trimmed.map(m => this._serialiseMessage(m))
-                });
+                const serialised = trimmed.map(m => this._serialiseMessage(m));
+                // With Identity Encryption on, the PM/group cache is written
+                // AES-GCM-encrypted under the vault key — the plaintext mirror
+                // of end-to-end encrypted conversations must not sit readable
+                // in IndexedDB. While the vault is locked nothing is written
+                // (never plaintext over ciphertext). Public channel history
+                // stays plaintext: it is public content.
+                if (typeof this.vaultEnabled === 'function' && this.vaultEnabled()) {
+                    if (!this._vaultKey) return;
+                    this._vaultEncrypt(JSON.stringify(serialised))
+                        .then(payload => this._cachePut('pms', { key, enc: 'v1', payload }))
+                        .catch(() => { });
+                } else {
+                    this._cachePut('pms', { key, messages: serialised });
+                }
                 this._scheduleTrim();
             });
         },

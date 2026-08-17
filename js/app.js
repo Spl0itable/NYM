@@ -4341,7 +4341,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.73.521';
+const NYMCHAT_VERSION = 'v3.73.522';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6333,7 +6333,10 @@ async function applyNostrSettingsAdditive(s) {
                         if (group.allowMemberInvites !== undefined) g.allowMemberInvites = group.allowMemberInvites !== false;
                         g.inviteEnabled = group.inviteEnabled === true;
                         g.inviteEpoch = group.inviteEpoch || 0;
-                        g.shareHistory = group.shareHistory === true;
+                        // Absence-safe like allowMemberInvites: a blob from an
+                        // older client has no shareHistory key and must not
+                        // flip the owner's setting off.
+                        if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         nym.updateGroupConversationUI(groupId);
                     } else {
@@ -7003,7 +7006,9 @@ async function applyNostrSettings(s) {
                         if (group.allowMemberInvites !== undefined) g.allowMemberInvites = group.allowMemberInvites !== false;
                         g.inviteEnabled = group.inviteEnabled === true;
                         g.inviteEpoch = group.inviteEpoch || 0;
-                        g.shareHistory = group.shareHistory === true;
+                        // Absence-safe like allowMemberInvites (older clients'
+                        // blobs have no shareHistory key).
+                        if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         nym.updateGroupConversationUI(groupId);
                     } else {

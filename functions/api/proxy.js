@@ -51,16 +51,69 @@ const CORS_HEADERS = {
   'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
 };
 
+const ALLOWED_APP_ORIGINS = new Set([
+  'https://web.nymchat.app',
+  'https://nymchat.app',
+]);
+
+const RATE_LIMITS = { media: 600, heavy: 120 };
+const HEAVY_ACTIONS = new Set(['unfurl', 'json', 'translate', 'zap-verify', 'upload', 'mirror']);
+const rateBuckets = new Map();
+
+function checkRateLimit(request, action) {
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  const bucket = HEAVY_ACTIONS.has(action) ? 'heavy' : 'media';
+  const limit = RATE_LIMITS[bucket];
+  const key = `${ip}:${bucket}`;
+  const now = Date.now();
+  let entry = rateBuckets.get(key);
+  if (!entry || now - entry.windowStart >= 60000) {
+    entry = { count: 0, windowStart: now };
+    rateBuckets.set(key, entry);
+  }
+  entry.count++;
+  if (rateBuckets.size > 10000) {
+    for (const [k, v] of rateBuckets) {
+      if (now - v.windowStart >= 60000) rateBuckets.delete(k);
+    }
+  }
+  return entry.count <= limit;
+}
+
+function originAllowed(request) {
+  const origin = request.headers.get('Origin');
+  if (!origin) return true; // native clients / same-origin GETs send none
+  if (ALLOWED_APP_ORIGINS.has(origin)) return true;
+  try {
+    // Whatever host this deployment is served from is also the app.
+    return origin === new URL(request.url).origin;
+  } catch {
+    return false;
+  }
+}
+
 export async function onRequest(context) {
   const { request } = context;
+
+  const reqUrl = new URL(request.url);
+  const reqAction = reqUrl.searchParams.get('action');
+
+  if (!originAllowed(request)) {
+    return jsonResponse({ error: 'Origin not allowed' }, 403);
+  }
+  if (!checkRateLimit(request, reqAction)) {
+    const r = jsonResponse({ error: 'Rate limit exceeded' }, 429);
+    r.headers.set('Retry-After', '60');
+    return r;
+  }
 
   // Handle CORS preflight
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  const url = new URL(request.url);
-  const action = url.searchParams.get('action');
+  const url = reqUrl;
+  const action = reqAction;
 
   try {
     if (action === 'translate') {
@@ -817,14 +870,68 @@ function isPrivateUrl(urlStr) {
   }
 }
 
-// Fetch that follows redirects manually, re-validating every hop against the
-// SSRF blocklist so a public URL cannot 30x-redirect into an internal address
-// (the redirect:'follow' TOCTOU). Caps the redirect chain.
+const DOH_URL = 'https://cloudflare-dns.com/dns-query';
+const DNS_CACHE_TTL = 300000;
+const dnsPrivateCache = new Map(); // host -> { isPrivate, exp }
+
+async function hostResolvesPrivate(host) {
+  const now = Date.now();
+  const cached = dnsPrivateCache.get(host);
+  if (cached && cached.exp > now) return cached.isPrivate;
+  let isPrivate = false;
+  try {
+    const answers = await Promise.all(['A', 'AAAA'].map(async (type) => {
+      const resp = await fetch(`${DOH_URL}?name=${encodeURIComponent(host)}&type=${type}`, {
+        headers: { Accept: 'application/dns-json' },
+        cf: { cacheTtl: 300 },
+      });
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return Array.isArray(data.Answer) ? data.Answer : [];
+    }));
+    for (const ans of [...answers[0], ...answers[1]]) {
+      if (!ans || typeof ans.data !== 'string') continue;
+      const record = ans.data.trim();
+      if (ans.type === 1) { // A
+        const v = ipv4ToInt(record);
+        if (v !== null && ipv4IntIsPrivate(v)) isPrivate = true;
+      } else if (ans.type === 28) { // AAAA
+        if (ipv6IsPrivate(record)) isPrivate = true;
+      }
+    }
+  } catch {
+    // fail open (see note above)
+  }
+  dnsPrivateCache.set(host, { isPrivate, exp: now + DNS_CACHE_TTL });
+  if (dnsPrivateCache.size > 5000) {
+    for (const [k, v] of dnsPrivateCache) {
+      if (v.exp <= now) dnsPrivateCache.delete(k);
+    }
+  }
+  return isPrivate;
+}
+
+// True when the URL's host is a name (not an IP literal) that needs resolving.
+function hostNeedsDnsCheck(urlStr) {
+  try {
+    const host = new URL(urlStr).hostname.toLowerCase().replace(/\.$/, '');
+    if (!host || host.includes(':')) return false; // IPv6 literal: string-checked
+    return ipv4ToInt(host) === null; // IPv4 literal: string-checked
+  } catch {
+    return false;
+  }
+}
+
 async function ssrfSafeFetch(targetUrl, init = {}, maxRedirects = 4) {
   let current = targetUrl;
   for (let i = 0; i <= maxRedirects; i++) {
     if (isPrivateUrl(current)) {
       const e = new Error('Blocked: private/local address in redirect chain');
+      e.ssrfBlocked = true;
+      throw e;
+    }
+    if (hostNeedsDnsCheck(current) && await hostResolvesPrivate(new URL(current).hostname)) {
+      const e = new Error('Blocked: hostname resolves to a private/local address');
       e.ssrfBlocked = true;
       throw e;
     }

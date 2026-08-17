@@ -1,6 +1,14 @@
 // Shared worker infrastructure for the Nymchat Pages Functions.
 // Vendored crypto (secp256k1/schnorr, hashing), Nostr event + NIP-44/NIP-59
 // helpers, request auth and CORS gating used by both the bot and storage endpoints.
+//
+// VENDORED-CRYPTO PROVENANCE (see SECURITY.md): the primitives below are
+// bundled copies of @noble/hashes and @noble/curves (the `node_modules/...`
+// path comments mark each vendored section) plus NIP-44/NIP-59 helpers in the
+// style of nostr-tools. Because they are vendored, dependency scanners will
+// NOT surface upstream security advisories for them — when an advisory lands
+// for @noble/curves, @noble/hashes, or nostr-tools, re-vendor this file from
+// the patched release and record the version here.
 
 // node_modules/@noble/hashes/esm/crypto.js
 var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;

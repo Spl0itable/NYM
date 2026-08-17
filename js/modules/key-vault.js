@@ -66,6 +66,39 @@ Object.assign(NYM.prototype, {
     }
   },
 
+  // Encrypt every plaintext PM/group cache record in IndexedDB under the vault
+  // key (enable path). The cache mirrors end-to-end encrypted conversations;
+  // with Identity Encryption on, that mirror must not stay readable on disk.
+  async _vaultProtectPmCache() {
+    if (!this._vaultKey || typeof this._cacheGetAll !== 'function') return;
+    try {
+      const all = await this._cacheGetAll('pms');
+      for (const rec of all) {
+        if (!rec || !rec.key || !Array.isArray(rec.messages)) continue;
+        try {
+          const payload = await this._vaultEncrypt(JSON.stringify(rec.messages));
+          await this._cachePut('pms', { key: rec.key, enc: 'v1', payload });
+        } catch (e) {}
+      }
+    } catch (e) {}
+  },
+
+  // Decrypt PM/group cache records back to plaintext (disable path, while the
+  // vault key is still in memory) so they don't become unreadable.
+  async _vaultUnprotectPmCache() {
+    if (!this._vaultKey || typeof this._cacheGetAll !== 'function') return;
+    try {
+      const all = await this._cacheGetAll('pms');
+      for (const rec of all) {
+        if (!rec || !rec.key || rec.enc !== 'v1' || typeof rec.payload !== 'string') continue;
+        try {
+          const messages = JSON.parse(await this._vaultDecrypt(rec.payload));
+          await this._cachePut('pms', { key: rec.key, messages });
+        } catch (e) {}
+      }
+    } catch (e) {}
+  },
+
   vaultEnabled() {
     try { return localStorage.getItem('nym_vault_enabled') === '1'; } catch (e) { return false; }
   },
@@ -226,6 +259,8 @@ Object.assign(NYM.prototype, {
     }
     // Group ephemeral secret keys get the same at-rest protection.
     await this._vaultProtectExtras();
+    // ...and the cached decrypted PM/group history in IndexedDB.
+    await this._vaultProtectPmCache();
     try {
       localStorage.setItem('nym_vault_salt', this._vb64(salt));
       localStorage.setItem('nym_vault_method', this._vaultIsWebAuthn(method) ? method : 'password');
@@ -263,6 +298,7 @@ Object.assign(NYM.prototype, {
       } catch (e) {}
     }
     await this._vaultUnprotectExtras();
+    await this._vaultUnprotectPmCache();
     try {
       localStorage.removeItem('nym_vault_enabled');
       localStorage.removeItem('nym_vault_salt');
@@ -347,8 +383,10 @@ Object.assign(NYM.prototype, {
   // password — the encrypted identity is unrecoverable and is discarded).
   resetVault() {
     for (const name of this._VAULT_KEYS) { try { localStorage.removeItem(name); } catch (e) {} }
-    // Encrypted-under-the-discarded-key extras are unrecoverable — drop them.
+    // Encrypted-under-the-discarded-key extras are unrecoverable — drop them,
+    // and clear the PM cache whose encrypted records can never be read again.
     this._vaultDiscardExtras();
+    try { if (typeof this.clearPMCache === 'function') this.clearPMCache(); } catch (e) {}
     try {
       localStorage.removeItem('nym_vault_enabled');
       localStorage.removeItem('nym_vault_salt');
