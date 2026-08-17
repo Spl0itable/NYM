@@ -17,6 +17,55 @@ Object.assign(NYM.prototype, {
 
   _VAULT_KEYS: ['nym_session_nsec', 'nym_dev_nsec', 'nym_nostr_login_nsec', 'nym_nip46_client_secret'],
 
+  // localStorage key prefixes for additional secret material that is encrypted
+  // alongside the identity keys (per-pubkey group ephemeral secret keys).
+  _VAULT_EXTRA_PREFIXES: ['nym_ephemeral_keys_'],
+
+  _vaultExtraKeyNames() {
+    const names = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const name = localStorage.key(i);
+        if (name && this._VAULT_EXTRA_PREFIXES.some(p => name.startsWith(p))) names.push(name);
+      }
+    } catch (e) {}
+    return names;
+  },
+
+  // Encrypt any plaintext extra-secret entries in place (vault must be unlocked).
+  async _vaultProtectExtras() {
+    if (!this._vaultKey) return;
+    for (const name of this._vaultExtraKeyNames()) {
+      try {
+        const cur = localStorage.getItem(name);
+        if (cur == null || String(cur).startsWith('enc:v1:')) continue;
+        localStorage.setItem(name, await this._vaultEncrypt(cur));
+      } catch (e) {}
+    }
+  },
+
+  // Decrypt extra-secret entries back to plaintext (vault must be unlocked).
+  async _vaultUnprotectExtras() {
+    if (!this._vaultKey) return;
+    for (const name of this._vaultExtraKeyNames()) {
+      try {
+        const cur = localStorage.getItem(name);
+        if (!cur || !String(cur).startsWith('enc:v1:')) continue;
+        localStorage.setItem(name, await this._vaultDecrypt(cur));
+      } catch (e) {}
+    }
+  },
+
+  // Drop encrypted extra-secret entries whose key is being discarded (reset path).
+  _vaultDiscardExtras() {
+    for (const name of this._vaultExtraKeyNames()) {
+      try {
+        const cur = localStorage.getItem(name);
+        if (cur && String(cur).startsWith('enc:v1:')) localStorage.removeItem(name);
+      } catch (e) {}
+    }
+  },
+
   vaultEnabled() {
     try { return localStorage.getItem('nym_vault_enabled') === '1'; } catch (e) { return false; }
   },
@@ -175,6 +224,8 @@ Object.assign(NYM.prototype, {
       this._vaultMem.set(name, cur);
       try { localStorage.setItem(name, await this._vaultEncrypt(cur)); } catch (e) {}
     }
+    // Group ephemeral secret keys get the same at-rest protection.
+    await this._vaultProtectExtras();
     try {
       localStorage.setItem('nym_vault_salt', this._vb64(salt));
       localStorage.setItem('nym_vault_method', this._vaultIsWebAuthn(method) ? method : 'password');
@@ -211,6 +262,7 @@ Object.assign(NYM.prototype, {
         if (plain != null) localStorage.setItem(name, plain);
       } catch (e) {}
     }
+    await this._vaultUnprotectExtras();
     try {
       localStorage.removeItem('nym_vault_enabled');
       localStorage.removeItem('nym_vault_salt');
@@ -295,6 +347,8 @@ Object.assign(NYM.prototype, {
   // password — the encrypted identity is unrecoverable and is discarded).
   resetVault() {
     for (const name of this._VAULT_KEYS) { try { localStorage.removeItem(name); } catch (e) {} }
+    // Encrypted-under-the-discarded-key extras are unrecoverable — drop them.
+    this._vaultDiscardExtras();
     try {
       localStorage.removeItem('nym_vault_enabled');
       localStorage.removeItem('nym_vault_salt');

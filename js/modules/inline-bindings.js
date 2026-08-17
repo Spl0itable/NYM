@@ -545,6 +545,7 @@ window.nymHapticTap = function (ms) {
         'groupCtxCopyInviteLink':     function () { nym().groupCtxCopyInviteLink(); },
         'joinGroupFromInvite':        function (_e, t) { nym().handleGroupInviteFromUrl(t.dataset.invite); },
         'groupCtxToggleInvites':      function () { nym().groupCtxToggleInvites(); },
+        'groupCtxToggleShareHistory': function () { nym().groupCtxToggleShareHistory(); },
         'groupCtxToggleInviteJoin':   function () { nym().groupCtxToggleInviteJoin(); },
         'groupCtxResetInviteLink':    function () { nym().groupCtxResetInviteLink(); },
         'groupCtxTransferOwner':      function () { nym().groupCtxTransferOwner(); },

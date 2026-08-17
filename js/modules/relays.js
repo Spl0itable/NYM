@@ -2685,6 +2685,22 @@ Object.assign(NYM.prototype, {
         await this._waitForEoseOrTimeout(subId, 5000);
     },
 
+    _scheduleEphemeralSubRefresh(delayMs = 2000) {
+        this._ephSubRefreshPending = true;
+        if (this._ephSubRefreshTimer) return;
+        const run = () => {
+            if (!this._ephSubRefreshPending) { this._ephSubRefreshTimer = null; return; }
+            if (this._ephRefreshInFlight) {
+                this._ephSubRefreshTimer = setTimeout(run, 1000);
+                return;
+            }
+            this._ephSubRefreshPending = false;
+            this._refreshEphemeralSubscriptions();
+            this._ephSubRefreshTimer = setTimeout(run, delayMs);
+        };
+        run();
+    },
+
     // Subscribe to gift wraps (kind 1059) for all of our ephemeral pubkeys
     async _refreshEphemeralSubscriptions() {
         if (this._ephRefreshInFlight) return;

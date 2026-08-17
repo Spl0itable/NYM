@@ -640,6 +640,14 @@ class NYM {
         this.groupEphemeralKeys = new Map();
         this.EPHEMERAL_PREV_KEYS_MAX = 30;
         this.GROUP_META_PIGGYBACK_WINDOW = 7 * 24 * 60 * 60;
+        // Each group message costs one gift wrap per member, so cap membership
+        // to keep per-message fan-out (encrypt + publish work) bounded.
+        this.MAX_GROUP_MEMBERS = 100;
+        // Key-resync heartbeat: after being offline this long, our stored view
+        // of other members' rotating ephemeral keys may have expired off relays,
+        // so we proactively re-exchange current keys (per-group cooldown).
+        this.GROUP_RESYNC_OFFLINE_GAP_SEC = 3 * 24 * 60 * 60;
+        this.GROUP_RESYNC_COOLDOWN_SEC = 24 * 60 * 60;
         this._ephemeralSubIds = [];
         this._dmCatchupReady = Promise.resolve();
         this.currentGroup = null;
@@ -4333,7 +4341,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.73.520';
+const NYMCHAT_VERSION = 'v3.73.521';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6303,8 +6311,10 @@ async function applyNostrSettingsAdditive(s) {
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
                     if (group.description) g.description = group.description;
+                    if (group.allowMemberInvites === false) g.allowMemberInvites = false;
                     if (group.inviteEnabled === true) g.inviteEnabled = true;
                     if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
+                    if (group.shareHistory === true) g.shareHistory = true;
                     if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
@@ -6320,8 +6330,10 @@ async function applyNostrSettingsAdditive(s) {
                         g.banner = group.banner || null;
                         g.avatar = group.avatar || null;
                         g.description = group.description || null;
+                        if (group.allowMemberInvites !== undefined) g.allowMemberInvites = group.allowMemberInvites !== false;
                         g.inviteEnabled = group.inviteEnabled === true;
                         g.inviteEpoch = group.inviteEpoch || 0;
+                        g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         nym.updateGroupConversationUI(groupId);
                     } else {
@@ -6973,8 +6985,10 @@ async function applyNostrSettings(s) {
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
                     if (group.description) g.description = group.description;
+                    if (group.allowMemberInvites === false) g.allowMemberInvites = false;
                     if (group.inviteEnabled === true) g.inviteEnabled = true;
                     if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
+                    if (group.shareHistory === true) g.shareHistory = true;
                     if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                 }
             } else {
@@ -6986,8 +7000,10 @@ async function applyNostrSettings(s) {
                         g.banner = group.banner || null;
                         g.avatar = group.avatar || null;
                         g.description = group.description || null;
+                        if (group.allowMemberInvites !== undefined) g.allowMemberInvites = group.allowMemberInvites !== false;
                         g.inviteEnabled = group.inviteEnabled === true;
                         g.inviteEpoch = group.inviteEpoch || 0;
+                        g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         nym.updateGroupConversationUI(groupId);
                     } else {

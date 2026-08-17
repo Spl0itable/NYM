@@ -271,6 +271,12 @@ Object.assign(NYM.prototype, {
         // before allowing outbound group messages to proceed.
         setTimeout(() => resolveCatchup(), 3000);
 
+        // After catch-up, re-exchange group ephemeral keys if this client was
+        // offline long enough that missed rotations may have expired off relays.
+        this._dmCatchupReady.then(() => {
+            try { this._maybeSendGroupKeyResyncs(); } catch (_) { }
+        });
+
         if (this.pendingDMs.size === 0) return;
 
         for (const [eventId, pending] of this.pendingDMs) {

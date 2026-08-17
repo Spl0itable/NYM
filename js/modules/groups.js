@@ -276,7 +276,11 @@ Object.assign(NYM.prototype, {
         this._invalidateEphPkCache();
     },
 
-    // Save ephemeral keys to localStorage.
+    // Save ephemeral keys to localStorage. When Identity Encryption (the key
+    // vault) is enabled, the blob is stored AES-GCM-encrypted under the vault
+    // key — the ephemeral secret keys decrypt received group messages, so
+    // leaving them plaintext would undermine the encrypted identity. While the
+    // vault is locked, nothing is written (never plaintext over ciphertext).
     _saveEphemeralKeys() {
         if (!this.pubkey) return;
         try {
@@ -284,20 +288,48 @@ Object.assign(NYM.prototype, {
             for (const [groupId, ek] of this.groupEphemeralKeys) {
                 data[groupId] = this._serializeEphemeralKeys(ek);
             }
-            localStorage.setItem(`nym_ephemeral_keys_${this.pubkey}`, JSON.stringify(data));
+            const storageKey = `nym_ephemeral_keys_${this.pubkey}`;
+            const json = JSON.stringify(data);
+            if (typeof this.vaultEnabled === 'function' && this.vaultEnabled()) {
+                if (!this._vaultKey) return;
+                // Async encrypt: only the latest snapshot wins if writes overlap.
+                const seq = (this._ephKeysSaveSeq = (this._ephKeysSaveSeq || 0) + 1);
+                this._vaultEncrypt(json).then(blob => {
+                    if (seq !== this._ephKeysSaveSeq) return;
+                    try { localStorage.setItem(storageKey, blob); } catch (_) { }
+                }).catch(() => { });
+            } else {
+                localStorage.setItem(storageKey, json);
+            }
         } catch (_) { }
     },
 
-    // Load ephemeral keys from localStorage
-    _loadEphemeralKeys() {
+    // Load ephemeral keys from localStorage (decrypting when the vault is on).
+    async _loadEphemeralKeys() {
         if (!this.pubkey) return;
         try {
-            const raw = localStorage.getItem(`nym_ephemeral_keys_${this.pubkey}`);
+            let raw = localStorage.getItem(`nym_ephemeral_keys_${this.pubkey}`);
             if (!raw) return;
+            let migrateToEncrypted = false;
+            if (String(raw).startsWith('enc:v1:')) {
+                // Encrypted blob: needs the unlocked vault key to read.
+                if (!(typeof this.vaultEnabled === 'function' && this.vaultEnabled() && this._vaultKey)) return;
+                try { raw = await this._vaultDecrypt(raw); } catch (_) { return; }
+            } else if (typeof this.vaultEnabled === 'function' && this.vaultEnabled() && this._vaultKey) {
+                // Plaintext blob while the vault is on (e.g. written before
+                // enabling): re-save encrypted after loading.
+                migrateToEncrypted = true;
+            }
             const data = JSON.parse(raw);
             const cap = this.EPHEMERAL_PREV_KEYS_MAX || 30;
             let trimmed = false;
             for (const [groupId, entry] of Object.entries(data)) {
+                // Load is async now (vault decrypt): if settings sync populated
+                // this group first, merge rather than clobber the newer keys.
+                if (this.groupEphemeralKeys.has(groupId)) {
+                    this._mergeEphemeralKeys(groupId, entry);
+                    continue;
+                }
                 const ek = this._deserializeEphemeralEntry(entry);
                 if (ek.self && Array.isArray(ek.self.prev) && ek.self.prev.length > cap) {
                     ek.self.prev = ek.self.prev.slice(0, cap);
@@ -306,7 +338,7 @@ Object.assign(NYM.prototype, {
                 this.groupEphemeralKeys.set(groupId, ek);
             }
             this._invalidateEphPkCache();
-            if (trimmed) this._saveEphemeralKeys();
+            if (trimmed || migrateToEncrypted) this._saveEphemeralKeys();
         } catch (_) { }
     },
 
@@ -351,6 +383,10 @@ Object.assign(NYM.prototype, {
                     metaUpdatedAt: group.metaUpdatedAt || 0,
                     lastModTs: group.lastModTs || 0,
                     lastModEventId: group.lastModEventId || null,
+                    modTsByTarget: group.modTsByTarget || {},
+                    modSeenIds: Array.isArray(group.modSeenIds) ? group.modSeenIds.slice(-100) : [],
+                    shareHistory: group.shareHistory === true,
+                    historyReceived: group.historyReceived === true,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
                 };
             }
@@ -596,6 +632,10 @@ Object.assign(NYM.prototype, {
                         if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
                         if (group.lastModTs) g.lastModTs = group.lastModTs;
                         if (group.lastModEventId) g.lastModEventId = group.lastModEventId;
+                        if (group.modTsByTarget && typeof group.modTsByTarget === 'object') g.modTsByTarget = { ...group.modTsByTarget };
+                        if (Array.isArray(group.modSeenIds)) g.modSeenIds = [...group.modSeenIds];
+                        if (group.shareHistory === true) g.shareHistory = true;
+                        if (group.historyReceived === true) g.historyReceived = true;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                     }
                 }
@@ -755,9 +795,20 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Handle key-resync from older clients. The ephemeral_pk was already
-        // extracted above; just silently consume so it doesn't display as a message.
+        // key-resync: the sender's ephemeral_pk was already extracted above.
+        // A resync REQUEST (from a member returning after a long offline gap)
+        // additionally gets a rate-limited reply carrying our current key.
+        // Never displayed as a message.
         if (typeTag && typeTag[1] === 'key-resync') {
+            const reqTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'resync_req' && t[1] === '1');
+            if (reqTag && !isOwn) this._maybeReplyKeyResync(groupId, senderPubkey);
+            return;
+        }
+
+        // group-history: a member shared recent chat history with us after we
+        // were added (owner-controlled setting). Never displayed as a bubble.
+        if (typeTag && typeTag[1] === 'group-history') {
+            if (!isOwn) this._handleGroupHistoryShare(rumor, groupId, senderPubkey);
             return;
         }
 
@@ -820,13 +871,15 @@ Object.assign(NYM.prototype, {
             const inviteEnabled = inviteEnabledTag ? inviteEnabledTag[1] === '1' : undefined;
             const inviteEpochTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_epoch');
             const inviteEpoch = inviteEpochTag ? (parseInt(inviteEpochTag[1], 10) || 0) : undefined;
+            const inviteShareHistTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'share_history');
+            const inviteShareHistory = inviteShareHistTag ? inviteShareHistTag[1] === '1' : undefined;
             if (!this.groupConversations.has(groupId)) {
                 this.addGroupConversation(
                     groupId,
                     groupName,
                     inviteMembers,
                     (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites, inviteEnabled, inviteEpoch }
+                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites, inviteEnabled, inviteEpoch, shareHistory: inviteShareHistory }
                 );
             }
             const grp = this.groupConversations.get(groupId);
@@ -842,9 +895,11 @@ Object.assign(NYM.prototype, {
             if (grp && inviteAllowInvites !== undefined) grp.allowMemberInvites = inviteAllowInvites;
             if (grp && inviteEnabled !== undefined) grp.inviteEnabled = inviteEnabled;
             if (grp && inviteEpoch !== undefined) grp.inviteEpoch = inviteEpoch;
+            if (grp && inviteShareHistory !== undefined) grp.shareHistory = inviteShareHistory;
             if (grp) {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
+                this._processPendingGroupHistory(groupId);
             }
 
             // Send notification for group invites
@@ -896,6 +951,7 @@ Object.assign(NYM.prototype, {
             const addAllowInvTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'allow_invites');
             const addInviteEnabledTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_enabled');
             const addInviteEpochTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_epoch');
+            const addShareHistTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'share_history');
             const existingGroup = this.groupConversations.get(groupId);
             const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey;
             // Refuse to bootstrap a brand-new group entry from a non-owner, unless
@@ -916,6 +972,12 @@ Object.assign(NYM.prototype, {
                 ? memberPubkeys.filter(pk => !bannedSet.has(pk)) : memberPubkeys;
             const existingMembers = existingGroup ? new Set(existingGroup.members) : new Set();
             const newMembers = addMemberPubkeys.filter(pk => !existingMembers.has(pk));
+            // Advance each (re-)added member's moderation clock so a replayed
+            // pre-re-add kick arriving later can't remove them again.
+            if (existingGroup && newMembers.length > 0) {
+                const addTs = Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000) + 300);
+                for (const pk of newMembers) this._bumpModTargetTs(existingGroup, pk, addTs);
+            }
             this.addGroupConversation(
                 groupId,
                 groupName,
@@ -929,7 +991,8 @@ Object.assign(NYM.prototype, {
                     description: trustBootstrap ? addDesc : undefined,
                     allowMemberInvites: trustBootstrap && addAllowInvTag ? addAllowInvTag[1] !== '0' : undefined,
                     inviteEnabled: trustBootstrap && addInviteEnabledTag ? addInviteEnabledTag[1] === '1' : undefined,
-                    inviteEpoch: trustBootstrap && addInviteEpochTag ? (parseInt(addInviteEpochTag[1], 10) || 0) : undefined
+                    inviteEpoch: trustBootstrap && addInviteEpochTag ? (parseInt(addInviteEpochTag[1], 10) || 0) : undefined,
+                    shareHistory: trustBootstrap && addShareHistTag ? addShareHistTag[1] === '1' : undefined
                 }
             );
             const grpAdd = this.groupConversations.get(groupId);
@@ -939,12 +1002,14 @@ Object.assign(NYM.prototype, {
             if (trustBootstrap && grpAdd && addAllowInvTag) grpAdd.allowMemberInvites = addAllowInvTag[1] !== '0';
             if (trustBootstrap && grpAdd && addInviteEnabledTag) grpAdd.inviteEnabled = addInviteEnabledTag[1] === '1';
             if (trustBootstrap && grpAdd && addInviteEpochTag) grpAdd.inviteEpoch = parseInt(addInviteEpochTag[1], 10) || 0;
+            if (trustBootstrap && grpAdd && addShareHistTag) grpAdd.shareHistory = addShareHistTag[1] === '1';
             if (trustBootstrap && grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
                 grpAdd.mods = [...addMods];
             }
             if (joiningViaInvite) this._pendingInviteJoins.delete(groupId);
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
+            this._processPendingGroupHistory(groupId);
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                 this.openGroup(groupId);
                 // Reconstruct the system message locally with fresh nicknames
@@ -975,7 +1040,7 @@ Object.assign(NYM.prototype, {
             // Verify the kick was actually issued by the owner or a moderator
             const grpForCheck = this.groupConversations.get(groupId);
             if (grpForCheck) {
-                if (this._isStaleModEvent(grpForCheck, rumor, event)) return;
+                if (this._isStaleModEvent(grpForCheck, rumor, removedPubkey)) return;
                 const isOwnerKick = grpForCheck.createdBy === senderPubkey;
                 const isModKick = Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(senderPubkey);
                 if (!isOwnerKick && !isModKick) return;
@@ -984,7 +1049,7 @@ Object.assign(NYM.prototype, {
                     if (grpForCheck.createdBy === removedPubkey) return;
                     if (Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(removedPubkey)) return;
                 }
-                this._recordModEvent(grpForCheck, rumor, event);
+                this._recordModEvent(grpForCheck, rumor, removedPubkey);
             }
             // Fetch profiles so nicknames display correctly instead of nym#xxxx
             const profileFetches = [];
@@ -1057,8 +1122,8 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (grp.createdBy !== senderPubkey) return; // only owner can promote
-            if (this._isStaleModEvent(grp, rumor, event)) return;
-            this._recordModEvent(grp, rumor, event);
+            if (this._isStaleModEvent(grp, rumor, targetPubkey)) return;
+            this._recordModEvent(grp, rumor, targetPubkey);
             if (!Array.isArray(grp.mods)) grp.mods = [];
             if (!grp.mods.includes(targetPubkey)) grp.mods.push(targetPubkey);
             this._appendModLog(grp, { type: 'promote', actor: senderPubkey, target: targetPubkey });
@@ -1097,8 +1162,8 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (grp.createdBy !== senderPubkey) return;
-            if (this._isStaleModEvent(grp, rumor, event)) return;
-            this._recordModEvent(grp, rumor, event);
+            if (this._isStaleModEvent(grp, rumor, targetPubkey)) return;
+            this._recordModEvent(grp, rumor, targetPubkey);
             if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== targetPubkey);
             this._appendModLog(grp, { type: 'revoke', actor: senderPubkey, target: targetPubkey });
             this.groupConversations.set(groupId, grp);
@@ -1136,8 +1201,9 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (grp.createdBy !== senderPubkey) return;
-            if (this._isStaleModEvent(grp, rumor, event)) return;
-            this._recordModEvent(grp, rumor, event);
+            // Ownership transfers keep global ordering: no target pubkey.
+            if (this._isStaleModEvent(grp, rumor, null)) return;
+            this._recordModEvent(grp, rumor, null);
             grp.createdBy = newOwner;
             if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== newOwner);
             this._appendModLog(grp, { type: 'transfer', actor: senderPubkey, target: newOwner });
@@ -1361,6 +1427,10 @@ Object.assign(NYM.prototype, {
 
         // Always include self as a member
         const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
+        if (allMembers.length > this.MAX_GROUP_MEMBERS) {
+            this.displaySystemMessage(`Groups are limited to ${this.MAX_GROUP_MEMBERS} members (every message is encrypted separately for each member).`);
+            return null;
+        }
 
         // CSPRNG (32-byte hex)
         const groupId = this._generateSharedEventId();
@@ -1385,6 +1455,7 @@ Object.assign(NYM.prototype, {
         tags.push(['allow_invites', allowMemberInvites ? '1' : '0']);
         tags.push(['invite_enabled', inviteEnabled ? '1' : '0']);
         tags.push(['invite_epoch', String(inviteEpoch)]);
+        tags.push(['share_history', opts.shareHistory === true ? '1' : '0']);
         tags.push(['x', nymMessageId]);
 
         // Bootstrap ephemeral keys: include our first ephemeral pk so members
@@ -1430,6 +1501,10 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('User is already in this group');
             return false;
         }
+        if (group.members.length >= this.MAX_GROUP_MEMBERS) {
+            this.displaySystemMessage(`This group is full (${this.MAX_GROUP_MEMBERS} members max).`);
+            return false;
+        }
         // Banlist: only the owner or a moderator can re-admit a banned user; regular members cannot.
         if (Array.isArray(group.banned) && group.banned.includes(newMemberPubkey)) {
             if (!this._canModerate(groupId, this.pubkey)) {
@@ -1468,6 +1543,7 @@ Object.assign(NYM.prototype, {
         tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
         tags.push(['invite_enabled', group.inviteEnabled ? '1' : '0']);
         tags.push(['invite_epoch', String(group.inviteEpoch || 0)]);
+        tags.push(['share_history', group.shareHistory === true ? '1' : '0']);
         tags.push(['x', nymMessageId]);
 
         // Include our ephemeral pk so the new member (and existing members) learn it
@@ -1483,6 +1559,11 @@ Object.assign(NYM.prototype, {
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
         this._saveEphemeralKeys();
 
+        // Owner opted in to sharing recent history: send it to the new member.
+        if (group.shareHistory === true) {
+            try { await this._sendGroupHistoryTo(groupId, newMemberPubkey); } catch (_) { }
+        }
+
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1493,6 +1574,245 @@ Object.assign(NYM.prototype, {
         }
 
         return true;
+    },
+
+    // Share recent chat history with a newly added member (owner-controlled,
+    // via the group's shareHistory setting). The forwarder re-sends recent
+    // plain chat messages as a single 'group-history' rumor wrapped only to
+    // the new member. Forwarded entries can't carry the original authors'
+    // signatures (the seal is ours), so the receiver marks them unverified.
+    async _sendGroupHistoryTo(groupId, memberPubkey) {
+        const group = this.groupConversations.get(groupId);
+        if (!group || group.shareHistory !== true) return;
+        if (!this._canSendGiftWraps()) return;
+        const list = this.pmMessages.get(this.getGroupConversationKey(groupId)) || [];
+        const MAX_MSGS = 50;
+        const MAX_JSON = 32000; // stay well under the NIP-44 plaintext cap
+        const picked = [];
+        for (let i = list.length - 1; i >= 0 && picked.length < MAX_MSGS; i--) {
+            const m = list[i];
+            // Plain chat messages only — no file offers or control events.
+            if (!m || !m.content || m.isFileOffer) continue;
+            if (!m.pubkey || !m.nymMessageId) continue;
+            picked.push({
+                p: m.pubkey,
+                c: String(m.content).slice(0, 2000),
+                t: Math.floor(m.created_at || 0),
+                x: m.nymMessageId
+            });
+        }
+        if (!picked.length) return;
+        picked.reverse(); // oldest first
+        let payload = picked;
+        while (payload.length > 1 && JSON.stringify(payload).length > MAX_JSON) {
+            payload = payload.slice(Math.ceil(payload.length / 4));
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const tags = [
+            ['p', memberPubkey],
+            ['g', groupId],
+            ['subject', group.name],
+            ['type', 'group-history'],
+            ['x', this._generateSharedEventId()]
+        ];
+        const rumor = { kind: 14, created_at: now, tags, content: JSON.stringify(payload), pubkey: this.pubkey };
+        await this._sendGiftWrapsAsync([memberPubkey], rumor, null, groupId);
+    },
+
+    // Receiver side: fold a shared history blob into the group's message list.
+    // Guards: the group must have history sharing enabled, the sender must be
+    // a member (or the owner), we only accept one blob per group, and only
+    // while our copy of the room is still essentially empty (fresh joiner).
+    _handleGroupHistoryShare(rumor, groupId, senderPubkey) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) {
+            // History can outrun the add-member wrap that creates the group
+            // entry. Stash it briefly; processed after the group bootstraps.
+            if (!this._pendingGroupHistory) this._pendingGroupHistory = new Map();
+            const nowMs = Date.now();
+            for (const [gid, entry] of this._pendingGroupHistory) {
+                if (nowMs - entry.stashedAt > 600000) this._pendingGroupHistory.delete(gid);
+            }
+            if (this._pendingGroupHistory.size < 8 && !this._pendingGroupHistory.has(groupId)) {
+                this._pendingGroupHistory.set(groupId, { rumor, senderPubkey, stashedAt: nowMs });
+            }
+            return;
+        }
+        if (group.shareHistory !== true) return;
+        if (group.historyReceived === true) return;
+        const isMemberSender = group.createdBy === senderPubkey
+            || (Array.isArray(group.members) && group.members.includes(senderPubkey));
+        if (!isMemberSender) return;
+
+        const groupConvKey = this.getGroupConversationKey(groupId);
+        if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
+        const list = this.pmMessages.get(groupConvKey);
+        // Only fresh joiners: if we already hold history, this blob isn't for us.
+        if (list.length > 3) return;
+
+        let entries;
+        try { entries = JSON.parse(rumor.content); } catch { return; }
+        if (!Array.isArray(entries) || !entries.length) return;
+        entries = entries.slice(0, 100);
+
+        const existingIds = new Set(list.map(m => m.nymMessageId).filter(Boolean));
+        const unknownPks = new Set();
+        let added = 0;
+        for (const e of entries) {
+            if (!e || typeof e !== 'object') continue;
+            if (!/^[0-9a-f]{64}$/i.test(e.p || '')) continue;
+            if (typeof e.c !== 'string' || !e.c) continue;
+            if (!/^[0-9a-f]{64}$/i.test(e.x || '')) continue;
+            if (existingIds.has(e.x)) continue;
+            if (this.deletedEventIds && this.deletedEventIds.has(e.x)) continue;
+            const ts = Math.min(Math.floor(e.t || 0) || 0, Math.floor(Date.now() / 1000));
+            if (ts <= 0) continue;
+            existingIds.add(e.x);
+            const senderPk = e.p.toLowerCase();
+            if (!this.users.has(senderPk)) unknownPks.add(senderPk);
+            list.push({
+                id: e.x,
+                author: this.getNymFromPubkey(senderPk),
+                pubkey: senderPk,
+                content: e.c.slice(0, 4000),
+                created_at: ts,
+                _seq: ++this._msgSeq,
+                timestamp: new Date(ts * 1000),
+                isOwn: senderPk === this.pubkey,
+                isPM: true,
+                isGroup: true,
+                groupId,
+                conversationKey: groupConvKey,
+                conversationPubkey: null,
+                eventKind: 1059,
+                isHistorical: true,
+                // Forwarded by another member; original author signature not verifiable.
+                senderVerified: false,
+                nymMessageId: e.x
+            });
+            added++;
+        }
+        if (!added) return;
+        list.sort((a, b) => this._compareMessages(a, b));
+        this.pmMessages.set(groupConvKey, list);
+        group.historyReceived = true;
+        this.channelDOMCache.delete(groupConvKey);
+        this.persistPMMessages(groupConvKey);
+        this._saveGroupConversations();
+        this._debouncedNostrSettingsSave();
+        // Resolve author names lazily; re-render if the room is open.
+        for (const pk of [...unknownPks].slice(0, 20)) {
+            try { this.fetchProfileDirect(pk); } catch (_) { }
+        }
+        if (this.inPMMode && this.currentGroup === groupId) {
+            this.openGroup(groupId);
+            const sharerName = this.getNymFromPubkey(senderPubkey);
+            this.displaySystemMessage(`${added} earlier message${added === 1 ? '' : 's'} shared by ${sharerName}.`);
+        }
+    },
+
+    // --- Key-resync heartbeat -------------------------------------------------
+    // Members advertise a fresh ephemeral receiving key with every message and
+    // keep only a bounded window of previous keys. A client that was offline
+    // long enough for relays to expire the missed messages comes back holding
+    // stale copies of other members' keys (and past 30 rotations, messages
+    // encrypted to a stale key are undecryptable). After a long offline gap we
+    // therefore send a key-resync REQUEST to each group — wrapped to members'
+    // REAL pubkeys, since our stored ephemeral keys are exactly what we suspect
+    // is stale — carrying our current key; members reply (rate-limited) with
+    // theirs, so both directions recover.
+
+    // Track when this client was last online so the gap is measurable at boot.
+    // Returns the gap in seconds computed from the previous session's marker.
+    _initLastOnlineTracking() {
+        if (this._lastOnlineTrackingStarted) return this._offlineGapSec || 0;
+        this._lastOnlineTrackingStarted = true;
+        const nowSec = Math.floor(Date.now() / 1000);
+        let stored = 0;
+        try { stored = parseInt(localStorage.getItem('nym_last_online_ts'), 10) || 0; } catch (_) { }
+        this._offlineGapSec = stored > 0 ? Math.max(0, nowSec - stored) : 0;
+        const write = () => {
+            try { localStorage.setItem('nym_last_online_ts', String(Math.floor(Date.now() / 1000))); } catch (_) { }
+        };
+        write();
+        this._lastOnlineInterval = setInterval(write, 120000);
+        return this._offlineGapSec;
+    },
+
+    // Called after DM catch-up on (re)connect. Sends resync requests only when
+    // the offline gap warrants it, at most once per group per cooldown window.
+    async _maybeSendGroupKeyResyncs() {
+        try {
+            const gap = this._initLastOnlineTracking();
+            if (!this.pubkey || !this._canSendGiftWraps()) return;
+            if (gap < this.GROUP_RESYNC_OFFLINE_GAP_SEC) return;
+            if (!this.groupConversations || this.groupConversations.size === 0) return;
+            let cooldowns = {};
+            try { cooldowns = JSON.parse(localStorage.getItem('nym_group_resync_ts') || '{}') || {}; } catch (_) { }
+            const nowSec = Math.floor(Date.now() / 1000);
+            let sentAny = false;
+            for (const [groupId, group] of this.groupConversations) {
+                if (this.leftGroups && this.leftGroups.has(groupId)) continue;
+                const others = (group.members || []).filter(pk => pk !== this.pubkey);
+                if (!others.length) continue;
+                if ((cooldowns[groupId] || 0) > nowSec - this.GROUP_RESYNC_COOLDOWN_SEC) continue;
+                cooldowns[groupId] = nowSec;
+                const eph = this._ensureSelfEphemeralKey(groupId);
+                const tags = others.map(pk => ['p', pk]);
+                tags.push(['g', groupId]);
+                tags.push(['subject', group.name]);
+                tags.push(['type', 'key-resync']);
+                tags.push(['resync_req', '1']);
+                tags.push(['ephemeral_pk', eph.pk]);
+                tags.push(['x', this._generateSharedEventId()]);
+                const rumor = { kind: 14, created_at: nowSec, tags, content: '', pubkey: this.pubkey };
+                await this._sendGiftWrapsAsync(others, rumor, null, groupId, { forceRealPk: true });
+                sentAny = true;
+            }
+            try { localStorage.setItem('nym_group_resync_ts', JSON.stringify(cooldowns)); } catch (_) { }
+            if (sentAny) this._saveEphemeralKeys();
+        } catch (_) { }
+    },
+
+    // Reply to a member's resync request with our current ephemeral key,
+    // wrapped to the key they just advertised (already folded in by the
+    // generic ephemeral_pk extraction). Rate-limited per group+requester.
+    async _maybeReplyKeyResync(groupId, senderPubkey) {
+        try {
+            const group = this.groupConversations.get(groupId);
+            if (!group || !this._canSendGiftWraps()) return;
+            if (this.leftGroups && this.leftGroups.has(groupId)) return;
+            const isMemberSender = group.createdBy === senderPubkey
+                || (Array.isArray(group.members) && group.members.includes(senderPubkey));
+            if (!isMemberSender) return;
+            if (!Array.isArray(group.members) || !group.members.includes(this.pubkey)) return;
+            if (!this._keyResyncReplyTs) this._keyResyncReplyTs = new Map();
+            const rlKey = `${groupId}:${senderPubkey}`;
+            const nowMs = Date.now();
+            if ((this._keyResyncReplyTs.get(rlKey) || 0) > nowMs - 3600000) return;
+            this._keyResyncReplyTs.set(rlKey, nowMs);
+            const eph = this._ensureSelfEphemeralKey(groupId);
+            const nowSec = Math.floor(nowMs / 1000);
+            const tags = [
+                ['p', senderPubkey],
+                ['g', groupId],
+                ['subject', group.name],
+                ['type', 'key-resync'],
+                ['ephemeral_pk', eph.pk],
+                ['x', this._generateSharedEventId()]
+            ];
+            const rumor = { kind: 14, created_at: nowSec, tags, content: '', pubkey: this.pubkey };
+            await this._sendGiftWrapsAsync([senderPubkey], rumor, null, groupId);
+            this._saveEphemeralKeys();
+        } catch (_) { }
+    },
+
+    // Apply a history blob that arrived before the group entry existed.
+    _processPendingGroupHistory(groupId) {
+        const pending = this._pendingGroupHistory && this._pendingGroupHistory.get(groupId);
+        if (!pending) return;
+        this._pendingGroupHistory.delete(groupId);
+        try { this._handleGroupHistoryShare(pending.rumor, groupId, pending.senderPubkey); } catch (_) { }
     },
 
     // Wrap and send one NIP-59 gift wrap per group member.
@@ -1573,7 +1893,10 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    async _sendGiftWrapsAsync(members, rumor, expirationTs, groupId = null) {
+    // opts.forceRealPk: wrap to members' real pubkeys even for group sends —
+    // used by key-resync requests, where our stored ephemeral keys are exactly
+    // what we suspect is stale.
+    async _sendGiftWrapsAsync(members, rumor, expirationTs, groupId = null, opts = {}) {
         // Archive-only self copy so group messages also hydrate from D1.
         if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
 
@@ -1585,7 +1908,7 @@ Object.assign(NYM.prototype, {
         if (this.privkey) {
             const sharedId = this.getNymMessageId(rumor);
             const wrapLocal = async (pubkey) => {
-                const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+                const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
                 const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
                 this.sendDMToRelays(['EVENT', wrapped]);
                 this._recordGiftWrapId(sharedId, wrapped.id);
@@ -1616,7 +1939,7 @@ Object.assign(NYM.prototype, {
 
         const wrapOne = async (pubkey) => {
             try {
-                const encryptTo = groupId ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+                const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
 
                 const sealContent = useExtension
                     ? await window.nostr.nip44.encrypt(encryptTo, rumorJson)
@@ -1754,8 +2077,9 @@ Object.assign(NYM.prototype, {
         this._saveEphemeralKeys();
         this._debouncedNostrSettingsSave(2000);
 
-        // Refresh relay subscriptions so we receive messages to our new ephemeral key
-        this._refreshEphemeralSubscriptions();
+        // Refresh relay subscriptions so we receive messages to our new ephemeral
+        // key (coalesced so rapid sends don't churn or drop refreshes).
+        this._scheduleEphemeralSubRefresh();
 
         // Bump our own presence so status stays "online".
         this.recordOwnActivity();
@@ -2122,6 +2446,7 @@ Object.assign(NYM.prototype, {
         tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
         tags.push(['invite_enabled', group.inviteEnabled ? '1' : '0']);
         tags.push(['invite_epoch', String(group.inviteEpoch || 0)]);
+        tags.push(['share_history', group.shareHistory === true ? '1' : '0']);
         tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content: '', pubkey: this.pubkey };
         await this._sendGiftWrapsAsync(others, rumor, null, groupId);
@@ -2139,11 +2464,32 @@ Object.assign(NYM.prototype, {
         tags.push(['allow_invites', group.allowMemberInvites === false ? '0' : '1']);
         tags.push(['invite_enabled', group.inviteEnabled ? '1' : '0']);
         tags.push(['invite_epoch', String(group.inviteEpoch || 0)]);
+        tags.push(['share_history', group.shareHistory === true ? '1' : '0']);
     },
 
-    _isStaleModEvent(grp, rumor, event) {
+    // Stable identifier for a moderation rumor, used for exact-replay dedup.
+    // Prefer the shared 'x' tag id (identical across every member's wrap),
+    // falling back to the rumor id.
+    _modEventKey(rumor) {
+        const xTag = (rumor?.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
+        return (xTag && xTag[1]) || (rumor && rumor.id) || null;
+    },
+
+    // Moderation events are ordered per target pubkey, not globally: relays can
+    // deliver distinct mod events out of order (promote A @100 after kick B @105)
+    // and a single global timestamp gate would silently drop the older one even
+    // though it was never seen. Exact replays are caught by the seen-id set.
+    // Events without a target (ownership transfers) keep the global gate, since
+    // authority for later events was already derived from the current owner.
+    _isStaleModEvent(grp, rumor, targetPubkey) {
         if (!grp) return false;
+        const key = this._modEventKey(rumor);
+        if (key && Array.isArray(grp.modSeenIds) && grp.modSeenIds.includes(key)) return true;
         const ts = Math.floor(rumor.created_at || 0);
+        if (targetPubkey) {
+            const last = (grp.modTsByTarget && grp.modTsByTarget[targetPubkey]) || 0;
+            return ts < last;
+        }
         const last = grp.lastModTs || 0;
         if (ts < last) return true;
         const evId = rumor && rumor.id;
@@ -2151,14 +2497,41 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    _recordModEvent(grp, rumor, event) {
+    _recordModEvent(grp, rumor, targetPubkey) {
         if (!grp) return;
         const nowSec = Math.floor(Date.now() / 1000);
         const ts = Math.min(Math.floor(rumor.created_at || 0), nowSec + 300);
+        const key = this._modEventKey(rumor);
+        if (key) {
+            if (!Array.isArray(grp.modSeenIds)) grp.modSeenIds = [];
+            if (!grp.modSeenIds.includes(key)) {
+                grp.modSeenIds.push(key);
+                if (grp.modSeenIds.length > 100) grp.modSeenIds = grp.modSeenIds.slice(-100);
+            }
+        }
+        if (targetPubkey) {
+            this._bumpModTargetTs(grp, targetPubkey, ts);
+        }
         if (ts >= (grp.lastModTs || 0)) {
             grp.lastModTs = ts;
             const evId = rumor && rumor.id;
             if (evId) grp.lastModEventId = evId;
+        }
+    },
+
+    // Advance a target's moderation clock (also used when a member is re-added,
+    // so a replayed pre-re-add kick can't remove them again).
+    _bumpModTargetTs(grp, targetPubkey, ts) {
+        if (!grp || !targetPubkey) return;
+        if (!grp.modTsByTarget) grp.modTsByTarget = {};
+        if (ts >= (grp.modTsByTarget[targetPubkey] || 0)) {
+            grp.modTsByTarget[targetPubkey] = ts;
+        }
+        const keys = Object.keys(grp.modTsByTarget);
+        if (keys.length > 200) {
+            // Keep the most recent 200 entries bounded by churn.
+            keys.sort((a, b) => grp.modTsByTarget[a] - grp.modTsByTarget[b]);
+            for (const k of keys.slice(0, keys.length - 200)) delete grp.modTsByTarget[k];
         }
     },
 
@@ -2175,6 +2548,7 @@ Object.assign(NYM.prototype, {
         const allowInvTag = tag('allow_invites');
         const inviteEnabledTag = tag('invite_enabled');
         const inviteEpochTag = tag('invite_epoch');
+        const shareHistTag = tag('share_history');
         let changed = false;
         if (subjectTag && subjectTag[1] && subjectTag[1] !== grp.name) { grp.name = subjectTag[1]; changed = true; }
         if (bannerTag) {
@@ -2200,6 +2574,10 @@ Object.assign(NYM.prototype, {
         if (inviteEpochTag) {
             const newEpoch = parseInt(inviteEpochTag[1], 10) || 0;
             if (newEpoch !== (grp.inviteEpoch || 0)) { grp.inviteEpoch = newEpoch; changed = true; }
+        }
+        if (shareHistTag) {
+            const newShare = shareHistTag[1] === '1';
+            if (newShare !== (grp.shareHistory === true)) { grp.shareHistory = newShare; changed = true; }
         }
         if (changed) {
             grp.metaUpdatedAt = metaTs;
@@ -2282,6 +2660,29 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(next
             ? 'Group members can now add new users.'
             : 'Only the group owner can add new users now.');
+    },
+
+    // Owner-only: toggle sharing recent chat history with newly added members,
+    // then propagate to the rest of the group (any member who adds someone
+    // needs to know the setting).
+    async setGroupShareHistory(groupId, enabled) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (!this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner can change this setting.');
+            return;
+        }
+        const next = !!enabled;
+        if (next === (group.shareHistory === true)) return;
+        group.shareHistory = next;
+        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        await this._broadcastGroupMetadata(groupId);
+        this.displaySystemMessage(next
+            ? 'New members will now receive recent chat history when they join.'
+            : 'New members will no longer receive chat history.');
     },
 
     // Owner-only: turn joining via invite link on or off, then propagate.
@@ -2471,6 +2872,7 @@ Object.assign(NYM.prototype, {
                 allowMemberInvites: opts.allowMemberInvites !== false,
                 inviteEnabled: opts.inviteEnabled === true,
                 inviteEpoch: opts.inviteEpoch || 0,
+                shareHistory: opts.shareHistory === true,
                 modLog: []
             });
             const pmList = document.getElementById('pmList');
@@ -2518,6 +2920,7 @@ Object.assign(NYM.prototype, {
             if (opts.allowMemberInvites !== undefined) next.allowMemberInvites = opts.allowMemberInvites;
             if (opts.inviteEnabled !== undefined) next.inviteEnabled = opts.inviteEnabled;
             if (opts.inviteEpoch !== undefined) next.inviteEpoch = opts.inviteEpoch;
+            if (opts.shareHistory !== undefined) next.shareHistory = opts.shareHistory;
             this.groupConversations.set(groupId, next);
             this.updateGroupConversationUI(groupId);
         }
@@ -3089,6 +3492,7 @@ Object.assign(NYM.prototype, {
         }
         if (iAmOwner) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInvites">${icon(checkbox(group.allowMemberInvites !== false))}Allow members to add others</div>`);
+            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleShareHistory">${icon(checkbox(group.shareHistory === true))}Share history with new members</div>`);
         }
         if (this._canAddMembers(groupId, this.pubkey)) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
@@ -3247,6 +3651,14 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         this.closeGroupContextMenu();
         this.setGroupAllowMemberInvites(groupId, group.allowMemberInvites === false);
+    },
+
+    groupCtxToggleShareHistory() {
+        const groupId = this._groupCtxGroupId;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        this.closeGroupContextMenu();
+        this.setGroupShareHistory(groupId, group.shareHistory !== true);
     },
 
     groupCtxToggleInviteJoin() {

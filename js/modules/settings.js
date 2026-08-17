@@ -316,8 +316,10 @@ Object.assign(NYM.prototype, {
                 banner: group.banner || null,
                 avatar: group.avatar || null,
                 description: group.description || null,
+                allowMemberInvites: group.allowMemberInvites !== false,
                 inviteEnabled: group.inviteEnabled === true,
                 inviteEpoch: group.inviteEpoch || 0,
+                shareHistory: group.shareHistory === true,
                 metaUpdatedAt: group.metaUpdatedAt || 0,
                 modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
             };
