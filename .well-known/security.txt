@@ -1,0 +1,5 @@
+# Nymchat vulnerability disclosure policy
+Contact: https://github.com/Spl0itable/NYM/security/advisories/new
+Expires: 2027-08-17T00:00:00.000Z
+Preferred-Languages: en
+Policy: https://github.com/Spl0itable/NYM/blob/main/SECURITY.md
