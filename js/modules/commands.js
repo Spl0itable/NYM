@@ -273,6 +273,8 @@ Object.assign(NYM.prototype, {
             '?help': { desc: 'Guide to premium, Pro models & git repos (free)' },
             '?model': { desc: 'Pick a Pro frontier model (?model off for standard)' },
             '?git': { desc: 'Connect a git repo to Pro replies (GitHub/GitLab/Gitea)' },
+            '?image': { desc: 'Generate an image (--model <name> on Pro; ?image models)' },
+            '?speak': { desc: 'Read text aloud as a voice clip' },
             '?buy': { desc: 'Buy Nymbot credits (Standard/Pro switch)' },
             '?balance': { desc: 'Check your standard & Pro credit balances' },
             '?gift': { desc: 'Gift Nymbot credits to another user' },

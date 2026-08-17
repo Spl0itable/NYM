@@ -1724,11 +1724,14 @@ Object.assign(NYM.prototype, {
             '• <code>?clear</code> — wipe this chat and start fresh.',
             '• <code>?balance</code> — check your credit balance (also shown in the header).',
             '• <code>?buy</code> — purchase more credits. <code>?gift @nym#xxxx</code> — gift credits to someone.',
-            '• <code>?model</code> — go <strong>Pro</strong>: pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.1, Codex) for every reply, paid with separate Pro credits.',
+            '• <code>?model</code> — go <strong>Pro</strong>: pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.6 Sol, Gemini, Grok, Kimi K3, Qwen, MiniMax) for every reply, paid with separate Pro credits.',
+            '• <code>?image &lt;description&gt;</code> — generate a picture. On Pro, add <code>--model &lt;name&gt;</code> to pick a frontier generator (Nano Banana Pro, Imagen 4, FLUX 2, Seedream, GPT Image 2, Grok Imagine, Recraft) — <code>?image models</code> lists them free.',
+            '• <code>?speak &lt;text&gt;</code> — get it read aloud as a voice clip.',
+            '• Send or link a picture — models that can see will look at the image itself, not just the link.',
             '• <code>?git</code> — connect a git repo (GitHub, GitLab, Gitea/Codeberg) so Pro replies read your actual code and can even commit, branch, and open PRs — like a chat-based coding agent.',
             '• <code>?transfer @nym#xxxx confirm</code> — move ALL your credits to another pubkey (great for switching nyms).',
             '',
-            '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Pro replies start at <strong>1–2 Pro credits</strong> and scale with reply length (each model\'s range is in <code>?model</code>). Credits are tied to your nym — save your nsec so you don\'t lose them.',
+            '<strong>Pricing:</strong> general chat, creative writing, and translation replies cost <strong>1 credit</strong>. Coding and reasoning/math replies cost <strong>2 credits</strong> (they use larger models). Pro replies start at <strong>1–2 Pro credits</strong> and scale with reply length (each model\'s range is in <code>?model</code>). <code>?image</code> costs <strong>5 credits</strong> (2 Pro) and <code>?speak</code> <strong>3 credits</strong> (1 Pro), charged per generation — nothing is charged if it fails. Credits are tied to your nym — save your nsec so you don\'t lose them.',
             '',
             'So, what can I help you with?'
         ].join('<br>');
@@ -2095,12 +2098,17 @@ Object.assign(NYM.prototype, {
     // Nymbot Pro model catalog (mirrors BOT_PRO_MODELS in functions/api/bot.js)
     _botProModels: [
         { key: 'claude-fable', label: 'Claude Fable 5', credits: 2, max: 16 },
-        { key: 'claude-opus', label: 'Claude Opus 4.8', credits: 1, max: 8 },
-        { key: 'claude-sonnet', label: 'Claude Sonnet 4.6', credits: 1, max: 6 },
+        { key: 'claude-opus', label: 'Claude Opus 5', credits: 1, max: 8 },
+        { key: 'claude-sonnet', label: 'Claude Sonnet 5', credits: 1, max: 6 },
         { key: 'claude-haiku', label: 'Claude Haiku 4.5', credits: 1, max: 1 },
-        { key: 'gpt-5', label: 'GPT-5.1', credits: 1, max: 4 },
-        { key: 'gpt-5-mini', label: 'GPT-5 mini', credits: 1, max: 1 },
-        { key: 'codex', label: 'GPT-5.1 Codex', credits: 1, max: 4 }
+        { key: 'gpt-5', label: 'GPT-5.6 Sol', credits: 1, max: 6 },
+        { key: 'gpt-5-mini', label: 'GPT-5.4 mini', credits: 1, max: 1 },
+        { key: 'gemini-pro', label: 'Gemini 3.1 Pro', credits: 1, max: 5 },
+        { key: 'gemini-flash', label: 'Gemini 3.6 Flash', credits: 1, max: 3 },
+        { key: 'grok', label: 'Grok 4.6', credits: 1, max: 6 },
+        { key: 'kimi', label: 'Kimi K3', credits: 1, max: 3 },
+        { key: 'qwen', label: 'Qwen 3.5', credits: 1, max: 3 },
+        { key: 'minimax', label: 'MiniMax M3', credits: 1, max: 3 }
     ],
 
     // "2 credits/reply" for flat models, "from 2 (up to 16 for max-length

@@ -142,6 +142,14 @@ async function run() {
   // Vulnerability-disclosure pointer (RFC 9116) verbatim.
   await emit('.well-known/security.txt', await fs.readFile(path.join(root, '.well-known', 'security.txt')));
 
+  // version.json — the app version (NYMCHAT_VERSION, the single source of truth
+  // in js/app.js) as a tiny fetchable endpoint, so the native iOS/Android apps
+  // can display the LIVE main-project version instead of a hardcoded string.
+  const appJsSource = await fs.readFile(path.join(root, 'js', 'app.js'), 'utf8');
+  const versionMatch = appJsSource.match(/NYMCHAT_VERSION\s*=\s*['"]([^'"]+)['"]/);
+  const appVersion = versionMatch ? versionMatch[1] : 'unknown';
+  await emit('version.json', JSON.stringify({ version: appVersion }));
+
   // Service worker: stamp a per-build cache version so each deploy gets a fresh
   // cache and old ones are pruned on activate.
   const swVersion = sha8([...assetMap.values()].sort().join('|'));
@@ -212,6 +220,8 @@ async function run() {
   Cache-Control: no-cache
 /build-manifest.json
   Cache-Control: no-cache
+/version.json
+  Cache-Control: public, max-age=300
 `;
   await emit('_headers', headers.replace(/\s*$/, '') + cacheRules);
 
