@@ -151,7 +151,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.73.523";
+var NYMCHAT_VERSION = "3.73.524";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -189,11 +189,9 @@ var BOT_PRO_MODELS = {
   "gemini-pro": { label: "Gemini 3.1 Pro", transport: "compat", model: "google/gemini-3.1-pro", baseCredits: 1, outTokensPerCredit: 2500, maxTokens: 8192, vision: true },
   "gemini-flash": { label: "Gemini 3.6 Flash", transport: "compat", model: "google/gemini-3.6-flash", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
   "grok": { label: "Grok 4.6", transport: "compat", model: "xai/grok-4.6", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
-  // Open-weight models Cloudflare serves directly - these run on Workers AI,
-  // not the unified gateway, and need their "@cf/" ids.
-  "kimi": { label: "Kimi K3", transport: "wai", model: "@cf/moonshotai/kimi-k3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
-  "qwen": { label: "Qwen 3.5", transport: "wai", model: "@cf/qwen/qwen3.5-397b-a17b", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 },
-  "minimax": { label: "MiniMax M3", transport: "wai", model: "@cf/minimax/minimax-m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 }
+  "kimi": { label: "Kimi K3", transport: "compat", model: "moonshotai/kimi-k3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
+  "qwen": { label: "Qwen 3.5", transport: "compat", model: "alibaba/qwen3.5-397b-a17b", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 },
+  "minimax": { label: "MiniMax M3", transport: "compat", model: "minimax/m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 }
 };
 
 var BOT_PRO_MODEL_ALIASES = {
@@ -261,17 +259,21 @@ function botProImageList() {
 function botImageRequestBody(family, prompt) {
   var p = String(prompt).slice(0, 2000);
   if (family === "google") {
-    // Gemini image generation takes chat-style parts.
-    return { contents: [{ role: "user", parts: [{ text: p }] }] };
+    // nano-banana / -pro / -2: prompt, image_input[], aspect_ratio,
+    // output_format (jpg|png|webp), image_size (1K|2K|4K).
+    return { prompt: p, aspect_ratio: "1:1", image_size: "1K" };
   }
   if (family === "imagen") {
-    return { instances: [{ prompt: p }], parameters: { sampleCount: 1 } };
+    // imagen-4: prompt, aspect_ratio, person_generation.
+    return { prompt: p, aspect_ratio: "1:1" };
   }
   if (family === "bfl") {
-    return { prompt: p, width: 1024, height: 1024, output_format: "jpeg" };
+    // flux-2-max / -pro-preview: prompt, input_images, width, height.
+    return { prompt: p, width: 1024, height: 1024 };
   }
-  // OpenAI images shape, also used by ByteDance, xAI and Recraft.
-  return { prompt: p, n: 1, size: "1024x1024", response_format: "b64_json" };
+  // gpt-image-2, seedream, grok-imagine and recraft differ in their optional
+  // fields, so send the only one they are all documented to take.
+  return { prompt: p };
 }
 
 // Providers bury the result under many different key names
@@ -604,11 +606,9 @@ function proTransportPlan(env, modelId, transport) {
     return plan;
   }
   if (transport === "anthropic" || /^anthropic\//.test(modelId)) {
-    // Native first: the OpenAI-compat translation drops Anthropic's content
-    // blocks, so a compat hop would come back empty rather than wrong.
     if (proAnthropicNativeUrl(env)) plan.push({ kind: "anthropic", model: modelId });
     if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
-    plan.push({ kind: "compat", model: modelId });
+    if (!plan.length) plan.push({ kind: "compat", model: modelId });
     return plan;
   }
   if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
@@ -616,9 +616,6 @@ function proTransportPlan(env, modelId, transport) {
   return plan;
 }
 
-// Normalize the model reply across transports/providers: OpenAI chat
-// completions, Anthropic-native content blocks, Workers AI {response}, or
-// any of those wrapped in a Cloudflare {success, result} envelope.
 function proNormalizeMessage(resp) {
   if (!resp || typeof resp !== "object") return null;
   if (typeof resp.result === "string" && resp.result) return { content: resp.result };
@@ -782,9 +779,9 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
   if (step.kind === "anthropic") {
     var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
     if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    if (/fable/.test(step.model)) {
+    if (/fable/.test(step.model) && env.ANTHROPIC_API_KEY) {
       nativeHeaders["cf-aig-zdr"] = "false";
-      if (env.ANTHROPIC_API_KEY) nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
+      nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
     }
     var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
     return proHttpChat(proAnthropicNativeUrl(env),
@@ -821,6 +818,9 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
 // rejection, a rate limit or a content refusal would come back identically
 // from every route, so those stop the walk and surface as-is.
 function proWorthRetrying(err) {
+  // A refusal is the model's answer, not a transport failure — every other
+  // route would refuse the same thread, and each attempt bills.
+  if (err && err.noRetry) return false;
   var status = err && err.httpStatus;
   if (typeof status === "number") return status === 400 || status === 401 || status === 403 || status === 404 || status === 405;
   // Binding/transport errors carry no status - an unknown model id is the
@@ -852,6 +852,19 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
   throw new Error("Pro model request failed on every route (" + errors.join(" | ").slice(0, 400) + ")");
 }
 
+// A provider that declined the request answers 200 with an empty content array
+// and stop_reason "refusal". That is a real, final answer about THIS
+// conversation — not a broken payload and not something a different route
+// would answer differently — so it must not read as a schema mismatch and must
+// not send the turn down the remaining transports (each of which bills).
+function proRefusalDetail(payload) {
+  var body = payload;
+  if (body && typeof body === "object" && body.result && typeof body.result === "object") body = body.result;
+  if (!body || typeof body !== "object" || body.stop_reason !== "refusal") return null;
+  var details = body.stop_details || {};
+  return { category: details.category || "", model: body.model || "" };
+}
+
 // A reply with no text and no tool calls means we failed to recognize the
 // upstream shape — surface a payload snippet instead of a blank reply so
 // schema mismatches diagnose themselves. Nothing is charged on throw.
@@ -859,6 +872,17 @@ function proCheckedMessage(payload) {
   var msg = proNormalizeMessage(payload);
   if (msg && (proMessageText(msg).trim() || (msg.tool_calls && msg.tool_calls.length))) {
     return { msg: msg, outputTokens: proUsageOutputTokens(payload) };
+  }
+  var refusal = proRefusalDetail(payload);
+  if (refusal) {
+    // The whole thread is resent every turn, so the trigger is often an older
+    // message rather than the one just sent — say so, because "rephrase" alone
+    // is useless advice when the user's new message was innocuous.
+    var err = new Error("The model declined this request under its provider's usage policy" +
+      (refusal.category ? " (" + refusal.category + ")" : "") +
+      ". Something earlier in this conversation may be the trigger, since the whole thread is sent each turn — try ?clear for a fresh thread, rephrasing, or ?model to switch models. You were not charged.");
+    err.noRetry = true;
+    throw err;
   }
   var snippet = "";
   try { snippet = JSON.stringify(payload); } catch (e) { snippet = String(payload); }
@@ -1549,6 +1573,50 @@ async function botPutProCredits(env, pubkey, data) {
   await creditsPut(env.DB_CREDITS, botProKey(pubkey), data);
 }
 
+// One Nymbot PM turn is identified by the gift wrap it answers. Both clients
+// fall back from the websocket to a signed HTTP POST whenever the socket errors
+// or times out (`_botMoneyRequest`, shop.js; `botSocketRequest`,
+// api_client.dart) and resend the SAME eventId — so without de-duplication the
+// model runs twice and the user pays twice for one message, while the first
+// reply dies with the abandoned socket. The ledger records the finished
+// response; a retry collects it instead of regenerating it.
+//
+// Degrades to today's behaviour when the ledger binding is absent: no
+// de-duplication, but nothing breaks.
+var BOT_TURN_POLL_MS = 2000;
+var BOT_TURN_WAIT_BUDGET_MS = 90000;
+
+function botTurnKey(pubkey, eventId) { return "pm:" + pubkey + ":" + eventId; }
+
+async function botTurnBegin(env, key) {
+  var r;
+  try { r = await ledgerCall(env, { op: "turn-begin", key: key }); } catch (e) { r = null; }
+  if (!r || r.error || !r.state) return { state: "claimed" };
+  return r;
+}
+
+async function botTurnFinish(env, key, body, status) {
+  try {
+    await ledgerCall(env, { op: "turn-finish", key: key, result: { body: body, status: status || 200 } });
+  } catch (e) { /* the turn itself succeeded; only the replay copy is lost */ }
+}
+
+// Wait for the in-flight attempt to record its answer rather than running the
+// turn again. Returns the stored result, or null when the caller should run it
+// (the other attempt lapsed, died, or is slower than any real reply).
+async function botTurnWait(env, key) {
+  var deadline = Date.now() + BOT_TURN_WAIT_BUDGET_MS;
+  while (Date.now() < deadline) {
+    await new Promise(function (r) { setTimeout(r, BOT_TURN_POLL_MS); });
+    var p;
+    try { p = await ledgerCall(env, { op: "turn-poll", key: key }); } catch (e) { return null; }
+    if (!p || p.error) return null;
+    if (p.state === "done") return p.result || null;
+    if (p.state !== "running") return null;
+  }
+  return null;
+}
+
 function isHex64(x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); }
 
 // Per-user ordered list of NIP-17 gift-wrap event IDs for the private Nymbot
@@ -1968,6 +2036,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (!currentId) return json({ error: "Missing message event id" }, 400);
     var fresh = !!body.fresh;
 
+    // Claim this turn before anything is fetched, generated or charged. A
+    // resend of the same message replays the first attempt's answer instead of
+    // paying for a second one.
+    var turnKey = botTurnKey(userPubkey, currentId);
+    var turnClaim = await botTurnBegin(env, turnKey);
+    if (turnClaim.state === "done" && turnClaim.result) {
+      return json(turnClaim.result.body, turnClaim.result.status);
+    }
+    if (turnClaim.state === "running") {
+      var waitedTurn = await botTurnWait(env, turnKey);
+      if (waitedTurn) return json(waitedTurn.body, waitedTurn.status);
+      // The other attempt never landed an answer, so it billed nothing and
+      // this one is free to run.
+    }
+
     var thread = await botGetThread(env, userPubkey);
     var historyIds = fresh ? [] : thread.filter(function (id) { return id !== currentId; });
 
@@ -2022,14 +2105,18 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         listThread.push(currentId);
         listThread.push(listPair.selfEvent.id);
         try { await botPutThread(env, userPubkey, listThread); } catch (e) { }
-        return json({
+        var listBody = {
           event: listPair.event,
           selfEvent: listPair.selfEvent,
           balance: (proModel ? proRecord : record).balance || 0,
           cost: 0,
           taskType: "image",
           pro: !!proModel
-        });
+        };
+        // Free, but it still publishes a wrap pair and advances the thread —
+        // a resend must replay this one, not mint a second pair.
+        await botTurnFinish(env, turnKey, listBody);
+        return json(listBody);
       }
       if (!media.prompt) {
         return json({ error: media.kind === "image"
@@ -2091,7 +2178,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       mediaThread.push(currentId);
       mediaThread.push(mediaPair.selfEvent.id);
       try { await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
-      return json({
+      var mediaBody = {
         event: mediaPair.event,
         selfEvent: mediaPair.selfEvent,
         balance: mediaRecord.balance,
@@ -2101,7 +2188,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         pro: !!proModel,
         proModel: proModel ? proModelKey : undefined,
         lowBalance: mediaRecord.balance <= 3
-      });
+      };
+      // Charged and delivered: record it so a resend collects this generation
+      // rather than paying for another one.
+      await botTurnFinish(env, turnKey, mediaBody);
+      return json(mediaBody);
     }
 
     var ai = env.AI;
@@ -2164,7 +2255,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     updatedThread.push(currentId);
     updatedThread.push(pair.selfEvent.id);
     try { await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
-    return json({
+    var chatBody = {
       event: pair.event,
       selfEvent: pair.selfEvent,
       balance: spendRecord.balance,
@@ -2175,7 +2266,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       git: !!ghConfig,
       modelCalls: chatResult.modelCalls,
       lowBalance: spendRecord.balance <= 3
-    });
+    };
+    // Charged and delivered. If the socket carrying this response is already
+    // gone, the client's HTTP retry reads the reply back out of here.
+    await botTurnFinish(env, turnKey, chatBody);
+    return json(chatBody);
   }
 
   if (body.action === "clear-history") {
@@ -2871,7 +2966,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.73.523 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.73.524 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3728,7 +3823,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.73.523")
+  // Prefix match (e.g. "3.61" matches "3.73.524")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3783,7 +3878,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.73.523", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.73.524", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

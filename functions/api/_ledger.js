@@ -14,6 +14,15 @@ import {
 
 const SATS_PER_CREDIT_DEFAULT = 100;
 
+// An in-flight Nymbot turn holds its claim for a little over the clients' own
+// 180s request timeout, so a retry arriving right at that deadline still sees
+// the original as running rather than starting a second billed attempt.
+const BOT_TURN_CLAIM_TTL_S = 300;
+// A finished turn stays replayable well past the retry window.
+const BOT_TURN_RESULT_TTL_S = 900;
+// Comfortably above a gift-wrapped reply, comfortably below the row limit.
+const BOT_TURN_MAX_RESULT_BYTES = 512 * 1024;
+
 export class NymLedger {
   constructor(state, env) {
     this.state = state;
@@ -33,6 +42,12 @@ export class NymLedger {
     );
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS edition_resv (invoice TEXT PRIMARY KEY, item TEXT NOT NULL, user TEXT, exp INTEGER NOT NULL);"
+    );
+    // One Nymbot PM turn, keyed by the gift wrap it answers. result NULL means
+    // an attempt is in flight; a non-null result is the finished response body,
+    // replayed verbatim to any retry of the same message.
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bot_turns (id TEXT PRIMARY KEY, result TEXT, exp INTEGER NOT NULL);"
     );
   }
 
@@ -71,6 +86,9 @@ export class NymLedger {
       case "shop-redeem": return this._shopRedeem(a);
       case "shop-reserve": return this._shopReserve(a);
       case "shop-supply": return this._shopSupply(a);
+      case "turn-begin": return this._turnBegin(a.key);
+      case "turn-poll": return this._turnPoll(a.key);
+      case "turn-finish": return this._turnFinish(a.key, a.result);
       default: return { error: "unknown op" };
     }
   }
@@ -101,6 +119,79 @@ export class NymLedger {
     if (existing.length) return false;
     this.sql.exec("INSERT INTO claims (id, kind, at) VALUES (?, ?, ?);", id, kind, Date.now());
     return true;
+  }
+
+  // Nymbot turn de-duplication.
+  _turnSweep(now) {
+    this.sql.exec("DELETE FROM bot_turns WHERE exp < ?;", now);
+  }
+
+  _turnRow(key) {
+    if (typeof key !== "string" || !key || key.length > 256) return { bad: true };
+    const now = Math.floor(Date.now() / 1000);
+    this._turnSweep(now);
+    const rows = this.sql.exec("SELECT result FROM bot_turns WHERE id = ? LIMIT 1;", key).toArray();
+    if (!rows.length) return { now, missing: true };
+    const raw = rows[0].result;
+    if (!raw) return { now, running: true };
+    try {
+      return { now, result: JSON.parse(raw) };
+    } catch {
+      // Unreadable row: treat the turn as never having happened rather than
+      // stranding the message.
+      this.sql.exec("DELETE FROM bot_turns WHERE id = ?;", key);
+      return { now, missing: true };
+    }
+  }
+
+  // Claim a turn. "done" carries the stored response, "running" means another
+  // attempt owns it, "claimed" means this caller owns it and should run.
+  _turnBegin(key) {
+    const row = this._turnRow(key);
+    if (row.bad) return { state: "error" };
+    if (row.result) return { state: "done", result: row.result };
+    if (row.running) return { state: "running" };
+    this.sql.exec(
+      "INSERT INTO bot_turns (id, result, exp) VALUES (?, NULL, ?);",
+      key,
+      row.now + BOT_TURN_CLAIM_TTL_S
+    );
+    return { state: "claimed" };
+  }
+
+  // Read-only probe used while waiting on an in-flight attempt. "gone" means
+  // the claim lapsed (the other attempt died), so the caller may run it.
+  _turnPoll(key) {
+    const row = this._turnRow(key);
+    if (row.bad) return { state: "error" };
+    if (row.result) return { state: "done", result: row.result };
+    if (row.running) return { state: "running" };
+    return { state: "gone" };
+  }
+
+  _turnFinish(key, result) {
+    if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
+    let encoded;
+    try {
+      encoded = JSON.stringify(result);
+    } catch {
+      return { ok: false };
+    }
+    // Never risk the row limit: an unstored result only costs the retry path,
+    // it does not break the turn that just succeeded.
+    if (!encoded || encoded.length > BOT_TURN_MAX_RESULT_BYTES) {
+      this.sql.exec("DELETE FROM bot_turns WHERE id = ?;", key);
+      return { ok: false, tooLarge: true };
+    }
+    const now = Math.floor(Date.now() / 1000);
+    this.sql.exec(
+      "INSERT INTO bot_turns (id, result, exp) VALUES (?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET result = excluded.result, exp = excluded.exp;",
+      key,
+      encoded,
+      now + BOT_TURN_RESULT_TTL_S
+    );
+    return { ok: true };
   }
 
   // Limited-edition supply (numbered drops)

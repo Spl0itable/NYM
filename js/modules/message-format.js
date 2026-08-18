@@ -149,6 +149,41 @@
             const list = mirrors.map(m => proxied(m, ctx.proxyBase));
             return ` data-media-fallbacks="${escapeHtml(list.join('|'))}"`;
         };
+        // Audio gets a player rather than a bare link. Its own placeholder
+        // markers keep it out of the image/video gallery grouping below — a
+        // full-width player has no business in a photo grid. `.ogg`/`.webm`
+        // stay with video, which already claims them and can be either.
+        const audioPlaceholders = [];
+        formatted = formatted.replace(
+            /(https?:\/\/[^\s]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s]*)?)/gi,
+            (match, url, ext) => {
+                const audioTypes = {
+                    mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac',
+                    wav: 'audio/wav', flac: 'audio/flac', opus: 'audio/ogg',
+                    oga: 'audio/ogg'
+                };
+                const type = audioTypes[ext.toLowerCase()] || 'audio/mpeg';
+                const proxiedUrl = proxied(url, ctx.proxyBase);
+                // The proxied URL is same-origin, so `download` actually
+                // downloads instead of navigating away like it would
+                // cross-origin.
+                let name = '';
+                try {
+                    name = decodeURIComponent((new URL(url).pathname.split('/').pop() || '')).slice(0, 60);
+                } catch (e) { name = ''; }
+                const idx = audioPlaceholders.length;
+                audioPlaceholders.push(
+                    `<span class="audio-container" data-action="stopPropagation">` +
+                    `<audio controls preload="metadata" class="message-audio">` +
+                    `<source src="${proxiedUrl}" type="${type}"></audio>` +
+                    `<a class="audio-download" href="${proxiedUrl}" download="${escapeHtml(name)}" ` +
+                    `target="_blank" rel="noopener noreferrer">Download${name ? ' ' + escapeHtml(name) : ''}</a>` +
+                    `</span>`
+                );
+                return `\uFDD4${idx}\uFDD5`;
+            }
+        );
+
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
             (match, url, ext) => {
@@ -214,6 +249,7 @@
             }
         );
         formatted = formatted.replace(/﷒(\d+)﷓/g, (_m, idx) => mediaPlaceholders[parseInt(idx, 10)].html);
+        formatted = formatted.replace(/\uFDD4(\d+)\uFDD5/g, (_m, idx) => audioPlaceholders[parseInt(idx, 10)]);
 
         formatted = formatted.replace(
             /(?:(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?]))(?![^<]*>)/gi,

@@ -977,6 +977,39 @@ body.chat-bubbles .read-more-btn {
     box-shadow: none;
 }
 
+.message-content .audio-container {
+    display: block;
+    max-width: 340px;
+    margin: 10px 0;
+}
+
+.message-content audio.message-audio {
+    display: block;
+    width: 100%;
+    min-width: 220px;
+    border-radius: var(--radius-sm);
+}
+
+.message-content a.audio-download {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    opacity: 0.85;
+    word-break: break-all;
+}
+
+.message-content a.audio-download:hover {
+    color: var(--primary);
+    text-decoration: underline;
+    opacity: 1;
+}
+
+.cv-column .message-content .audio-container {
+    max-width: 100%;
+}
+
 .message-content .video-container {
     position: relative;
     display: inline-block;
