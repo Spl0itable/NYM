@@ -20,8 +20,9 @@ notes unless they prefer otherwise.
 - Public channels (kinds 20000/23333) are intentionally unencrypted.
 - The `/api/proxy` endpoint is intentionally unauthenticated (it exists to
   keep user IPs away from third-party servers); reports about its abuse
-  potential should focus on bypasses of its SSRF, rate-limit, or content-type
-  controls.
+  potential should focus on bypasses of its SSRF, origin, or content-type
+  controls. Request-rate abuse is handled by Cloudflare at the edge rather
+  than in the worker, so volumetric findings belong there.
 
 ## Vendored cryptography
 

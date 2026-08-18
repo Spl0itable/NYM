@@ -145,7 +145,9 @@ Object.assign(NYM.prototype, {
             swipeLeftAction: this.settings.swipeLeftAction || 'quote',
             swipeRightAction: this.settings.swipeRightAction || 'translate',
             swipeThreshold: this.settings.swipeThreshold || 60,
-            swipeReactEmoji: this.settings.swipeReactEmoji || '❤️',
+            ...(localStorage.getItem('nym_swipe_react_emoji')
+                ? { swipeReactEmoji: localStorage.getItem('nym_swipe_react_emoji') }
+                : {}),
             sidebarSectionOrder: this._getSidebarSectionOrder(),
             notificationsEnabled: this.notificationsEnabled !== false,
             groupNotifyMentionsOnly: this.groupNotifyMentionsOnly || false,
@@ -164,10 +166,6 @@ Object.assign(NYM.prototype, {
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
             botPmClearedAt: this._getBotPmClearedAt() || 0,
             keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent',
-            // Non-sensitive preference only: "I protect my identity key at rest
-            // on my devices." No key material, salt, or credential is ever
-            // synced — each device sets up its own factor locally. Lets a new
-            // device offer to enable encryption too. Monotonic (only flips on).
             encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1'
         };
     },

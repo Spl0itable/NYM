@@ -178,23 +178,24 @@ var BOT_PM_MAX_TOKENS = {
 };
 
 var BOT_PRO_SATS_PER_CREDIT = 100;
+
 var BOT_PRO_MODELS = {
-  "claude-fable": { label: "Claude Fable 5", model: "anthropic/claude-fable-5", baseCredits: 2, outTokensPerCredit: 600, maxTokens: 8192, vision: true },
-  "claude-opus": { label: "Claude Opus 5", model: "anthropic/claude-opus-5", baseCredits: 1, outTokensPerCredit: 1200, maxTokens: 8192, vision: true },
-  "claude-sonnet": { label: "Claude Sonnet 5", model: "anthropic/claude-sonnet-5", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
-  "claude-haiku": { label: "Claude Haiku 4.5", model: "anthropic/claude-haiku-4.5", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 4096, vision: true },
-  "gpt-5": { label: "GPT-5.6 Sol", model: "openai/gpt-5.6-sol", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
-  "gpt-5-mini": { label: "GPT-5.4 mini", model: "openai/gpt-5.4-mini", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 8192, vision: true },
-  "gemini-pro": { label: "Gemini 3.1 Pro", model: "google/gemini-3.1-pro", baseCredits: 1, outTokensPerCredit: 2500, maxTokens: 8192, vision: true },
-  "gemini-flash": { label: "Gemini 3.6 Flash", model: "google/gemini-3.6-flash", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
-  "grok": { label: "Grok 4.6", model: "xai/grok-4.6", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
-  "kimi": { label: "Kimi K3", model: "moonshotai/kimi-k3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
-  "qwen": { label: "Qwen 3.5", model: "alibaba/qwen3.5-397b-a17b", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 },
-  "minimax": { label: "MiniMax M3", model: "minimax/m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 }
+  "claude-fable": { label: "Claude Fable 5", transport: "anthropic", model: "anthropic/claude-fable-5", baseCredits: 2, outTokensPerCredit: 600, maxTokens: 8192, vision: true },
+  "claude-opus": { label: "Claude Opus 5", transport: "anthropic", model: "anthropic/claude-opus-5", baseCredits: 1, outTokensPerCredit: 1200, maxTokens: 8192, vision: true },
+  "claude-sonnet": { label: "Claude Sonnet 5", transport: "anthropic", model: "anthropic/claude-sonnet-5", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
+  "claude-haiku": { label: "Claude Haiku 4.5", transport: "anthropic", model: "anthropic/claude-haiku-4.5", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 4096, vision: true },
+  "gpt-5": { label: "GPT-5.6 Sol", transport: "compat", model: "openai/gpt-5.6-sol", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
+  "gpt-5-mini": { label: "GPT-5.4 mini", transport: "compat", model: "openai/gpt-5.4-mini", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 8192, vision: true },
+  "gemini-pro": { label: "Gemini 3.1 Pro", transport: "compat", model: "google/gemini-3.1-pro", baseCredits: 1, outTokensPerCredit: 2500, maxTokens: 8192, vision: true },
+  "gemini-flash": { label: "Gemini 3.6 Flash", transport: "compat", model: "google/gemini-3.6-flash", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
+  "grok": { label: "Grok 4.6", transport: "compat", model: "xai/grok-4.6", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
+  // Open-weight models Cloudflare serves directly - these run on Workers AI,
+  // not the unified gateway, and need their "@cf/" ids.
+  "kimi": { label: "Kimi K3", transport: "wai", model: "@cf/moonshotai/kimi-k3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
+  "qwen": { label: "Qwen 3.5", transport: "wai", model: "@cf/qwen/qwen3.5-397b-a17b", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 },
+  "minimax": { label: "MiniMax M3", transport: "wai", model: "@cf/minimax/minimax-m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 }
 };
-// Retired keys kept resolvable so a stored ?model preference doesn't silently
-// drop the user back to standard routing. "codex" pointed at
-// openai/gpt-5.1-codex, which is no longer in Cloudflare's catalog at all.
+
 var BOT_PRO_MODEL_ALIASES = {
   "codex": "gpt-5",
   "claude-opus-4.8": "claude-opus",
@@ -425,7 +426,9 @@ async function botMediaBytes(result, field) {
 
 // Generates with a frontier provider
 async function botProImageGenerate(env, imageModel, prompt) {
-  if (!proBindingAvailable(env)) {
+  // Frontier generators are provider-hosted, so unlike the Workers AI chat
+  // models they need the gateway name as well as the binding.
+  if (!proBindingAvailable(env) || !env.AI_GATEWAY_NAME) {
     throw new Error("Frontier image models need the AI binding and AI_GATEWAY_NAME configured on the worker. Standard-tier ?image still works.");
   }
   var body = botImageRequestBody(imageModel.family, prompt);
@@ -515,21 +518,102 @@ function botProCost(m, calls, outputTokens) {
   return Math.min(cost, botProMaxCost(m) * calls);
 }
 
-function proGatewayUrl(env) {
-  if (env.AI_GATEWAY_URL) return env.AI_GATEWAY_URL;
-  if (env.AI_GATEWAY_ACCOUNT_ID) {
-    return "https://api.cloudflare.com/client/v4/accounts/" + env.AI_GATEWAY_ACCOUNT_ID +
-      "/ai/v1/chat/completions";
+// Account id + gateway name, however they were configured: explicit vars win,
+// otherwise they are read back out of AI_GATEWAY_URL.
+function proGatewayIds(env) {
+  var acct = env.AI_GATEWAY_ACCOUNT_ID || "";
+  var name = env.AI_GATEWAY_NAME || "";
+  var url = env.AI_GATEWAY_URL || "";
+  var fromGateway = /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/([^/]+)\/([^/]+)\//.exec(url);
+  if (fromGateway) {
+    if (!acct) acct = fromGateway[1];
+    if (!name) name = fromGateway[2];
   }
-  return null;
+  var fromApi = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/([^/]+)\//.exec(url);
+  if (fromApi && !acct) acct = fromApi[1];
+  return { acct: acct, name: name };
+}
+
+function proApiToken(env) {
+  return env.CF_API_TOKEN || env.AI_GATEWAY_API_TOKEN || "";
+}
+
+function proCompatEndpoints(env) {
+  var ids = proGatewayIds(env);
+  var out = [];
+  var seen = {};
+  var push = function (url, kind) {
+    if (!url || seen[url]) return;
+    seen[url] = 1;
+    out.push({ url: url, kind: kind });
+  };
+  if (ids.acct && ids.name) {
+    push("https://gateway.ai.cloudflare.com/v1/" + ids.acct + "/" + ids.name + "/compat/chat/completions", "gateway");
+  }
+  if (env.AI_GATEWAY_URL) {
+    push(env.AI_GATEWAY_URL, /^https:\/\/api\.cloudflare\.com\//.test(env.AI_GATEWAY_URL) ? "api" : "gateway");
+  }
+  if (ids.acct && proApiToken(env)) {
+    push("https://api.cloudflare.com/client/v4/accounts/" + ids.acct + "/ai/v1/chat/completions", "api");
+  }
+  return out.filter(function (e) { return e.kind !== "api" || proApiToken(env); });
+}
+
+function proCompatHeaders(env, kind) {
+  var headers = { "Content-Type": "application/json" };
+  if (kind === "api") {
+    var token = proApiToken(env);
+    if (token) headers["Authorization"] = "Bearer " + token;
+  } else if (env.AI_GATEWAY_TOKEN) {
+    headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+  }
+  return headers;
 }
 
 function proBindingAvailable(env) {
-  return !!(env.AI && typeof env.AI.run === "function" && env.AI_GATEWAY_NAME);
+  return !!(env.AI && typeof env.AI.run === "function");
 }
 
 function proConfigured(env) {
-  return !!(proBindingAvailable(env) || proGatewayUrl(env));
+  return !!(proBindingAvailable(env) || proCompatEndpoints(env).length || proAnthropicNativeUrl(env));
+}
+
+// The unified endpoint namespaces Cloudflare-hosted weights under workers-ai/,
+// so a "@cf/..." model keeps working there when the binding is unavailable.
+function proCompatSlug(modelId) {
+  return /^@cf\//.test(modelId) ? "workers-ai/" + modelId : modelId;
+}
+
+// Third-party (non-"@cf/") models reach their provider through the binding
+// only when a gateway is named — that is the hop the frontier image models
+// already ride (botProImageGenerate).
+function proBoundProviderAvailable(env) {
+  return proBindingAvailable(env) && !!env.AI_GATEWAY_NAME;
+}
+
+// Ordered transports to try for one model. The first entry is the model's
+// declared home; the rest are the routes that can still answer if that one is
+// misconfigured. Nothing is charged until a transport actually returns text,
+// so a dead route costs the user nothing.
+function proTransportPlan(env, modelId, transport) {
+  var plan = [];
+  if (transport === "wai" || /^@cf\//.test(modelId)) {
+    // Cloudflare hosts these weights: the binding needs no gateway at all.
+    if (proBindingAvailable(env)) plan.push({ kind: "bound", model: modelId });
+    plan.push({ kind: "compat", model: proCompatSlug(modelId) });
+    return plan;
+  }
+  if (transport === "anthropic" || /^anthropic\//.test(modelId)) {
+    // Native first: the OpenAI-compat translation drops Anthropic's content
+    // blocks, so a compat hop would come back empty rather than wrong.
+    if (proAnthropicNativeUrl(env)) plan.push({ kind: "anthropic", model: modelId });
+    if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
+    plan.push({ kind: "compat", model: modelId });
+    return plan;
+  }
+  if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
+  plan.push({ kind: "compat", model: modelId });
+  return plan;
 }
 
 // Normalize the model reply across transports/providers: OpenAI chat
@@ -562,7 +646,25 @@ function proNormalizeMessage(resp) {
     if (toolCalls.length) normalized.tool_calls = toolCalls;
     return normalized;
   }
-  if (typeof resp.response === "string") return { content: resp.response };
+  // Workers AI answers { response, tool_calls: [{ name, arguments }] } - the
+  // arguments arrive as an object, not the JSON string OpenAI uses.
+  if (typeof resp.response === "string" || Array.isArray(resp.tool_calls)) {
+    var out = { content: typeof resp.response === "string" ? resp.response : "" };
+    if (Array.isArray(resp.tool_calls) && resp.tool_calls.length) {
+      out.tool_calls = resp.tool_calls.map(function (tc, i) {
+        if (tc && tc.function) return tc;
+        var args = tc && tc.arguments;
+        return {
+          id: (tc && tc.id) || ("call_" + i),
+          function: {
+            name: tc && tc.name,
+            arguments: typeof args === "string" ? args : JSON.stringify(args || {})
+          }
+        };
+      });
+    }
+    return out;
+  }
   return null;
 }
 
@@ -630,8 +732,13 @@ async function proHttpChat(url, headers, body) {
         ((data.errors[0].code ? data.errors[0].code + ": " : "") + data.errors[0].message)) ||
       (raw && raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()) ||
       "";
-    throw new Error("Pro model request failed: HTTP " + res.status +
+    var err = new Error("Pro model request failed: HTTP " + res.status +
       (detail ? " — " + String(detail).slice(0, 200) : ""));
+    // The transport runner reads this to decide whether another route could
+    // still answer (a bad id / wrong credentials) or whether retrying would
+    // just burn the same rejection (quota, rate limit, refusal).
+    err.httpStatus = res.status;
+    throw err;
   }
   return proCheckedMessage(data);
 }
@@ -641,76 +748,108 @@ function proAnthropicModelId(catalogId) {
 }
 
 function proAnthropicNativeUrl(env) {
-  var acct = env.AI_GATEWAY_ACCOUNT_ID || "";
-  var name = env.AI_GATEWAY_NAME || "";
-  var fromGateway = /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/([^/]+)\/([^/]+)\//.exec(env.AI_GATEWAY_URL || "");
-  if (fromGateway) {
-    if (!acct) acct = fromGateway[1];
-    if (!name) name = fromGateway[2];
-  }
-  var fromApi = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/([^/]+)\//.exec(env.AI_GATEWAY_URL || "");
-  if (fromApi && !acct) acct = fromApi[1];
-  if (!acct || !name) return null;
-  return "https://gateway.ai.cloudflare.com/v1/" + acct + "/" + name + "/anthropic/v1/messages";
+  var ids = proGatewayIds(env);
+  if (!ids.acct || !ids.name) return null;
+  return "https://gateway.ai.cloudflare.com/v1/" + ids.acct + "/" + ids.name + "/anthropic/v1/messages";
 }
 
-async function proGatewayChat(env, modelId, messages, maxTokens, tools) {
-  if (/^anthropic\//.test(modelId)) {
-    var nativeUrl = proAnthropicNativeUrl(env);
-    if (!nativeUrl) {
-      throw new Error("Claude Pro models need AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_NAME configured on the worker (Cloudflare's OpenAI-compat translation drops Anthropic replies, so they must use the gateway's native endpoint).");
+// One attempt on one transport. Throws on failure so the runner below can
+// decide whether the next transport is worth trying.
+async function proAttempt(env, step, messages, maxTokens, tools) {
+  if (step.kind === "bound") {
+    // Anthropic speaks its own request shape even behind the binding — the
+    // OpenAI-style body is what loses its content blocks.
+    var boundReq;
+    if (/^anthropic\//.test(step.model)) {
+      boundReq = anthropicizeRequest(messages, maxTokens, tools);
+    } else {
+      boundReq = { messages: messages };
+      if (tools && tools.length) boundReq.tools = tools;
+      // OpenAI's newest models reject max_tokens in favor of this.
+      if (/^openai\//.test(step.model)) boundReq.max_completion_tokens = maxTokens;
+      else boundReq.max_tokens = maxTokens;
     }
-    var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
-    if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    if (/fable/.test(modelId)) {
-      nativeHeaders["cf-aig-zdr"] = "false";
-      if (env.ANTHROPIC_API_KEY) nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
-    }
-    var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
-    var nativeBody = Object.assign({ model: proAnthropicModelId(modelId) }, nativeReq);
-    try {
-      return await proHttpChat(nativeUrl, nativeHeaders, nativeBody);
-    } catch (e) {
-      if (/x-api-key/i.test(String((e && e.message) || "")) && proBindingAvailable(env)) {
-        var bound;
-        try {
-          bound = await env.AI.run(modelId, nativeReq, { gateway: { id: env.AI_GATEWAY_NAME } });
-        } catch (e2) {
-          throw new Error("Pro model request failed: " + String((e2 && e2.message) || e2).slice(0, 300));
-        }
-        return proCheckedMessage(bound);
-      }
-      throw e;
-    }
-  }
-
-  var req = { messages: messages };
-  if (tools && tools.length) req.tools = tools;
-  // OpenAI's newest models reject max_tokens in favor of this.
-  if (/^openai\//.test(modelId)) req.max_completion_tokens = maxTokens;
-  else req.max_tokens = maxTokens;
-
-  if (!env.AI_GATEWAY_URL && proBindingAvailable(env)) {
+    var opts = env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
     var bound;
     try {
-      bound = await env.AI.run(modelId, req, { gateway: { id: env.AI_GATEWAY_NAME } });
+      bound = await env.AI.run(step.model, boundReq, opts);
     } catch (e) {
       throw new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
     }
     return proCheckedMessage(bound);
   }
 
-  var url = proGatewayUrl(env);
-  if (!url) throw new Error("Nymbot Pro is not configured.");
-  var headers = { "Content-Type": "application/json" };
-  if (env.AI_GATEWAY_TOKEN) {
-    if (/^https:\/\/api\.cloudflare\.com\//.test(url)) {
-      headers["Authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    } else {
-      headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+  if (step.kind === "anthropic") {
+    var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
+    if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    if (/fable/.test(step.model)) {
+      nativeHeaders["cf-aig-zdr"] = "false";
+      if (env.ANTHROPIC_API_KEY) nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
+    }
+    var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
+    return proHttpChat(proAnthropicNativeUrl(env),
+      nativeHeaders,
+      Object.assign({ model: proAnthropicModelId(step.model) }, nativeReq));
+  }
+
+  var req = { messages: messages };
+  if (tools && tools.length) req.tools = tools;
+  // OpenAI's newest models reject max_tokens in favor of this.
+  if (/^openai\//.test(step.model)) req.max_completion_tokens = maxTokens;
+  else req.max_tokens = maxTokens;
+
+  var endpoints = proCompatEndpoints(env);
+  if (!endpoints.length) {
+    throw new Error("Nymbot Pro needs AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_NAME (or AI_GATEWAY_URL) configured on the worker.");
+  }
+  var lastErr = null;
+  for (var i = 0; i < endpoints.length; i++) {
+    try {
+      return await proHttpChat(endpoints[i].url,
+        proCompatHeaders(env, endpoints[i].kind),
+        Object.assign({ model: step.model }, req));
+    } catch (e) {
+      lastErr = e;
+      if (!proWorthRetrying(e)) throw e;
     }
   }
-  return proHttpChat(url, headers, Object.assign({ model: modelId }, req));
+  throw lastErr || new Error("Pro model request failed.");
+}
+
+// Retry the next route only when the failure says "this route can't serve this
+// model" - a bad slug, wrong credentials, a route that isn't wired up. A quota
+// rejection, a rate limit or a content refusal would come back identically
+// from every route, so those stop the walk and surface as-is.
+function proWorthRetrying(err) {
+  var status = err && err.httpStatus;
+  if (typeof status === "number") return status === 400 || status === 401 || status === 403 || status === 404 || status === 405;
+  // Binding/transport errors carry no status - an unknown model id is the
+  // common case there, so let the next transport have a turn.
+  return true;
+}
+
+// Runs a Pro model over its transports in order (see proTransportPlan) and
+// returns the first real reply. [proModel] is a BOT_PRO_MODELS entry; nothing
+// is billed unless this resolves, so a route that has moved costs the user
+// nothing.
+async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
+  var modelId = typeof proModel === "string" ? proModel : proModel.model;
+  var transport = typeof proModel === "string" ? "" : (proModel.transport || "");
+  var plan = proTransportPlan(env, modelId, transport);
+  if (!plan.length) throw new Error("Nymbot Pro is not configured.");
+  var errors = [];
+  for (var i = 0; i < plan.length; i++) {
+    try {
+      return await proAttempt(env, plan[i], messages, maxTokens, tools);
+    } catch (e) {
+      var message = String((e && e.message) || e);
+      errors.push(plan[i].kind + ": " + message);
+      if (!proWorthRetrying(e)) throw e;
+    }
+  }
+  // Every route rejected it. Name them all - "HTTP 401" alone doesn't say
+  // which credential is missing when two transports are in play.
+  throw new Error("Pro model request failed on every route (" + errors.join(" | ").slice(0, 400) + ")");
 }
 
 // A reply with no text and no tool calls means we failed to recognize the
@@ -757,8 +896,8 @@ function proMessageWithThinking(msg) {
   return text;
 }
 
-async function runProGatewayModel(env, modelId, messages, maxTokens) {
-  var r = await proGatewayChat(env, modelId, messages, maxTokens, null);
+async function runProGatewayModel(env, proModel, messages, maxTokens) {
+  var r = await proGatewayChat(env, proModel, messages, maxTokens, null);
   return { text: proMessageWithThinking(r.msg), outputTokens: r.outputTokens };
 }
 
@@ -1219,7 +1358,7 @@ async function runProGitChat(env, proModel, cfg, messages) {
   while (true) {
     calls++;
     var lastTurn = calls >= BOT_GIT_MAX_TURNS;
-    var r = await proGatewayChat(env, proModel.model, convo, proModel.maxTokens, lastTurn ? null : tools);
+    var r = await proGatewayChat(env, proModel, convo, proModel.maxTokens, lastTurn ? null : tools);
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
     var toolCalls = msg && Array.isArray(msg.tool_calls) ? msg.tool_calls.slice(0, BOT_GIT_MAX_TOOLS_PER_TURN) : [];
@@ -1281,12 +1420,14 @@ function buildNymbotPmSystemPrompt(proModel) {
   var tierSection = proModel ? [
     "=== PRO MODE (USER-SELECTED MODEL) ===",
     "This user has Nymbot Pro and chose " + proModel.label + " — every reply in this chat is generated by that frontier model. You ARE " + proModel.label + " speaking as Nymbot; if the user asks which model they're talking to, tell them it's " + proModel.label + ". Don't name the gateway infrastructure used to reach it.",
+    "MODEL IDENTITY IS NOT A GUESS: " + proModel.label + " is the model actually serving this reply — it was selected by the user and routed here. Never answer with a different model name, a different version number, or a name you infer from your training data. If you would have said anything other than \"" + proModel.label + "\", you are wrong: say " + proModel.label + ".",
     "Pricing: " + proModel.label + " replies cost " + proModel.baseCredits + " Pro credit" + (proModel.baseCredits === 1 ? "" : "s") + (proModel.outTokensPerCredit ? " plus 1 more per ~" + proModel.outTokensPerCredit + " tokens of reply length (max " + botProMaxCost(proModel) + " for a maximum-length reply) — short answers cost the base, long ones scale" : " flat") + ". Pro credits are a separate balance from standard credits (1 Pro credit = " + BOT_PRO_SATS_PER_CREDIT + " sats vs " + BOT_SATS_PER_CREDIT + " sats for a standard credit) because frontier models cost more to run. ?buy opens the purchase flow with a Standard/Pro switch.",
     "The user can switch models anytime with ?model <name> (e.g. ?model claude-opus), or type ?model off to drop back to standard multi-model routing which spends standard credits.",
     "GIT REPOS: Pro users can connect a repository with ?git — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg and self-hosted) — so you can read the codebase and, when writes are enabled, commit, branch, and open pull/merge requests. When a repo is connected, a GIT REPO MODE section appears below with your tools; without it you have NO repo access — point curious users at ?git."
   ] : [
     "=== PREMIUM MULTI-MODEL ROUTING ===",
     "Each message is auto-classified (coding, reasoning/math, creative writing, translation, or general chat) and routed to the best AI model for that task. The free public-channel bot uses one general model; this private chat is sharper because of routing. Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — say 'AI models' or 'large language models' instead.",
+    "NO PINNED MODEL HERE: this reply is coming from standard routing, so there is no user-selected frontier model. If the user asks which model they're talking to, say Nymbot routes each message to the model that suits it and that ?model pins a specific one on Pro — never claim to be Claude, GPT, Gemini, Grok, or any other named model, and never say a model is 'selected' when none is.",
     "Pricing: coding and reasoning queries cost 2 credits each (they use larger, more expensive models). General chat, creative writing, and translation cost 1 credit each. If a user asks why some queries cost more, explain it's because those routes use bigger models.",
     "NYMBOT PRO: An even higher tier exists — ?model lets the user pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.6 Sol, GPT-5.4 mini, Gemini 3.1 Pro, Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5, MiniMax M3) for every reply, paid with separate Pro credits (?buy has a Pro switch). Pro can also connect a git repo (?git — GitHub, GitLab, or Gitea/Codeberg) so replies read the user's actual code and can even commit, branch, and open PRs. If a user wants a specific named model, stronger answers, or repo-aware coding help, point them at ?model and ?git."
   ];
@@ -1540,7 +1681,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       var ghResult = await runProGitChat(context.env, proModel, ghConfig, messages);
       return { reply: sanitizeBotResponse(ghResult.reply, true), taskType: taskType, modelCalls: ghResult.modelCalls, outputTokens: ghResult.outputTokens };
     }
-    var proResult = await runProGatewayModel(context.env, proModel.model, messages, proModel.maxTokens);
+    var proResult = await runProGatewayModel(context.env, proModel, messages, proModel.maxTokens);
     return { reply: sanitizeBotResponse(proResult.text, true), taskType: taskType, outputTokens: proResult.outputTokens };
   }
   var pmModel = BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general;

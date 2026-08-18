@@ -56,30 +56,6 @@ const ALLOWED_APP_ORIGINS = new Set([
   'https://nymchat.app',
 ]);
 
-const RATE_LIMITS = { media: 600, heavy: 120 };
-const HEAVY_ACTIONS = new Set(['unfurl', 'json', 'translate', 'zap-verify', 'upload', 'mirror']);
-const rateBuckets = new Map();
-
-function checkRateLimit(request, action) {
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  const bucket = HEAVY_ACTIONS.has(action) ? 'heavy' : 'media';
-  const limit = RATE_LIMITS[bucket];
-  const key = `${ip}:${bucket}`;
-  const now = Date.now();
-  let entry = rateBuckets.get(key);
-  if (!entry || now - entry.windowStart >= 60000) {
-    entry = { count: 0, windowStart: now };
-    rateBuckets.set(key, entry);
-  }
-  entry.count++;
-  if (rateBuckets.size > 10000) {
-    for (const [k, v] of rateBuckets) {
-      if (now - v.windowStart >= 60000) rateBuckets.delete(k);
-    }
-  }
-  return entry.count <= limit;
-}
-
 function originAllowed(request) {
   const origin = request.headers.get('Origin');
   if (!origin) return true; // native clients / same-origin GETs send none
@@ -100,11 +76,6 @@ export async function onRequest(context) {
 
   if (!originAllowed(request)) {
     return jsonResponse({ error: 'Origin not allowed' }, 403);
-  }
-  if (!checkRateLimit(request, reqAction)) {
-    const r = jsonResponse({ error: 'Rate limit exceeded' }, 429);
-    r.headers.set('Retry-After', '60');
-    return r;
   }
 
   // Handle CORS preflight

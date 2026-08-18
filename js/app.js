@@ -3933,10 +3933,10 @@ async function saveSettings() {
             localStorage.setItem('nym_swipe_threshold', String(t));
         }
     }
-    if (!nym.settings.swipeReactEmoji) {
-        nym.settings.swipeReactEmoji = '❤️';
-        localStorage.setItem('nym_swipe_react_emoji', '❤️');
-    }
+    // No default is materialised here on Save: writing ❤️ into localStorage
+    // would turn "never picked one" into a real pick, which then publishes and
+    // overwrites the emoji chosen on another device. The live default lives in
+    // the loader (`localStorage.getItem(...) || '❤️'`) instead.
 
     const tiRaw = document.getElementById('typingIndicatorsSelect').value;
     const typingIndicatorsScope = SAVE_INDICATOR_SCOPES.includes(tiRaw) ? tiRaw : 'everywhere';
@@ -6445,6 +6445,15 @@ async function applyNostrSettingsAdditive(s) {
     }
 }
 
+const SWIPE_REACT_SHORTCODE_RE = /^:[A-Za-z0-9_]{1,48}:$/;
+
+const SWIPE_REACT_TEXTISH_RE = /[A-Za-z0-9\s]/;
+function isValidSwipeReactEmoji(v) {
+    if (typeof v !== 'string' || !v.length) return false;
+    if (SWIPE_REACT_SHORTCODE_RE.test(v)) return true;
+    return v.length <= 16 && !SWIPE_REACT_TEXTISH_RE.test(v);
+}
+
 async function applyNostrSettings(s) {
     if (!s || typeof s !== 'object') return;
     nym._applyRemoteDepth = (nym._applyRemoteDepth || 0) + 1;
@@ -6587,7 +6596,7 @@ async function applyNostrSettings(s) {
         nym.settings.swipeThreshold = s.swipeThreshold;
         localStorage.setItem('nym_swipe_threshold', String(s.swipeThreshold));
     }
-    if (typeof s.swipeReactEmoji === 'string' && s.swipeReactEmoji.length > 0 && s.swipeReactEmoji.length <= 8) {
+    if (isValidSwipeReactEmoji(s.swipeReactEmoji)) {
         nym.settings.swipeReactEmoji = s.swipeReactEmoji;
         localStorage.setItem('nym_swipe_react_emoji', s.swipeReactEmoji);
     }
