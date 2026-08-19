@@ -1254,6 +1254,11 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                   fullTimestamp: formatFullTimestamp(message.dateTime,
                       settings.timeFormat, settings.dateFormat),
                   fontSize: 12,
+                  powEventId: message.id,
+                  powTarget: message.powTarget,
+                  // Public channel messages only: PM/group rows are
+                  // gift-wrapped and carry no mined work.
+                  powApplies: !message.isPM && !message.isGroup,
                 ),
                 // `.crypto-lock-irc`: the verification lock sits inside
                 // `.message-time` after the clock (PM/group only).
@@ -1756,6 +1761,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         // (showTimestampPopup); hover tints it `--primary`
         // (`.clickable-timestamp:hover`).
         _TimestampText(
+          powEventId: message.id,
+          powTarget: message.powTarget,
+          powApplies: !message.isPM && !message.isGroup,
           label: formatRelativeTime(message.dateTime),
           fullTimestamp: formatFullTimestamp(
               message.dateTime, settings.timeFormat, settings.dateFormat),
@@ -3583,12 +3591,26 @@ class _TimestampText extends StatefulWidget {
     required this.fullTimestamp,
     required this.fontSize,
     this.height,
+    this.powEventId,
+    this.powTarget,
+    this.powApplies = false,
   });
 
   final String label;
   final String fullTimestamp;
   final double fontSize;
   final double? height;
+
+  /// The event id whose leading zero bits are the work actually proven.
+  final String? powEventId;
+
+  /// NIP-13 target from the event's `nonce` tag; null means no tag at all.
+  final int? powTarget;
+
+  /// Whether proof-of-work is meaningful for this row. PMs and group messages
+  /// are gift-wrapped and never mined, so the section is omitted for them
+  /// rather than reported as "none", which would read as a fault.
+  final bool powApplies;
 
   @override
   State<_TimestampText> createState() => _TimestampTextState();
@@ -3597,6 +3619,68 @@ class _TimestampText extends StatefulWidget {
 class _TimestampTextState extends State<_TimestampText> {
   bool _hover = false;
   OverlayEntry? _popup;
+
+  /// The proof-of-work line for the popup, or nothing when PoW does not apply.
+  ///
+  /// Every message this app sends to a public channel is mined — the send path
+  /// floors at [kNymchatPowFloor] (16 bits) even with the PoW setting off — so
+  /// the bits are a useful signal that a message came from a real client rather
+  /// than a spam bot. A message with NO nonce tag did no work: leading zeros
+  /// happen by chance (1 in 2^n), so the tag, not the bits, is what shows the
+  /// sender tried.
+  List<Widget> _powRows(NymColors c) {
+    if (!widget.powApplies) return const [];
+    final target = widget.powTarget;
+    final label = Text(
+      tr('Proof-of-work'),
+      softWrap: false,
+      style: TextStyle(color: c.textDim, fontSize: 12),
+    );
+
+    late final Widget value;
+    if (target == null) {
+      value = Text(
+        tr('None'),
+        softWrap: false,
+        style: TextStyle(color: c.textDim, fontSize: 12),
+      );
+    } else {
+      final bits = powBitsForId(widget.powEventId);
+      final short = target > 0 && bits < target;
+      final text = target > 0
+          ? (short
+              ? tr('{bits} bits · target {target} (below target)',
+                  {'bits': bits, 'target': target})
+              : tr('{bits} bits · target {target}',
+                  {'bits': bits, 'target': target}))
+          : tr('{bits} bits', {'bits': bits});
+      value = Text(
+        text,
+        softWrap: false,
+        style: TextStyle(
+          // A message that fell short of its own target is shown as such
+          // rather than quietly rounded up.
+          color: short ? c.textDim : c.primary,
+          fontSize: 12,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      );
+    }
+
+    return [
+      Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Divider(height: 1, thickness: 1, color: c.glassBorder),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [label, const SizedBox(width: 8), value],
+        ),
+      ),
+    ];
+  }
 
   @override
   void dispose() {
@@ -3675,11 +3759,19 @@ class _TimestampTextState extends State<_TimestampText> {
                                 color: Color(0x0DFFFFFF), spreadRadius: 1),
                           ],
                   ),
-                  // `.timestamp-popup-body`: 13px --text, nowrap.
-                  child: Text(
-                    widget.fullTimestamp,
-                    softWrap: false,
-                    style: TextStyle(color: c.text, fontSize: 13),
+                  // `.timestamp-popup-body`: 13px --text, nowrap, with the
+                  // proof-of-work detail beneath it.
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.fullTimestamp,
+                        softWrap: false,
+                        style: TextStyle(color: c.text, fontSize: 13),
+                      ),
+                      ..._powRows(c),
+                    ],
                   ),
                 ),
               ),

@@ -1049,16 +1049,36 @@ class ApiClient {
   /// GET the geo relay list -> `[{url,lat,lng}]`. Filters out non-finite coords
   /// (relays.js:20). Returns an empty list on a non-200 so the caller can fall
   /// back to the bitchat CSV.
-  Future<List<GeoRelay>> geoRelays() async {
+  Future<List<GeoRelay>> geoRelays() async =>
+      (await geoRelayDirectories()).upstream;
+
+  /// GET both geo-relay directories the proxy serves.
+  ///
+  /// `upstream` is the georelays CSV bitchat-android reads; `vetted` is the
+  /// validator-gated copy inside the bitchat repo that bitchat iOS reads. They
+  /// have diverged, and each client picks from its own, so both are needed to
+  /// reach either population. `vetted` is empty against an older proxy build.
+  Future<({List<GeoRelay> upstream, List<GeoRelay> vetted})>
+      geoRelayDirectories() async {
     final u = geoRelaysUrl();
     final res = await _client.get(Uri.parse(u), headers: _headers());
     _trackApiData('geo-relays',
         sent: _bodyLen(u), recv: _bodyLen(res.bodyBytes));
-    if (res.statusCode != 200) return const [];
+    const empty = (upstream: <GeoRelay>[], vetted: <GeoRelay>[]);
+    if (res.statusCode != 200) return empty;
     final data = jsonDecode(_utf8Body(res));
-    if (data is! Map || data['relays'] is! List) return const [];
+    if (data is! Map || data['relays'] is! List) return empty;
+    return (
+      upstream: _parseGeoRelayList(data['relays']),
+      vetted: _parseGeoRelayList(data['vetted']),
+    );
+  }
+
+  /// Filters out non-finite coords (relays.js:20).
+  static List<GeoRelay> _parseGeoRelayList(Object? raw) {
+    if (raw is! List) return const [];
     final out = <GeoRelay>[];
-    for (final r in data['relays'] as List) {
+    for (final r in raw) {
       if (r is! Map) continue;
       final url = r['url'];
       final lat = r['lat'];

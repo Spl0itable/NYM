@@ -102,6 +102,7 @@ class Message {
     this.localMediaName,
     this.viaMesh = false,
     this.isBot = false,
+    this.powTarget,
     this.thinking,
     this.optimistic = false,
     this.spamGated = false,
@@ -182,6 +183,17 @@ class Message {
   bool viaMesh;
 
   bool isBot;
+
+  /// NIP-13 difficulty the sender COMMITTED to, from the event's `nonce` tag,
+  /// or null when the event carried no nonce tag at all.
+  ///
+  /// Presence of the tag is what separates "mined" from "never mined": leading
+  /// zero bits on an id happen by chance (1 in 2^n), so the bits alone cannot
+  /// show a sender did any work. Messages from other Nostr clients have no tag.
+  /// The work actually PROVEN is recomputed from [id] on demand
+  /// ([powBitsForId]) rather than trusted from the tag. Session-local — the
+  /// timestamp popup recomputes it, so it is not serialised.
+  int? powTarget;
 
   /// Nymbot reasoning block (collapsed "💭 Reasoning").
   String? thinking;
@@ -343,6 +355,30 @@ bool _hasRealMsTag(Message m) {
 
 /// Ordering comparator mirroring `_compareMessages`: primary created_at (sec);
 /// secondary `ms` only when both carry a real ms tag; tertiary seq.
+/// Leading zero BITS of an event id — the work actually proven (NIP-13).
+///
+/// Returns 0 for anything that is not a 64-char hex id (PM/group rows are keyed
+/// by a rumor id that carries no mined work, and optimistic rows have no id
+/// yet).
+int powBitsForId(String? id) {
+  if (id == null || id.length != 64) return 0;
+  var bits = 0;
+  for (var i = 0; i < id.length; i++) {
+    final nibble = int.tryParse(id[i], radix: 16);
+    if (nibble == null) return 0; // not hex — not an event id
+    if (nibble == 0) {
+      bits += 4;
+      continue;
+    }
+    // Leading zeros within this nibble: 8->0, 4->1, 2->2, 1->3.
+    if (nibble >= 8) return bits;
+    if (nibble >= 4) return bits + 1;
+    if (nibble >= 2) return bits + 2;
+    return bits + 3;
+  }
+  return bits;
+}
+
 int compareMessages(Message a, Message b) {
   if (a.createdAt != b.createdAt) return a.createdAt - b.createdAt;
   if (_hasRealMsTag(a) && _hasRealMsTag(b)) {

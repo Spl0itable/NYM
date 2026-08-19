@@ -421,6 +421,9 @@ class NostrController {
       final settings = _ref.read(settingsProvider.notifier);
       appSpamFilterEnabled = settings.spamFilterEnabled;
       appSpamFilterAggressive = settings.spamFilterAggressive;
+      // The inbound PoW exclusion threshold. Unlike the spam flags this one DOES
+      // have settings-modal UI, so it is refreshed on save too (_flushSettingsSync).
+      appPowFilterBits = pow.normalizePowDifficulty(settings.powDifficulty);
 
       // The active pubkey scopes the per-identity image-blur read
       // (`nym_image_blur_<pubkey>` first, then the global key —
@@ -748,6 +751,12 @@ class NostrController {
     }
     final parsed = <NostrEvent>[];
     for (final raw in rows) {
+      // D1 archives EVERY peer's vouch list under this one pseudo-channel, so
+      // the cohort grows with the whole network rather than with anything this
+      // user did — a real PWA trace showed ~107k rows. Verifying and
+      // re-ingesting that many is unbounded work; live relay vouches still
+      // expand the graph, so a cap only slows discovery.
+      if (parsed.length >= _kVouchD1MaxEvents) break;
       try {
         final ev = NostrEvent.fromJson(raw);
         if (ev.kind != EventKind.appData) continue;
@@ -777,11 +786,25 @@ class NostrController {
     if (valid.isEmpty) return;
     // Coalesce the fixpoint expansion's per-vouch notifies into one rebuild.
     _ref.read(appStateProvider.notifier).runBatched(() {
+      // Each vouch is ingested at most ONCE. _ingestVouch drops any vouch whose
+      // author is not already trusted, and applying an accepted one twice is
+      // idempotent (it is a set union), so re-scanning the whole cohort on
+      // every pass was O(20 x N) for no added trust. Tracking what has been
+      // applied keeps the fixpoint identical at a fraction of the work.
+      final applied = <int>{};
       var changed = true;
       var guard = 0;
       while (changed && guard++ < 20) {
         final before = _ref.read(appStateProvider).nymchatPubkeys.length;
-        for (final ev in valid) {
+        for (var i = 0; i < valid.length; i++) {
+          if (applied.contains(i)) continue;
+          final ev = valid[i];
+          // Not rooted yet — leave it for a later pass, once its author may
+          // have become trusted.
+          if (!_ref.read(appStateProvider).nymchatPubkeys.contains(ev.pubkey)) {
+            continue;
+          }
+          applied.add(i);
           try {
             _ingestVouch(ev);
           } catch (_) {}
@@ -790,6 +813,10 @@ class NostrController {
       }
     });
   }
+
+  /// Hard cap on how much of the D1 vouch archive one rebuild ingests.
+  /// Mirrors the PWA's `VOUCH_D1_MAX_EVENTS` (nostr-core.js).
+  static const int _kVouchD1MaxEvents = 5000;
 
   /// Max number of per-channel D1 archive restores in flight at once. The PWA
   /// coalesces the whole set into ONE `channel-get` (channels.js:1123); here
@@ -2495,6 +2522,51 @@ class NostrController {
   /// section additionally takes the replace-style apply when newer than the
   /// per-section applied ts + stored sync ts — the PWA never prompts for its
   /// own sections.
+  /// A stable id for THIS client instance, so a device ignores the echo of its
+  /// own ping. Process-scoped: a relaunch is a new instance, which at worst
+  /// costs one redundant D1 read.
+  String? _syncInstanceIdCache;
+  String get _syncInstanceId =>
+      _syncInstanceIdCache ??= '${Random().nextInt(1 << 32).toRadixString(36)}'
+          '${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+
+  int _lastSyncPingTs = 0;
+  Timer? _syncPingTimer;
+
+  /// Handles a settings-changed ping from one of our other devices.
+  ///
+  /// The ping is only a doorbell: D1 holds the authoritative values (the sender
+  /// wrote them before pinging), so this pulls from there rather than trusting
+  /// anything in the ping body. Three guards: our OWN ping is ignored (every
+  /// device sees its own wrap come back), a ping no newer than the last is
+  /// ignored so relay backlog on reconnect cannot re-trigger an applied change,
+  /// and pulls are debounced so a burst collapses into one read.
+  void _onSettingsChangedPing(Map<String, dynamic> ping, int rumorTs) {
+    final src = ping['src'];
+    if (src is String && src == _syncInstanceId) return;
+
+    final rawTs = ping['ts'];
+    final ts = rawTs is num ? rawTs.toInt() : rumorTs;
+    if (ts != 0 && ts <= _lastSyncPingTs) return;
+    _lastSyncPingTs = ts;
+
+    _syncPingTimer?.cancel();
+    _syncPingTimer = Timer(const Duration(milliseconds: 1200), () {
+      _syncPingTimer = null;
+      unawaited(_pullSettingsAfterPing());
+    });
+  }
+
+  Future<void> _pullSettingsAfterPing() async {
+    try {
+      final sync = _storageSync;
+      if (sync == null) return;
+      await _mergeRemoteSettings(sync);
+    } catch (_) {
+      // A failed pull leaves the next scheduled read to catch up.
+    }
+  }
+
   void _onSettingsRumor(Map<String, dynamic> rumor, GiftWrapUnwrapped u) {
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
     final tags = _tags(rumor);
@@ -2510,6 +2582,22 @@ class NostrController {
 
     final isOwn = self.isNotEmpty && senderPubkey == self;
     if (!isOwn) return;
+
+    // Cross-device signal: another of our devices saved settings and wrote
+    // them to D1. Carries no settings content — pull the authoritative values.
+    if (dTag == 'nymchat-sync-ping') {
+      try {
+        final raw = jsonDecode(rumor['content'] as String? ?? '');
+        if (raw is Map) {
+          _onSettingsChangedPing(Map<String, dynamic>.from(raw),
+              (rumor['created_at'] as num?)?.toInt() ?? 0);
+        }
+      } catch (_) {
+        // Malformed ping — ignore.
+      }
+      return;
+    }
+
     Map<String, dynamic> decoded;
     try {
       final raw = jsonDecode(rumor['content'] as String? ?? '');
@@ -9347,6 +9435,9 @@ class NostrController {
 
   Future<void> _flushSettingsSync(StorageSync sync) async {
     try {
+      // Keep the inbound PoW filter in step with the saved setting.
+      appPowFilterBits = pow.normalizePowDifficulty(
+          _ref.read(settingsProvider.notifier).powDifficulty);
       // The default landing channel is KV-only (not a typed Settings field), so
       // thread it in explicitly so it rides the `channels` section like the PWA
       // (`pinnedLandingChannel`, settings.js:21,116). SETTINGS-SYNC seam.
@@ -9367,6 +9458,11 @@ class NostrController {
           'leftGroups': appState.leftGroups.toList(),
           'leftGroupTimes': Map<String, dynamic>.from(appState.leftGroupTimes),
         },
+        // Orders userJoinedChannels for the channels-section trimmer, which
+        // runs only when the payload would otherwise be too large to publish
+        // at all — least-recently-active channels go first.
+        channelActivity: Map<String, int>.from(
+            _ref.read(appStateProvider).channelLastActivity),
       );
       // N26 outbound: publish the cross-device notification read-state wrap (the
       // `nymchat-notifications` category) so a notification read/dismissed here

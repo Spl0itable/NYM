@@ -92,6 +92,7 @@ class LocalizationService {
 
   Timer? _debounce;
   bool _flushing = false;
+  int _inFlight = 0;
 
   /// Sources whose translation failed every in-line attempt, parked for a
   /// delayed retry round so a transient proxy hiccup doesn't leave them stuck
@@ -280,6 +281,16 @@ class LocalizationService {
       _primePending.isNotEmpty ||
       _sweepPending.isNotEmpty;
 
+  /// True while a translation pass is running or still queued. Drives the
+  /// sidebar's progress row.
+  ///
+  /// Deliberately does NOT read [_flushing]: the per-chunk notify fires from
+  /// inside the drain loop, so this has to read false on that last notify.
+  /// Adding a notify after the flag drops instead would rebuild the tree with
+  /// nothing in flight, and every failed-but-visible string would re-queue
+  /// itself and start another pass — a loop that starves the sweep lane.
+  bool get isTranslating => isActive && (_anyPending || _inFlight > 0);
+
   void _scheduleFlush() {
     if (_flushing || !_anyPending) return;
     _debounce?.cancel();
@@ -307,7 +318,12 @@ class LocalizationService {
         final chunk = queue.take(_chunkSize).toList();
         queue.removeAll(chunk);
         chunk.forEach(_requested.add);
-        await _mapPooled(chunk, 8, _translateOne);
+        _inFlight += chunk.length;
+        try {
+          await _mapPooled(chunk, 8, _translateOne);
+        } finally {
+          _inFlight -= chunk.length;
+        }
         if (lang != _lang) return; // language switched mid-flight
         _persist();
         onChanged?.call();

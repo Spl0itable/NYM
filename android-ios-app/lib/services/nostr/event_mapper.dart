@@ -112,7 +112,26 @@ class EventMapper {
       isHistorical: isHistorical,
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer?.toJson(),
+      // NIP-13 target the sender committed to, or null when there is no nonce
+      // tag at all — which is how the timestamp popup tells "no proof-of-work"
+      // (another client) from "mined to N bits". The work actually proven is
+      // recomputed from the id via [powBitsForId], never trusted from the tag.
+      powTarget: _powTarget(e),
     );
+  }
+
+  /// The difficulty a NIP-13 `nonce` tag commits to, or null when the event
+  /// carries no nonce tag. A tag with an unparseable/absent target still means
+  /// "mined", so it maps to 0 rather than null.
+  static int? _powTarget(NostrEvent e) {
+    for (final t in e.tags) {
+      if (t.isNotEmpty && t[0] == 'nonce') {
+        if (t.length < 3) return 0;
+        final target = int.tryParse(t[2]);
+        return (target != null && target > 0) ? target : 0;
+      }
+    }
+    return null;
   }
 
   /// Parses a kind-0 profile event into a [UserProfile].

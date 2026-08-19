@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -8,6 +9,9 @@ import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../state/settings_provider.dart';
 import '../common/nym_avatar.dart' show proxiedAvatarUrl;
+import 'package:http/http.dart' as http;
+
+import 'wallpaper_cache.dart';
 
 /// The kind of fill a wallpaper type produces. Mirrors `applyWallpaper`:
 /// `pattern` is one of the 7 built-in tiled vector patterns, `none` paints
@@ -56,6 +60,21 @@ class WallpaperPattern {
 /// tinted by the active `--primary` (`context.nym.primary`). Driven by
 /// `settings.wallpaperType`; supports a custom uploaded image
 /// (`nym_wallpaper_custom_url`) overlaid by a dark/light scrim.
+/// Fetches the wallpaper once, through the media proxy, and stores it locally
+/// so later launches paint from disk. Fire-and-forget: the current frame is
+/// already painting from the network, and the benefit lands on the next launch.
+void _warmWallpaperCache(String url) {
+  unawaited(WallpaperCache.resolve(url, fetch: (u) async {
+    try {
+      final res = await http.get(Uri.parse(proxiedAvatarUrl(u) ?? u));
+      if (res.statusCode != 200 || res.bodyBytes.isEmpty) return null;
+      return res.bodyBytes;
+    } catch (_) {
+      return null;
+    }
+  }));
+}
+
 class WallpaperLayer extends ConsumerWidget {
   const WallpaperLayer({super.key});
 
@@ -91,11 +110,27 @@ class WallpaperLayer extends ConsumerWidget {
       // (settings `_WallpaperPicker`) persists a locally-picked file's absolute
       // path instead, so a value that isn't an http(s) URL is an on-device file.
       final isRemote = url.startsWith('http://') || url.startsWith('https://');
-      final ImageProvider image = isRemote
-          // Route the remote custom wallpaper through the media proxy (hide IP /
-          // bypass hotlink-403), like every other remote image.
-          ? NetworkImage(proxiedAvatarUrl(url) ?? url)
-          : FileImage(File(url));
+
+      // Prefer the locally cached copy. The url is the wallpaper's synced
+      // identity, but painting from it means a third-party request on every
+      // cold start (Flutter's ImageCache is memory-only). WallpaperCache keeps
+      // the bytes on disk — written at upload time, or fetched once on a device
+      // that got the url from settings sync — so this normally paints offline.
+      final ImageProvider image;
+      if (!isRemote) {
+        image = FileImage(File(url));
+      } else {
+        final local = WallpaperCache.cached(url);
+        if (local != null) {
+          image = FileImage(local);
+        } else {
+          // Not cached yet: paint from the proxy this once (hides the IP and
+          // dodges hotlink-403s, like every other remote image) and warm the
+          // cache so subsequent launches are local.
+          image = NetworkImage(proxiedAvatarUrl(url) ?? url);
+          _warmWallpaperCache(url);
+        }
+      }
       return IgnorePointer(
         child: DecoratedBox(
           decoration: BoxDecoration(

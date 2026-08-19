@@ -14,6 +14,7 @@ import '../../features/channels/channel_manager.dart';
 import '../../features/globe/geohash_explorer.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/i18n/localization_service.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/identity/panic_overlay.dart';
@@ -908,6 +909,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           const SizedBox(height: 10),
           _ConnectionStatusIndicator(connectedCount: connectedRelays),
           _MeshStatusIndicator(onItemSelected: widget.onItemSelected),
+          const _TranslatingIndicator(),
         ],
       ),
     );
@@ -1145,6 +1147,46 @@ class _ConnectionStatusIndicator extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Progress row shown while the app-wide UI translation sweep is running.
+class _TranslatingIndicator extends ConsumerWidget {
+  const _TranslatingIndicator();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(i18nVersionProvider);
+    if (!LocalizationService.instance.isTranslating) {
+      return const SizedBox.shrink();
+    }
+    final c = context.nym;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 11,
+            height: 11,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(c.primary),
+              backgroundColor: c.textDim.withValues(alpha: 0.25),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              tr('Translating...'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: c.textDim, fontSize: 12),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -14,6 +14,21 @@ import 'schnorr.dart';
 /// self-attestation) and gate un-attested spam.
 const int kNymchatPowFloor = 16;
 
+/// Clamps a stored PoW-filter difficulty onto the options the UI offers.
+///
+/// This value FILTERS INBOUND messages; it does not set what we send, which is
+/// always at least [kNymchatPowFloor]. The old 8- and 12-bit options were dead
+/// — every Nymchat message already clears them, and a client doing no work at
+/// all is not caught by a threshold that low — so they were retired and a value
+/// stored from them is lifted to 16 rather than selecting nothing.
+int normalizePowDifficulty(int? raw) {
+  final n = raw ?? 0;
+  if (n <= 0) return 0; // Disabled
+  if (n <= 16) return 16; // 8 / 12 -> the real floor
+  if (n <= 20) return 20;
+  return 24;
+}
+
 /// Counts the number of leading zero bits in the 32-byte event id [idHex].
 int getPow(String idHex) {
   var count = 0;

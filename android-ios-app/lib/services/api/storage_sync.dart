@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart' show sha256;
 
@@ -524,6 +525,7 @@ class StorageSync {
     String? pinnedLandingChannelJson,
     Map<String, dynamic>? seenCalls,
     Map<String, dynamic>? extras,
+    Map<String, int>? channelActivity,
   }) async {
     final sent = <String>{};
     final sections = buildSectionPayloads(
@@ -542,11 +544,51 @@ class StorageSync {
       final ok = await _publishCategoryWrap(
         Map<String, dynamic>.of(entry.value),
         sectionCategory(entry.key),
-        trim: entry.key == 'channels' ? _trimChannelsReadState : null,
+        trim: entry.key == 'channels'
+            ? _channelsTrimmer(channelActivity ?? const {})
+            : null,
       );
       if (ok) sent.add(entry.key);
     }
+    await publishSettingsChangedPing(sent.toList());
     return sent;
+  }
+
+  /// A stable id for THIS client instance, so a device ignores the echo of its
+  /// own ping.
+  String? _syncInstanceIdCache;
+  String get syncInstanceId =>
+      _syncInstanceIdCache ??= '${Random().nextInt(1 << 32).toRadixString(36)}'
+          '${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+
+  /// Announces "settings changed, re-read D1" to our other devices.
+  ///
+  /// The settings wraps themselves are not a reliable live cross-device channel
+  /// — the web client does not even subscribe to them when the relay proxy is
+  /// in use, because D1 is the source of truth there — so a device only picked
+  /// up another device's change on its next D1 read.
+  ///
+  /// This ping rides the critical kind-1059 `#p:self` subscription that is
+  /// already open, and deliberately carries NO settings content: just which
+  /// sections moved and who sent it. That keeps it a few hundred bytes, well
+  /// clear of the wrap size limits the section blobs have to fight with, and
+  /// the receiver pulls the authoritative values from D1 — already written by
+  /// the section publishes above. It is NOT stored as a D1 category: it is a
+  /// notification, not a settings blob.
+  Future<void> publishSettingsChangedPing(List<String> sections) async {
+    if (sections.isEmpty) return;
+    final publisher = _syncWrapPublisher;
+    if (publisher == null) return;
+    try {
+      await publisher({
+        'src': syncInstanceId,
+        'sections': sections,
+        'ts': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, 'nymchat-sync-ping');
+    } catch (_) {
+      // Best-effort: a failed ping just means the other device waits for its
+      // next D1 read, which is the behaviour we had before.
+    }
   }
 
   /// Relay-side NIP-59 `nym-sync` publisher (`_publishWrappedNostrEvent`,
@@ -570,46 +612,152 @@ class StorageSync {
   /// re-written/re-wrapped (`_publishedSectionJson`, settings.js:385-388).
   final Map<String, String> _publishedSectionJson = {};
 
-  /// The payload is encrypted twice (seal kind 13 → gift wrap kind 1059) and
-  /// base64 expands it ~1.9x; bound the inner rumor so the wrapped event stays
-  /// under common ~64KiB relay caps (`_publishCategoryWrap`, settings.js:352-358).
+  // --- NIP-44 size model ----------------------------------------------------
+  //
+  // A settings blob is encrypted TWICE (rumor → seal kind 13 → gift wrap kind
+  // 1059), and NIP-44 pads each layer to a power-of-two-derived chunk before
+  // base64. That padding is a STEP FUNCTION, not the smooth ~1.95x factor this
+  // assumed, and the steps are what broke publishing: a 30,000-byte rumor lands
+  // on the 32768 pad, which pushes the seal onto the 49152 pad, producing a
+  // 65,958-byte wrapped event — over the 65,000 relay gate, so it was dropped.
+  // The old bound allowed 30,769 and history shards were budgeted at 30,000, so
+  // they fell squarely in the rejected zone and silently never synced.
+  //
+  // Modelling the padding exactly puts the real cliff at 28,672 bytes, with
+  // ~10KB of headroom below it (28,672 wraps to 55,034), so the bound tolerates
+  // the overhead estimates being a little off.
   static const int _rumorOverhead = 256;
-  static const int _maxWrappedBytes = 60000;
-  static final int _maxRumorBytes = (_maxWrappedBytes / 1.95).floor();
+  static const int _relayEventLimit = 65000;
+
+  /// NIP-44 v2 `calc_padded_len`.
+  static int nip44PaddedLen(int len) {
+    if (len <= 32) return 32;
+    final nextPower = 1 << ((log(len - 1) / ln2).floor() + 1);
+    final chunk = nextPower <= 256 ? 32 : nextPower ~/ 8;
+    return chunk * (((len - 1) ~/ chunk) + 1);
+  }
+
+  /// Length of a NIP-44 v2 payload: base64(version | nonce | ciphertext | mac).
+  static int nip44PayloadLen(int plaintextBytes) {
+    final raw = 1 + 32 + (2 + nip44PaddedLen(plaintextBytes)) + 32;
+    return ((raw + 2) ~/ 3) * 4;
+  }
+
+  /// Size of the final `["EVENT", wrapped]` frame for a rumor of this size.
+  static int wrappedSizeForRumor(int rumorBytes) {
+    const sealOverhead = 200; // kind/created_at/tags/pubkey/id/sig
+    const wrapOverhead = 320; // same, plus the p/d/k tags
+    final sealJson = nip44PayloadLen(rumorBytes) + sealOverhead;
+    return nip44PayloadLen(sealJson) + wrapOverhead + 10;
+  }
+
+  /// Largest rumor whose wrapped event still clears the relay gate. Derived
+  /// rather than hardcoded so it stays correct if the gate moves.
+  static int maxRumorBytesForWrap([int limit = _relayEventLimit]) {
+    var lo = 32, hi = 64 * 1024, best = 32;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      if (wrappedSizeForRumor(mid) <= limit) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return best;
+  }
+
+  static final int _maxRumorBytes = maxRumorBytesForWrap();
 
   /// Approximate rumor byte size: UTF-8 length of the double-JSON-stringified
   /// payload plus the fixed rumor overhead (settings.js:359-363).
   static int _rumorByteSize(Map<String, dynamic> payload) =>
       utf8.encode(jsonEncode(jsonEncode(payload))).length + _rumorOverhead;
 
-  /// Drops the oldest entries from the channels section's auto-growing
-  /// read-state maps so the payload fits under the NIP-44 limit instead of
-  /// being skipped (`_trimChannelsReadState`, settings.js:574-588). Only map
-  /// shapes are trimmed (the array forms of closedPMs/leftGroups are not).
-  static bool _trimChannelsReadState(Map<String, dynamic> p) {
-    for (final key in const [
-      'closedPMTimes',
-      'leftGroupTimes',
-      'closedPMs',
-      'leftGroups',
-    ]) {
-      final m = p[key];
-      if (m is! Map) continue;
-      if (m.length <= 30) continue;
-      final entries = m.entries.toList()
-        ..sort((a, b) {
-          final na = a.value is num ? a.value as num : 0;
-          final nb = b.value is num ? b.value as num : 0;
-          return na.compareTo(nb);
-        });
-      var drop = (entries.length * 0.25).floor();
-      if (drop < 1) drop = 1;
-      for (var i = 0; i < drop; i++) {
-        m.remove(entries[i].key);
+  /// Drops the oldest entries from the channels section's auto-growing state so
+  /// the payload fits instead of being skipped entirely
+  /// (`_trimChannelsReadState`, settings.js).
+  ///
+  /// Runs ONLY under size pressure (the publisher calls it in a loop while the
+  /// payload is over the limit), so the choice is never "trim vs keep" — it is
+  /// "trim vs publish nothing", and publishing nothing means the channels
+  /// section stops syncing across devices altogether.
+  ///
+  /// Order is by increasing harm:
+  ///   1. userJoinedChannels — the unbounded one. Every geohash channel ever
+  ///      entered lands here and nothing removed it, which is what pushed this
+  ///      section over the limit. A dropped channel just leaves the sidebar.
+  ///   2. the read-state maps, oldest first — a dropped entry lets a closed PM
+  ///      or left group reappear, so these go last.
+  ///
+  /// closedPMs and leftGroups are stored as JSON ARRAYS. The previous version
+  /// only handled Map shapes and so never trimmed either of them — a gap its
+  /// own doc comment noted, and the reason this section could not be published.
+  static bool Function(Map<String, dynamic>) _channelsTrimmer(
+      Map<String, int> activity) {
+    return (Map<String, dynamic> p) {
+      // 1. Least-recently-active joined channels.
+      final joined = p['userJoinedChannels'];
+      if (joined is List && joined.length > 20) {
+        final ordered = joined.map((e) => '$e').toList()
+          ..sort((a, b) => (activity[a] ?? 0).compareTo(activity[b] ?? 0));
+        var n = (ordered.length * 0.25).floor();
+        if (n < 1) n = 1;
+        final drop = ordered.take(n).toSet();
+        p['userJoinedChannels'] =
+            joined.where((e) => !drop.contains('$e')).toList();
+        return true;
       }
-      return true;
-    }
-    return false;
+
+      // 2. Read-state arrays, oldest first by their companion times map.
+      for (final pair in const [
+        ('closedPMs', 'closedPMTimes'),
+        ('leftGroups', 'leftGroupTimes'),
+      ]) {
+        final arr = p[pair.$1];
+        final rawTimes = p[pair.$2];
+        final times = rawTimes is Map ? rawTimes : null;
+        if (arr is List && arr.length > 30) {
+          num at(String k) {
+            final v = times?[k];
+            return v is num ? v : 0;
+          }
+
+          final ordered = arr.map((e) => '$e').toList()
+            ..sort((a, b) => at(a).compareTo(at(b)));
+          var n = (ordered.length * 0.25).floor();
+          if (n < 1) n = 1;
+          final drop = ordered.take(n).toSet();
+          p[pair.$1] = arr.where((e) => !drop.contains('$e')).toList();
+          // Keep the companion map in step so it cannot outlive its set.
+          if (times != null) {
+            for (final k in drop) {
+              times.remove(k);
+            }
+          }
+          return true;
+        }
+      }
+
+      // 3. Any time map that outgrew its set (or has no set at all).
+      for (final key in const ['closedPMTimes', 'leftGroupTimes']) {
+        final m = p[key];
+        if (m is! Map || m.length <= 30) continue;
+        final entries = m.entries.toList()
+          ..sort((a, b) {
+            final na = a.value is num ? a.value as num : 0;
+            final nb = b.value is num ? b.value as num : 0;
+            return na.compareTo(nb);
+          });
+        var drop = (entries.length * 0.25).floor();
+        if (drop < 1) drop = 1;
+        for (var i = 0; i < drop; i++) {
+          m.remove(entries[i].key);
+        }
+        return true;
+      }
+      return false;
+    };
   }
 
   /// Drops the oldest ~10% of the synced bell history
@@ -890,8 +1038,13 @@ class StorageSync {
     }
 
     // Group message history → nymchat-history-<gid>-<YYYYMM>-<shard>.
-    const shardBudget =
-        30000; // ~30 KB of message JSON per shard (settings.js:497).
+    // Message JSON per shard. The rumor carries this as an ESCAPED string,
+    // which inflates it, and the escaped total has to stay under
+    // maxRumorBytesForWrap() (28,672). Budgeting 18 KB of raw message JSON
+    // leaves room for that escaping plus the rumor scaffolding; the previous
+    // 30,000 exceeded the wrap cliff on its own, so every shard it produced was
+    // silently dropped at publish time (settings.js:497).
+    const shardBudget = 18000;
     for (final e in historyByConvKey.entries) {
       final convKey = e.key;
       final msgs = e.value;

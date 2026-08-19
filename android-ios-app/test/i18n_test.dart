@@ -89,6 +89,119 @@ void main() {
     });
   });
 
+  group('isTranslating (sidebar progress row)', () {
+    test('false in English, true while a sweep runs, false once it finishes',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
+      final svc = LocalizationService.instance;
+      svc.setLanguage('en');
+      expect(svc.isTranslating, isFalse,
+          reason: 'English translates nothing, so the row must stay hidden');
+
+      var notifies = 0;
+      svc.onChanged = () => notifies++;
+
+      final mock = MockClient((req) async {
+        final text = (jsonDecode(req.body)['text'] ?? '').toString();
+        // Slow enough that the assertion below lands mid-flight.
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        return http.Response(
+          jsonEncode(
+              {'translatedText': text.toUpperCase(), 'detectedLanguage': 'de'}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      svc.configure(
+        kv: kv,
+        language: 'de',
+        apiClient: ApiClient(client: mock, baseUrl: 'https://h/api/proxy'),
+      );
+
+      svc.sweep(const ['Alpha', 'Beta', 'Gamma']);
+      expect(svc.isTranslating, isTrue,
+          reason: 'queued work should show immediately, before the flush runs');
+
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      expect(svc.isTranslating, isFalse,
+          reason: 'the row must clear once the sweep drains');
+      expect(notifies, greaterThan(0),
+          reason: 'the last per-chunk notify is what repaints the row away');
+
+      svc.onChanged = null;
+      svc.setLanguage('en');
+    });
+
+    test('a notify that re-requests a failed string cannot starve the sweep',
+        () async {
+      // Regression: onChanged bumps i18nVersionProvider, which rebuilds the
+      // tree, which calls tr() again. A failed string is un-marked from
+      // _requested, so that rebuild re-queues it on the HIGH-priority lane. If
+      // completion also notified, the sweep lane never got a turn: nothing
+      // translated and the progress row stayed up for good.
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
+      final svc = LocalizationService.instance;
+      svc.setLanguage('en');
+
+      final mock = MockClient((req) async {
+        final text = (jsonDecode(req.body)['text'] ?? '').toString();
+        if (text == 'Flaky') return http.Response('nope', 500);
+        return http.Response(
+          jsonEncode(
+              {'translatedText': text.toUpperCase(), 'detectedLanguage': 'de'}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      svc.configure(
+        kv: kv,
+        language: 'de',
+        apiClient: ApiClient(client: mock, baseUrl: 'https://h/api/proxy'),
+      );
+
+      // Stand in for the rebuild: every notify re-reads the failing string.
+      svc.onChanged = () => svc.translate('Flaky');
+
+      svc.translate('Flaky');
+      svc.sweep(const ['Alpha', 'Beta', 'Gamma']);
+
+      await Future<void>.delayed(const Duration(seconds: 4));
+
+      expect(svc.translate('Alpha'), 'ALPHA',
+          reason: 'the sweep lane must still drain behind the retried string');
+      expect(svc.translate('Gamma'), 'GAMMA');
+      expect(svc.isTranslating, isFalse,
+          reason: 'the row must clear even though one string keeps failing');
+
+      svc.onChanged = null;
+      svc.setLanguage('en');
+    });
+
+    test('switching back to English clears it', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
+      final svc = LocalizationService.instance;
+      svc.setLanguage('en');
+      final mock = MockClient((req) async => http.Response(
+            jsonEncode({'translatedText': 'x', 'detectedLanguage': 'de'}),
+            200,
+            headers: {'content-type': 'application/json'},
+          ));
+      svc.configure(
+        kv: kv,
+        language: 'de',
+        apiClient: ApiClient(client: mock, baseUrl: 'https://h/api/proxy'),
+      );
+      svc.sweep(const ['One', 'Two']);
+      expect(svc.isTranslating, isTrue);
+      svc.setLanguage('en');
+      expect(svc.isTranslating, isFalse,
+          reason: 'isActive gates it, so English hides the row at once');
+    });
+  });
+
   group('LocalizationService sweep pipeline', () {
     test('queues, translates and caches a string via the proxy', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{});

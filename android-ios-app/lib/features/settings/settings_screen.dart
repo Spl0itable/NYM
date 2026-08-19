@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/constants/storage_keys.dart';
+import '../../core/crypto/pow.dart';
 import '../../core/crypto/bech32_codec.dart' as bech32;
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -35,6 +36,7 @@ import '../translate/auto_translate.dart' show autoTranslateTargetFor;
 import '../messages/format/message_content.dart' show InlineEmojiText;
 import '../identity/modal_chrome.dart';
 import '../identity/vault_settings_modal.dart';
+import '../../widgets/wallpaper/wallpaper_cache.dart';
 import 'settings_helpers.dart';
 import 'settings_widgets.dart';
 
@@ -176,7 +178,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _cachePMsAtOpen = _draft.cachePMs;
     final ctrl0 = ref.read(settingsProvider.notifier);
     _draftKeypair = ctrl0.keypairMode;
-    _draftPow = ctrl0.powDifficulty;
+    // Lift a value stored from the retired 8/12 options onto the offered set,
+    // so the dropdown does not open with nothing selected.
+    _draftPow = normalizePowDifficulty(ctrl0.powDifficulty);
     // Blur seeds from the per-pubkey key first, then the global key, default
     // blur — `loadImageBlurSettings` precedence (settings.js:1139-1156; the
     // PWA's modal shows the resolved value, and the Save-time `setBlurImages`
@@ -806,6 +810,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             tr('Failed to upload wallpaper: All Blossom servers failed'));
         return;
       }
+      // Cache the bytes we already have under the new url, so this device never
+      // fetches its own wallpaper back from the host, and drop any previous
+      // wallpaper's cached copy. The url still goes to settings — it is what
+      // travels to the user's other devices, which fetch once and then cache
+      // the same way.
+      await WallpaperCache.store(url, bytes);
+      unawaited(WallpaperCache.pruneExcept(url));
       await ref.read(keyValueStoreProvider).setString(
             StorageKeys.wallpaperCustomUrl,
             url,
@@ -1401,13 +1412,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         'and group chats will not work reliably since recipients cannot reply '
         'to a constantly changing pubkey. Settings will not sync across '
         'devices.');
+    // This setting FILTERS INBOUND messages; it does not change what we send —
+    // the send path floors every outgoing message at kNymchatPowFloor (16 bits)
+    // regardless. The old 8- and 12-bit options were therefore dead: every
+    // Nymchat message already clears them, and a client doing no work at all is
+    // not caught by a threshold that low either. Above 16 hides messages from
+    // other Nymchat users, who mine at 16 — the labels say so rather than
+    // presenting it as a neutral "High".
     final powItems = <({int value, String label})>[
       (value: 0, label: tr('Disabled')),
-      (value: 8, label: tr('Very Low (8 bits)')),
-      (value: 12, label: tr('Low (12 bits)')),
-      (value: 16, label: tr('Medium (16 bits)')),
-      (value: 20, label: tr('High (20 bits)')),
-      (value: 24, label: tr('Very High (24 bits)')),
+      (value: 16, label: tr('16 bits (Nymchat minimum)')),
+      (value: 20, label: tr('20 bits — also hides Nymchat messages')),
+      (value: 24, label: tr('24 bits — also hides Nymchat messages')),
     ];
     final acceptItems = <({String value, String label})>[
       (value: 'enabled', label: tr('Enabled')),
@@ -1497,13 +1513,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
       _GroupSpec(
         text: tr(
-            'Proof of Work Difficulty {options} Enable for anti-spam to '
-            'require messages have a minimum PoW',
+            'Proof of Work Difficulty {options} Filters incoming messages by '
+            'proof of work — it does not change what you send. Every message '
+            'Nymchat sends is already mined to at least 16 bits, so 16 keeps '
+            'Nymchat traffic and drops clients that do no work. Above 16 also '
+            'hides messages from other Nymchat users.',
             {'options': _optText(powItems)}),
         child: FormGroup(
           label: tr('Proof of Work Difficulty'),
-          hint:
-              tr('Enable for anti-spam to require messages have a minimum PoW'),
+          hint: tr('Filters incoming messages by proof of work — it does not '
+              'change what you send. Every message Nymchat sends is already '
+              'mined to at least 16 bits, so 16 keeps Nymchat traffic and '
+              'drops clients that do no work. Above 16 also hides messages '
+              'from other Nymchat users.'),
           child: FormSelect<int>(
             value: _draftPow,
             items: powItems,
