@@ -392,6 +392,16 @@
                         if (p.profile.lnAddress && !this.userLightningAddresses.has(p.pubkey)) {
                             this.userLightningAddresses.set(p.pubkey, p.profile.lnAddress);
                         }
+                        // Restore when this profile was last fetched so a reload
+                        // inside the 5-minute window doesn't re-request every
+                        // profile it just hydrated. An older stamp still reads as
+                        // stale and refreshes normally.
+                        if (typeof p.profile.fetchedAt === 'number' && p.profile.fetchedAt > 0) {
+                            if (!this.profileFetchedAt) this.profileFetchedAt = new Map();
+                            if (!this.profileFetchedAt.has(p.pubkey)) {
+                                this.profileFetchedAt.set(p.pubkey, p.profile.fetchedAt);
+                            }
+                        }
                     }
                 }
 
@@ -709,7 +719,12 @@
                     bannerUrl: this.userBanners && this.userBanners.get(pubkey) || null,
                     bio: this.userBios && this.userBios.get(pubkey) || null,
                     lnAddress: this.userLightningAddresses && this.userLightningAddresses.get(pubkey) || null,
-                    kind0Ts: this._kind0Ts && this._kind0Ts.get(pubkey) || profile.kind0Ts || null
+                    kind0Ts: this._kind0Ts && this._kind0Ts.get(pubkey) || profile.kind0Ts || null,
+                    // Freshness bookkeeping travels WITH the profile. Without it
+                    // a reload restored every cached profile but with no record
+                    // of when it was fetched, so all of them looked stale and the
+                    // app re-fetched the entire cache it had just loaded.
+                    fetchedAt: this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || null
                 };
                 this._cachePut('profiles', { pubkey, profile: enriched });
                 this._scheduleTrim();

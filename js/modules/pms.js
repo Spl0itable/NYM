@@ -3043,6 +3043,7 @@ Object.assign(NYM.prototype, {
 <span class="pm-name">${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
 <span class="unread-badge nm-hidden">0</span>
+<button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
 </div>
 `;
             item.dataset.action = 'openPMItem';

@@ -2627,6 +2627,59 @@ Object.assign(NYM.prototype, {
         this._resubscribeChannels();
     },
 
+    // Only the direct-connection path needs this. In pool mode these come from
+    // D1 through the pool worker, which never sees a per-relay filter.
+    _shardEphemeralKeys(ephPks, relayUrls, redundancy = 2) {
+        const out = new Map(relayUrls.map(u => [u, []]));
+        const n = relayUrls.length;
+        if (!n || !ephPks.length) return out;
+        // Fewer relays than the redundancy target: everyone gets everything,
+        // which is both what we did before and the best available.
+        if (n <= redundancy) {
+            for (const url of relayUrls) out.set(url, ephPks.slice());
+            return out;
+        }
+        const hash = (str) => {
+            let h = 0x811c9dc5;                       // FNV-1a, 32-bit
+            for (let i = 0; i < str.length; i++) {
+                h ^= str.charCodeAt(i);
+                h = (h * 0x01000193) >>> 0;
+            }
+            return h;
+        };
+        for (const pk of ephPks) {
+            const ranked = relayUrls
+                .map(url => ({ url, score: hash(pk + '|' + url) }))
+                .sort((a, b) => (b.score - a.score) || (a.url < b.url ? -1 : 1));
+            for (let r = 0; r < redundancy; r++) out.get(ranked[r].url).push(pk);
+        }
+        return out;
+    },
+
+    // Open, readable relays in a stable order.
+    _readableRelayUrls() {
+        const urls = [];
+        this.relayPool.forEach((relay, url) => {
+            if (this.writeOnlyRelays && this.writeOnlyRelays.has(url)) return;
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN) urls.push(url);
+        });
+        return urls.sort();
+    },
+
+    // Direct-mode ephemeral REQ: one filter per relay carrying only that
+    // relay's shard. `buildFilter` receives the shard so each caller keeps its
+    // own limit/since.
+    _sendShardedEphemeralReq(subId, ephPks, buildFilter) {
+        const shards = this._shardEphemeralKeys(ephPks, this._readableRelayUrls());
+        shards.forEach((keys, url) => {
+            if (!keys.length) return;
+            const relay = this.relayPool.get(url);
+            if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+            const msg = JSON.stringify(this._normalizeReqPayload(['REQ', subId, buildFilter(keys)]));
+            this._safeWsSend(relay.ws, msg, { critical: true });
+        });
+    },
+
     // History fetch for ephemeral pubkeys
     async _recoverEphemeralHistory(ephPks) {
         if (!Array.isArray(ephPks) || ephPks.length === 0) return;
@@ -2673,12 +2726,11 @@ Object.assign(NYM.prototype, {
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSendToRole('critical', ['REQ', subId, filter]);
         } else {
-            const req = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
-            this.relayPool.forEach((relay, url) => {
-                if (this.writeOnlyRelays && this.writeOnlyRelays.has(url)) return;
-                if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    this._safeWsSend(relay.ws, req, { critical: true });
-                }
+            // Sharded: no relay gets the whole ephemeral set (_shardEphemeralKeys).
+            this._sendShardedEphemeralReq(subId, ephPks, (keys) => {
+                const f = { kinds: [1059], '#p': keys, limit: Math.min(keys.length * 20, 1000) };
+                if (since > 0) f.since = since;
+                return f;
             });
         }
 
@@ -2738,12 +2790,18 @@ Object.assign(NYM.prototype, {
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 this._poolSendToRole('critical', ['REQ', subId, filter]);
             } else {
-                const msg = JSON.stringify(this._normalizeReqPayload(['REQ', subId, filter]));
-                this.relayPool.forEach((relay, url) => {
-                    if (this.writeOnlyRelays && this.writeOnlyRelays.has(url)) return;
-                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                        this._safeWsSend(relay.ws, msg, { critical: true });
+                // Sharded: no relay gets the whole ephemeral set. `filter` above
+                // stays the unsharded shape because the pool path still uses it
+                // and `_poolSubscribeOnWorker` replays it on shard recycle.
+                this._sendShardedEphemeralReq(subId, ephPks, (keys) => {
+                    const f = { kinds: [1059], '#p': keys };
+                    if (this._getApiHost && this._getApiHost()) {
+                        f.limit = 1;
+                    } else {
+                        f.since = Math.floor(Date.now() / 1000) - 604800;
+                        f.limit = 200 * keys.length;
                     }
+                    return f;
                 });
             }
 

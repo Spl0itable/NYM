@@ -1049,6 +1049,7 @@ Object.assign(NYM.prototype, {
         // Use event delegation for channel clicks
         document.getElementById('channelList').addEventListener('click', (e) => {
             // Handle channel item clicks
+            if (e.target.closest('.row-menu-btn')) return;
             const channelItem = e.target.closest('.channel-item');
             if (channelItem && !e.target.closest('.pin-btn') && !e.target.closest('.hide-btn')) {
                 e.preventDefault();

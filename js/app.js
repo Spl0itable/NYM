@@ -4341,7 +4341,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.73.524';
+const NYMCHAT_VERSION = 'v3.73.525';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6301,6 +6301,8 @@ async function applyNostrSettingsAdditive(s) {
     // Group conversations
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
+            // A group the user has left must never come back from synced data.
+            if (nym.leftGroups && nym.leftGroups.has(groupId)) continue;
             if (!nym.groupConversations.has(groupId)) {
                 nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy, banner: group.banner, avatar: group.avatar, description: group.description });
                 const g = nym.groupConversations.get(groupId);
@@ -6989,6 +6991,10 @@ async function applyNostrSettings(s) {
     // Group conversations encrypted inside a gift wrap
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
+            // Same guard as the additive path. The retroactive sweep further
+            // down would eventually delete it again, but not before the row
+            // flashes into the sidebar and its messages are ingested.
+            if (nym.leftGroups && nym.leftGroups.has(groupId)) continue;
             if (!nym.groupConversations.has(groupId)) {
                 nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { banner: group.banner, avatar: group.avatar, description: group.description });
                 const g = nym.groupConversations.get(groupId);

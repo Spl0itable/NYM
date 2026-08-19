@@ -623,6 +623,23 @@ window.nymHapticTap = function (ms) {
         // PM / group sidebar list items
         'openPMItem':                 function (_e, t) { nym().openPM(t.dataset.nym, t.dataset.pubkey); },
         'openGroupItem':              function (_e, t) { nym().openGroup(t.dataset.groupId); },
+        // The long-press menu, reachable by tap. The dispatcher resolves to the
+        // NEAREST data-action, so this fires instead of the row's open action —
+        // no stopPropagation needed for that, but the row's own click listener
+        // (sidebar-sections.js) is separate and does need suppressing.
+        'sidebarRowMenu':             function (e, t) {
+            e.preventDefault();
+            e.stopPropagation();
+            var row = t.closest('.pm-item, .channel-item');
+            if (!row) return;
+            var n = nym();
+            var items = n._buildSidebarMenuItems(row);
+            if (!items || !items.length) return;
+            var r = t.getBoundingClientRect();
+            // Anchor to the button so the menu opens where the user tapped,
+            // matching the long-press behaviour.
+            n._showSidebarActionMenu(items, r.left + r.width / 2, r.bottom);
+        },
 
         // PMs dynamic
         'removeNewPMRecipient':       function (_e, t) { nym().removeNewPMRecipient(t.dataset.pubkey); }

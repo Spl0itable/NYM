@@ -1003,7 +1003,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             link.setAttribute('target', '_blank');
             link.setAttribute('rel', 'noopener');
 
-            const cached = this._geohashPlaceCache && this._geohashPlaceCache.get(safeGeohash.toLowerCase());
+            const cached = this._loadGeohashPlaceCache().get(safeGeohash.toLowerCase());
             this._fillLocationLink(link, cached || 'Loading location...');
             locWrap.appendChild(link);
 
@@ -1036,7 +1036,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     _fillLocationLink(link, place) {
-        link.replaceChildren();
+        this._fillLocationParts(link, place);
+    },
+
+    // Split "City, Region, Country" into a shrinkable city part and a country
+    // part that never truncates, so a narrow container eats the city and still
+    // shows which country the channel is in. Shared by the channel header and
+    // the sidebar subtext.
+    _fillLocationParts(el, place) {
+        el.replaceChildren();
         const idx = place.lastIndexOf(', ');
         if (idx > 0 && idx < place.length - 2) {
             const city = document.createElement('span');
@@ -1045,31 +1053,138 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const country = document.createElement('span');
             country.className = 'loc-country';
             country.textContent = place.slice(idx);
-            link.appendChild(city);
-            link.appendChild(country);
+            el.appendChild(city);
+            el.appendChild(country);
         } else {
-            const country = document.createElement('span');
-            country.className = 'loc-country';
-            country.textContent = place;
-            link.appendChild(country);
+            // No country to protect — one run, free to ellipsize.
+            const only = document.createElement('span');
+            only.className = 'loc-city';
+            only.textContent = place;
+            el.appendChild(only);
         }
     },
 
     // Resolve a geohash to a human-readable place name, cached per geohash.
+
+    /// localStorage key for the persisted geohash → "City, Country" map.
+    _GEO_PLACE_KEY: 'nym_geohash_places',
+    /// Bound on the persisted map. Entries are ~30 bytes, so this is tiny.
+    _GEO_PLACE_MAX: 500,
+    /// Nominatim's documented rate limit, plus a little headroom. Applies to
+    /// the direct-to-Nominatim fallback, where this browser is the API client.
+    _GEO_PLACE_MIN_INTERVAL_MS: 1100,
+    /// Lookups allowed in flight at once when going through our proxy, which
+    /// edge-caches for a day and is itself Nominatim's client. Keeps a sidebar
+    /// full of geohashes resolving in a couple of round trips instead of one
+    /// per second, which is what made the coordinates linger.
+    _GEO_PLACE_CONCURRENCY: 4,
+
+    _loadGeohashPlaceCache() {
+        if (this._geohashPlaceCache) return this._geohashPlaceCache;
+        this._geohashPlaceCache = new Map();
+        try {
+            const raw = localStorage.getItem(this._GEO_PLACE_KEY);
+            if (raw) {
+                const obj = JSON.parse(raw);
+                for (const k in obj) {
+                    if (Object.prototype.hasOwnProperty.call(obj, k) && typeof obj[k] === 'string') {
+                        this._geohashPlaceCache.set(k, obj[k]);
+                    }
+                }
+            }
+        } catch (_) { /* corrupt or unavailable — start empty */ }
+        return this._geohashPlaceCache;
+    },
+
+    _saveGeohashPlaceCache() {
+        if (this._geoPlaceSaveTimer) return;
+        this._geoPlaceSaveTimer = setTimeout(() => {
+            this._geoPlaceSaveTimer = null;
+            try {
+                const m = this._geohashPlaceCache;
+                if (!m) return;
+                let entries = [...m.entries()];
+                if (entries.length > this._GEO_PLACE_MAX) {
+                    // Keep the most recently resolved; Map preserves insertion order.
+                    entries = entries.slice(-this._GEO_PLACE_MAX);
+                    this._geohashPlaceCache = new Map(entries);
+                }
+                localStorage.setItem(this._GEO_PLACE_KEY, JSON.stringify(Object.fromEntries(entries)));
+            } catch (_) { /* quota or private mode — cache stays in memory */ }
+        }, 1000);
+    },
+
     async _resolveGeohashPlaceName(geohash) {
-        if (!this._geohashPlaceCache) this._geohashPlaceCache = new Map();
-        const key = geohash.toLowerCase();
-        if (this._geohashPlaceCache.has(key)) return this._geohashPlaceCache.get(key);
+        const key = String(geohash || '').toLowerCase();
+        if (!key) return 'Unknown location';
+        const cache = this._loadGeohashPlaceCache();
+        if (cache.has(key)) return cache.get(key);
 
-        const coords = this.decodeGeohash(geohash);
-        const data = await this.fetchGeocode(coords.lat, coords.lng, 10);
-        const addr = (data && data.address) || {};
-        const city = addr.city || addr.town || addr.village || addr.county || '';
-        const country = addr.country || '';
-        const place = [city, country].filter(x => x).join(', ') || 'Unknown location';
+        // Collapse concurrent callers for the same geohash (the header and its
+        // sidebar row resolve the same place on channel switch).
+        if (!this._geoPlaceInflight) this._geoPlaceInflight = new Map();
+        const existing = this._geoPlaceInflight.get(key);
+        if (existing) return existing;
 
-        this._geohashPlaceCache.set(key, place);
-        return place;
+        const p = this._geoPlaceRun(async () => {
+            const coords = this.decodeGeohash(geohash);
+            const data = await this.fetchGeocode(coords.lat, coords.lng, 10);
+            const addr = (data && data.address) || {};
+            const city = addr.city || addr.town || addr.village || addr.county || '';
+            const country = addr.country || '';
+            return [city, country].filter(x => x).join(', ') || 'Unknown location';
+        })
+            .then(place => {
+                cache.set(key, place);
+                this._saveGeohashPlaceCache();
+                this._geoPlaceInflight.delete(key);
+                return place;
+            })
+            .catch(err => {
+                this._geoPlaceInflight.delete(key);
+                throw err;
+            });
+        this._geoPlaceInflight.set(key, p);
+        return p;
+    },
+
+    // Run one geocode lookup under whichever rate policy actually binds.
+    //
+    // Through the proxy the worker is Nominatim's client and its answers are
+    // edge-cached for a day, so a handful of lookups can be in flight at once
+    // — that is what lets a sidebar of geohashes resolve in a round trip or
+    // two instead of one per second. On the direct fallback this browser *is*
+    // the API client, so requests stay strictly serialised with the documented
+    // ≥1s gap between them.
+    async _geoPlaceRun(fn) {
+        const viaProxy = typeof this._getProxyBaseUrl === 'function' && !!this._getProxyBaseUrl();
+
+        if (!viaProxy) {
+            const mine = (this._geoPlaceQueue || Promise.resolve()).then(async () => {
+                const gap = (this._geoPlaceLastAt || 0) + this._GEO_PLACE_MIN_INTERVAL_MS - Date.now();
+                if (gap > 0) await new Promise(r => setTimeout(r, gap));
+                this._geoPlaceLastAt = Date.now();
+                return fn();
+            });
+            // Keep the chain alive after a rejection so one failure doesn't
+            // wedge every queued lookup behind it.
+            this._geoPlaceQueue = mine.catch(() => { });
+            return mine;
+        }
+
+        if (!this._geoPlaceWaiters) this._geoPlaceWaiters = [];
+        if (!this._geoPlaceActive) this._geoPlaceActive = 0;
+        if (this._geoPlaceActive >= this._GEO_PLACE_CONCURRENCY) {
+            await new Promise(resolve => this._geoPlaceWaiters.push(resolve));
+        }
+        this._geoPlaceActive++;
+        try {
+            return await fn();
+        } finally {
+            this._geoPlaceActive--;
+            const next = this._geoPlaceWaiters.shift();
+            if (next) next();
+        }
     },
 
     // Identifies the active conversation so unsent input can be kept per place.
@@ -1448,12 +1563,46 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 item.classList.add('pinned');
             }
 
+            // Location subtext. A geohash paints its coordinates immediately
+            // (decoded locally, no network) and upgrades in place to the
+            // human-readable place once the queued lookup lands; a named
+            // channel just says it isn't one. Mirrors the channel header.
+            const subText = isGeo
+                ? (this._loadGeohashPlaceCache().get(geohash.toLowerCase()) || this.getGeohashLocation(geohash) || '')
+                : 'Not a geohash';
+
             item.innerHTML = `
-    <span class="channel-name"${locationHint}>${displayName}</span>
+    <span class="channel-name"${locationHint}>${displayName}<span class="channel-sub"></span></span>
     <div class="channel-badges">
         <span class="unread-badge nm-hidden">0</span>
+        ${key === 'nymchat' ? '' : '<button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Channel menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>'}
     </div>
 `;
+
+            // Upgrade the coordinates to a place name once the queued lookup
+            // returns. Only fires for a geohash we have never resolved — a
+            // cached one already rendered its place above and costs no request.
+            // Only a resolved place name has the "City, Country" shape worth
+            // splitting; raw coordinates and 'Not a geohash' stay one run.
+            const cachedPlace = isGeo ? this._loadGeohashPlaceCache().get(geohash.toLowerCase()) : null;
+            const subEl = item.querySelector('.channel-sub');
+            if (subEl) {
+                if (cachedPlace) {
+                    this._fillLocationParts(subEl, cachedPlace);
+                } else {
+                    // Wrapped rather than set as bare text: .channel-sub is a
+                    // flex container, and an anonymous flex item can't ellipsize.
+                    const only = document.createElement('span');
+                    only.className = 'loc-city';
+                    only.textContent = subText;
+                    subEl.appendChild(only);
+                }
+            }
+            if (isGeo && !this._loadGeohashPlaceCache().has(geohash.toLowerCase())) {
+                this._resolveGeohashPlaceName(geohash).then(place => {
+                    if (place && subEl && subEl.isConnected) this._fillLocationParts(subEl, place);
+                }).catch(() => { /* keep the coordinates */ });
+            }
 
             // Insert before the view more button if it exists
             const viewMoreBtn = list.querySelector('.view-more-btn');

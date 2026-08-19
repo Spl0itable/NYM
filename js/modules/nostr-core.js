@@ -440,9 +440,12 @@ Object.assign(NYM.prototype, {
 
             // Fetch kind 0 profile for channel message senders we haven't seen
             if (event.pubkey !== this.pubkey) {
+                // Timestamp only, for the same reason as fetchProfileDirect: an
+                // avatar-less sender otherwise queued a profile fetch on EVERY
+                // message they posted, which in a busy channel is a fetch per
+                // message per such user.
                 const lastFetch = this.profileFetchedAt.get(event.pubkey) || 0;
-                const stale = Date.now() - lastFetch > 5 * 60 * 1000;
-                if (!this.userAvatars.has(event.pubkey) || stale) {
+                if (Date.now() - lastFetch > 5 * 60 * 1000) {
                     this.profileFetchedAt.set(event.pubkey, Date.now());
                     this.queueProfileFetch(event.pubkey);
                 }
@@ -1737,10 +1740,9 @@ Object.assign(NYM.prototype, {
     async fetchProfileDirect(pubkey) {
         if (!pubkey) return;
 
-        // Skip if we already have a fresh profile (avoids needless REQ)
+        // Skip if we already fetched this profile recently (avoids needless REQ).
         const lastFetch = (this.profileFetchedAt && this.profileFetchedAt.get(pubkey)) || 0;
-        const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
-        if (fresh && this.userAvatars && this.userAvatars.has(pubkey)) return;
+        if (Date.now() - lastFetch < 5 * 60 * 1000) return;
 
         return new Promise(resolve => {
             if (!this.pendingProfileResolvers.has(pubkey)) {

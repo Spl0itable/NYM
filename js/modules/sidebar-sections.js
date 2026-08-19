@@ -246,7 +246,9 @@ Object.assign(NYM.prototype, {
             if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
         };
 
-        const onStart = (itemEl, x, y) => {
+        const onStart = (itemEl, x, y, target) => {
+            // Pressing the overflow button is not a long-press on the row.
+            if (target && target.closest && target.closest('.row-menu-btn')) return;
             startX = x; startY = y;
             fired = false;
             cancel();
@@ -268,13 +270,13 @@ Object.assign(NYM.prototype, {
                 if (e.button !== 0) return;
                 const itemEl = e.target.closest('.channel-item, .pm-item');
                 if (!itemEl || !list.contains(itemEl)) return;
-                onStart(itemEl, e.clientX, e.clientY);
+                onStart(itemEl, e.clientX, e.clientY, e.target);
             });
             list.addEventListener('touchstart', (e) => {
                 const itemEl = e.target.closest('.channel-item, .pm-item');
                 if (!itemEl || !list.contains(itemEl)) return;
                 const t = e.touches && e.touches[0];
-                if (t) onStart(itemEl, t.clientX, t.clientY);
+                if (t) onStart(itemEl, t.clientX, t.clientY, e.target);
             }, { passive: true });
 
             list.addEventListener('mousemove', (e) => {
@@ -296,9 +298,19 @@ Object.assign(NYM.prototype, {
                 if (fired) { e.preventDefault(); fired = false; }
             });
             list.addEventListener('touchcancel', cancel);
-            // Suppress the click that opens the conversation when the menu fired
             list.addEventListener('click', (e) => {
-                if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; }
+                if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; return; }
+                const btn = e.target.closest && e.target.closest('.row-menu-btn');
+                if (!btn || !list.contains(btn)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const itemEl = btn.closest('.channel-item, .pm-item');
+                if (!itemEl) return;
+                const items = this._buildSidebarMenuItems(itemEl);
+                if (!items.length) return;
+                const r = btn.getBoundingClientRect();
+                // Anchor under the button, matching where a long-press lands.
+                this._showSidebarActionMenu(items, r.left + r.width / 2, r.bottom);
             }, true);
         };
 
