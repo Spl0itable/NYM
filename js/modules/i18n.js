@@ -551,16 +551,12 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Non-blocking progress row shown while background translation is in
-    // flight. It lives in the SIDEBAR, under the relay status — it used to be
-    // `position: fixed` in the bottom-right corner, which is where the message
-    // input is, so it sat on top of the composer while translating. The sidebar
-    // has room for it and nothing there to obscure.
+    // Progress row shown in the sidebar, under the relay status, while
+    // background translation is in flight.
     _i18nUpdateIndicator() {
         const remaining = this._i18nRemaining();
         let row = this._i18nIndicator;
         if (remaining <= 0) {
-            // Completed: remove it entirely rather than leaving an empty row.
             if (row) { row.remove(); this._i18nIndicator = null; }
             return;
         }
@@ -573,8 +569,6 @@ Object.assign(NYM.prototype, {
             if (anchor && anchor.parentNode) {
                 anchor.insertAdjacentElement('afterend', row);
             } else {
-                // No sidebar yet (very early boot) — fall back to the body so
-                // the progress is still visible.
                 document.body.appendChild(row);
             }
             this._i18nIndicator = row;

@@ -156,10 +156,8 @@ Object.assign(NYM.prototype, {
         msg.created_at = signedEvent.created_at;
         msg.timestamp = new Date(signedEvent.created_at * 1000);
         delete msg._optimistic;
-        // The optimistic row was built BEFORE mining, so it has no nonce tag to
-        // read. The signed event is the first time the PoW target exists; carry
-        // it over or the timestamp popup reports our own mined messages as
-        // "None - sent from another client".
+        // The optimistic row predates mining; the signed event is where the
+        // PoW target first exists.
         if (typeof this._powTargetFromEvent === 'function') {
             const ownPowTarget = this._powTargetFromEvent(signedEvent);
             if (typeof ownPowTarget === 'number') msg.powTarget = ownPowTarget;
@@ -3445,7 +3443,7 @@ Object.assign(NYM.prototype, {
         if (!hasNonce) {
             return '<div class="timestamp-popup-pow">' +
                 '<span class="pow-label">Proof-of-work</span>' +
-                '<span class="pow-none">None &middot; sent from another client</span>' +
+                '<span class="pow-none">None</span>' +
                 '</div>';
         }
 

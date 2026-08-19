@@ -176,9 +176,10 @@ html .nm-hidden { display: none; }
 .translate-lang-option:disabled { opacity: 0.5; cursor: default; }
 
 /* i18n.js — app-wide UI translation */
-.nym-i18n-bg-indicator { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 10px; border-radius: 999px; background: var(--glass-bg, rgba(20,20,20,0.85)); border: 1px solid var(--glass-border); color: var(--text-dim); font-size: 0.8em; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; }
-.nym-i18n-bg-indicator.visible { opacity: 1; transform: translateY(0); }
-.nym-i18n-bg-spinner { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--glass-border); border-top-color: var(--primary); animation: nym-i18n-spin 0.8s linear infinite; }
+.nym-i18n-bg-indicator { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 8px; color: var(--text-dim); font-size: 11px; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
+.nym-i18n-bg-indicator.visible { opacity: 1; }
+.nym-i18n-bg-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nym-i18n-bg-spinner { flex: none; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--glass-border); border-top-color: var(--primary); animation: nym-i18n-spin 0.8s linear infinite; }
 @keyframes nym-i18n-spin { to { transform: rotate(360deg); } }
 .message-translation.auto { border-left-color: var(--secondary, var(--primary)); }
 .message-autotr-footer { width: 100%; margin-top: 3px; font-size: 0.8em; }
