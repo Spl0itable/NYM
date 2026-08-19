@@ -86,6 +86,7 @@ Object.assign(NYM.prototype, {
         // Drop boot placeholder columns if we never activated real ones.
         const strip0 = document.getElementById('columnsStrip');
         if (strip0) strip0.querySelectorAll('.cv-skeleton-col').forEach(el => el.remove());
+        this._cvCancelPendingRender();
         if (!this._cvActive) return;
         const focused = this._cvColumns.find(c => c.id === this._cvFocusedId) || this._cvColumns[0];
         this._cvActive = false;
@@ -513,8 +514,32 @@ Object.assign(NYM.prototype, {
         this._cvMarkColumnRead(col.key);
     },
 
+    // Renders the focused column immediately, then the rest one per frame.
     _cvRenderAll() {
-        for (const col of this._cvColumns) this._cvRenderColumn(col);
+        this._cvCancelPendingRender();
+        const cols = [...this._cvColumns];
+        if (!cols.length) return;
+
+        this._cvRenderColumn(cols[0]);
+        if (cols.length === 1) return;
+
+        let i = 1;
+        const step = () => {
+            this._cvRenderRAF = null;
+            if (!this._cvActive || i >= cols.length) return;
+            const col = cols[i++];
+            // The column may have been closed while we were yielding.
+            if (this._cvColumns.indexOf(col) !== -1) this._cvRenderColumn(col);
+            this._cvRenderRAF = requestAnimationFrame(step);
+        };
+        this._cvRenderRAF = requestAnimationFrame(step);
+    },
+
+    _cvCancelPendingRender() {
+        if (this._cvRenderRAF) {
+            cancelAnimationFrame(this._cvRenderRAF);
+            this._cvRenderRAF = null;
+        }
     },
 
     _cvSubscribeChannel(channel, geohash) {

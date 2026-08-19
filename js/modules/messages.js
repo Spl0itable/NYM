@@ -3667,20 +3667,43 @@ Object.assign(NYM.prototype, {
     },
 
     // Snapshot of the app state the pure formatter needs, shared across a batch.
+    _formatCtxRev: 0,
+
+    /// Call after mutating customEmojis or mediaFallbacks.
+    _invalidateFormatCtx() {
+        this._formatCtxRev = (this._formatCtxRev || 0) + 1;
+        this._formatCtxCache = null;
+    },
+
     _buildFormatCtx() {
-        return {
-            proxyBase: (typeof this._getProxyBaseUrl === 'function' ? this._getProxyBaseUrl() : null) || null,
-            currentChannel: this.currentChannel || null,
-            currentGeohash: this.currentGeohash || null,
+        const proxyBase = (typeof this._getProxyBaseUrl === 'function' ? this._getProxyBaseUrl() : null) || null;
+        const currentChannel = this.currentChannel || null;
+        const currentGeohash = this.currentGeohash || null;
+        const rev = this._formatCtxRev || 0;
+
+        const cached = this._formatCtxCache;
+        if (cached && cached.rev === rev &&
+            cached.ctx.proxyBase === proxyBase &&
+            cached.ctx.currentChannel === currentChannel &&
+            cached.ctx.currentGeohash === currentGeohash) {
+            return cached.ctx;
+        }
+
+        const ctx = {
+            proxyBase,
+            currentChannel,
+            currentGeohash,
             customEmojis: (this.customEmojis && this.customEmojis.size) ? Object.fromEntries(this.customEmojis) : null,
             mediaFallbacks: (this.mediaFallbacks && this.mediaFallbacks.size) ? Object.fromEntries(this.mediaFallbacks) : null,
         };
+        this._formatCtxCache = { rev, ctx };
+        return ctx;
     },
 
     // ctx for synchronous main-thread formatting: adds the static emoji map, the
     // highlight strategy that defers to the highlight worker, and quote flair.
     _mainFormatCtx(content) {
-        const ctx = this._buildFormatCtx();
+        const ctx = Object.assign({}, this._buildFormatCtx());
         ctx.emojiMap = this.emojiMap;
         ctx.highlightCode = (rawCode, normLang, trimmed) => this._mainHighlightCode(rawCode, normLang, trimmed);
         if (content != null) {

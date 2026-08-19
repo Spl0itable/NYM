@@ -9,22 +9,33 @@ Object.assign(NYM.prototype, {
         // Loose shortcode→url map: covers emoji seen via message `emoji` tags
         // that aren't part of any saved pack, so old messages still render
         // their custom emoji after a reload.
+        this._hydratingEmojiCache = true;
+        // finally, not a trailing assignment: leaving this flag stuck true would
+        // silently disable emoji persistence for the rest of the session.
         try {
-            const map = JSON.parse(localStorage.getItem('nym_custom_emojis') || '[]');
-            if (Array.isArray(map)) {
-                for (const entry of map) {
-                    if (Array.isArray(entry)) this.registerCustomEmoji(entry[0], entry[1]);
+            try {
+                const map = JSON.parse(localStorage.getItem('nym_custom_emojis') || '[]');
+                if (Array.isArray(map)) {
+                    for (const entry of map) {
+                        if (Array.isArray(entry)) this.registerCustomEmoji(entry[0], entry[1]);
+                    }
                 }
-            }
-        } catch (_) { }
-        try {
-            const cached = JSON.parse(localStorage.getItem('nym_custom_emoji_packs') || '[]');
-            for (const pack of cached) this._storeEmojiPack(pack, false);
-        } catch (_) { }
+            } catch (_) { }
+            try {
+                const cached = JSON.parse(localStorage.getItem('nym_custom_emoji_packs') || '[]');
+                for (const pack of cached) this._storeEmojiPack(pack, false);
+            } catch (_) { }
+        } finally {
+            this._hydratingEmojiCache = false;
+        }
     },
 
+    // Same throttle-not-debounce reasoning as _saveCustomEmojiMap above. This
+    // one did not show up in the profile (packs arrive in far smaller numbers
+    // than loose shortcodes), but it is the identical hazard.
     _saveCustomEmojiCache() {
-        if (this._emojiCacheSaveTimer) clearTimeout(this._emojiCacheSaveTimer);
+        if (this._hydratingEmojiCache) return;
+        if (this._emojiCacheSaveTimer) return;
         this._emojiCacheSaveTimer = setTimeout(() => {
             this._emojiCacheSaveTimer = null;
             const write = () => {
@@ -97,7 +108,8 @@ Object.assign(NYM.prototype, {
     },
 
     _saveCustomEmojiMap() {
-        if (this._emojiMapSaveTimer) clearTimeout(this._emojiMapSaveTimer);
+        if (this._hydratingEmojiCache) return;
+        if (this._emojiMapSaveTimer) return;
         this._emojiMapSaveTimer = setTimeout(() => {
             this._emojiMapSaveTimer = null;
             try {
@@ -121,6 +133,8 @@ Object.assign(NYM.prototype, {
         if (this.emojiMap && this.emojiMap[shortcode.toLowerCase()]) return;
         if (this.customEmojis.get(shortcode) === url) return;
         this.customEmojis.set(shortcode, url);
+        // The formatting context snapshots this map; tell it the snapshot moved.
+        if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
         if (!this._pendingEmojiRefreshCodes) this._pendingEmojiRefreshCodes = new Set();
         this._pendingEmojiRefreshCodes.add(shortcode);
         this._emojiPickerDirty = true;
