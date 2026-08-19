@@ -20,6 +20,42 @@ function _getQuoteMentionPattern(author) {
 
 Object.assign(NYM.prototype, {
 
+    /// The difficulty a NIP-13 `nonce` tag COMMITS to, or null when the event
+    /// carries no nonce tag at all.
+    ///
+    /// Presence of the tag is what distinguishes "mined and fell short" from
+    /// "never mined": leading zero bits on an id are cheap to have by accident
+    /// (1 in 2^n), so achieved bits alone cannot tell you a sender did any work.
+    /// Messages from clients other than this one generally have no nonce tag.
+    _powTargetFromEvent(event) {
+        const tag = event && Array.isArray(event.tags)
+            ? event.tags.find(t => Array.isArray(t) && t[0] === 'nonce')
+            : null;
+        if (!tag) return null;
+        const target = parseInt(tag[2], 10);
+        return Number.isFinite(target) && target > 0 ? target : 0;
+    },
+
+    /// Leading zero BITS of an event id — the work actually proven (NIP-13).
+    powBitsForId(id) {
+        if (typeof id !== 'string' || !/^[0-9a-f]{64}$/i.test(id)) return 0;
+        try {
+            if (window.NostrTools && window.NostrTools.nip13 &&
+                typeof window.NostrTools.nip13.getPow === 'function') {
+                return window.NostrTools.nip13.getPow(id);
+            }
+        } catch (_) { /* fall through to the local count */ }
+        // Local equivalent, so the popup still works if nostr-tools is absent.
+        let bits = 0;
+        for (let i = 0; i < id.length; i++) {
+            const nibble = parseInt(id[i], 16);
+            if (nibble === 0) { bits += 4; continue; }
+            bits += Math.clz32(nibble) - 28;
+            break;
+        }
+        return bits;
+    },
+
     // NIP-13: Validate proof of work
     validatePow(event, minimumDifficulty = 0) {
         if (minimumDifficulty === 0) return true;
@@ -513,7 +549,11 @@ Object.assign(NYM.prototype, {
                 isHistorical: isHistorical,
                 isFileOffer: !!fileOffer,
                 fileOffer: fileOffer,
-                isBot: this.isVerifiedBot(event.pubkey)
+                isBot: this.isVerifiedBot(event.pubkey),
+                // NIP-13 target the sender committed to, or null when the event
+                // carries no nonce tag (i.e. it did not come from this app).
+                // The work actually PROVEN is recomputed from the id on demand.
+                powTarget: this._powTargetFromEvent(event)
             };
 
             // Don't display duplicate of own messages
@@ -2803,28 +2843,54 @@ Object.assign(NYM.prototype, {
     // vouch list from relays. Signatures are verified and the graph is expanded
     // iteratively so a vouch from a newly-trusted author is applied once they're
     // rooted.
+    /// Hard cap on how much of the vouch archive one pass will ingest.
+    VOUCH_D1_MAX_EVENTS: 5000,
+
     async _fetchVouchesFromD1() {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiStream !== 'function') return;
         const events = [];
+        const cap = this.VOUCH_D1_MAX_EVENTS;
         try {
             const resp = await this._storageApiStream('channel-get', { channel: 'nym-vouches' }, false);
-            await this._readNdjsonStream(resp, (ev) => { if (ev && ev.kind === 30078) events.push(ev); });
+            await this._readNdjsonStream(resp, (ev) => {
+                if (ev && ev.kind === 30078) events.push(ev);
+                // Stop the stream rather than parse the rest just to drop it.
+                if (events.length >= cap) return false;
+            });
         } catch (_) { return; }
         if (events.length === 0) return;
-        const valid = [];
-        for (const ev of events) {
-            if (await this._verifyRelayEventAsync(ev)) valid.push(ev);
-        }
+
+        // Verification is LAZY and the whole walk is time-sliced.
+        const applied = new Set();
         let changed = true;
         let guard = 0;
+        let sliceStart = Date.now();
+        const breathe = async () => {
+            if (Date.now() - sliceStart <= 16) return;
+            if (typeof this._yieldToIdle === 'function') await this._yieldToIdle();
+            sliceStart = Date.now();
+        };
         while (changed && guard++ < 20) {
             const before = this.nymchatPubkeys ? this.nymchatPubkeys.size : 0;
-            for (const ev of valid) {
-                try { this.handleVouchEvent(ev); } catch (_) { }
+            for (let i = 0; i < events.length; i++) {
+                if (applied.has(i)) continue;
+                const ev = events[i];
+                // Untrusted author: handleVouchEvent would drop it anyway, so
+                // don't pay for a signature check yet. A later pass reconsiders
+                // it if the author becomes trusted.
+                if (!ev || !this.nymchatPubkeys || !this.nymchatPubkeys.has(ev.pubkey)) continue;
+                const cached = this._verifiedIdCheck(ev);
+                const ok = (cached !== undefined) ? cached : await this._verifyRelayEventAsync(ev);
+                applied.add(i);
+                // Applying twice is idempotent (_markNymchatPubkey is a set
+                // add), so applying once is equivalent to the old re-scan.
+                if (ok) { try { this.handleVouchEvent(ev); } catch (_) { } }
+                await breathe();
             }
             const after = this.nymchatPubkeys ? this.nymchatPubkeys.size : 0;
             changed = after !== before;
+            await breathe();
         }
     },
 

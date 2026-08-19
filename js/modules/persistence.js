@@ -190,7 +190,11 @@
                 isFileOffer: m.isFileOffer,
                 fileOffer: m.fileOffer,
                 isBot: m.isBot,
-                thinking: m.thinking
+                thinking: m.thinking,
+                // NIP-13 target from the sender's nonce tag. Without this the
+                // cache restore drops it and every reloaded message reports
+                // "no proof of work" regardless of what was actually mined.
+                powTarget: m.powTarget
             };
             // Non-enumerable so it never leaks into JSON/structured-clone of the
             // live message object elsewhere.
@@ -355,6 +359,19 @@
         async hydrateFromCache() {
             if (this._cacheDisabled) return;
             const cachePMsAllowed = this.settings && this.settings.cachePMs !== false;
+
+            // Hydration touches EVERY cached message
+            const SLICE_MS = 12;
+            let sliceStart = (typeof performance !== 'undefined' && performance.now)
+                ? performance.now() : Date.now();
+            const nowMs = () => (typeof performance !== 'undefined' && performance.now)
+                ? performance.now() : Date.now();
+            const breathe = async () => {
+                if (nowMs() - sliceStart < SLICE_MS) return;
+                await new Promise(r => setTimeout(r, 0));
+                sliceStart = nowMs();
+            };
+
             try {
                 const [profiles, channels, pms, reactions, avatars, banners] = await Promise.all([
                     this._cacheGetAll('profiles'),
@@ -368,6 +385,7 @@
                 // Profiles
                 let profileCount = 0;
                 for (const p of profiles) {
+                    await breathe();
                     if (!p || !p.pubkey) continue;
                     if (profileCount++ >= STORE_LIMITS.profiles) break;
                     if (!this.users.has(p.pubkey)) {
@@ -407,6 +425,7 @@
 
                 // Avatars: rehydrate blobs as object URLs
                 for (const a of avatars) {
+                    await breathe();
                     if (!a || !a.pubkey || !a.blob) continue;
                     try {
                         // Skip if the cached blob doesn't match the current source URL
@@ -422,6 +441,7 @@
 
                 // Banners: rehydrate blobs as object URLs
                 for (const b of banners) {
+                    await breathe();
                     if (!b || !b.pubkey || !b.blob) continue;
                     try {
                         const currentSource = this.userBanners.get(b.pubkey);
@@ -439,7 +459,16 @@
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
                     if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
-                    const msgs = c.messages.map(m => this._hydrateMessage(m));
+                    const msgs = [];
+                    for (const m of c.messages) {
+                        await breathe();
+                        msgs.push(this._hydrateMessage(m));
+                    }
+                    // Re-check: breathe() hands the event loop back, so a live
+                    // relay event may have created this key while we yielded.
+                    // The pre-loop guard is no longer enough on its own —
+                    // overwriting here would drop a just-received message.
+                    if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
                     this.messages.set(c.key, msgs);
                     loadedChannelKeys.push(c.key);
                 }
@@ -449,6 +478,7 @@
                     if (!msgs || !msgs.length) continue;
                     let lastTs = 0;
                     for (const m of msgs) {
+                        await breathe();
                         if (!m) continue;
                         const gated = !m.isOwn && !this.isFriend(m.pubkey) &&
                             !this.nymchatPubkeys.has(m.pubkey) &&
@@ -486,7 +516,13 @@
                         }
                         if (!Array.isArray(rawMsgs)) continue;
                         if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
-                        const msgs = rawMsgs.map(m => this._hydrateMessage(m));
+                        const msgs = [];
+                        for (const m of rawMsgs) {
+                            await breathe();
+                            msgs.push(this._hydrateMessage(m));
+                        }
+                        // Re-check after yielding, as above.
+                        if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
                         this.pmMessages.set(p.key, msgs);
                     }
                     for (const k of migrateKeys) this.persistPMMessages(k);
@@ -496,6 +532,7 @@
                     for (const msgs of this.pmMessages.values()) {
                         if (!Array.isArray(msgs)) continue;
                         for (const m of msgs) {
+                            await breathe();
                             if (!m || m.isOwn || m.isGroup || !m.pubkey) continue;
                             if (m.nymMessageId) this.nymUsers.add(m.pubkey);
                             else if (m.bitchatMessageId) this.bitchatUsers.add(m.pubkey);
@@ -506,6 +543,7 @@
                 }
 
                 for (const r of reactions) {
+                    await breathe();
                     if (!r || !r.messageId || !Array.isArray(r.entries)) continue;
                     if (this.reactions.has(r.messageId)) continue;
                     const emojiMap = new Map();
@@ -522,6 +560,7 @@
                     for (const msgs of this.pmMessages.values()) {
                         if (!Array.isArray(msgs)) continue;
                         for (const m of msgs) {
+                            await breathe();
                             if (m && m.id && m.nymMessageId && m.id !== m.nymMessageId) {
                                 this._migrateReactionKey(m.id, m.nymMessageId);
                             }
@@ -546,6 +585,10 @@
         },
 
         _populateSidebarFromHydration() {
+            // Suppress addChannel's per-add sidebar sweeps for the whole run —
+            // each is a querySelectorAll over the list, so leaving them on makes
+            // this O(n^2) in DOM queries during boot.
+            this._bulkChannelAdd = true;
             try {
                 if (typeof this.addChannel === 'function') {
                     for (const storageKey of [...this.messages.keys()]) {
@@ -592,7 +635,17 @@
                     this._clearSidebarSkel('channelList');
                     this._clearSidebarSkel('pmList');
                 }
-            } catch (_) { }
+            } catch (_) {
+                // Fall through to the flush below — the sidebar must not be left
+                // with the bulk flag set, or later addChannel calls would stop
+                // refreshing pins and hidden state entirely.
+            } finally {
+                if (typeof this._flushBulkChannelAdd === 'function') {
+                    this._flushBulkChannelAdd();
+                } else {
+                    this._bulkChannelAdd = false;
+                }
+            }
         },
 
         _ensurePersistState() {

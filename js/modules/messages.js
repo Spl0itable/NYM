@@ -156,6 +156,14 @@ Object.assign(NYM.prototype, {
         msg.created_at = signedEvent.created_at;
         msg.timestamp = new Date(signedEvent.created_at * 1000);
         delete msg._optimistic;
+        // The optimistic row was built BEFORE mining, so it has no nonce tag to
+        // read. The signed event is the first time the PoW target exists; carry
+        // it over or the timestamp popup reports our own mined messages as
+        // "None - sent from another client".
+        if (typeof this._powTargetFromEvent === 'function') {
+            const ownPowTarget = this._powTargetFromEvent(signedEvent);
+            if (typeof ownPowTarget === 'number') msg.powTarget = ownPowTarget;
+        }
 
         const idSet = isPM ? null : this.channelMessageIds && this.channelMessageIds.get(storageKey);
         if (idSet) idSet.add(signedEvent.id);
@@ -180,6 +188,7 @@ Object.assign(NYM.prototype, {
             el.dataset.messageId = signedEvent.id;
             el.dataset.createdAt = String(signedEvent.created_at || 0);
             el.classList.remove('optimistic-pending');
+            if (typeof msg.powTarget === 'number') el.dataset.powTarget = String(msg.powTarget);
 
             if (oldCreated !== msg.created_at && typeof this._findDomInsertionPoint === 'function') {
                 const container = el.parentNode;
@@ -718,6 +727,12 @@ Object.assign(NYM.prototype, {
             messageEl.dataset.ms = this._messageMs(message);
             messageEl.dataset.seq = message._seq || 0;
             if (message.isPM) messageEl.dataset.isPM = '1';
+            // NIP-13: the target the sender committed to. Absent attribute means
+            // the event carried no nonce tag, which is how the timestamp popup
+            // tells "no proof-of-work" from "mined to N bits".
+            if (typeof message.powTarget === 'number') {
+                messageEl.dataset.powTarget = String(message.powTarget);
+            }
             if (message.isGroup && message.groupId) messageEl.dataset.groupId = message.groupId;
 
             const authorClass = message.isOwn ? 'self' : '';
@@ -3398,13 +3413,15 @@ Object.assign(NYM.prototype, {
 
         const modal = document.createElement('div');
         modal.className = 'reactors-modal timestamp-popup';
-        modal.innerHTML = `<div class="timestamp-popup-body">${this.escapeHtml(fullTime)}</div>`;
+        const powHtml = this._timestampPopupPowHtml(anchorEl);
+        modal.innerHTML =
+            `<div class="timestamp-popup-body">${this.escapeHtml(fullTime)}</div>${powHtml}`;
         document.body.appendChild(modal);
         this.timestampPopup = modal;
 
         const rect = anchorEl.getBoundingClientRect();
         const right = Math.max(4, window.innerWidth - rect.right);
-        const approxHeight = 90;
+        const approxHeight = powHtml ? 130 : 90;
         const verticalDecl = (rect.top > approxHeight + 20)
             ? `bottom:${window.innerHeight - rect.top + 6}px;`
             : `top:${rect.bottom + 6}px;`;
@@ -3415,6 +3432,35 @@ Object.assign(NYM.prototype, {
         const scroller = document.getElementById('messagesContainer');
         if (scroller) scroller.addEventListener('scroll', onScroll, { passive: true, capture: true });
         window.addEventListener('scroll', onScroll, { passive: true, capture: true });
+    },
+
+    /// The proof-of-work section of the timestamp popup, or '' when PoW does not
+    /// apply to this row.
+    _timestampPopupPowHtml(anchorEl) {
+        const row = anchorEl && anchorEl.closest ? anchorEl.closest('.message') : null;
+        if (!row || !row.dataset) return '';
+        if (row.dataset.isPM === '1') return '';
+
+        const hasNonce = typeof row.dataset.powTarget === 'string' && row.dataset.powTarget !== '';
+        if (!hasNonce) {
+            return '<div class="timestamp-popup-pow">' +
+                '<span class="pow-label">Proof-of-work</span>' +
+                '<span class="pow-none">None &middot; sent from another client</span>' +
+                '</div>';
+        }
+
+        const bits = (typeof this.powBitsForId === 'function')
+            ? this.powBitsForId(row.dataset.messageId || '')
+            : 0;
+        const target = parseInt(row.dataset.powTarget, 10) || 0;
+        const short = target > 0 && bits < target;
+        const detail = target > 0
+            ? `${bits} bits &middot; target ${target}${short ? ' (below target)' : ''}`
+            : `${bits} bits`;
+        return '<div class="timestamp-popup-pow">' +
+            '<span class="pow-label">Proof-of-work</span>' +
+            `<span class="pow-bits${short ? ' pow-short' : ''}">${detail}</span>` +
+            '</div>';
     },
 
     closeTimestampPopup() {

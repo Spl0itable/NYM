@@ -2,13 +2,73 @@
 
 Object.assign(NYM.prototype, {
 
+    /// localStorage key for the persisted geo-relay directory.
+    _GEO_RELAY_CACHE_KEY: 'nym_geo_relays',
+    /// How long a cached directory is used before we look for changes.
+    /// Matches bitchat on both platforms: iOS `geoRelayFetchIntervalSeconds`
+    /// (TransportConfig.swift) and Android `ONE_DAY_MS` (RelayDirectory.kt) are
+    /// both 24h. The list changes rarely, and refetching it on every reload
+    /// costs a request before geohash channels can be joined.
+    _GEO_RELAY_TTL_MS: 24 * 60 * 60 * 1000,
+
+    /// Reads the persisted directory. Returns null when absent or unusable —
+    /// never when merely stale, so a failed refresh can still fall back to it.
+    _loadGeoRelayCache() {
+        try {
+            const raw = localStorage.getItem(this._GEO_RELAY_CACHE_KEY);
+            if (!raw) return null;
+            const data = JSON.parse(raw);
+            if (!data || !Array.isArray(data.relays) || !data.relays.length) return null;
+            const ok = (arr) => (Array.isArray(arr) ? arr : []).filter(r =>
+                r && typeof r.url === 'string' && Number.isFinite(r.lat) && Number.isFinite(r.lng));
+            const relays = ok(data.relays);
+            if (!relays.length) return null;
+            return { fetchedAt: Number(data.fetchedAt) || 0, relays, vetted: ok(data.vetted) };
+        } catch (_) {
+            return null;
+        }
+    },
+
+    _saveGeoRelayCache(relays, vetted) {
+        const slim = (list) => (list || []).map(r => ({ url: r.url, lat: r.lat, lng: r.lng }));
+        try {
+            localStorage.setItem(this._GEO_RELAY_CACHE_KEY, JSON.stringify({
+                fetchedAt: Date.now(),
+                relays: slim(relays),
+                vetted: slim(vetted),
+            }));
+        } catch (_) { /* quota or private mode — the in-memory list still works */ }
+    },
+
     // Fetch geo relay list from the same remote CSV that bitchat uses.
     // Falls back to the hardcoded list if fetch fails.
     // Returns a promise so connectToGeoRelays can await the fresh data
     // before selecting relays, ensuring we match bitchat's relay set.
-    fetchGeoRelays() {
+    //
+    // A directory cached within _GEO_RELAY_TTL_MS is adopted WITHOUT any
+    // network call, so a reload or reconnect starts from disk. Pass
+    // { force: true } to check for changes regardless of age.
+    fetchGeoRelays(opts = {}) {
         const directCsvUrl = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
         const base = this._getProxyBaseUrl();
+
+        const vettedCsvUrl = 'https://raw.githubusercontent.com/permissionlesstech/bitchat/refs/heads/main/relays/online_relays_gps.csv';
+
+        const cached = this._loadGeoRelayCache();
+        if (cached) {
+            // Adopt the cached lists immediately either way: when fresh this is
+            // the whole operation, and when stale it keeps geohash channels
+            // working while the refresh is in flight.
+            this._adoptGeoRelays(cached.relays, cached.vetted, { persist: false });
+            const age = Date.now() - cached.fetchedAt;
+            if (!opts.force && age >= 0 && age < this._GEO_RELAY_TTL_MS) {
+                return Promise.resolve();
+            }
+        }
+
+        const clean = (arr) => Array.isArray(arr)
+            ? arr.filter(r => r && r.url && Number.isFinite(r.lat) && Number.isFinite(r.lng))
+            : [];
 
         const tryProxyJson = async () => {
             if (!base) return null;
@@ -17,34 +77,66 @@ Object.assign(NYM.prototype, {
                 if (!res.ok) return null;
                 const data = await res.json();
                 if (!data || !Array.isArray(data.relays)) return null;
-                return data.relays.filter(r => r && r.url && Number.isFinite(r.lat) && Number.isFinite(r.lng));
+                return { relays: clean(data.relays), vetted: clean(data.vetted) };
             } catch {
                 return null;
             }
         };
 
-        const fetchAndParseCsvLocally = async () => {
-            const res = await fetch(directCsvUrl, { cache: 'no-cache' });
+        const fetchCsv = async (url) => {
+            const res = await fetch(url, { cache: 'no-cache' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const csv = await res.text();
-            return this._parseGeoRelaysCsv(csv);
+            return this._parseGeoRelaysCsv(await res.text());
         };
 
         return (async () => {
-            let relays = await tryProxyJson();
-            if (!relays || relays.length === 0) {
-                relays = await fetchAndParseCsvLocally();
+            let got = await tryProxyJson();
+            if (!got || got.relays.length === 0) {
+                // Direct fallback. The vetted list is best-effort: without it we
+                // still match bitchat Android, which is what we did before.
+                const [relays, vetted] = await Promise.all([
+                    fetchCsv(directCsvUrl),
+                    fetchCsv(vettedCsvUrl).catch(() => []),
+                ]);
+                got = { relays, vetted };
             }
-            if (relays && relays.length > 0) {
-                this.geoRelays = relays.map(r => ({ ...r, url: this._canonicalRelayUrl(r.url) }));
-                for (const r of this.geoRelays) this.allRelayUrls.add(r.url);
-                if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                    this._poolSendRelayConfig();
-                }
+            if (got && got.relays.length > 0) {
+                this._adoptGeoRelays(got.relays, got.vetted, { persist: true });
             }
         })().catch((err) => {
+            // A cached directory (however old) has already been adopted above,
+            // so a failed refresh degrades to "keep using what we had".
             console.warn(`[GeoRelays] CSV fetch failed (${this.geoRelays.length} geo relays):`, err.message);
         });
+    },
+
+    /// Installs the two parsed directories, canonicalising urls, and optionally
+    /// persists them for the next launch.
+    ///
+    /// `geoRelays` stays the UNION so pool sharding and allRelayUrls cover
+    /// everything either directory names; the two are kept apart because
+    /// selection has to apply each client's own rule (see
+    /// getClosestRelaysForGeohash).
+    _adoptGeoRelays(relays, vetted, { persist }) {
+        const canon = (list) => (list || []).map(r => ({ ...r, url: this._canonicalRelayUrl(r.url) }));
+        this._geoRelaysUpstream = canon(relays);
+        this._geoRelaysVetted = canon(vetted);
+
+        const byUrl = new Map();
+        for (const r of this._geoRelaysUpstream) byUrl.set(r.url, r);
+        for (const r of this._geoRelaysVetted) if (!byUrl.has(r.url)) byUrl.set(r.url, r);
+        this.geoRelays = [...byUrl.values()];
+        // Defensive: adopting the cached directory runs synchronously from
+        // inside the constructor (see app.js, where allRelayUrls is seeded
+        // just above the fetchGeoRelays call). Any future reordering that puts
+        // an adopt ahead of that assignment should degrade, not throw.
+        if (!this.allRelayUrls) this.allRelayUrls = new Set(this.defaultRelays || []);
+        for (const r of this.geoRelays) this.allRelayUrls.add(r.url);
+
+        if (persist) this._saveGeoRelayCache(this._geoRelaysUpstream, this._geoRelaysVetted);
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            this._poolSendRelayConfig();
+        }
     },
 
     _parseGeoRelaysCsv(csv) {
@@ -68,26 +160,42 @@ Object.assign(NYM.prototype, {
         return parsed;
     },
 
-    // Find the N closest relays to a geohash location
+    // The N closest relays to a geohash, as the UNION of what each bitchat
+    // client would pick.
     getClosestRelaysForGeohash(geohash, count = this.geoRelayCount) {
         try {
-            // Decode geohash to get center coordinates
             const coords = this.decodeGeohash(geohash);
             if (!coords || typeof coords.lat !== 'number' || typeof coords.lng !== 'number') {
                 return [];
             }
 
-            // Calculate distance from geohash center to each geo-located relay
-            const relaysWithDistance = this.geoRelays.map(relay => ({
+            const rank = (list) => list.map((relay, index) => ({
                 url: relay.url,
-                distance: this.calculateDistance(coords.lat, coords.lng, relay.lat, relay.lng)
+                index,
+                distance: this.calculateDistance(coords.lat, coords.lng, relay.lat, relay.lng),
             }));
 
-            // Sort by distance (closest first)
-            relaysWithDistance.sort((a, b) => a.distance - b.distance);
+            // Android's rule: distance only. Array.prototype.sort is stable per
+            // spec, so ties keep directory order — which is what Kotlin's
+            // stable sortedBy over the same CSV produces.
+            const upstream = rank(this._geoRelaysUpstream || this.geoRelays || []);
+            upstream.sort((a, b) => (a.distance - b.distance) || (a.index - b.index));
 
-            // Return the N closest relays
-            return relaysWithDistance.slice(0, count);
+            // iOS's rule: (distance, host) ascending.
+            const vetted = rank(this._geoRelaysVetted || []);
+            vetted.sort((a, b) => (a.distance - b.distance) || (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
+
+            const out = [];
+            const seen = new Set();
+            for (const r of [...upstream.slice(0, count), ...vetted.slice(0, count)]) {
+                if (seen.has(r.url)) continue;
+                seen.add(r.url);
+                out.push({ url: r.url, distance: r.distance });
+            }
+            // Closest-first overall, so callers that only take a prefix still
+            // get the nearest relays.
+            out.sort((a, b) => a.distance - b.distance);
+            return out;
         } catch (error) {
             return [];
         }

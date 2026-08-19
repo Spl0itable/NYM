@@ -238,29 +238,34 @@ Object.assign(NYM.prototype, {
         return resp;
     },
 
+    /// Reads an NDJSON stream, calling [onItem] per parsed line.
     async _readNdjsonStream(resp, onItem) {
         if (resp && resp._wsItems) {
-            for (const it of resp._wsItems) { try { onItem(it); } catch (_) { } }
+            for (const it of resp._wsItems) {
+                try { if (onItem(it) === false) return; } catch (_) { }
+            }
             return;
         }
         if (!resp || !resp.body) return;
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
+        let stop = false;
         const handle = (line) => {
-            if (!line) return;
-            try { onItem(JSON.parse(line)); } catch (_) { }
+            if (!line || stop) return;
+            try { if (onItem(JSON.parse(line)) === false) stop = true; } catch (_) { }
         };
-        while (true) {
+        while (!stop) {
             const { value, done } = await reader.read();
             if (done) break;
             buf += decoder.decode(value, { stream: true });
             let nl;
-            while ((nl = buf.indexOf('\n')) >= 0) {
+            while (!stop && (nl = buf.indexOf('\n')) >= 0) {
                 handle(buf.slice(0, nl));
                 buf = buf.slice(nl + 1);
             }
         }
+        if (stop) { try { await reader.cancel(); } catch (_) { } return; }
         buf += decoder.decode();
         if (buf) handle(buf);
     },

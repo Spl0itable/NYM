@@ -124,7 +124,9 @@ Object.assign(NYM.prototype, {
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
             wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
             wallpaperCustomUrl: localStorage.getItem('nym_wallpaper_custom_url') || '',
-            powDifficulty: parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
+            powDifficulty: (typeof normalizePowDifficulty === 'function')
+                ? normalizePowDifficulty(localStorage.getItem('nym_pow_difficulty'))
+                : parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
             hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
             textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             transparencyEnabled: this.settings.transparencyEnabled === true && localStorage.getItem('nym_transparency_enabled') === 'true',
@@ -355,14 +357,46 @@ Object.assign(NYM.prototype, {
     },
 
     // Publish one data category as its own self-addressed gift wrap
+    _nip44PaddedLen(len) {
+        if (len <= 32) return 32;
+        const nextPower = 1 << (Math.floor(Math.log2(len - 1)) + 1);
+        const chunk = nextPower <= 256 ? 32 : nextPower / 8;
+        return chunk * (Math.floor((len - 1) / chunk) + 1);
+    },
+
+    /// Length of a NIP-44 v2 payload: base64(version | nonce | ciphertext | mac).
+    _nip44PayloadLen(plaintextBytes) {
+        const raw = 1 + 32 + (2 + this._nip44PaddedLen(plaintextBytes)) + 32;
+        return Math.ceil(raw / 3) * 4;
+    },
+
+    /// Size of the final `["EVENT", wrapped]` frame for a rumor of this size.
+    _wrappedSizeForRumor(rumorBytes) {
+        const SEAL_OVERHEAD = 200;   // kind/created_at/tags/pubkey/id/sig
+        const WRAP_OVERHEAD = 320;   // same, plus the p/d/k tags added here
+        const sealJson = this._nip44PayloadLen(rumorBytes) + SEAL_OVERHEAD;
+        return this._nip44PayloadLen(sealJson) + WRAP_OVERHEAD + 10;
+    },
+
+    /// Largest rumor whose wrapped event still clears the relay gate. Memoised;
+    /// derived rather than hardcoded so it stays correct if the gate moves.
+    _maxRumorBytesForWrap(limit = 65000) {
+        if (!this._maxRumorCache) this._maxRumorCache = {};
+        const hit = this._maxRumorCache[limit];
+        if (hit) return hit;
+        let lo = 32, hi = 64 * 1024, best = 32;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (this._wrappedSizeForRumor(mid) <= limit) { best = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        this._maxRumorCache[limit] = best;
+        return best;
+    },
+
     async _publishCategoryWrap(payload, dTag, createdAt, trimFns) {
         const RUMOR_OVERHEAD = 256;
-        // The payload is encrypted twice (seal kind 13 -> gift wrap kind 1059)
-        // and base64 expands it ~1.9x across both stages. Bound the inner rumor
-        // so the final wrapped event stays under common ~64KiB relay caps.
-        const MAX_WRAPPED_BYTES = 60000;
-        const EXPANSION = 1.95;
-        const MAX_RUMOR_BYTES = Math.floor(MAX_WRAPPED_BYTES / EXPANSION);
+        const MAX_RUMOR_BYTES = this._maxRumorBytesForWrap();
         const encoder = new TextEncoder();
         const rumorByteSize = (p) => {
             const json = JSON.stringify(p);
@@ -382,7 +416,7 @@ Object.assign(NYM.prototype, {
 
         if (rumorByteSize(payload) > MAX_RUMOR_BYTES) {
             console.warn(`[NostrSync] ${dTag} exceeds NIP-44 plaintext limit after trimming; skipping publish`);
-            return;
+            return false;
         }
 
         // Skip republishing a wrap whose (post-trim) payload is byte-identical to
@@ -391,10 +425,13 @@ Object.assign(NYM.prototype, {
         // state as fresh 1059 gift wraps, flooding relays with nym-sync events.
         if (!this._publishedSectionJson) this._publishedSectionJson = {};
         const finalJson = JSON.stringify(payload);
-        if (this._publishedSectionJson[dTag] === finalJson) return;
+        if (this._publishedSectionJson[dTag] === finalJson) return false;
         this._publishedSectionJson[dTag] = finalJson;
 
         await this._publishWrappedNostrEvent(payload, dTag, createdAt);
+        // Reports whether anything actually changed, so the caller only pings
+        // our other devices when there is something for them to re-read.
+        return true;
     },
 
     async _publishEncryptedSettings(settingsData) {
@@ -492,8 +529,12 @@ Object.assign(NYM.prototype, {
         try {
             const groupMessageHistory = this._buildGroupHistorySync();
             if (groupMessageHistory) {
-                // ~30 KB of message JSON per shard, well under the NIP-44 cap.
-                const SHARD_BUDGET = 30000;
+                // Message JSON per shard. The rumor carries this as an ESCAPED
+                // string, which inflates it, and the escaped total has to stay
+                // under _maxRumorBytesForWrap() (28,672). Budgeting 18 KB of raw
+                // message JSON leaves room for that escaping plus the rumor
+                // scaffolding; the old 30,000 exceeded the cliff on its own.
+                const SHARD_BUDGET = 18000;
                 // Last-resort guard if a single message is itself enormous.
                 const trimOldestHistory = (p) => {
                     const hist = p.groupMessageHistory || {};
@@ -569,17 +610,106 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
 
         const sections = this._splitSettingsBySection(settingsData);
+        const changed = [];
         for (const [section, payload] of Object.entries(sections)) {
             const dTag = `nymchat-settings-${section}`;
-            const trimFns = section === 'channels' ? [this._trimChannelsReadState] : null;
-            await this._publishCategoryWrap(payload, dTag, now, trimFns);
+            // Bound: the trimmer reads channelLastActivity to decide what to drop.
+            const trimFns = section === 'channels'
+                ? [this._trimChannelsReadState.bind(this)]
+                : null;
+            if (await this._publishCategoryWrap(payload, dTag, now, trimFns)) {
+                changed.push(section);
+            }
+        }
+        await this._publishSettingsChangedPing(changed, now);
+    },
+
+    /// Handles a settings-changed ping from one of our other devices.
+    _onSettingsChangedPing(ping, rumorTs) {
+        if (!ping || typeof ping !== 'object') return;
+        if (ping.src && ping.src === this._syncInstanceId()) return;
+        if (this._applyingRemoteSettings) return;
+
+        const ts = Number(ping.ts) || rumorTs || 0;
+        if (ts && ts <= (this._lastSyncPingTs || 0)) return;
+        this._lastSyncPingTs = ts;
+
+        if (this._syncPingTimer) clearTimeout(this._syncPingTimer);
+        this._syncPingTimer = setTimeout(async () => {
+            this._syncPingTimer = null;
+            try {
+                if (typeof this.settingsLoadFromD1 === 'function') {
+                    await this.settingsLoadFromD1();
+                }
+            } catch (_) {
+                // A failed pull just leaves the next scheduled read to catch up.
+            }
+        }, 1200);
+    },
+
+    /// A stable id for THIS client instance, so a device ignores the echo of
+    /// its own ping. Session-scoped: a reload is a new instance, which at worst
+    /// costs one redundant D1 read.
+    _syncInstanceId() {
+        if (!this.__syncInstanceId) {
+            this.__syncInstanceId = Math.random().toString(36).slice(2) +
+                Date.now().toString(36);
+        }
+        return this.__syncInstanceId;
+    },
+
+    /// Announces "settings changed, re-read D1" to our other devices.
+    async _publishSettingsChangedPing(sections, createdAt) {
+        if (!Array.isArray(sections) || sections.length === 0) return;
+        if (!this.pubkey) return;
+        try {
+            await this._publishWrappedNostrEvent(
+                { src: this._syncInstanceId(), sections, ts: createdAt },
+                'nymchat-sync-ping',
+                createdAt,
+                { skipD1: true }
+            );
+        } catch (_) {
+            // Best-effort: a failed ping just means the other device waits for
+            // its next D1 read, which is the behaviour we had before.
         }
     },
 
-    // Drop the oldest entries from the channels section's auto-growing read-state
-    // maps so the payload fits under the NIP-44 limit instead of being skipped.
+    // Drop the oldest entries from the channels section's auto-growing state so
+    // the payload fits instead of being skipped entirely.
     _trimChannelsReadState(p) {
-        for (const key of ['closedPMTimes', 'leftGroupTimes', 'closedPMs', 'leftGroups']) {
+        // 1. Least-recently-active joined channels.
+        const joined = p.userJoinedChannels;
+        if (Array.isArray(joined) && joined.length > 20) {
+            const activity = this.channelLastActivity instanceof Map
+                ? this.channelLastActivity
+                : new Map();
+            const ordered = [...joined].sort(
+                (a, b) => (activity.get(a) || 0) - (activity.get(b) || 0));
+            const drop = new Set(ordered.slice(0, Math.max(1, Math.floor(ordered.length * 0.25))));
+            p.userJoinedChannels = joined.filter(c => !drop.has(c));
+            return true;
+        }
+
+        // 2. Read-state maps, oldest first.
+        const pairs = [['closedPMs', 'closedPMTimes'], ['leftGroups', 'leftGroupTimes']];
+        for (const [setKey, timeKey] of pairs) {
+            const arr = p[setKey];
+            const times = (p[timeKey] && typeof p[timeKey] === 'object' && !Array.isArray(p[timeKey]))
+                ? p[timeKey] : null;
+            if (Array.isArray(arr) && arr.length > 30) {
+                const ordered = [...arr].sort(
+                    (a, b) => (Number(times?.[a]) || 0) - (Number(times?.[b]) || 0));
+                const drop = new Set(ordered.slice(0, Math.max(1, Math.floor(ordered.length * 0.25))));
+                p[setKey] = arr.filter(x => !drop.has(x));
+                // Keep the companion map in step so it cannot outlive its set.
+                if (times) for (const k of drop) delete times[k];
+                return true;
+            }
+        }
+
+        // 3. Any time map that outgrew its set (or has no set at all).
+        for (const key of ['closedPMTimes', 'leftGroupTimes']) {
             const m = p[key];
             if (m && typeof m === 'object' && !Array.isArray(m)) {
                 const entries = Object.entries(m);
@@ -603,10 +733,12 @@ Object.assign(NYM.prototype, {
     },
 
     // Persist to D1 and publish a NIP-59 nym-sync gift wrap to relays.
-    async _publishWrappedNostrEvent(payload, dTag, createdAt) {
+    async _publishWrappedNostrEvent(payload, dTag, createdAt, opts = {}) {
         const NT = window.NostrTools;
         const now = createdAt || Math.floor(Date.now() / 1000);
-        this._saveSettingsBlobToD1(dTag, JSON.stringify(payload));
+        // The sync ping is a notification, not a settings category — writing it
+        // to D1 would add a row every save that no reader ever wants.
+        if (!opts.skipD1) this._saveSettingsBlobToD1(dTag, JSON.stringify(payload));
 
         const rumor = {
             kind: 30078,
@@ -835,15 +967,30 @@ Object.assign(NYM.prototype, {
         const toApply = sectionEntries.length
             ? sectionEntries
             : coreEntries.filter(d => d.realCat === 'nymchat-settings');
+        // The additive pass is per-section on purpose: it merges lists by union,
+        // so it has to see each section's own payload.
         let coreApplied = 0, newestCoreTs = 0;
+        const merged = {};
         for (const d of toApply) {
             try {
                 await applyNostrSettingsAdditive(d.payload);
-                await applyNostrSettings(d.payload);
+                // _splitSettingsBySection routes every key to exactly ONE
+                // section, so the section payloads are disjoint (bar the shared
+                // `v`) and a newest-last merge reproduces exactly what applying
+                // them oldest-to-newest would leave behind.
+                Object.assign(merged, d.payload);
                 coreApplied++;
                 const ts = d.updatedAt ? Math.floor(d.updatedAt / 1000) : Math.floor(Date.now() / 1000);
                 if (ts > newestCoreTs) newestCoreTs = ts;
             } catch (_) { }
+        }
+        // ONE authoritative apply rather than one per section. applyNostrSettings
+        // is the most expensive function in the boot path — it rebuilds sidebar
+        // rows and does dozens of synchronous localStorage writes — and running
+        // it once per section made boot block for seconds with no gain, since
+        // every pass but the last was immediately superseded.
+        if (coreApplied > 0) {
+            try { await applyNostrSettings(merged); } catch (_) { coreApplied = 0; }
         }
 
         if (coreApplied === 0) return false;
@@ -1204,7 +1351,9 @@ Object.assign(NYM.prototype, {
         localStorage.setItem('nym_autoscroll', this.settings.autoscroll);
         localStorage.setItem('nym_timestamps', this.settings.showTimestamps);
         localStorage.setItem('nym_sort_proximity', this.settings.sortByProximity);
-        const powDifficulty = parseInt(document.getElementById('powDifficultySelect').value);
+        const powDifficulty = (typeof normalizePowDifficulty === 'function')
+            ? normalizePowDifficulty(document.getElementById('powDifficultySelect').value)
+            : parseInt(document.getElementById('powDifficultySelect').value);
         this.powDifficulty = powDifficulty;
         this.enablePow = powDifficulty > 0;
         localStorage.setItem('nym_pow_difficulty', powDifficulty.toString());

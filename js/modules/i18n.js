@@ -537,25 +537,51 @@ Object.assign(NYM.prototype, {
         if (this._i18nApplyTimer) { clearTimeout(this._i18nApplyTimer); this._i18nApplyTimer = null; }
     },
 
-    // ---- background indicator ---------------------------------------------
+    /// The indicator's own label, in the language being translated INTO.
+    _i18nIndicatorLabel() {
+        const en = 'Translating…';
+        try {
+            const lang = this.getUiLanguage && this.getUiLanguage();
+            if (!lang || lang === 'en') return en;
+            const cache = this._i18nLoadCache(lang);
+            const hit = cache && (cache[en] || cache['Translating...']);
+            return (typeof hit === 'string' && hit.trim()) ? hit : en;
+        } catch (_) {
+            return en;
+        }
+    },
 
-    // Small, non-blocking pill shown while background translation is in flight.
+    // Non-blocking progress row shown while background translation is in
+    // flight. It lives in the SIDEBAR, under the relay status — it used to be
+    // `position: fixed` in the bottom-right corner, which is where the message
+    // input is, so it sat on top of the composer while translating. The sidebar
+    // has room for it and nothing there to obscure.
     _i18nUpdateIndicator() {
         const remaining = this._i18nRemaining();
-        let pill = this._i18nIndicator;
+        let row = this._i18nIndicator;
         if (remaining <= 0) {
-            if (pill) { pill.classList.remove('visible'); }
+            // Completed: remove it entirely rather than leaving an empty row.
+            if (row) { row.remove(); this._i18nIndicator = null; }
             return;
         }
-        if (!pill) {
-            pill = document.createElement('div');
-            pill.className = 'nym-i18n-bg-indicator';
-            pill.setAttribute('data-no-i18n', '');
-            pill.innerHTML = '<span class="nym-i18n-bg-spinner"></span><span class="nym-i18n-bg-text">Translating…</span>';
-            document.body.appendChild(pill);
-            this._i18nIndicator = pill;
+        if (!row || !row.isConnected) {
+            row = document.createElement('div');
+            row.className = 'nym-i18n-bg-indicator';
+            row.setAttribute('data-no-i18n', '');
+            row.innerHTML = '<span class="nym-i18n-bg-spinner"></span><span class="nym-i18n-bg-text"></span>';
+            const anchor = document.querySelector('.sidebar-header .status-indicator');
+            if (anchor && anchor.parentNode) {
+                anchor.insertAdjacentElement('afterend', row);
+            } else {
+                // No sidebar yet (very early boot) — fall back to the body so
+                // the progress is still visible.
+                document.body.appendChild(row);
+            }
+            this._i18nIndicator = row;
         }
-        pill.classList.add('visible');
+        const text = row.querySelector('.nym-i18n-bg-text');
+        if (text) text.textContent = this._i18nIndicatorLabel();
+        row.classList.add('visible');
     },
 
     // ---- init + boot -------------------------------------------------------

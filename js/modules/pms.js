@@ -863,6 +863,16 @@ Object.assign(NYM.prototype, {
                 }
 
                 if (isOwn) {
+                    // Cross-device signal: another of our devices saved
+                    // settings and wrote them to D1. It carries no settings
+                    // content — pull the authoritative values instead.
+                    if (dTag === 'nymchat-sync-ping') {
+                        try {
+                            const ping = JSON.parse(rumor.content);
+                            this._onSettingsChangedPing(ping, rumor.created_at || 0);
+                        } catch (_) { }
+                        return;
+                    }
                     try {
                         const s = JSON.parse(rumor.content);
                         const rumorTs = rumor.created_at || 0;

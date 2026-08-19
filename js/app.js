@@ -572,8 +572,8 @@ class NYM {
         this.geoRelayConnections = new Map();
         this.currentGeoRelays = new Set();
         this.geoRelayCount = 5;
-        this._geoRelaysReady = this.fetchGeoRelays();
         this.allRelayUrls = new Set(this.defaultRelays);
+        this._geoRelaysReady = this.fetchGeoRelays();
         this.pendingConnections = new Map();
         this.relayList = [];
         this.maxRelaysForReq = 1000;
@@ -591,7 +591,7 @@ class NYM {
         this.nym = null;
         this.pendingSettingsTransfers = [];
         this.dismissedTransferEvents = new Set(JSON.parse(localStorage.getItem('nym_dismissed_transfers') || '[]'));
-        this.powDifficulty = 12;
+        this.powDifficulty = 16;
         this.enablePow = false;
         this.nymchatPowFloor = 16;
         this.nymchatVouches = new Set();
@@ -3690,7 +3690,7 @@ async function showSettings() {
 
     const powDifficultySelect = document.getElementById('powDifficultySelect');
     if (powDifficultySelect) {
-        powDifficultySelect.value = localStorage.getItem('nym_pow_difficulty') || '0';
+        powDifficultySelect.value = String(normalizePowDifficulty(localStorage.getItem('nym_pow_difficulty')));
     }
 
     // Render pending settings transfers
@@ -4341,7 +4341,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.73.526';
+const NYMCHAT_VERSION = 'v3.73.527';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6658,7 +6658,7 @@ async function applyNostrSettings(s) {
     // PoW difficulty
     if (typeof s.powDifficulty === 'number') {
         nym.powDifficulty = s.powDifficulty;
-        nym.enablePow = s.powDifficulty > 0;
+        nym.enablePow = normalizePowDifficulty(s.powDifficulty) > 0;
         localStorage.setItem('nym_pow_difficulty', String(s.powDifficulty));
     }
 
@@ -6743,12 +6743,17 @@ async function applyNostrSettings(s) {
     if (Array.isArray(s.userJoinedChannels)) {
         // Migrate the legacy default channel key to the renamed default.
         const joined = [...new Set(s.userJoinedChannels.map(key => key === 'nym' ? 'nymchat' : key))];
-        joined.forEach(key => {
+        // Bulk-guarded: this restores up to MAX_JOINED_CHANNELS rows, and
+        // addChannel's per-add pin/hidden sweeps make that O(n^2) in DOM
+        // queries — the multi-second blocked task on every settings restore.
+        const addJoined = () => joined.forEach(key => {
             nym.userJoinedChannels.add(key);
             if (!nym.channels.has(key)) {
                 nym.addChannel(key, key);
             }
         });
+        if (typeof nym._withBulkChannelAdd === 'function') nym._withBulkChannelAdd(addJoined);
+        else addJoined();
 
         localStorage.setItem('nym_user_joined_channels', JSON.stringify(joined));
         localStorage.setItem('nym_user_channels', JSON.stringify(
@@ -7569,6 +7574,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Parse URL for channel routing
 // When a brand-new user opens an invite link, surface the group on the setup
 // modal so the reason for signing up is clear.
+/// Clamps a stored PoW-filter difficulty onto the offered options.
+function normalizePowDifficulty(raw) {
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n <= 0) return 0;   // Disabled
+    if (n <= 16) return 16;                        // 8 / 12 -> the real floor
+    if (n <= 20) return 20;
+    return 24;
+}
+
 function updateSetupInviteBanner() {
     const banner = document.getElementById('setupInviteBanner');
     if (!banner) return;

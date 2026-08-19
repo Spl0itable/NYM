@@ -609,6 +609,38 @@
     white-space: nowrap;
 }
 
+.timestamp-popup {
+    max-width: 300px;
+}
+
+.timestamp-popup-pow {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--glass-border);
+    font-size: 12px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.timestamp-popup-pow .pow-label {
+    color: var(--text-dim);
+}
+
+.timestamp-popup-pow .pow-bits {
+    color: var(--primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.timestamp-popup-pow .pow-bits.pow-short {
+    color: var(--text-dim);
+}
+
+.timestamp-popup-pow .pow-none {
+    color: var(--text-dim);
+}
+
 .group-readers,
 .channel-readers {
     display: flex;

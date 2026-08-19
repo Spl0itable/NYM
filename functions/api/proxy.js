@@ -35,7 +35,9 @@ const MAX_JSON_SIZE = 512 * 1024;
 // Max size for proxied media (100 MB) — caps bandwidth/memory amplification.
 const MAX_MEDIA_SIZE = 100 * 1024 * 1024;
 
+// The two geo-relay directories bitchat's own clients read
 const GEO_RELAYS_URL = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
+const GEO_RELAYS_VETTED_URL = 'https://raw.githubusercontent.com/permissionlesstech/bitchat/refs/heads/main/relays/online_relays_gps.csv';
 const GEO_RELAYS_CACHE_TTL = 300;
 
 // Translate endpoint
@@ -151,9 +153,12 @@ async function handleGeoRelays(context) {
     return new Response(cached.body, { status: cached.status, headers });
   }
 
-  const upstream = await fetch(GEO_RELAYS_URL, {
-    headers: { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'text/csv, text/plain' },
-  });
+  const headersFor = { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'text/csv, text/plain' };
+  const [upstream, vetted] = await Promise.all([
+    fetch(GEO_RELAYS_URL, { headers: headersFor }),
+    // Best-effort: a failure here must not take down the primary list.
+    fetch(GEO_RELAYS_VETTED_URL, { headers: headersFor }).catch(() => null),
+  ]);
   if (!upstream.ok) {
     return jsonResponse({ error: `Upstream returned ${upstream.status}` }, 502);
   }
@@ -161,12 +166,19 @@ async function handleGeoRelays(context) {
   const csv = await upstream.text();
   const relays = parseGeoRelaysCsv(csv);
 
+  // `relays` keeps its existing meaning (the upstream list) so older clients
+  // are unaffected; `vetted` is additive.
+  let vettedRelays = [];
+  if (vetted && vetted.ok) {
+    try { vettedRelays = parseGeoRelaysCsv(await vetted.text()); } catch (_) { /* additive only */ }
+  }
+
   const headers = new Headers(CORS_HEADERS);
   headers.set('Content-Type', 'application/json');
   headers.set('Cache-Control', `public, max-age=${GEO_RELAYS_CACHE_TTL}, s-maxage=${GEO_RELAYS_CACHE_TTL}`);
   headers.set('X-Edge-Cache', 'MISS');
 
-  const resp = new Response(JSON.stringify({ relays }), { status: 200, headers });
+  const resp = new Response(JSON.stringify({ relays, vetted: vettedRelays }), { status: 200, headers });
   if (context && context.waitUntil) {
     context.waitUntil(cache.put(cacheKey, resp.clone()));
   } else {

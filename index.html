@@ -1583,13 +1583,11 @@
                         <label class="form-label">Proof of Work Difficulty</label>
                         <select class="form-select" id="powDifficultySelect">
                             <option value="0" selected>Disabled</option>
-                            <option value="8">Very Low (8 bits)</option>
-                            <option value="12">Low (12 bits)</option>
-                            <option value="16">Medium (16 bits)</option>
-                            <option value="20">High (20 bits)</option>
-                            <option value="24">Very High (24 bits)</option>
+                            <option value="16">16 bits (Nymchat minimum)</option>
+                            <option value="20">20 bits &mdash; also hides Nymchat messages</option>
+                            <option value="24">24 bits &mdash; also hides Nymchat messages</option>
                         </select>
-                        <div class="form-hint">Enable for anti-spam to require messages have a minimum PoW</div>
+                        <div class="form-hint">Filters <strong>incoming</strong> messages by proof of work &mdash; it does not change what you send. Every message Nymchat sends is already mined to at least 16 bits, so 16 keeps Nymchat traffic and drops clients that do no work. Above 16 also hides messages from other Nymchat users, who mine at 16.</div>
                     </div>
 
                     <div class="form-group">

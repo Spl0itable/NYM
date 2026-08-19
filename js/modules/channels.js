@@ -201,9 +201,15 @@ Object.assign(NYM.prototype, {
         const exact = this._d1ChannelLast && this._d1ChannelLast.get(String(name).toLowerCase());
         if (exact) return exact * 1000;
         if (!Array.isArray(buckets)) return 0;
-        const now = Math.floor(Date.now() / 1000);
+
+        const anchor = Math.floor(
+            (this._geohashActivityFetchedAt || Date.now()) / 1000);
+
         for (let h = 0; h < buckets.length && h < 24; h++) {
-            if ((buckets[h] || 0) > 0) return (now - h * 3600) * 1000;
+            if ((buckets[h] || 0) > 0) {
+
+                return (anchor - (h + 1) * 3600) * 1000;
+            }
         }
         return 0;
     },
@@ -236,12 +242,14 @@ Object.assign(NYM.prototype, {
         if (this._geohashD1Activity) this._geohashD1Activity.forEach((b, n) => { if (this.isValidGeohash(n)) consider(n, b); });
         if (this._namedChannelActivity) this._namedChannelActivity.forEach((b, n) => { if (!this.isValidGeohash(n)) consider(n, b); });
         candidates.sort((a, b) => b.ts - a.ts);
-        for (let i = 0; i < candidates.length && i < SIDEBAR_DISCOVER_LIMIT; i++) {
-            const c = candidates[i];
-            this.addChannelToList(c.nm, c.nm);
-            if (c.ts > 0) this.channelLastActivity.set(c.key, c.ts);
-            added = true;
-        }
+        this._withBulkChannelAdd(() => {
+            for (let i = 0; i < candidates.length && i < SIDEBAR_DISCOVER_LIMIT; i++) {
+                const c = candidates[i];
+                this.addChannelToList(c.nm, c.nm);
+                if (c.ts > 0) this.channelLastActivity.set(c.key, c.ts);
+                added = true;
+            }
+        });
         if (added) this._persistUnreadCounts();
         this._scheduleChannelSort();
     },
@@ -269,7 +277,7 @@ Object.assign(NYM.prototype, {
             // already-read local cache can't drop the badge below real activity.
             this._d1Unread.set(unreadKey, count);
             if (count > (this.unreadCounts.get(unreadKey) || 0)) {
-                this.unreadCounts.set(unreadKey, count);
+                this._setUnreadCount(unreadKey, count);
                 this._renderUnreadBadge(unreadKey, count);
                 changed = true;
             }
@@ -619,8 +627,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         allChannels.sort((a, b) => a.sortKey - b.sortKey);
 
         // Add channels to UI in mixed order
-        allChannels.forEach(channel => {
-            this.addChannel(channel.name, channel.geohash);
+        this._withBulkChannelAdd(() => {
+            allChannels.forEach(channel => {
+                this.addChannel(channel.name, channel.geohash);
+            });
         });
     },
 
@@ -804,6 +814,48 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveHiddenChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.applyHiddenChannels();
+    },
+
+    _withBulkChannelAdd(fn) {
+        const outer = !this._bulkChannelAdd;
+        if (outer) this._bulkChannelAdd = true;
+        try {
+            return fn();
+        } finally {
+            // Never leave the flag set on a throw — later addChannel calls would
+            // silently stop refreshing pins and hidden state.
+            if (outer) this._flushBulkChannelAdd();
+        }
+    },
+
+    /// Runs the per-add sidebar refreshes that _bulkChannelAdd suppressed.
+    _flushBulkChannelAdd() {
+        this._bulkChannelAdd = false;
+        this.updateChannelPins();
+        this.applyHiddenChannels();
+        // After applyHiddenChannels, so the overflow marking sees settled
+        // display state rather than recomputing against stale rows.
+        this.updateViewMoreButton('channelList');
+        if (typeof this.refreshChannelAutocompleteIfOpen === 'function') {
+            this.refreshChannelAutocompleteIfOpen();
+        }
+    },
+
+    /// Rows a collapsed list shows before "View N more...".
+    COLLAPSED_LIST_VISIBLE: 20,
+
+    _markListOverflow(listId) {
+        const list = document.getElementById(listId);
+        if (!list) return [];
+        const visible = Array.from(list.querySelectorAll('.list-item:not(.search-hidden)'))
+            .filter(el => el.style.display !== 'none');
+        const isExpanded = this.listExpansionStates.get(listId) || false;
+        const cap = this.COLLAPSED_LIST_VISIBLE;
+        list.querySelectorAll('.list-overflow').forEach(el => el.classList.remove('list-overflow'));
+        if (!isExpanded) {
+            for (let i = cap; i < visible.length; i++) visible[i].classList.add('list-overflow');
+        }
+        return visible;
     },
 
     applyHiddenChannels() {
@@ -1613,10 +1665,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
             this.channels.set(key, { channel, geohash });
-            this.updateChannelPins();
-            this.applyHiddenChannels();
-            if (typeof this.refreshChannelAutocompleteIfOpen === 'function') {
-                this.refreshChannelAutocompleteIfOpen();
+            // The row template above hardcodes a hidden zero badge. Sidebar rows
+            // are built as channels are discovered, which is often AFTER the
+            // counts were restored and painted, so seed from the live count or
+            // the badge stays blank until the next message in that channel.
+            const unreadKey = geohash ? `#${geohash}` : channel;
+            const standingUnread = (this.unreadCounts && this.unreadCounts.get(unreadKey)) || 0;
+            if (standingUnread > 0) this._renderUnreadBadge(unreadKey, standingUnread);
+            // updateChannelPins and applyHiddenChannels each sweep the whole
+            // list with querySelectorAll, so doing them per add makes bulk
+            // population O(n^2) in DOM queries. During a bulk add the caller
+            // runs them ONCE at the end (_flushBulkChannelAdd).
+            if (!this._bulkChannelAdd) {
+                this.updateChannelPins();
+                this.applyHiddenChannels();
+                if (typeof this.refreshChannelAutocompleteIfOpen === 'function') {
+                    this.refreshChannelAutocompleteIfOpen();
+                }
             }
 
             // Hide new channel if it doesn't match active search filter
@@ -1631,8 +1696,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
-            // Check if we need to add/update view more button
-            this.updateViewMoreButton('channelList');
+            // Check if we need to add/update view more button. Suppressed during
+            // a bulk add for the same reason as the sweeps above, and it is the
+            // expensive one: _markListOverflow reads style.display on every row
+            // (forcing a style recalc) and rewrites the .list-overflow class
+            // across the list, so running it per add was the real O(n^2) —
+            // _flushBulkChannelAdd runs it once at the end instead.
+            if (!this._bulkChannelAdd) this.updateViewMoreButton('channelList');
         }
     },
 
@@ -1652,13 +1722,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        const items = list.querySelectorAll('.list-item:not(.search-hidden)');
+        // Only rows that can actually be SEEN count toward the collapsed budget.
+        // The CSS used to do this with `.list-collapsed .list-item:nth-child(n+21)`,
+        // but nth-child counts every sibling — including rows already hidden by
+        // the hidden/blocked-channel filter — so those silently ate slots and the
+        // collapsed list showed fewer than 20. Channels with unread badges that
+        // should have been on screen were pushed out of view by rows that were
+        // not even rendered. Mark the overflow explicitly instead.
+        const items = this._markListOverflow(listId);
         let existingBtn = list.querySelector('.view-more-btn');
 
         // Get current expansion state
         const isExpanded = this.listExpansionStates.get(listId) || false;
 
-        if (items.length > 20) {
+        if (items.length > this.COLLAPSED_LIST_VISIBLE) {
             // We need a button
             if (!existingBtn) {
                 const btn = document.createElement('div');
@@ -1674,7 +1751,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 list.classList.remove('list-collapsed');
                 list.classList.add('list-expanded');
             } else {
-                existingBtn.textContent = `View ${this.abbreviateNumber(items.length - 20)} more...`;
+                existingBtn.textContent = `View ${this.abbreviateNumber(items.length - this.COLLAPSED_LIST_VISIBLE)} more...`;
                 list.classList.add('list-collapsed');
                 list.classList.remove('list-expanded');
             }
@@ -1703,6 +1780,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const currentState = this.listExpansionStates.get(listId) || false;
         const newState = !currentState;
         this.listExpansionStates.set(listId, newState);
+        // Re-mark for the new state: expanding clears every overflow mark,
+        // collapsing re-applies them to whatever is currently visible.
+        this._markListOverflow(listId);
 
         if (newState) {
             // Expanding
@@ -1728,12 +1808,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 btn.remove();
                 btn = document.createElement('div');
                 btn.className = 'view-more-btn';
-                btn.textContent = `View ${this.abbreviateNumber(items.length - 20)} more...`;
+                const cap = this.COLLAPSED_LIST_VISIBLE;
+                const visible = Array.from(list.querySelectorAll('.list-item:not(.search-hidden)'))
+                    .filter(el => el.style.display !== 'none');
+                btn.textContent = `View ${this.abbreviateNumber(visible.length - cap)} more...`;
                 btn.onclick = () => this.toggleListExpansion(listId);
 
-                // Insert after the 20th visible item
-                if (items.length > 20 && items[19]) {
-                    items[19].insertAdjacentElement('afterend', btn);
+                // Insert after the last VISIBLE row of the collapsed window —
+                // counting raw items would place it behind hidden rows.
+                if (visible.length > cap && visible[cap - 1]) {
+                    visible[cap - 1].insertAdjacentElement('afterend', btn);
                 } else {
                     list.appendChild(btn);
                 }
@@ -1778,11 +1862,39 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.displaySystemMessage(`Left channel ${geohash ? '#' + geohash : '#' + channel}`);
     },
 
+    /// Cap on the joined-channel set.
+    MAX_JOINED_CHANNELS: 300,
+
     saveUserJoinedChannels() {
-        const existing = this.loadUserJoinedChannels();
-        const combined = new Set([...existing, ...this.userJoinedChannels]);
-        localStorage.setItem('nym_user_joined_channels', JSON.stringify(Array.from(combined)));
+        // No union with the stored copy: app.js seeds this.userJoinedChannels
+        // from localStorage at construction, so the in-memory set is already
+        // authoritative — merging the old list back in only undid removals,
+        // which is why leaving a channel never actually shrank this.
+        this._capUserJoinedChannels();
+        localStorage.setItem('nym_user_joined_channels',
+            JSON.stringify(Array.from(this.userJoinedChannels)));
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
+    /// Trims the joined set to MAX_JOINED_CHANNELS, dropping least-recently-
+    /// active first. Pinned channels and the current one are never dropped.
+    _capUserJoinedChannels() {
+        const set = this.userJoinedChannels;
+        if (!set || set.size <= this.MAX_JOINED_CHANNELS) return;
+        const activity = this.channelLastActivity instanceof Map
+            ? this.channelLastActivity : new Map();
+        const current = this.currentGeohash || this.currentChannel || '';
+        const keep = (k) =>
+            k === 'nymchat' || k === current ||
+            (this.pinnedChannels && this.pinnedChannels.has(k));
+        const at = (k) => activity.get('#' + k) || activity.get(k) || 0;
+
+        const droppable = [...set].filter(k => !keep(k)).sort((a, b) => at(a) - at(b));
+        let over = set.size - this.MAX_JOINED_CHANNELS;
+        for (const k of droppable) {
+            if (over-- <= 0) break;
+            set.delete(k);
+        }
     },
 
     loadUserJoinedChannels() {
@@ -1849,11 +1961,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
+    // Every caller gates this on `!message.isHistorical`, so it always means
+    // "one more LIVE unread message arrived".
     updateUnreadCount(channel) {
         let count = this._recomputeUnreadCount(channel);
         // Don't let a partial local cache drop the badge below the D1 archive.
         if (this._d1Unread) count = Math.max(count, this._d1Unread.get(channel) || 0);
-        this.unreadCounts.set(channel, count);
+        // The cache may hold only a slice of what is unread, so the recompute
+        // alone would stomp a larger standing count back down. A live arrival
+        // means the true total is one MORE than whatever already stood.
+        if (this._unreadCountStillValid(channel)) {
+            count = Math.max(count, (this.unreadCounts.get(channel) || 0) + 1);
+        }
+        this._setUnreadCount(channel, count);
         this._persistUnreadCounts();
         this._renderUnreadBadge(channel, count);
         this._scheduleChannelSort();
@@ -2028,11 +2148,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         channelList.innerHTML = '';
         channels.forEach(channel => channelList.appendChild(channel));
 
+        // Hidden/blocked channels first: updateViewMoreButton counts only rows
+        // that are actually visible, so their display state has to be settled
+        // before the collapsed budget is worked out.
+        this.applyHiddenChannels();
+
         // Re-add view more button
         this.updateViewMoreButton('channelList');
-
-        // Apply hidden channel visibility
-        this.applyHiddenChannels();
 
         // Re-apply channel search filter if search is active
         const searchInput = document.getElementById('channelSearch');
@@ -2059,7 +2181,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         }
         this.channelLastRead.set(channel, lastTs);
-        this.unreadCounts.set(channel, 0);
+        this._setUnreadCount(channel, 0);
         // Drop the D1 archive floor — it was relative to the old lastRead and
         // would otherwise resurrect the badge on the next recompute.
         if (this._d1Unread) this._d1Unread.delete(channel);
@@ -2137,9 +2259,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (v > 0) lastRead[k] = v;
                 }
             }
+            // The lastRead each stored count was computed against. Without it a
+            // reload cannot tell "this count is still valid, the local cache is
+            // just thin" from "this count is stale, the channel has been read",
+            // and a partial cache silently wipes the badge.
+            const basis = {};
+            if (this._unreadBasisRead) {
+                for (const [k, v] of this._unreadBasisRead) {
+                    if (unread[k] !== undefined) basis[k] = v;
+                }
+            }
             localStorage.setItem('nym_unread_counts', JSON.stringify(unread));
             localStorage.setItem('nym_channel_activity', JSON.stringify(activity));
             localStorage.setItem('nym_channel_last_read', JSON.stringify(lastRead));
+            localStorage.setItem('nym_unread_basis', JSON.stringify(basis));
         } catch (_) { }
     },
 
@@ -2169,7 +2302,38 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (typeof v === 'number' && v > 0) this.channelLastRead.set(k, v);
                 }
             }
+            if (!this._unreadBasisRead) this._unreadBasisRead = new Map();
+            const b = localStorage.getItem('nym_unread_basis');
+            if (b) {
+                const parsed = JSON.parse(b);
+                for (const [k, v] of Object.entries(parsed || {})) {
+                    if (typeof v === 'number' && v >= 0) this._unreadBasisRead.set(k, v);
+                }
+            }
         } catch (_) { }
+    },
+
+    /// Store an unread count and stamp the lastRead it was derived from.
+    _setUnreadCount(channel, count) {
+        if (!this._unreadBasisRead) this._unreadBasisRead = new Map();
+        if (count > 0) {
+            this.unreadCounts.set(channel, count);
+            this._unreadBasisRead.set(channel, (this.channelLastRead && this.channelLastRead.get(channel)) || 0);
+        } else {
+            this.unreadCounts.delete(channel);
+            this._unreadBasisRead.delete(channel);
+        }
+    },
+
+    /// True when the stored count for [channel] still stands, i.e. nothing has
+    /// been read since it was computed. Counts with no stamp (written before
+    /// this existed, or by an older build) are treated as still valid so an
+    /// upgrade does not wipe every badge once.
+    _unreadCountStillValid(channel) {
+        const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
+        const basis = this._unreadBasisRead && this._unreadBasisRead.get(channel);
+        if (basis === undefined) return true;
+        return lastRead <= basis;
     },
 
     recomputeAllUnreadCounts() {
@@ -2178,7 +2342,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.pmMessages) for (const k of this.pmMessages.keys()) keys.add(k);
         if (this.unreadCounts) for (const k of this.unreadCounts.keys()) keys.add(k);
         const d1Floor = this._d1Unread || new Map();
-        const windowStart = Math.floor(Date.now() / 1000) - 86400;
         for (const k of keys) {
             if (!k) continue;
             const isConv = k.startsWith('pm-') || k.startsWith('group-');
@@ -2198,15 +2361,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // cache count is authoritative (lets cross-device reads clear).
                 count = Math.max(count, floor || 0);
             } else {
-                const lastRead = (this.channelLastRead && this.channelLastRead.get(k)) || 0;
-                if (floor !== undefined && lastRead >= windowStart) {
-                    count = Math.max(count, floor);
-                } else {
-                    count = Math.max(count, persisted, floor || 0);
-                }
+                // A public channel's local cache is a PARTIAL view: D1 restore
+                // brings back recent history, most of which is usually already
+                // read, so recomputing from it undercounts badly. Keep the
+                // stored count as a floor while it is still valid — only a read
+                // (here or on another device, which advances lastRead past the
+                // stamp) may lower the badge.
+                count = Math.max(count, floor || 0);
+                if (this._unreadCountStillValid(k)) count = Math.max(count, persisted);
             }
-            if (count > 0) this.unreadCounts.set(k, count);
-            else this.unreadCounts.delete(k);
+            this._setUnreadCount(k, count);
             this._renderUnreadBadge(k, count);
         }
         this._persistUnreadCounts(true);

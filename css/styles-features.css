@@ -2296,6 +2296,11 @@ body:not(.chat-bubbles) .message.supporter-style {
     vertical-align: middle;
 }
 
+#sidebarAvatar.avatar {
+    width: 32px;
+    height: 32px;
+}
+
 .avatar-message {
     width: 18px;
     height: 18px;
