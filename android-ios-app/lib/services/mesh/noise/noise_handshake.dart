@@ -59,12 +59,12 @@ class NoiseSymmetricState {
     final nameBytes = Uint8List.fromList(utf8.encode(protocolName));
     Uint8List h;
     if (nameBytes.length <= NoiseCrypto.hashLen) {
-      h = Uint8List(NoiseCrypto.hashLen)..setRange(0, nameBytes.length, nameBytes);
+      h = Uint8List(NoiseCrypto.hashLen)
+        ..setRange(0, nameBytes.length, nameBytes);
     } else {
       h = NoiseCrypto.sha256(nameBytes);
     }
-    return NoiseSymmetricState._(
-        Uint8List.fromList(h), h, NoiseCipherState());
+    return NoiseSymmetricState._(Uint8List.fromList(h), h, NoiseCipherState());
   }
 
   void mixKey(Uint8List inputKeyMaterial) {
@@ -186,8 +186,8 @@ class NoiseHandshakeState {
     for (final token in pattern) {
       switch (token) {
         case _Token.e:
-          _re = Uint8List.fromList(
-              Uint8List.sublistView(message, offset, offset + NoiseCrypto.dhLen));
+          _re = Uint8List.fromList(Uint8List.sublistView(
+              message, offset, offset + NoiseCrypto.dhLen));
           offset += NoiseCrypto.dhLen;
           _sym.mixHash(_re!);
           break;

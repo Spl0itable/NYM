@@ -51,8 +51,8 @@ class FragmentPayload {
   static FragmentPayload? decode(Uint8List payload) {
     if (payload.length < headerSize) return null;
     try {
-      final fragmentID = Uint8List.fromList(
-          Uint8List.sublistView(payload, 0, fragmentIdSize));
+      final fragmentID =
+          Uint8List.fromList(Uint8List.sublistView(payload, 0, fragmentIdSize));
       final index = (payload[8] << 8) | payload[9];
       final total = (payload[10] << 8) | payload[11];
       final originalType = payload[12];

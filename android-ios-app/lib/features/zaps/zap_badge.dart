@@ -127,8 +127,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
                   scale: shock.scale,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      borderRadius:
-                          const BorderRadius.all(Radius.circular(20)),
+                      borderRadius: const BorderRadius.all(Radius.circular(20)),
                       boxShadow: _shockGlow(),
                     ),
                     child: child,
@@ -261,7 +260,8 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     notifier.addSystemMessage(
         tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
     final controller = ref.read(nostrControllerProvider);
-    final lnAddr = await controller.resolveLightningAddressForZap(message.pubkey);
+    final lnAddr =
+        await controller.resolveLightningAddressForZap(message.pubkey);
     if (lnAddr == null || lnAddr.isEmpty) {
       notifier.addSystemMessage(tr(
           '@{nym} cannot receive zaps (no lightning address set)',
@@ -670,7 +670,11 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Color(0xFFFFFFFF), Color(0xFFFFD86B), Color(0xFFF7931A)],
+                    colors: [
+                      Color(0xFFFFFFFF),
+                      Color(0xFFFFD86B),
+                      Color(0xFFF7931A)
+                    ],
                     stops: [0.0, 0.45, 1.0],
                   ),
                   boxShadow: [

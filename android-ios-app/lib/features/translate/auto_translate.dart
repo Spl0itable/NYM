@@ -285,8 +285,8 @@ class _Job {
   final String key;
 }
 
-final autoTranslateProvider =
-    StateNotifierProvider<AutoTranslateNotifier, Map<String, AutoTranslateEntry>>(
+final autoTranslateProvider = StateNotifierProvider<AutoTranslateNotifier,
+    Map<String, AutoTranslateEntry>>(
   (ref) => AutoTranslateNotifier(),
 );
 

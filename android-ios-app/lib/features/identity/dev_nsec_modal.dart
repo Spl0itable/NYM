@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/common/keyboard_inset_dialog.dart';
 
 import '../../core/crypto/bech32_codec.dart';
 import '../../core/crypto/keys.dart';
@@ -95,7 +96,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
+    return KeyboardInsetDialog(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
@@ -131,8 +132,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                             // `.nm-h-19` hint.
                             Text(
                               tr('Paste your nsec to verify your identity:'),
-                              style:
-                                  TextStyle(color: c.textDim, fontSize: 11),
+                              style: TextStyle(color: c.textDim, fontSize: 11),
                             ),
                             const SizedBox(height: 8),
                             ModalChrome.focusRing(
@@ -152,8 +152,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                               Text(
                                 tr('Invalid nsec - does not match the developer '
                                     'pubkey.'),
-                                style:
-                                    TextStyle(color: c.danger, fontSize: 12),
+                                style: TextStyle(color: c.danger, fontSize: 12),
                               ),
                             ],
                           ],
@@ -175,8 +174,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                     ],
                   ),
                 ),
-                ModalChrome.closeChip(
-                    c, () => Navigator.of(context).pop()),
+                ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
               ],
             ),
           ),

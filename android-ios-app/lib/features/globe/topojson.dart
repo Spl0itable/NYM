@@ -107,9 +107,8 @@ List<GeoFeature> _decodeAdmin1(Map<String, dynamic> geo) {
     final geom = f['geometry'];
     if (geom is! Map) continue;
     final props = (f['properties'] as Map?) ?? const {};
-    final name = (props['name'] as String?) ??
-        (props['name_en'] as String?) ??
-        '';
+    final name =
+        (props['name'] as String?) ?? (props['name_en'] as String?) ?? '';
     final type = geom['type'];
     final coords = geom['coordinates'];
     List<List<List<List<double>>>> polys;
@@ -221,9 +220,8 @@ List<GeoFeature> _decodeWorld(Map<String, dynamic> topo) {
   final objects = topo['objects'] as Map<String, dynamic>;
   final obj = (objects['countries'] ?? objects[objects.keys.first])
       as Map<String, dynamic>;
-  final geoms = obj['type'] == 'GeometryCollection'
-      ? (obj['geometries'] as List)
-      : [obj];
+  final geoms =
+      obj['type'] == 'GeometryCollection' ? (obj['geometries'] as List) : [obj];
 
   final features = <GeoFeature>[];
   for (final g in geoms) {

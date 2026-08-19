@@ -10,6 +10,7 @@ import 'features/i18n/i18n.dart';
 import 'features/i18n/localization_service.dart';
 import 'features/mesh/mesh_controller.dart';
 import 'features/onboarding/boot_gate.dart';
+import 'features/share/share_intake.dart';
 import 'services/firebase_messaging_service.dart';
 import 'services/notification_service.dart';
 import 'services/platform/deep_link_target.dart';
@@ -30,6 +31,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     with WidgetsBindingObserver {
   DeepLinkService? _deepLinks;
   StreamSubscription<String>? _payloadSub;
+  ShareIntake? _shareIntake;
 
   /// Lets sign-out clear any dialogs/modals pushed above the boot gate. The
   /// remount (keyed [BootGate]) replaces the gate's content, but pushed routes
@@ -79,6 +81,13 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
         onDeepLink: deepLinks.handleUrl,
         showLocalNotification: notifications.showNotification,
       );
+
+      // 4) OS share sheet: text/URLs/media shared into the app open a
+      //    destination picker (channel / PM / group). Self-guards on
+      //    unsupported platforms.
+      final shareIntake = ShareIntake(ref: ref, navKey: _navKey);
+      _shareIntake = shareIntake;
+      await shareIntake.start();
     } catch (e, st) {
       // Platform plugins are absent in widget tests and on unsupported
       // platforms; never let that crash the app.
@@ -91,6 +100,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     WidgetsBinding.instance.removeObserver(this);
     _payloadSub?.cancel();
     _deepLinks?.dispose();
+    _shareIntake?.dispose();
     super.dispose();
   }
 

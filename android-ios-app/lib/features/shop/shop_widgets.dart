@@ -227,8 +227,8 @@ class FlairBadge extends StatelessWidget {
     // either mode), and the `filter: drop-shadow` on star/flame/diamond/genesis
     // is NOT reset by the light-mode rules, so it survives into light mode —
     // `_FlairGlow.shadowsFor` returns exactly those drop-shadow copies.
-    final color =
-        (isLight ? lightColors[flairId] : colors[flairId]) ?? context.nym.primary;
+    final color = (isLight ? lightColors[flairId] : colors[flairId]) ??
+        context.nym.primary;
     final shadows = _glows[flairId]?.shadowsFor(isLight: isLight) ?? const [];
     final icon = ShopSvgIcon(svg: svg, size: size, color: color);
     return Padding(
@@ -250,7 +250,8 @@ class FlairBadge extends StatelessWidget {
                           sigmaX: Shadow.convertRadiusToSigma(blur),
                           sigmaY: Shadow.convertRadiusToSigma(blur),
                         ),
-                        child: ShopSvgIcon(svg: svg, size: size, color: glowColor),
+                        child:
+                            ShopSvgIcon(svg: svg, size: size, color: glowColor),
                       ),
                     ),
                   ),
@@ -613,7 +614,9 @@ class ShopAuraBubble extends StatelessWidget {
       } else {
         fillColor = (styleActive ? null : last.background) ??
             (defaultFill
-                ? (c.isLight ? const Color(0x1A000000) : const Color(0x24FFFFFF))
+                ? (c.isLight
+                    ? const Color(0x1A000000)
+                    : const Color(0x24FFFFFF))
                 : null);
       }
     } else {
@@ -647,8 +650,7 @@ class ShopAuraBubble extends StatelessWidget {
     // snowflakes (:1149-1161) and the ungated IRC row starfield (:1179) stay.
     CosmeticAura? watermarkAura;
     for (final a in auras) {
-      if (a.watermark != null &&
-          (a.edgeWatermark || !bubble || !styleActive)) {
+      if (a.watermark != null && (a.edgeWatermark || !bubble || !styleActive)) {
         watermarkAura = a;
         break;
       }
@@ -673,9 +675,8 @@ class ShopAuraBubble extends StatelessWidget {
         : BorderRadius.zero;
 
     final needsStack = watermarkAura != null || overlayAura != null;
-    final inner = padding == null
-        ? child
-        : Padding(padding: padding!, child: child);
+    final inner =
+        padding == null ? child : Padding(padding: padding!, child: child);
     // IRC row-level auras (`body:not(.chat-bubbles) .message.cosmetic-X` —
     // gold/neon/phoenix/cosmic, the ones carrying a border-left) decorate the
     // BLOCK message row, so the wash/bar/glow spans the available width; the
@@ -970,9 +971,8 @@ class _SupporterStyleBubble extends StatelessWidget {
           ),
           border: Border(
             left: BorderSide(
-              color: isLight
-                  ? const Color(0xFFB8960A)
-                  : const Color(0xFFFFD700),
+              color:
+                  isLight ? const Color(0xFFB8960A) : const Color(0xFFFFD700),
               width: 3,
             ),
           ),
@@ -1034,9 +1034,7 @@ class ShopSupplyBadge extends StatelessWidget {
     final tier = switch (availability.state) {
       ShopAvailabilityState.available => _available,
       ShopAvailabilityState.soon => _soon,
-      ShopAvailabilityState.ended ||
-      ShopAvailabilityState.soldout =>
-        _danger,
+      ShopAvailabilityState.ended || ShopAvailabilityState.soldout => _danger,
     };
     final fg = context.nym.isLight ? tier.lightFg : tier.fg;
     return Container(
@@ -1105,8 +1103,7 @@ class ShopBundlePreview extends StatelessWidget {
           alignment: WrapAlignment.center,
           children: [
             for (final id in shown) _BundleChip(itemId: id),
-            if (all.length > _chipCap)
-              _BundleChip.more(all.length - _chipCap),
+            if (all.length > _chipCap) _BundleChip.more(all.length - _chipCap),
           ],
         ),
       ],
@@ -1249,7 +1246,10 @@ class ShopLegendaryRibbon extends StatelessWidget {
             gradient: LinearGradient(
               colors: [Color(0xFFFFB340), Color(0xFFFF7AD9)],
             ),
-            boxShadow: [BoxShadow(color: Color(0x59000000), blurRadius: 4, offset: Offset(0, 1))],
+            boxShadow: [
+              BoxShadow(
+                  color: Color(0x59000000), blurRadius: 4, offset: Offset(0, 1))
+            ],
           ),
           child: Text(
             tr('LEGENDARY'),

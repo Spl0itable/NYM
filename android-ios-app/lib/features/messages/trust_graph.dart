@@ -63,7 +63,8 @@ class TrustGraph {
   /// Parses a kind-30078 `nym-vouches` event's `content` (a JSON array of hex
   /// pubkey strings) into the valid, non-self pubkeys it vouches for. Invalid
   /// JSON / non-array content yields an empty list (nostr-core.js:2668-2674).
-  static List<String> parseVouchList(dynamic decodedContent, {String? selfPubkey}) {
+  static List<String> parseVouchList(dynamic decodedContent,
+      {String? selfPubkey}) {
     if (decodedContent is! List) return const [];
     final out = <String>[];
     for (final pk in decodedContent) {

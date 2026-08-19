@@ -62,7 +62,8 @@ void main() {
 
   group('render (NymFormat.format) hides the token', () {
     test('plain bot game message', () {
-      final blocks = NymFormat.format('Guess the word: _ _ _ _\n[gc:QUJDMTIz==]');
+      final blocks =
+          NymFormat.format('Guess the word: _ _ _ _\n[gc:QUJDMTIz==]');
       expect(_flatten(blocks).contains('[gc:'), isFalse);
     });
 
@@ -79,7 +80,8 @@ void main() {
     });
   });
 
-  test('WIRE parity: the token is display-only — `?guess` detection still sees '
+  test(
+      'WIRE parity: the token is display-only — `?guess` detection still sees '
       'it in the composed reply', () {
     // What the composer sends when you quote-reply the bot's game message.
     const composed =

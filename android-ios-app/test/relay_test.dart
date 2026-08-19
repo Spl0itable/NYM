@@ -106,8 +106,8 @@ void main() {
       expect((ok as OkMessage).accepted, isTrue);
       expect(ok.id, 'id1');
 
-      final rejected = RelayMessage.parse(
-          jsonEncode(['OK', 'id2', false, 'blocked: pow']));
+      final rejected =
+          RelayMessage.parse(jsonEncode(['OK', 'id2', false, 'blocked: pow']));
       expect((rejected as OkMessage).accepted, isFalse);
       expect(rejected.message, 'blocked: pow');
     });
@@ -143,7 +143,9 @@ void main() {
 
   group('Frame building round-trips', () {
     test('REQ round-trips through jsonDecode', () {
-      final filter = NostrFilter(kinds: [1], tags: {
+      final filter = NostrFilter(kinds: [
+        1
+      ], tags: {
         'p': ['me']
       });
       final frame = RelayFrame.req('subA', [filter]);

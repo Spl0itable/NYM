@@ -90,8 +90,9 @@ class _MessageSkeletonState extends State<MessageSkeleton>
           // viewport-sized count deliberately overfills the pane (+3 rows), so
           // the column is hosted in an inert reversed scrollable: bottom-
           // anchored, top overflow clipped, no layout overflow.
-          final rows =
-              widget.useBubbles ? _bubbleRows(c, rowCount) : _ircRows(c, rowCount);
+          final rows = widget.useBubbles
+              ? _bubbleRows(c, rowCount)
+              : _ircRows(c, rowCount);
           return SingleChildScrollView(
             reverse: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -111,7 +112,10 @@ class _MessageSkeletonState extends State<MessageSkeleton>
   /// transparent)` (stops 0 / .5 / 1) translated horizontally from
   /// `translateX(-100%)` to `translateX(100%)` as `_t` runs 0→1, clipped to the
   /// shape. Painted over the shape's `bg-tertiary` base.
-  Widget _shimmer(NymColors c, {required double width, required double height, BoxShape shape = BoxShape.rectangle}) {
+  Widget _shimmer(NymColors c,
+      {required double width,
+      required double height,
+      BoxShape shape = BoxShape.rectangle}) {
     // -1 → +1 of the shape width == translateX(-100%) → translateX(100%).
     final dx = (_t.value * 2 - 1) * width;
     final radius = shape == BoxShape.circle
@@ -134,7 +138,11 @@ class _MessageSkeletonState extends State<MessageSkeleton>
                 gradient: LinearGradient(
                   begin: Alignment.centerLeft,
                   end: Alignment.centerRight,
-                  colors: [Colors.transparent, c.glassBorder, Colors.transparent],
+                  colors: [
+                    Colors.transparent,
+                    c.glassBorder,
+                    Colors.transparent
+                  ],
                 ),
               ),
             ),
@@ -153,20 +161,62 @@ class _MessageSkeletonState extends State<MessageSkeleton>
   List<Widget> _ircRows(NymColors c, int rowCount) {
     // [authorWidthClass, [lineWidthClasses…]] — verbatim from the PWA pattern.
     const pattern = <List<Object>>[
-      [2, ['skl-3']],
-      [1, ['skl-4', 'skl-2']],
-      [3, ['skl-2']],
-      [2, ['skl-3', 'skl-3', 'skl-1']],
-      [1, ['skl-2']],
-      [2, ['skl-4']],
-      [3, ['skl-1']],
-      [1, ['skl-3', 'skl-2']],
-      [2, ['skl-2']],
-      [2, ['skl-4', 'skl-3']],
-      [1, ['skl-1']],
-      [3, ['skl-3']],
-      [2, ['skl-2', 'skl-1']],
-      [1, ['skl-4']],
+      [
+        2,
+        ['skl-3']
+      ],
+      [
+        1,
+        ['skl-4', 'skl-2']
+      ],
+      [
+        3,
+        ['skl-2']
+      ],
+      [
+        2,
+        ['skl-3', 'skl-3', 'skl-1']
+      ],
+      [
+        1,
+        ['skl-2']
+      ],
+      [
+        2,
+        ['skl-4']
+      ],
+      [
+        3,
+        ['skl-1']
+      ],
+      [
+        1,
+        ['skl-3', 'skl-2']
+      ],
+      [
+        2,
+        ['skl-2']
+      ],
+      [
+        2,
+        ['skl-4', 'skl-3']
+      ],
+      [
+        1,
+        ['skl-1']
+      ],
+      [
+        3,
+        ['skl-3']
+      ],
+      [
+        2,
+        ['skl-2', 'skl-1']
+      ],
+      [
+        1,
+        ['skl-4']
+      ],
     ];
     return [
       for (var i = 0; i < rowCount; i++)
@@ -244,15 +294,37 @@ class _MessageSkeletonState extends State<MessageSkeleton>
   List<Widget> _bubbleRows(NymColors c, int rowCount) {
     // {self, bubbles:[[baseWidthClass, lineCount], …]} — verbatim from the PWA.
     const pattern = <_BubbleGroup>[
-      _BubbleGroup(false, [[3, 3], [1, 1]]),
-      _BubbleGroup(true, [[2, 2]]),
-      _BubbleGroup(false, [[1, 1]]),
-      _BubbleGroup(true, [[1, 1], [3, 2], [1, 1]]),
-      _BubbleGroup(false, [[4, 4]]),
-      _BubbleGroup(true, [[2, 1]]),
-      _BubbleGroup(false, [[3, 2], [1, 1]]),
-      _BubbleGroup(true, [[3, 3]]),
-      _BubbleGroup(false, [[2, 1]]),
+      _BubbleGroup(false, [
+        [3, 3],
+        [1, 1]
+      ]),
+      _BubbleGroup(true, [
+        [2, 2]
+      ]),
+      _BubbleGroup(false, [
+        [1, 1]
+      ]),
+      _BubbleGroup(true, [
+        [1, 1],
+        [3, 2],
+        [1, 1]
+      ]),
+      _BubbleGroup(false, [
+        [4, 4]
+      ]),
+      _BubbleGroup(true, [
+        [2, 1]
+      ]),
+      _BubbleGroup(false, [
+        [3, 2],
+        [1, 1]
+      ]),
+      _BubbleGroup(true, [
+        [3, 3]
+      ]),
+      _BubbleGroup(false, [
+        [2, 1]
+      ]),
     ];
     return [
       for (var i = 0; i < rowCount; i++)

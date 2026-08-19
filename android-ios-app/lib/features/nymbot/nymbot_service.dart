@@ -436,7 +436,8 @@ class NymbotService {
   /// `_gitUserLogin` (pms.js:2210): GitLab exposes `username`, the rest `login`.
   static String gitUserLogin(GitConfig cfg, Object? data) {
     if (data is! Map) return '';
-    final v = cfg.provider == GitProvider.gitlab ? data['username'] : data['login'];
+    final v =
+        cfg.provider == GitProvider.gitlab ? data['username'] : data['login'];
     return v?.toString() ?? '';
   }
 

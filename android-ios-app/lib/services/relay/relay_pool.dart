@@ -429,8 +429,7 @@ class RelayPool implements PoolTransport {
   @override
   Subscription subscribe(List<NostrFilter> filters, {String? subId}) {
     final id = subId ?? generateSubId(_rng);
-    final readable =
-        _connections.keys.where(_isReadable).length;
+    final readable = _connections.keys.where(_isReadable).length;
     final sub = Subscription._(
       id,
       this,

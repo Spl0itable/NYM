@@ -78,7 +78,9 @@ class QuickContextMenu extends StatelessWidget {
           // `--shadow-lg` softens in light mode (rgba(0,0,0,0.15) vs 0.4).
           boxShadow: [
             BoxShadow(
-                color: c.isLight ? const Color(0x26000000) : const Color(0x66000000),
+                color: c.isLight
+                    ? const Color(0x26000000)
+                    : const Color(0x66000000),
                 blurRadius: 32,
                 offset: const Offset(0, 8)),
           ],
@@ -196,7 +198,9 @@ class QuickReactPopup extends StatelessWidget {
           // `--shadow-lg` softens in light mode (rgba(0,0,0,0.15) vs 0.4).
           boxShadow: [
             BoxShadow(
-                color: c.isLight ? const Color(0x26000000) : const Color(0x66000000),
+                color: c.isLight
+                    ? const Color(0x26000000)
+                    : const Color(0x66000000),
                 blurRadius: 32,
                 offset: const Offset(0, 8)),
           ],
@@ -220,7 +224,8 @@ class QuickReactPopup extends StatelessWidget {
                 ),
               ),
               child: _btn(
-                child: Icon(Icons.keyboard_arrow_down, size: 18, color: c.textDim),
+                child:
+                    Icon(Icons.keyboard_arrow_down, size: 18, color: c.textDim),
                 onTap: onMore,
               ),
             ),
@@ -423,8 +428,8 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
                 size: Size.infinite,
                 // The cutout is the pressed MESSAGE's rect (F9), not the
                 // zero-size press-point anchor the pill lays out against.
-                painter: _SpotlightPainter(
-                    hole: widget.spotlightRect ?? Rect.zero),
+                painter:
+                    _SpotlightPainter(hole: widget.spotlightRect ?? Rect.zero),
               ),
             ),
           ),
@@ -457,8 +462,8 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
                   beginScale: 0.9,
                   beginOffsetY: -6,
                   child: ConstrainedBox(
-                    constraints:
-                        BoxConstraints(maxWidth: math.min(280, size.width - 20)),
+                    constraints: BoxConstraints(
+                        maxWidth: math.min(280, size.width - 20)),
                     child: QuickContextMenu(items: widget.contextItems),
                   ),
                 ),
@@ -488,8 +493,8 @@ class _SpotlightPainter extends CustomPainter {
     }
     final screen = Path()..addRect(Offset.zero & size);
     final cut = Path()
-      ..addRRect(RRect.fromRectAndRadius(
-          hole.inflate(4), const Radius.circular(12)));
+      ..addRRect(
+          RRect.fromRectAndRadius(hole.inflate(4), const Radius.circular(12)));
     canvas.drawPath(
       Path.combine(PathOperation.difference, screen, cut),
       paint,

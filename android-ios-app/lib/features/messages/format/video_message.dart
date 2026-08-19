@@ -450,8 +450,7 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
                   }
                 }),
                 child: AspectRatio(
-                  aspectRatio:
-                      value.isInitialized ? value.aspectRatio : 16 / 9,
+                  aspectRatio: value.isInitialized ? value.aspectRatio : 16 / 9,
                   child: VideoPlayer(controller),
                 ),
               ),

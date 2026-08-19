@@ -233,8 +233,7 @@ Future<NostrEvent> bitchatWrap({
 /// transport for it.
 typedef UnwrapCandidate = ({Uint8List sk, bool bitchat});
 
-bool _isV2(String? content) =>
-    content != null && content.startsWith('v2:');
+bool _isV2(String? content) => content != null && content.startsWith('v2:');
 
 /// Attempts to decrypt + parse a kind-1059 gift [wrap] against ordered
 /// [candidates]. Tries bitchat (`v2:`) first when enabled, then NIP-44. Returns
@@ -250,10 +249,10 @@ Future<({NostrEvent seal, Map<String, dynamic> rumor, bool isBitchat})?>
       var isBitchat = false;
 
       if (cand.bitchat && _isV2(wrap.content)) {
-        final sealJson = await bitchat.decryptBitchat(
-            wrap.content, wrap.pubkey, sk);
-        seal = NostrEvent.fromJson(
-            jsonDecode(sealJson) as Map<String, dynamic>);
+        final sealJson =
+            await bitchat.decryptBitchat(wrap.content, wrap.pubkey, sk);
+        seal =
+            NostrEvent.fromJson(jsonDecode(sealJson) as Map<String, dynamic>);
         final rumorJson = _isV2(seal.content)
             ? await bitchat.decryptBitchat(seal.content, seal.pubkey, sk)
             : nip44.decrypt(

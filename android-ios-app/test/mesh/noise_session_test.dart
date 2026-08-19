@@ -44,7 +44,8 @@ void main() {
 
       final msg3 = await initiator.processHandshakeMessage(msg2);
       expect(msg3, isNotNull);
-      expect(msg3!.length, 64, reason: 'XX message 3 is enc(s) + empty payload');
+      expect(msg3!.length, 64,
+          reason: 'XX message 3 is enc(s) + empty payload');
 
       final none = await responder.processHandshakeMessage(msg3);
       expect(none, isNull);
@@ -76,8 +77,8 @@ void main() {
       final (initiator, responder) = await completeHandshake();
 
       for (var i = 0; i < 5; i++) {
-        final plain =
-            Uint8List.fromList(List.generate(20 + i, (j) => (i * 7 + j) & 0xFF));
+        final plain = Uint8List.fromList(
+            List.generate(20 + i, (j) => (i * 7 + j) & 0xFF));
         final wire = await initiator.encrypt(plain);
         // 4-byte nonce prefix + ciphertext + 16-byte tag.
         expect(wire.length, plain.length + 4 + 16);

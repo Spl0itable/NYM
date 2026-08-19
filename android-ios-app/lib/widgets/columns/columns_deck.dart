@@ -416,9 +416,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final saved = _loadLayout();
     if (saved != null && saved.isNotEmpty) {
       // In PM-only mode channel columns are not allowed (`cvAddColumn` guard).
-      _columns.addAll(pmOnly
-          ? saved.where((d) => d.kind != _ColumnKind.channel)
-          : saved);
+      _columns.addAll(
+          pmOnly ? saved.where((d) => d.kind != _ColumnKind.channel) : saved);
     }
 
     if (_columns.isEmpty) {
@@ -563,8 +562,9 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   void _commitTabsReorder(int from, int to) {
     if (from < 0 || from >= _columns.length) return;
     if (to < 0 || to >= _columns.length || from == to) return;
-    final focusedDesc =
-        (_focused >= 0 && _focused < _columns.length) ? _columns[_focused] : null;
+    final focusedDesc = (_focused >= 0 && _focused < _columns.length)
+        ? _columns[_focused]
+        : null;
     setState(() {
       final moved = _columns.removeAt(from);
       _columns.insert(to, moved);
@@ -797,7 +797,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       if (left < pos.pixels) {
         target = left - 12; // `cr.left - sr.left - 12`
       } else if (right > pos.pixels + pos.viewportDimension) {
-        target = right - pos.viewportDimension + 12; // `cr.right - sr.right + 12`
+        target =
+            right - pos.viewportDimension + 12; // `cr.right - sr.right + 12`
       }
       if (target == null) return;
       _stripScroll.animateTo(
@@ -923,8 +924,9 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     }
     if (!found) insertAt = _columns.length - 1;
     if (insertAt == from) return;
-    final focusedDesc =
-        (_focused >= 0 && _focused < _columns.length) ? _columns[_focused] : null;
+    final focusedDesc = (_focused >= 0 && _focused < _columns.length)
+        ? _columns[_focused]
+        : null;
     setState(() {
       final moved = _columns.removeAt(from);
       _columns.insert(insertAt, moved);
@@ -1222,9 +1224,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       case _ColumnKind.channel:
         return '#${d.geohash.isNotEmpty ? d.geohash : d.channel}';
       case _ColumnKind.pm:
-        final conv = app.pmConversations
-            .where((c) => c.pubkey == d.pubkey)
-            .toList();
+        final conv =
+            app.pmConversations.where((c) => c.pubkey == d.pubkey).toList();
         final nym = conv.isNotEmpty ? conv.first.nym : null;
         return (nym != null && nym.isNotEmpty)
             ? nym
@@ -1457,8 +1458,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
                   key: _stripKey,
                   controller: _stripScroll,
                   scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: _CvDimens.padding),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: _CvDimens.padding),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1975,8 +1976,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                 ? null
                 : [
                     BoxShadow(
-                      color: Colors.black
-                          .withValues(alpha: c.isLight ? 0.1 : 0.4),
+                      color:
+                          Colors.black.withValues(alpha: c.isLight ? 0.1 : 0.4),
                       offset: const Offset(0, 4),
                       blurRadius: 16,
                     ),
@@ -2008,8 +2009,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                         // the generic note if still empty (08-H1). Keyed on the
                         // storage key so re-pointing the column replays it.
                         ? _DeckEmptyOrLoading(
-                            key: ValueKey(
-                                'cvempty_${widget.desc.storageKey}'),
+                            key: ValueKey('cvempty_${widget.desc.storageKey}'),
                             useBubbles: settings.useBubbles,
                             emptyNote: _emptyNoteText(),
                           )
@@ -2054,37 +2054,37 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                 itemBuilder: (context, revIndex) {
                                   final entries =
                                       groups[groups.length - 1 - revIndex];
-                                // Per-row raster isolation (see the single-view
-                                // list in messages_list.dart): keeps a repaint
-                                // in one column's row from re-rasterizing every
-                                // other row across all open columns.
-                                //
-                                // Keyed by the group's LEAD message id (stable as
-                                // messages append to a group): without it the
-                                // keyless children reconcile by index, so a new
-                                // group shifts every reversed index and re-creates
-                                // still-visible rows, restarting their
-                                // `bubble-snap-in` from opacity 0 — the
-                                // semi-transparent grouped bubbles. See the single
-                                // view in messages_list.dart for the full rationale.
-                                return RepaintBoundary(
-                                  key: ValueKey(
-                                      'cvgroup_${entries.first.message.id}'),
-                                  child: MessageGroup(
-                                    entries: entries,
-                                    settings: settings,
-                                    // `body.columns-mode` message-layout variants
-                                    // (styles-columns.css:27-82): IRC rows stack
-                                    // vertically, hover buttons stack, media caps
-                                    // at 100%, and desktop self bubble groups
-                                    // drop the 14px right padding.
-                                    columnsMode: true,
-                                    // Jump within THIS column on a quote tap.
-                                    scrollKey: widget.desc.storageKey,
-                                    onReactionPicker: (msg) =>
-                                        showReactionPicker(context, ref, msg),
-                                  ),
-                                );
+                                  // Per-row raster isolation (see the single-view
+                                  // list in messages_list.dart): keeps a repaint
+                                  // in one column's row from re-rasterizing every
+                                  // other row across all open columns.
+                                  //
+                                  // Keyed by the group's LEAD message id (stable as
+                                  // messages append to a group): without it the
+                                  // keyless children reconcile by index, so a new
+                                  // group shifts every reversed index and re-creates
+                                  // still-visible rows, restarting their
+                                  // `bubble-snap-in` from opacity 0 — the
+                                  // semi-transparent grouped bubbles. See the single
+                                  // view in messages_list.dart for the full rationale.
+                                  return RepaintBoundary(
+                                    key: ValueKey(
+                                        'cvgroup_${entries.first.message.id}'),
+                                    child: MessageGroup(
+                                      entries: entries,
+                                      settings: settings,
+                                      // `body.columns-mode` message-layout variants
+                                      // (styles-columns.css:27-82): IRC rows stack
+                                      // vertically, hover buttons stack, media caps
+                                      // at 100%, and desktop self bubble groups
+                                      // drop the 14px right padding.
+                                      columnsMode: true,
+                                      // Jump within THIS column on a quote tap.
+                                      scrollKey: widget.desc.storageKey,
+                                      onReactionPicker: (msg) =>
+                                          showReactionPicker(context, ref, msg),
+                                    ),
+                                  );
                                 },
                               );
                             });
@@ -2451,9 +2451,8 @@ class _HeaderDots extends StatelessWidget {
               margin: const EdgeInsets.symmetric(horizontal: 2),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: i == active
-                    ? c.primary
-                    : c.textDim.withValues(alpha: 0.4),
+                color:
+                    i == active ? c.primary : c.textDim.withValues(alpha: 0.4),
               ),
             ),
         ],
@@ -2517,7 +2516,8 @@ class _HeaderIconButtonState extends State<_HeaderIconButton> {
 /// strip, the active column's dot primary/opaque; the whole cluster opens the
 /// tabs view. Shown only for >1 column (gap F5).
 class _Pager extends StatefulWidget {
-  const _Pager({required this.count, required this.active, required this.onTap});
+  const _Pager(
+      {required this.count, required this.active, required this.onTap});
   final int count;
   final int active;
   final VoidCallback onTap;
@@ -2764,9 +2764,7 @@ class _PickerBodyState extends State<_PickerBody> {
     final f = _term.trim().toLowerCase();
     final shown = f.isEmpty
         ? widget.rows
-        : widget.rows
-            .where((r) => r.label.toLowerCase().contains(f))
-            .toList();
+        : widget.rows.where((r) => r.label.toLowerCase().contains(f)).toList();
 
     // `.cv-picker-search` (padding 10, bottom border) → `.cv-picker-input`.
     final search = Container(
@@ -2984,8 +2982,7 @@ class _TabsSheetState extends State<_TabsSheet> {
               // styles-themes-responsive.css:537).
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black
-                      .withValues(alpha: c.isLight ? 0.12 : 0.5),
+                  color: Colors.black.withValues(alpha: c.isLight ? 0.12 : 0.5),
                   blurRadius: 32,
                   offset: const Offset(0, 8),
                 ),
@@ -2998,11 +2995,10 @@ class _TabsSheetState extends State<_TabsSheet> {
                 // `.cv-tabs-head`: padding 14/16, bottom border, primary title
                 // (font-weight 600, inherited 14px size).
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
-                    border:
-                        Border(bottom: BorderSide(color: c.glassBorder)),
+                    border: Border(bottom: BorderSide(color: c.glassBorder)),
                   ),
                   child: Row(
                     children: [
@@ -3075,8 +3071,8 @@ class _TabsSheetState extends State<_TabsSheet> {
                         active: widget.activeDesc == desc,
                         icon: widget.iconOf(desc),
                         title: widget.titleOf(desc),
-                        onTap: () => Navigator.of(context)
-                            .pop(_TabsResult.select(desc)),
+                        onTap: () =>
+                            Navigator.of(context).pop(_TabsResult.select(desc)),
                         onClose: () async {
                           // Remove by identity and keep the sheet open,
                           // rebuilding the rows (columns.js:862-866).

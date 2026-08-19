@@ -107,8 +107,7 @@ class ReactorsModal extends ConsumerWidget {
                       offset: Offset(0, 8),
                       blurRadius: 32),
                   BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
-                  const BoxShadow(
-                      color: Color(0x0DFFFFFF), spreadRadius: 1),
+                  const BoxShadow(color: Color(0x0DFFFFFF), spreadRadius: 1),
                 ],
         ),
         child: Column(
@@ -167,8 +166,8 @@ class ReactorsModal extends ConsumerWidget {
                         users[r.pubkey]?.profile?.picture ?? r.imageUrl),
                   if (overflow > 0)
                     Padding(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
                       child: Text(
                         tr('+{n} more', {'n': overflow}),
                         style: TextStyle(

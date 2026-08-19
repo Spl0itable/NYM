@@ -14,8 +14,10 @@ import 'package:nym_bar/state/nostr_controller.dart';
 import 'package:nym_bar/state/settings_provider.dart';
 import 'package:nym_bar/widgets/context_menu/context_menu_actions.dart';
 
-const _self = '0000000000000000000000000000000000000000000000000000000000001a2b';
-const _other = '11111111111111111111111111111111111111111111111111111111deadbeef';
+const _self =
+    '0000000000000000000000000000000000000000000000000000000000001a2b';
+const _other =
+    '11111111111111111111111111111111111111111111111111111111deadbeef';
 
 Future<ProviderContainer> _container() async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -61,7 +63,8 @@ void _seedChannelMessage(
 
 void main() {
   group('friends', () {
-    test('toggleFriend adds/removes, persists nym_friends, isFriend reflects it',
+    test(
+        'toggleFriend adds/removes, persists nym_friends, isFriend reflects it',
         () async {
       final c = await _container();
       addTearDown(c.dispose);
@@ -116,10 +119,7 @@ void main() {
           content: 'hello',
           isOwn: true);
       _seedChannelMessage(c,
-          id: 'theirs',
-          pubkey: _other,
-          author: 'satoshi#beef',
-          content: 'gm');
+          id: 'theirs', pubkey: _other, author: 'satoshi#beef', content: 'gm');
 
       // Both visible initially.
       var msgs = c.read(messagesForCurrentViewProvider);
@@ -153,12 +153,14 @@ void main() {
           content: 'buy my SPAM now');
       _seedChannelMessage(c,
           id: 'badNym',
-          pubkey: '2222222222222222222222222222222222222222222222222222222222223c4d',
+          pubkey:
+              '2222222222222222222222222222222222222222222222222222222222223c4d',
           author: 'Spammer#3c4d',
           content: 'totally innocent');
       _seedChannelMessage(c,
           id: 'clean',
-          pubkey: '33333333333333333333333333333333333333333333333333333333000099ff',
+          pubkey:
+              '33333333333333333333333333333333333333333333333333333333000099ff',
           author: 'trinity#99ff',
           content: 'gm friends');
 
@@ -184,7 +186,8 @@ void main() {
       );
     });
 
-    test('an own message that hits a blocked keyword is hidden locally', () async {
+    test('an own message that hits a blocked keyword is hidden locally',
+        () async {
       // The PWA hides the user's OWN keyword-matching message from the local
       // view (it was still sent) and posts a "hidden locally" notice
       // (messages.js:638-642). [sendLocal] inserts the echo + the notice; the
@@ -231,8 +234,8 @@ void main() {
             id: '_none', pubkey: '', author: '', content: '', createdAt: 0),
       );
       expect(notice.id, isNot('_none'));
-      expect(notice.systemAction!.kind,
-          SystemActionKind.reportSpamFalsePositive);
+      expect(
+          notice.systemAction!.kind, SystemActionKind.reportSpamFalsePositive);
       expect(notice.systemAction!.label, 'Report false positive');
       expect(notice.systemAction!.payload, 'Xq7zkwjpQmbvxz');
       expect(notice.content, contains('flagged by the spam filter'));
@@ -313,9 +316,13 @@ void main() {
       final c = await _container();
       addTearDown(c.dispose);
       _seedChannelMessage(c,
-          id: 'd1', pubkey: _self, author: 'you#1a2b', content: 'bye', isOwn: true);
-      expect(
-          c.read(messagesForCurrentViewProvider).map((m) => m.id), contains('d1'));
+          id: 'd1',
+          pubkey: _self,
+          author: 'you#1a2b',
+          content: 'bye',
+          isOwn: true);
+      expect(c.read(messagesForCurrentViewProvider).map((m) => m.id),
+          contains('d1'));
       c.read(appStateProvider.notifier).removeMessage('d1');
       expect(c.read(messagesForCurrentViewProvider).map((m) => m.id),
           isNot(contains('d1')));
@@ -323,8 +330,7 @@ void main() {
 
     // The user-reported bug: an incoming edit (event carries ['edit', origId])
     // must REWRITE the original in place, never append a second bubble.
-    NostrEvent channelMsg(String id, String content,
-            {String? editOf}) =>
+    NostrEvent channelMsg(String id, String content, {String? editOf}) =>
         NostrEvent(
           id: id,
           pubkey: _other,
@@ -363,8 +369,7 @@ void main() {
       n.markNymchatPubkey(_other);
       // Edit arrives FIRST (original not seen yet) — buffered, not shown.
       n.ingestEvent(channelMsg('editEvt', 'late edit', editOf: 'orig'));
-      expect(
-          c.read(messagesForCurrentViewProvider).map((m) => m.id),
+      expect(c.read(messagesForCurrentViewProvider).map((m) => m.id),
           isNot(contains('editEvt')));
       // Original lands → the buffered edit is replayed onto it in place.
       n.ingestEvent(channelMsg('orig', 'first text'));

@@ -60,7 +60,8 @@ class FakeMeshTransport implements MeshTransport {
   @override
   Stream<MeshLinkEvent> get links => _links.stream;
   @override
-  Future<void> broadcast(Uint8List frame) async => bus.broadcastFrom(this, frame);
+  Future<void> broadcast(Uint8List frame) async =>
+      bus.broadcastFrom(this, frame);
   @override
   Future<MeshTransportAvailability> start() async {
     bus.markStarted(this);
@@ -74,7 +75,8 @@ class FakeMeshTransport implements MeshTransport {
 }
 
 /// Builds the MeshBridge inside the container so it gets a real Ref.
-final _bridgeServiceProvider = Provider<MeshService>((ref) => throw UnimplementedError());
+final _bridgeServiceProvider =
+    Provider<MeshService>((ref) => throw UnimplementedError());
 final _bridgeProvider = Provider<MeshBridge>((ref) => MeshBridge(
       ref: ref,
       service: ref.read(_bridgeServiceProvider),
@@ -105,7 +107,8 @@ void main() {
     'dexterous.com/flutter/local_notifications',
     'flutter.baseflow.com/permissions/methods',
   ]) {
-    messenger.setMockMethodCallHandler(MethodChannel(name), (call) async => null);
+    messenger.setMockMethodCallHandler(
+        MethodChannel(name), (call) async => null);
   }
 
   test('an inbound #mesh message from a peer lands in the #mesh channel view',
@@ -137,7 +140,8 @@ void main() {
     addTearDown(container.dispose);
 
     final app = container.read(appStateProvider.notifier);
-    app.goLive(bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
+    app.goLive(
+        bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
 
     final bridge = container.read(_bridgeProvider);
     bridge.start();
@@ -171,7 +175,8 @@ void main() {
     await bobService.stop();
   });
 
-  test('an inbound mesh PM from a peer lands in its pm-<pubkey> view', () async {
+  test('an inbound mesh PM from a peer lands in its pm-<pubkey> view',
+      () async {
     SharedPreferences.setMockInitialValues(
         <String, Object>{'flutter.nym_notifications_enabled': 'false'});
     final kv = await KeyValueStore.open();
@@ -199,7 +204,8 @@ void main() {
     addTearDown(container.dispose);
 
     final app = container.read(appStateProvider.notifier);
-    app.goLive(bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
+    app.goLive(
+        bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
 
     final bridge = container.read(_bridgeProvider);
     bridge.start();
@@ -273,7 +279,8 @@ void main() {
     addTearDown(container.dispose);
 
     final app = container.read(appStateProvider.notifier);
-    app.goLive(bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
+    app.goLive(
+        bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
     final bridge = container.read(_bridgeProvider);
     bridge.start();
 
@@ -342,7 +349,8 @@ void main() {
     addTearDown(container.dispose);
 
     final app = container.read(appStateProvider.notifier);
-    app.goLive(bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
+    app.goLive(
+        bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
     final bridge = container.read(_bridgeProvider);
     bridge.start();
 
@@ -353,14 +361,15 @@ void main() {
     // Simulate opening the DM before the handshake AND before the announce is
     // captured: no session, no announced key.
     bobService.peerById(alice.myPeerID)!.noisePublicKey = null;
-    final openedPubkey = bridge.openPeerDm(bobService.peerById(alice.myPeerID)!);
+    final openedPubkey =
+        bridge.openPeerDm(bobService.peerById(alice.myPeerID)!);
     app.switchView(ChatView.pm(openedPubkey));
 
     // Now the peer replies — this drives the handshake and resolves the real key.
     await alice.sendPrivateMessage(bobService.myPeerID, 'reply text');
 
-    await _waitFor(() =>
-        container.read(messagesForCurrentViewProvider).isNotEmpty);
+    await _waitFor(
+        () => container.read(messagesForCurrentViewProvider).isNotEmpty);
 
     final shown = container.read(messagesForCurrentViewProvider);
     expect(shown.map((e) => e.content), contains('reply text'),

@@ -66,9 +66,7 @@ class LandingChannel {
 
   @override
   bool operator ==(Object other) =>
-      other is LandingChannel &&
-      other.type == type &&
-      other.geohash == geohash;
+      other is LandingChannel && other.type == type && other.geohash == geohash;
 
   @override
   int get hashCode => Object.hash(type, geohash);
@@ -112,7 +110,16 @@ void writeLandingChannel(KeyValueStore kv, LandingChannel channel) {
 List<LandingChannelOption> buildLandingChannelOptions(
   List<ChannelEntry> channels, {
   List<String> commonGeohashes = const [
-    'nymchat', '9q', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5',
+    'nymchat',
+    '9q',
+    'w2',
+    'dr5r',
+    '9q8y',
+    'u4pr',
+    'gcpv',
+    'f2m6',
+    'xn77',
+    'tjm5',
   ],
 }) {
   final out = <LandingChannelOption>[];
@@ -142,7 +149,11 @@ List<LandingChannelOption> buildLandingChannelOptions(
 /// The five valid read-receipt/typing-indicator scopes (settings.js:3
 /// `INDICATOR_SCOPES`).
 const List<String> kIndicatorScopes = [
-  'disabled', 'pms', 'groups', 'pms-groups', 'everywhere',
+  'disabled',
+  'pms',
+  'groups',
+  'pms-groups',
+  'everywhere',
 ];
 
 /// Coerces a stored indicator-scope value to a valid scope, mirroring
@@ -269,30 +280,51 @@ String abbreviateTransferKey(String pubkey) {
 /// (app.js:4048-4073 `SETTINGS_KEY_EXACT`). Identity/login/PM/group/shop keys
 /// are deliberately absent so they are preserved.
 const List<String> kSettingsResetKeys = [
-  'nym_theme', 'nym_color_mode',
+  'nym_theme',
+  'nym_color_mode',
   'nym_chat_layout',
-  'nym_wallpaper_type', 'nym_wallpaper_custom_url',
-  'nym_text_size', 'nym_transparency_enabled', 'nym_nick_style',
+  'nym_wallpaper_type',
+  'nym_wallpaper_custom_url',
+  'nym_text_size',
+  'nym_transparency_enabled',
+  'nym_nick_style',
   'nym_show_status',
-  'nym_autoscroll', 'nym_timestamps', 'nym_time_format', 'nym_date_format',
-  'nym_sound', 'nym_notifications_enabled', 'nym_notify_friends_only',
+  'nym_autoscroll',
+  'nym_timestamps',
+  'nym_time_format',
+  'nym_date_format',
+  'nym_sound',
+  'nym_notifications_enabled',
+  'nym_notify_friends_only',
   'nym_sort_proximity',
-  'nym_dm_fwdsec_enabled', 'nym_dm_ttl_seconds',
-  'nym_read_receipts_enabled', 'nym_typing_indicators_enabled',
-  'nym_accept_pms', 'nym_cache_pms', 'nym_sync_mls_history',
-  'nym_groupchat_pm_only_mode', 'nym_low_data_mode',
+  'nym_dm_fwdsec_enabled',
+  'nym_dm_ttl_seconds',
+  'nym_read_receipts_enabled',
+  'nym_typing_indicators_enabled',
+  'nym_accept_pms',
+  'nym_cache_pms',
+  'nym_sync_mls_history',
+  'nym_groupchat_pm_only_mode',
+  'nym_low_data_mode',
   'nym_pow_difficulty',
-  'nym_pinned_channels', 'nym_pinned_landing_channel',
-  'nym_hidden_channels', 'nym_hide_non_pinned',
-  'nym_blocked', 'nym_blocked_channels', 'nym_blocked_keywords',
+  'nym_pinned_channels',
+  'nym_pinned_landing_channel',
+  'nym_hidden_channels',
+  'nym_hide_non_pinned',
+  'nym_blocked',
+  'nym_blocked_channels',
+  'nym_blocked_keywords',
   'nym_image_blur',
   'nym_group_notify_mentions_only',
   'nym_recent_emojis',
-  'nym_user_channels', 'nym_user_joined_channels',
+  'nym_user_channels',
+  'nym_user_joined_channels',
   'nym_relay_url',
   'nym_nav',
-  'nym_tutorial_seen', 'nym_botpm_welcomed',
-  'nym_notification_history', 'nym_notification_last_read',
+  'nym_tutorial_seen',
+  'nym_botpm_welcomed',
+  'nym_notification_history',
+  'nym_notification_last_read',
   'nym_notification_seen',
 ];
 

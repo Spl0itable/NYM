@@ -20,7 +20,8 @@ void main() {
   const cap = 1000; // mirrors AppStateNotifier._kChannelHistoryCap
   const key = '#flood';
 
-  test('non-batched ingest caps a public channel to the newest N, oldest dropped',
+  test(
+      'non-batched ingest caps a public channel to the newest N, oldest dropped',
       () {
     final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
     final base = 1000000000;

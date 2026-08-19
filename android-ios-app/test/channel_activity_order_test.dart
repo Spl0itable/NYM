@@ -16,7 +16,8 @@ NostrEvent _msg(String d, int ts, {String id = ''}) => NostrEvent(
     );
 
 void main() {
-  test('channelLastActivity only rises — a backfilled OLD message never lowers it',
+  test(
+      'channelLastActivity only rises — a backfilled OLD message never lowers it',
       () {
     final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
     // A fresh live message stamps recent activity (stored as createdAt*1000 ms).
@@ -35,7 +36,8 @@ void main() {
     expect(n.state.channelLastActivity['#busy']! > tNewest, isTrue);
   });
 
-  test('two channels order by their newest activity regardless of backfill order',
+  test(
+      'two channels order by their newest activity regardless of backfill order',
       () {
     final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
     n.ingestEvent(_msg('alpha', 100));
@@ -45,8 +47,10 @@ void main() {
       n.ingestEvent(_msg('beta', ts));
     }
     // beta's newest (200) still beats alpha's newest (100).
-    expect(n.state.channelLastActivity['#beta']! >
-        n.state.channelLastActivity['#alpha']!, isTrue);
+    expect(
+        n.state.channelLastActivity['#beta']! >
+            n.state.channelLastActivity['#alpha']!,
+        isTrue);
   });
 
   test('index-backed reaction guard: isKnownMessageId tracks ingested ids', () {

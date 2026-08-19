@@ -76,7 +76,8 @@ void main() {
     });
 
     test('MainActivity lives in the real package', () {
-      final kt = _read('android/app/src/main/kotlin/com/nym/bar/MainActivity.kt');
+      final kt =
+          _read('android/app/src/main/kotlin/com/nym/bar/MainActivity.kt');
       expect(kt, contains('package com.nym.bar'));
     });
   });

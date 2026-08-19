@@ -167,8 +167,7 @@ class ModalChrome {
       isDense: true,
       hintText: hint.isEmpty ? null : hint,
       hintStyle: TextStyle(color: c.textDim, fontSize: 15),
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       filled: true,
       // Dark: white@.05 → .07 on focus; light: black@.04 `!important`, so the
       // focus bump never applies.
@@ -303,9 +302,8 @@ class _SendButtonState extends State<_SendButton> {
       opacity: enabled ? 1 : 0.35,
       child: MouseRegion(
         // `.send-btn:disabled { cursor: not-allowed }`.
-        cursor: enabled
-            ? SystemMouseCursors.click
-            : SystemMouseCursors.forbidden,
+        cursor:
+            enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
         child: GestureDetector(
@@ -466,9 +464,7 @@ class _CloseChipState extends State<_CloseChip> {
                 ? c.danger.withValues(alpha: 0.12)
                 : Colors.white.withValues(alpha: 0.05),
             border: Border.all(
-              color: _hover
-                  ? c.danger.withValues(alpha: 0.3)
-                  : c.glassBorder,
+              color: _hover ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
             ),
           ),
           child: Text(

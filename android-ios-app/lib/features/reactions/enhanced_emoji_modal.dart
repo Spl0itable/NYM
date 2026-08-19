@@ -136,11 +136,14 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
   /// picker recents at 20 on mobile (`innerWidth<=768`) / 24 on desktop.
   List<String> _visibleRecents(CustomEmojiState custom, double width) {
     final cap = width <= 768 ? 20 : kRecentEmojisCap;
-    return widget.recents.where((e) {
-      final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
-      if (m == null) return true;
-      return custom.codeToUrl.containsKey(m.group(1));
-    }).take(cap).toList();
+    return widget.recents
+        .where((e) {
+          final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
+          if (m == null) return true;
+          return custom.codeToUrl.containsKey(m.group(1));
+        })
+        .take(cap)
+        .toList();
   }
 
   /// True when an emoji passes the current search (reactions.js
@@ -175,12 +178,10 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     final sections = <_Section>[];
 
     // Recently Used.
-    final recents = _visibleRecents(custom, screenWidth)
-        .where((e) {
-          final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
-          return m == null ? _matches(e) : _matchesCustom(m.group(1)!);
-        })
-        .toList();
+    final recents = _visibleRecents(custom, screenWidth).where((e) {
+      final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
+      return m == null ? _matches(e) : _matchesCustom(m.group(1)!);
+    }).toList();
     if (recents.isNotEmpty) {
       sections.add(_Section(
         title: tr('Recently Used'),
@@ -282,7 +283,8 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
           borderRadius: NymRadius.rmd,
           boxShadow: [
             BoxShadow(
-              color: c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
+              color:
+                  c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
               blurRadius: 32,
               offset: const Offset(0, 8),
             ),

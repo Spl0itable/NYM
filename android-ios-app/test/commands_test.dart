@@ -16,7 +16,8 @@ import 'package:nym_bar/models/user.dart';
 /// A spy [CommandEngine]: records sent content + system messages, and exposes
 /// the context flags so gating + dispatch can be asserted without an engine.
 class _SpyEngine implements CommandEngine {
-  _SpyEngine({this.inPM = false, this.inGroup = false, Map<String, User>? users})
+  _SpyEngine(
+      {this.inPM = false, this.inGroup = false, Map<String, User>? users})
       : users = users ?? {};
 
   @override

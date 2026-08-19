@@ -136,7 +136,8 @@ void main() {
       });
       final kv = await KeyValueStore.open();
       final mem = _MemSecure();
-      final vault = _FakeVault(kv, mem.asSecureStore(), correct: 'correcthorse');
+      final vault =
+          _FakeVault(kv, mem.asSecureStore(), correct: 'correcthorse');
 
       var unlocked = false;
       await tester.pumpWidget(host(

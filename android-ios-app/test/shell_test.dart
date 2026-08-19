@@ -25,7 +25,8 @@ void main() {
   // Custom-emoji ingest arms a module-global deferred prefetch Timer; cancel
   // it so widget tests don't fail on a pending timer at teardown.
   tearDown(resetCustomEmojiPrefetchForTest);
-  testWidgets('HomeShell renders a sample channel and a message', (tester) async {
+  testWidgets('HomeShell renders a sample channel and a message',
+      (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final kv = await KeyValueStore.open();
 

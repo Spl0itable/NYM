@@ -13,7 +13,6 @@ import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_manager.dart';
 import '../../features/globe/geohash_explorer.dart';
 import '../../features/mesh/mesh_controller.dart';
-import '../../features/mesh/mesh_screen.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/nick_edit_modal.dart';
@@ -41,6 +40,7 @@ import 'channel_list_item.dart';
 import 'pm_context_menu.dart';
 import 'pm_list_item.dart';
 import 'sidebar_row_gestures.dart';
+import 'sidebar_row_menu_button.dart';
 import 'sidebar_skeleton.dart';
 import 'user_list_item.dart';
 
@@ -254,6 +254,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
     final app = ref.watch(appStateProvider);
     final view = ref.watch(currentViewProvider);
+    // While the mesh overlay is open no conversation is "current", so the
+    // sidebar must show nothing as active — otherwise the channel you left
+    // behind stays highlighted and re-tapping it is a no-op view change that
+    // never dismisses the overlay. Every active-highlight below is gated on
+    // `!meshOpen`.
+    final meshOpen = ref.watch(meshScreenOpenProvider);
     // Visible channels + PWA sort. `applyHiddenChannels` (channels.js:820-833)
     // NEVER hides `#nymchat` or the ACTIVE row — neither via the per-channel
     // hidden set nor via hide-non-pinned — which is exactly what keeps the
@@ -263,8 +269,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final hideNonPinned = ref
         .watch(settingsProvider.select((settings) => settings.hideNonPinned));
     final location = ref.watch(userLocationProvider);
-    final activeChannelKey =
-        view.kind == ViewKind.channel ? view.id.toLowerCase() : '';
+    final activeChannelKey = (!meshOpen && view.kind == ViewKind.channel)
+        ? view.id.toLowerCase()
+        : '';
     final visibleChannels = app.channels
         .where((ch) => !app.blockedChannels.contains(ch.key))
         .where((ch) =>
@@ -340,6 +347,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final showPmSkel = !_skelTimedOut && pmEntries.isEmpty;
 
     void select(ChatView v) {
+      // Dismiss the mesh overlay on ANY conversation tap — even when the tapped
+      // view equals the current one (switchView is then a no-op, so this is the
+      // only thing that reveals the channel you were in beneath the overlay).
+      if (ref.read(meshScreenOpenProvider)) {
+        ref.read(meshScreenOpenProvider.notifier).state = false;
+      }
       notifier.switchView(v);
       widget.onItemSelected?.call();
     }
@@ -464,7 +477,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
               for (final ch in r.rows)
                 ChannelListItem(
                   entry: ch,
-                  active: view.kind == ViewKind.channel && view.id == ch.key,
+                  active: !meshOpen &&
+                      view.kind == ViewKind.channel &&
+                      view.id == ch.key,
                   pinned: pinned.contains(ch.key),
                   // `unreadCounts` is keyed by the `#<geohash|name>` storageKey
                   // (app_state `_ingestChannelMessage` / `channelKeyOf`), NOT
@@ -578,8 +593,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 if (e.group != null)
                   _GroupListItem(
                     group: e.group!,
-                    active:
-                        view.kind == ViewKind.group && view.id == e.group!.id,
+                    active: !meshOpen &&
+                        view.kind == ViewKind.group &&
+                        view.id == e.group!.id,
                     unread:
                         unread[GroupLogic.groupStorageKey(e.group!.id)] ?? 0,
                     textSize: textSize,
@@ -591,7 +607,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   PMListItem(
                     nym: e.pm!.nym,
                     pubkey: e.pm!.pubkey,
-                    active: view.kind == ViewKind.pm && view.id == e.pm!.pubkey,
+                    active: !meshOpen &&
+                        view.kind == ViewKind.pm &&
+                        view.id == e.pm!.pubkey,
                     unread: unread[e.pm!.pubkey] ?? 0,
                     textSize: textSize,
                     mesh: meshPmPubkeys.contains(e.pm!.pubkey.toLowerCase()),
@@ -1166,8 +1184,11 @@ class _MeshStatusIndicator extends ConsumerWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: () {
+            // Shows the in-shell mesh overlay (idempotent — already-open stays
+            // open, no stacking). onItemSelected closes the mobile drawer so
+            // the mesh screen is revealed beneath it.
+            ref.read(meshScreenOpenProvider.notifier).state = true;
             onItemSelected?.call();
-            Navigator.of(context).push(MeshScreen.route());
           },
           // A generous, full-width tap target (like the connected-relays row),
           // so the mesh status line is easy to hit instead of a thin text strip.
@@ -1482,7 +1503,8 @@ class _NavSection extends StatelessWidget {
                   // (the PWA rotates the same glyph -90° → chevronRight).
                   _MiniIcon(
                     svg: open ? NymIcons.chevronDown : NymIcons.chevronRight,
-                    tooltip: open ? tr('Collapse section') : tr('Expand section'),
+                    tooltip:
+                        open ? tr('Collapse section') : tr('Expand section'),
                     onTap: onToggleOpen,
                   ),
                 ],
@@ -1936,6 +1958,16 @@ class _GroupListItem extends ConsumerWidget {
                     const SizedBox(width: 5),
                     _GroupUnreadPill(count: unread),
                   ],
+                  // Same menu the hold opens, to the right of the unread pill
+                  // (`.row-menu-btn`).
+                  const SizedBox(width: 2),
+                  SidebarRowMenuButton(
+                    semanticLabel: 'Group menu',
+                    onShowMenu: (pos) {
+                      _leaveMenu(context, ref, pos);
+                      return true;
+                    },
+                  ),
                 ],
               ),
             ),

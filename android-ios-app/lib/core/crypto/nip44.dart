@@ -26,8 +26,7 @@ Uint8List _hmacSha256(Uint8List key, Uint8List data) {
 }
 
 /// HKDF-Extract(salt, ikm) -> PRK.
-Uint8List _hkdfExtract(Uint8List salt, Uint8List ikm) =>
-    _hmacSha256(salt, ikm);
+Uint8List _hkdfExtract(Uint8List salt, Uint8List ikm) => _hmacSha256(salt, ikm);
 
 /// HKDF-Expand(prk, info, length) -> OKM.
 Uint8List _hkdfExpand(Uint8List prk, Uint8List info, int length) {
@@ -77,8 +76,8 @@ Uint8List getConversationKey(Uint8List privkey, String pubkeyHex) {
 
 // --- Per-message keys / padding ---------------------------------------------
 
-({Uint8List chachaKey, Uint8List chachaNonce, Uint8List hmacKey})
-    _messageKeys(Uint8List conversationKey, Uint8List nonce) {
+({Uint8List chachaKey, Uint8List chachaNonce, Uint8List hmacKey}) _messageKeys(
+    Uint8List conversationKey, Uint8List nonce) {
   final keys = _hkdfExpand(conversationKey, nonce, 76);
   return (
     chachaKey: keys.sublist(0, 32),
@@ -178,8 +177,7 @@ String decrypt(String payload, Uint8List conversationKey) {
   }
   final nonce = Uint8List.fromList(data.sublist(1, 33));
   final mac = data.sublist(data.length - 32);
-  final ciphertext =
-      Uint8List.fromList(data.sublist(33, data.length - 32));
+  final ciphertext = Uint8List.fromList(data.sublist(33, data.length - 32));
   final mk = _messageKeys(conversationKey, nonce);
   final aad = Uint8List(nonce.length + ciphertext.length)
     ..setRange(0, nonce.length, nonce)

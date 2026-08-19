@@ -36,7 +36,16 @@ class GeohashChannelPoint {
 /// `autocomplete_queries.dart` / `settings_helpers.dart` — to avoid importing the
 /// heavy `nostr_controller.dart` into this leaf module.
 const List<String> kGlobeSeedGeohashes = [
-  'nymchat', '9q', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5',
+  'nymchat',
+  '9q',
+  'w2',
+  'dr5r',
+  '9q8y',
+  'u4pr',
+  'gcpv',
+  'f2m6',
+  'xn77',
+  'tjm5',
 ];
 
 /// Heat floor assigned to a geohash that is D1-active inside the active window

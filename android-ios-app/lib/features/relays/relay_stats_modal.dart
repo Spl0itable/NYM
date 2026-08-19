@@ -103,8 +103,7 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     // Real connected-relay count (NostrService.onConnectionChanged → appState).
     final connected =
         ref.watch(appStateProvider.select((s) => s.connectedRelays));
-    final lowData =
-        ref.watch(settingsProvider.select((s) => s.lowDataMode));
+    final lowData = ref.watch(settingsProvider.select((s) => s.lowDataMode));
 
     // Live relay traffic counters — typed getter on the controller, null before
     // boot. Already a fresh snapshot (the controller getter merges the pool's
@@ -151,7 +150,8 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                       blurRadius: 20,
                     ),
                     BoxShadow(
-                      color: Colors.white.withValues(alpha: 0.05), // 1px white ring
+                      color: Colors.white
+                          .withValues(alpha: 0.05), // 1px white ring
                       spreadRadius: 1,
                     ),
                   ],
@@ -173,8 +173,8 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                       margin: const EdgeInsets.only(bottom: 24),
                       padding: const EdgeInsets.only(bottom: 14),
                       decoration: BoxDecoration(
-                        border: Border(
-                            bottom: BorderSide(color: c.glassBorder)),
+                        border:
+                            Border(bottom: BorderSide(color: c.glassBorder)),
                       ),
                       child: Text(
                         tr('NETWORK STATS'),
@@ -250,12 +250,10 @@ class _Cards extends StatelessWidget {
   Widget build(BuildContext context) {
     // Real values when [stats] is available; PWA placeholders otherwise.
     // Avg Latency: `avgLat !== null ? avgLat + 'ms' : '--'` (app.js:7391).
-    final latency = stats?.averageLatencyMs != null
-        ? '${stats!.averageLatencyMs}ms'
-        : '--';
+    final latency =
+        stats?.averageLatencyMs != null ? '${stats!.averageLatencyMs}ms' : '--';
     // Events: k-abbreviated total (app.js:7392).
-    final events =
-        stats != null ? _abbreviateCount(stats!.totalEvents) : '0';
+    final events = stats != null ? _abbreviateCount(stats!.totalEvents) : '0';
     // Data In / Out: formatBytes (app.js:7393-7394).
     final dataIn = stats != null ? formatBytes(stats!.bytesReceived) : '0 B';
     final dataOut = stats != null ? formatBytes(stats!.bytesSent) : '0 B';
@@ -650,6 +648,7 @@ class _RelayListSection extends StatelessWidget {
     );
   }
 }
+
 /// Key for the App-data row's expansion state (the PWA uses the literal
 /// `'__api__'` url, app.js:7611).
 const String _kApiRowKey = '__api__';
@@ -853,8 +852,9 @@ class _RelayRow extends StatelessWidget {
       metricColor: context.nym.textBright,
       expanded: expanded,
       onTap: onTap,
-      detail:
-          expanded ? _KindDetail(perKind: stats?.kindStatsPerRelay[data.url]) : null,
+      detail: expanded
+          ? _KindDetail(perKind: stats?.kindStatsPerRelay[data.url])
+          : null,
     );
   }
 }
@@ -953,9 +953,7 @@ class _ApiActionDetail extends StatelessWidget {
     final known = _labels[action];
     if (known != null) return known;
     final words = action.split(RegExp(r'[-_]+')).where((w) => w.isNotEmpty);
-    return words
-        .map((w) => w[0].toUpperCase() + w.substring(1))
-        .join(' ');
+    return words.map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
   }
 
   @override
@@ -1004,12 +1002,14 @@ class _KindRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(left, maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
+            child: Text(left,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
           ),
           const SizedBox(width: 10),
           Expanded(child: Text(mid, textAlign: TextAlign.right, style: style)),
           const SizedBox(width: 10),
-          Expanded(child: Text(right, textAlign: TextAlign.right, style: style)),
+          Expanded(
+              child: Text(right, textAlign: TextAlign.right, style: style)),
         ],
       ),
     );
@@ -1115,9 +1115,7 @@ class _CloseChipState extends State<_CloseChip> {
                 ? c.danger.withValues(alpha: 0.12)
                 : Colors.white.withValues(alpha: 0.05),
             border: Border.all(
-              color: hovered
-                  ? c.danger.withValues(alpha: 0.3)
-                  : c.glassBorder,
+              color: hovered ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
             ),
           ),
           child: Text(

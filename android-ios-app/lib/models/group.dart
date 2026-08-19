@@ -15,6 +15,7 @@ class GroupControlType {
   static const leave = 'group-leave';
   static const unban = 'group-unban';
   static const keyResync = 'key-resync';
+  static const history = 'group-history';
 }
 
 /// A moderation-log entry (docs/specs/03 §4.1).
@@ -70,11 +71,17 @@ class Group {
     this.metaUpdatedAt = 0,
     this.lastModTs = 0,
     this.lastModEventId,
+    this.shareHistory = false,
+    this.historyReceived = false,
     List<ModLogEntry>? modLog,
+    Map<String, int>? modTsByTarget,
+    List<String>? modSeenIds,
   })  : members = members ?? <String>[],
         mods = mods ?? <String>[],
         banned = banned ?? <String>[],
-        modLog = modLog ?? <ModLogEntry>[];
+        modLog = modLog ?? <ModLogEntry>[],
+        modTsByTarget = modTsByTarget ?? <String, int>{},
+        modSeenIds = modSeenIds ?? <String>[];
 
   /// 64-hex CSPRNG group id.
   final String id;
@@ -93,7 +100,21 @@ class Group {
   int metaUpdatedAt;
   int lastModTs;
   String? lastModEventId;
+
+  /// Owner-controlled: newly added members receive recent chat history.
+  bool shareHistory;
+
+  /// We already folded in one shared-history blob for this group.
+  bool historyReceived;
   final List<ModLogEntry> modLog;
+
+  /// Per-target moderation clocks: distinct mod events are ordered per target
+  /// pubkey, so an out-of-order promote for A isn't dropped because an
+  /// unrelated kick for B carried a newer timestamp.
+  final Map<String, int> modTsByTarget;
+
+  /// Recently-applied moderation event ids (x tag / wrap id) for replay dedup.
+  final List<String> modSeenIds;
 
   bool isOwner(String pubkey) => createdBy == pubkey;
   bool isMod(String pubkey) => mods.contains(pubkey);
@@ -118,19 +139,27 @@ class Group {
         'metaUpdatedAt': metaUpdatedAt,
         'lastModTs': lastModTs,
         'lastModEventId': lastModEventId,
+        'shareHistory': shareHistory,
+        'historyReceived': historyReceived,
+        'modTsByTarget': modTsByTarget,
+        'modSeenIds': modSeenIds,
         'modLog': modLog.map((e) => e.toJson()).toList(),
       };
 
   factory Group.fromJson(Map<String, dynamic> j) => Group(
         id: j['id'] as String,
         name: (j['name'] ?? '') as String,
-        members:
-            ((j['members'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        members: ((j['members'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
         lastMessageTime: (j['lastMessageTime'] as num?)?.toInt() ?? 0,
         createdBy: j['createdBy'] as String?,
-        mods: ((j['mods'] as List?) ?? const []).map((e) => e.toString()).toList(),
-        banned:
-            ((j['banned'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        mods: ((j['mods'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        banned: ((j['banned'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
         avatar: j['avatar'] as String?,
         banner: j['banner'] as String?,
         description: j['description'] as String?,
@@ -140,8 +169,18 @@ class Group {
         metaUpdatedAt: (j['metaUpdatedAt'] as num?)?.toInt() ?? 0,
         lastModTs: (j['lastModTs'] as num?)?.toInt() ?? 0,
         lastModEventId: j['lastModEventId'] as String?,
+        shareHistory: j['shareHistory'] == true,
+        historyReceived: j['historyReceived'] == true,
+        modTsByTarget: j['modTsByTarget'] is Map
+            ? (j['modTsByTarget'] as Map).map(
+                (k, v) => MapEntry(k.toString(), (v as num?)?.toInt() ?? 0))
+            : null,
+        modSeenIds: ((j['modSeenIds'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
         modLog: ((j['modLog'] as List?) ?? const [])
-            .map((e) => ModLogEntry.fromJson((e as Map).cast<String, dynamic>()))
+            .map(
+                (e) => ModLogEntry.fromJson((e as Map).cast<String, dynamic>()))
             .toList(),
       );
 }

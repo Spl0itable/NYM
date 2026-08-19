@@ -45,8 +45,7 @@ void main() {
   // 1. Boot gate decision (setup-modal-init.js + checkSavedConnection).
   // ---------------------------------------------------------------------------
   group('BootGate', () {
-    testWidgets(
-        'shows the setup modal when not logged-in + auto-ephemeral off',
+    testWidgets('shows the setup modal when not logged-in + auto-ephemeral off',
         (tester) async {
       roomy(tester);
       // Language already chosen so the first-run picker (which now leads

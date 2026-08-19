@@ -137,7 +137,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     super.dispose();
   }
 
-  String get _pubkey => ref.read(nostrControllerProvider).identity?.pubkey ?? '';
+  String get _pubkey =>
+      ref.read(nostrControllerProvider).identity?.pubkey ?? '';
 
   String get _suffix {
     final pk = _pubkey;
@@ -278,8 +279,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                   isDense: true,
                   hintText: tr('Enter new nym'),
                   hintStyle: TextStyle(color: c.textDim),
-                  contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 11),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                   filled: true,
                   fillColor: Colors.white.withValues(alpha: 0.05),
                   border: _inputBorder(c),
@@ -402,7 +403,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 height: 64,
                 child: _avatarPath != null
                     ? Image.file(File(_avatarPath!), fit: BoxFit.cover)
-                    : (_currentAvatarUrl != null && _currentAvatarUrl!.isNotEmpty
+                    : (_currentAvatarUrl != null &&
+                            _currentAvatarUrl!.isNotEmpty
                         ? NymAvatar(
                             seed: _pubkey,
                             size: 64,
@@ -451,9 +453,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       children: [
         _label(c, tr('Banner')),
         Builder(builder: (_) {
-          final remoteBanner = _bannerPath == null
-              ? proxiedAvatarUrl(_currentBannerUrl)
-              : null;
+          final remoteBanner =
+              _bannerPath == null ? proxiedAvatarUrl(_currentBannerUrl) : null;
           return Container(
             height: 80,
             clipBehavior: Clip.antiAlias,
@@ -671,9 +672,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     }
     final display = nsec.isEmpty
         ? tr('No local private key (delegated signer)')
-        : (_nsecVisible
-            ? nsec
-            : '•' * (nsec.length.clamp(8, 24)));
+        : (_nsecVisible ? nsec : '•' * (nsec.length.clamp(8, 24)));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -715,7 +714,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               IconButton(
                 tooltip: tr('Copy'),
                 icon: NymSvgIcon(NymIcons.ctxCopy, size: 16, color: c.textDim),
-                onPressed: () => _copyToClipboard(nsec, tr('Private key copied')),
+                onPressed: () =>
+                    _copyToClipboard(nsec, tr('Private key copied')),
               ),
           ],
         ),
@@ -832,12 +832,12 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     String? url;
     try {
       url = await ref.read(nostrControllerProvider).uploadImage(
-            bytes,
-            contentType: contentType,
-            onProgress: (p) {
-              if (mounted) setState(() => _uploadProgress = p);
-            },
-          );
+        bytes,
+        contentType: contentType,
+        onProgress: (p) {
+          if (mounted) setState(() => _uploadProgress = p);
+        },
+      );
     } catch (_) {
       url = null;
     }

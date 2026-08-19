@@ -91,7 +91,8 @@ class _PollCardState extends ConsumerState<PollCard> {
     var dt = DateTime.fromMillisecondsSinceEpoch(poll.createdAt * 1000);
     final now = DateTime.now();
     if (dt.isAfter(now)) dt = now;
-    final timeStr = poll.createdAt > 0 ? formatTime(dt, settings.timeFormat) : '';
+    final timeStr =
+        poll.createdAt > 0 ? formatTime(dt, settings.timeFormat) : '';
     // polls.js:270-278 hardcodes en-US "Mon D, YYYY, hh:mm:ss" (it ignores the
     // dateFormat setting) — the '' dateFormat selects [formatFullTimestamp]'s
     // short-month default branch.
@@ -453,8 +454,7 @@ class _PollCardState extends ConsumerState<PollCard> {
                   curve: NymMotion.curve,
                   child: _PollHoverButtons(
                     onReact: () => _openReactionPicker(context),
-                    onTranslate: () =>
-                        setState(() => _showTranslation = true),
+                    onTranslate: () => setState(() => _showTranslation = true),
                   ),
                 ),
               ),
@@ -592,9 +592,8 @@ class _PollHoverActionButtonState extends State<_PollHoverActionButton> {
     final restFill = c.isLight
         ? const Color(0xD9FFFFFF) // rgba(255,255,255,0.85)
         : const Color(0xCC141423); // rgba(20,20,35,0.8)
-    final restBorder = c.isLight
-        ? Colors.black.withValues(alpha: 0.08)
-        : c.glassBorder;
+    final restBorder =
+        c.isLight ? Colors.black.withValues(alpha: 0.08) : c.glassBorder;
     final btn = MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -608,8 +607,7 @@ class _PollHoverActionButtonState extends State<_PollHoverActionButton> {
           decoration: BoxDecoration(
             color: _hover ? Colors.white.withValues(alpha: 0.08) : restFill,
             borderRadius: NymRadius.rxs,
-            border:
-                Border.all(color: _hover ? c.primaryA(0.3) : restBorder),
+            border: Border.all(color: _hover ? c.primaryA(0.3) : restBorder),
           ),
           child: NymSvgIcon(widget.svg, size: 16, color: c.text),
         ),
@@ -691,8 +689,8 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
                   // `.reactors-modal { min-width:160; max-width:240 }`.
                   constraints:
                       const BoxConstraints(minWidth: 160, maxWidth: 240),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
                     color: c.bgSecondary,
                     borderRadius: NymRadius.rmd,
@@ -1016,9 +1014,8 @@ class _PollFooterState extends State<_PollFooter> {
   Widget build(BuildContext context) {
     final c = context.nym;
     // `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}` — the raw integer.
-    final label = widget.total == 1
-        ? tr('1 vote')
-        : tr('{n} votes', {'n': widget.total});
+    final label =
+        widget.total == 1 ? tr('1 vote') : tr('{n} votes', {'n': widget.total});
     return Transform.translate(
       // `.poll-footer { margin-left: -6px }`.
       offset: const Offset(-6, 0),
@@ -1219,7 +1216,8 @@ class _PollVotersModal extends ConsumerWidget {
                         context,
                         users,
                         e.key,
-                        optionLabel[e.value] ?? tr('Option {n}', {'n': e.value + 1}),
+                        optionLabel[e.value] ??
+                            tr('Option {n}', {'n': e.value + 1}),
                       ),
                     // `.reactors-modal-more` — "+N more" (polls.js:482-483).
                     if (overflow > 0)
@@ -1257,7 +1255,8 @@ class _PollVotersModal extends ConsumerWidget {
   ) {
     final c = context.nym;
     final isYou = pk == selfPubkey;
-    final nym = stripPubkeySuffix(users[pk]?.nym ?? getNymFromPubkey('nym', pk));
+    final nym =
+        stripPubkeySuffix(users[pk]?.nym ?? getNymFromPubkey('nym', pk));
     final suffix = getPubkeySuffix(pk);
     return InkWell(
       onTap: () => onTapRow(pk),
@@ -1269,7 +1268,8 @@ class _PollVotersModal extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         child: Row(
           children: [
-            NymAvatar(seed: pk, size: 18, imageUrl: users[pk]?.profile?.picture),
+            NymAvatar(
+                seed: pk, size: 18, imageUrl: users[pk]?.profile?.picture),
             const SizedBox(width: 6),
             Expanded(
               child: RichText(
@@ -1430,8 +1430,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
           // First non-`auto` detected language wins (translate.js:385).
           var detected = 'auto';
           for (final r in results) {
-            if (r.detectedLanguage.isNotEmpty &&
-                r.detectedLanguage != 'auto') {
+            if (r.detectedLanguage.isNotEmpty && r.detectedLanguage != 'auto') {
               detected = r.detectedLanguage;
               break;
             }
@@ -1447,8 +1446,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
               // `🌐` + `.poll-translation-question` (bold, margin-bottom 4).
               Text.rich(
                 TextSpan(
-                  style:
-                      TextStyle(color: c.textDim, fontSize: 13, height: 1.4),
+                  style: TextStyle(color: c.textDim, fontSize: 13, height: 1.4),
                   children: [
                     const TextSpan(text: '🌐 '),
                     TextSpan(

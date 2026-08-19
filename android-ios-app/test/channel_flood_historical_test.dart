@@ -29,7 +29,8 @@ void main() {
   group('channelMessage historical flag (PWA messageAge > 10000)', () {
     test('a fresh (live) channel event is NOT historical', () {
       final m = EventMapper.channelMessage(
-        _chan('room', 'a', 'hello there', pubkey: sender, createdAtSec: nowSec()),
+        _chan('room', 'a', 'hello there',
+            pubkey: sender, createdAtSec: nowSec()),
         selfPubkey: self,
       )!;
       expect(m.isHistorical, isFalse);
@@ -91,8 +92,7 @@ void main() {
       expect(m.isHistorical, isTrue);
     });
 
-    test(
-        'a future created_at WITHOUT stored_at still caps to now (unchanged)',
+    test('a future created_at WITHOUT stored_at still caps to now (unchanged)',
         () {
       final futureSec = nowSec() + 300;
       final m = EventMapper.channelMessage(

@@ -485,7 +485,8 @@ String formatCommandDisplay(CommandSpec spec) {
 /// True if [spec] may run in the given context. Mirrors the per-handler guards:
 /// channel/channelOnly reject PMs+groups; groupOnly rejects everything but a
 /// group.
-bool isAllowedIn(CommandSpec spec, {required bool inPM, required bool inGroup}) {
+bool isAllowedIn(CommandSpec spec,
+    {required bool inPM, required bool inGroup}) {
   switch (spec.context) {
     case CommandContext.all:
       return true;

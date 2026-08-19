@@ -1,3 +1,9 @@
+// FORMATTING: the tables below are dense on purpose, mirroring the web
+// client's source. `dart format` explodes them to one entry per line, and
+// the `// dart format off` directive cannot protect them because it needs
+// language version >= 3.7 while this package is on ^3.6.0 (legacy
+// formatter, which ignores the directive). Keep this file OUT of
+// repo-wide format passes.
 /// Google-Translate language code → display name (translate.js
 /// `NYM_TRANSLATE_LANGUAGES` / `NYM_TRANSLATE_LANG_NAMES`). Trimmed to the
 /// resolver the inline translation label needs (`_languageName`).

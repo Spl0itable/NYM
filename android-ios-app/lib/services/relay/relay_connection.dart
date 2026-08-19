@@ -138,8 +138,7 @@ class RelayConnection {
   /// Open the connection. Safe to call when already connecting/connected.
   void connect() {
     _closedByUser = false;
-    if (_status == RelayStatus.connecting ||
-        _status == RelayStatus.connected) {
+    if (_status == RelayStatus.connecting || _status == RelayStatus.connected) {
       return;
     }
     _openSocket();

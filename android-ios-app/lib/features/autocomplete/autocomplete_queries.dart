@@ -19,7 +19,16 @@ const int kAutocompleteMax = 8;
 /// The 10 seed channels the PWA always offers (app.js:681 `commonGeohashes`).
 /// `nymchat` is the named default; the rest are geohash prefixes.
 const List<String> kCommonGeohashes = [
-  'nymchat', '9q', 'w2', 'dr5r', '9q8y', 'u4pr', 'gcpv', 'f2m6', 'xn77', 'tjm5',
+  'nymchat',
+  '9q',
+  'w2',
+  'dr5r',
+  '9q8y',
+  'u4pr',
+  'gcpv',
+  'f2m6',
+  'xn77',
+  'tjm5',
 ];
 
 // ---------------------------------------------------------------------------
@@ -216,8 +225,7 @@ List<ChannelResult> queryChannels({
     map[name] = ChannelResult(
       name: name,
       messageCount: count,
-      isJoined: joinedKeys.contains(name) ||
-          channels.any((c) => c.key == name),
+      isJoined: joinedKeys.contains(name) || channels.any((c) => c.key == name),
       isCurrent: name == currentKey,
       isGeohash: geo,
       location: geo ? geohashLocationLabel(name) : '',
@@ -350,11 +358,8 @@ List<EmojiResult> queryEmoji({
     // — `name.replace(/^:+|:+$/g,'')`).
     final result = <EmojiResult>[
       for (final e in recents) _recentEmojiResult(e, emojiToNames, custom),
-      ...index
-          .where((e) => !recentSet.contains(e.emoji))
-          .take(10)
-          .map((e) =>
-              EmojiResult(name: e.name, emoji: e.emoji, customUrl: e.customUrl)),
+      ...index.where((e) => !recentSet.contains(e.emoji)).take(10).map((e) =>
+          EmojiResult(name: e.name, emoji: e.emoji, customUrl: e.customUrl)),
     ];
     return result.take(kAutocompleteMax).toList();
   }
@@ -418,7 +423,10 @@ EmojiResult _recentEmojiResult(
 /// Kaomoji categories grouped by mood — verbatim from `kaomojiCategories`
 /// (commands.js:332).
 const List<(String, List<String>)> kKaomojiCategories = [
-  ('Joy', ['(◕‿◕)', '(◠‿◠)', '(*^‿^*)', '(≧◡≦)', 'ヽ(•‿•)ノ', '(´∇｀)', '＼(^o^)／']),
+  (
+    'Joy',
+    ['(◕‿◕)', '(◠‿◠)', '(*^‿^*)', '(≧◡≦)', 'ヽ(•‿•)ノ', '(´∇｀)', '＼(^o^)／']
+  ),
   ('Love', ['(♥‿♥)', '(づ｡◕‿‿◕｡)づ', '♡(◡‿◡)', '(*♡∀♡)', '(❤ω❤)']),
   ('Sad', ['(╥﹏╥)', '(｡•́︿•̀｡)', '(T_T)', '(ಥ_ಥ)', '(´；ω；`)', 'orz']),
   ('Anger', ['(╬ಠ益ಠ)', 'ヽ(`Д´)ﾉ', '(ノಠ益ಠ)ノ', '凸(￣ヘ￣)', '(＃`Д´)']),

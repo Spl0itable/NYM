@@ -41,11 +41,9 @@ class NoiseCrypto {
     final tempKey = hmacSha256(chainingKey, inputKeyMaterial);
     final out1 = hmacSha256(tempKey, Uint8List.fromList([0x01]));
     if (numOutputs == 1) return [out1];
-    final out2 =
-        hmacSha256(tempKey, Uint8List.fromList([...out1, 0x02]));
+    final out2 = hmacSha256(tempKey, Uint8List.fromList([...out1, 0x02]));
     if (numOutputs == 2) return [out1, out2];
-    final out3 =
-        hmacSha256(tempKey, Uint8List.fromList([...out2, 0x03]));
+    final out3 = hmacSha256(tempKey, Uint8List.fromList([...out2, 0x03]));
     return [out1, out2, out3];
   }
 
@@ -72,8 +70,7 @@ class NoiseCrypto {
     final kp = await _x25519.newKeyPairFromSeed(localPrivateSeed);
     final shared = await _x25519.sharedSecretKey(
       keyPair: kp,
-      remotePublicKey:
-          SimplePublicKey(remotePublic, type: KeyPairType.x25519),
+      remotePublicKey: SimplePublicKey(remotePublic, type: KeyPairType.x25519),
     );
     return Uint8List.fromList(await shared.extractBytes());
   }

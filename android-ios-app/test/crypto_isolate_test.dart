@@ -28,8 +28,7 @@ void main() {
       {
         'wrap': wrap.toJson(),
         'cands': [
-          for (final c in candidates)
-            {'sk': bytesToHex(c.sk), 'bc': c.bitchat},
+          for (final c in candidates) {'sk': bytesToHex(c.sk), 'bc': c.bitchat},
         ],
       };
 
@@ -48,7 +47,8 @@ void main() {
       };
 
   group('wrapBatchIsolate (outbound wrap entrypoint)', () {
-    test('ROUND-TRIP: wrap to a recipient then unwrap yields the rumor', () async {
+    test('ROUND-TRIP: wrap to a recipient then unwrap yields the rumor',
+        () async {
       final senderSk = generatePrivateKey();
       final recipientSk = generatePrivateKey();
       final senderPub = getPublicKeyHex(senderSk);
@@ -119,7 +119,11 @@ void main() {
       final r0 = generatePrivateKey();
       final r1 = generatePrivateKey();
       final r2 = generatePrivateKey();
-      final pubs = [getPublicKeyHex(r0), getPublicKeyHex(r1), getPublicKeyHex(r2)];
+      final pubs = [
+        getPublicKeyHex(r0),
+        getPublicKeyHex(r1),
+        getPublicKeyHex(r2)
+      ];
 
       final rumor = UnsignedEvent(
         pubkey: senderPub,
@@ -402,7 +406,8 @@ void main() {
         senderPrivkey: senderSk,
         recipientPubkey: recipientPub,
       );
-      final job = debugEncodeUnwrapJob(wrap, [(sk: recipientSk, bitchat: false)]);
+      final job =
+          debugEncodeUnwrapJob(wrap, [(sk: recipientSk, bitchat: false)]);
       // The encoded job is a plain JSON-able map carrying the key as hex.
       expect(job['wrap'], isA<Map<String, dynamic>>());
       final cands = (job['cands'] as List).cast<Map<String, dynamic>>();

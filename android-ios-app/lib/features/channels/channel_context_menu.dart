@@ -70,8 +70,7 @@ List<ChannelMenuAction> buildChannelMenuActions(
           ref.read(appStateProvider.notifier).unhideChannel(key);
           ref.read(keyValueStoreProvider).setString(
                 StorageKeys.hiddenChannels,
-                jsonEncode(
-                    ref.read(appStateProvider).hiddenChannels.toList()),
+                jsonEncode(ref.read(appStateProvider).hiddenChannels.toList()),
               );
         } else {
           controller.hideChannel(key);

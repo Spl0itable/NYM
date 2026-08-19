@@ -69,7 +69,8 @@ class CallNym extends ConsumerWidget {
     );
 
     if (self || (pubkey.isNotEmpty && pubkey == selfPubkey)) {
-      return Text(tr('You'), style: base, maxLines: 1, overflow: TextOverflow.ellipsis);
+      return Text(tr('You'),
+          style: base, maxLines: 1, overflow: TextOverflow.ellipsis);
     }
 
     final users = ref.watch(usersProvider);

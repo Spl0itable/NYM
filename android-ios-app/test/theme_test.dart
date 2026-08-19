@@ -67,8 +67,7 @@ void main() {
       for (final t in NymThemeKey.values) {
         for (final b in Brightness.values) {
           for (final solid in [true, false]) {
-            final c = resolveNymColors(
-                theme: t, brightness: b, solidUi: solid);
+            final c = resolveNymColors(theme: t, brightness: b, solidUi: solid);
             expect(c.primary.a, 1.0);
             buildNymThemeData(c); // must not throw
           }

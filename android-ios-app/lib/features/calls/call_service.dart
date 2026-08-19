@@ -225,7 +225,8 @@ class CallService {
   RTCVideoRenderer get localRenderer => _localRenderer;
 
   /// Look up a remote participant's renderer by pubkey (for the grid).
-  RTCVideoRenderer? rendererFor(String pubkey) => _active?.peers[pubkey]?.renderer;
+  RTCVideoRenderer? rendererFor(String pubkey) =>
+      _active?.peers[pubkey]?.renderer;
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -382,7 +383,8 @@ class CallService {
       return;
     }
     if (!ac.isGroup) {
-      _system(tr('Left the call — you blocked {name}', {'name': _nymFor(pubkey)}));
+      _system(
+          tr('Left the call — you blocked {name}', {'name': _nymFor(pubkey)}));
       end();
       return;
     }
@@ -464,8 +466,8 @@ class CallService {
     for (final pk in ac.members.where((pk) => pk != _self)) {
       _send(pk, CallSignal.chat(callId: ac.callId, text: trimmed, mid: mid));
     }
-    ac.chatLog.add(CallChatMessage(
-        pubkey: _self, text: trimmed, isSelf: true, mid: mid));
+    ac.chatLog.add(
+        CallChatMessage(pubkey: _self, text: trimmed, isSelf: true, mid: mid));
     _publish();
   }
 
@@ -482,7 +484,10 @@ class CallService {
     // pack can still resolve+render the image (calls.js:1153-1155).
     final tags = _emojiTagsFor(emoji);
     for (final pk in ac.members.where((pk) => pk != _self)) {
-      _send(pk, CallSignal.reaction(callId: ac.callId, emoji: emoji, emojiTags: tags));
+      _send(
+          pk,
+          CallSignal.reaction(
+              callId: ac.callId, emoji: emoji, emojiTags: tags));
     }
     _pushFly(emoji, who: tr('You'));
   }
@@ -557,7 +562,11 @@ class CallService {
       _send(
           pk,
           CallSignal.chatReaction(
-              callId: ac.callId, mid: mid, emoji: emoji, op: op, emojiTags: tags));
+              callId: ac.callId,
+              mid: mid,
+              emoji: emoji,
+              op: op,
+              emojiTags: tags));
     }
     _publish();
   }
@@ -653,7 +662,10 @@ class CallService {
 
   void _sendChatRead(String senderPubkey, String mid) {
     final ac = _active;
-    if (ac == null || mid.isEmpty || senderPubkey.isEmpty || senderPubkey == _self) {
+    if (ac == null ||
+        mid.isEmpty ||
+        senderPubkey.isEmpty ||
+        senderPubkey == _self) {
       return;
     }
     if (!_readReceiptAllowed(ac)) return;
@@ -874,8 +886,8 @@ class CallService {
   void _playRingBeep() {
     try {
       final wav = _ringWav ??= renderSoundWav(kIncomingCallRingtone);
-      final player = _ringPlayer ??=
-          (AudioPlayer()..setReleaseMode(ReleaseMode.stop));
+      final player =
+          _ringPlayer ??= (AudioPlayer()..setReleaseMode(ReleaseMode.stop));
       // Restart from the top each beep so the 2 s cadence is crisp.
       unawaited(() async {
         try {
@@ -1085,7 +1097,8 @@ class CallService {
   /// rather than surfaced (calls.js `_CALL_SEEN_TTL_SEC = 86400`).
   static const int _callSeenTtlSec = 86400;
 
-  void _onInvite(String sender, Map<String, dynamic> data, [int createdAtSec = 0]) {
+  void _onInvite(String sender, Map<String, dynamic> data,
+      [int createdAtSec = 0]) {
     final callId = (data['callId'] as String?) ?? '';
     // Skip a call already handled here or answered/seen on another device — this
     // is what stops a relay-replayed invite from re-ringing (calls.js:312).
@@ -1144,9 +1157,8 @@ class CallService {
       // calls.js `_onCallInvite` (a claimed member is only added when there is
       // no known roster, or the roster actually contains them).
       final group = _groupById(groupId);
-      final roster = (group != null && group.members.isNotEmpty)
-          ? group.members
-          : null;
+      final roster =
+          (group != null && group.members.isNotEmpty) ? group.members : null;
       final claimed = (data['members'] as List?)?.cast<String>() ?? const [];
       for (final pk in claimed) {
         if (pk != sender &&
@@ -1218,7 +1230,8 @@ class CallService {
     if (!ac.members.contains(sender)) return;
     if (!ac.isGroup) {
       // calls.js `_onCallReject`: busy peer vs explicit decline.
-      _system(data['reason'] == 'busy' ? tr('User is busy') : tr('Call declined'));
+      _system(
+          data['reason'] == 'busy' ? tr('User is busy') : tr('Call declined'));
       _endCall();
     }
   }
@@ -1294,8 +1307,7 @@ class CallService {
     // InvalidStateError from setRemoteDescription and abort the candidate flush,
     // wedging ICE at CONNECTING→FAILED. Ignore it, exactly like calls.js:584
     // (`if (entry.pc.signalingState === 'stable') return;`).
-    if (peer.pc.signalingState ==
-        RTCSignalingState.RTCSignalingStateStable) {
+    if (peer.pc.signalingState == RTCSignalingState.RTCSignalingStateStable) {
       return;
     }
     try {
@@ -1658,8 +1670,9 @@ class CallService {
       // calls.js `_getLocalMedia` surfaces a media-error system message.
       _system(
         tr('Could not access {device}: {error}', {
-          'device':
-              kind == CallKind.video ? tr('camera/microphone') : tr('microphone'),
+          'device': kind == CallKind.video
+              ? tr('camera/microphone')
+              : tr('microphone'),
           'error': e,
         }),
       );
@@ -1714,7 +1727,8 @@ class CallService {
   /// payload simply omits the field.
   List<List<String>>? _emojiTagsFor(String content) {
     try {
-      final tags = _ref.read(liveCustomEmojiProvider.notifier)
+      final tags = _ref
+          .read(liveCustomEmojiProvider.notifier)
           .emojiTagsForContent(content);
       return tags.isEmpty ? null : tags;
     } catch (_) {
@@ -1744,11 +1758,11 @@ class CallService {
   // Privacy gates — mirror settings.js isIndicatorAllowedFor(scope, context)
   // ---------------------------------------------------------------------------
 
-  bool _typingAllowed(_ActiveCall ac) =>
-      _indicatorAllowed(_ref.read(settingsProvider).typingIndicatorsScope, ac.isGroup);
+  bool _typingAllowed(_ActiveCall ac) => _indicatorAllowed(
+      _ref.read(settingsProvider).typingIndicatorsScope, ac.isGroup);
 
-  bool _readReceiptAllowed(_ActiveCall ac) =>
-      _indicatorAllowed(_ref.read(settingsProvider).readReceiptsScope, ac.isGroup);
+  bool _readReceiptAllowed(_ActiveCall ac) => _indicatorAllowed(
+      _ref.read(settingsProvider).readReceiptsScope, ac.isGroup);
 
   /// scope ∈ disabled|everywhere|pms|groups|pms-groups; context = group|pm.
   static bool _indicatorAllowed(String scope, bool isGroup) {
@@ -1954,9 +1968,8 @@ class CallService {
     // chat-log entry so the overlay renders the count badges per message.
     // Blocked senders' rows are hidden, mirroring `_hideCallChatFrom`
     // (calls.js:1985-1991) so blocking mid-call drops their messages too.
-    final chatLog = ac.chatLog
-        .where((m) => m.isSelf || !_isBlocked(m.pubkey))
-        .map((m) {
+    final chatLog =
+        ac.chatLog.where((m) => m.isSelf || !_isBlocked(m.pubkey)).map((m) {
       final r = ac.chatReactions[m.mid];
       if (r == null || r.isEmpty) return m;
       return m.copyWith(

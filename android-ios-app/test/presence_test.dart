@@ -189,8 +189,7 @@ void main() {
         content: content,
       );
 
-  NostrEvent namedMsg(String sender, String channel,
-          {int createdAt = 2000}) =>
+  NostrEvent namedMsg(String sender, String channel, {int createdAt = 2000}) =>
       NostrEvent(
         id: 'n_${sender}_${channel}_$createdAt',
         pubkey: sender,
@@ -251,13 +250,14 @@ void main() {
       n.setUserPresence(
           pubkey: other, status: UserStatus.online, lastSeenMs: now);
       expect(n.state.users[other]!.lastSeen, now);
-      expect(n.state.users[other]!.effectiveStatus(nowMs: now),
-          UserStatus.online);
+      expect(
+          n.state.users[other]!.effectiveStatus(nowMs: now), UserStatus.online);
     });
   });
 
   group('C02-5: unread predicate counts keyword/spam the PWA still counts', () {
-    test('countsTowardUnread keeps a keyword-hidden message that '
+    test(
+        'countsTowardUnread keeps a keyword-hidden message that '
         'isMessageFiltered drops', () {
       final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
       n.addBlockedKeyword('spamword');
@@ -718,8 +718,8 @@ void main() {
     test('trims entries older than 24h on record', () {
       final n = NotificationHistoryNotifier();
       final old = DateTime.now()
-              .subtract(const Duration(hours: 25))
-              .millisecondsSinceEpoch;
+          .subtract(const Duration(hours: 25))
+          .millisecondsSinceEpoch;
       n.record(type: 'pm', title: 'old', body: 'stale', ts: old, eventId: 'o1');
       // The stale entry is outside the 24h window; recording a fresh one drops
       // it (matching the PWA's 24h cutoff).
@@ -749,7 +749,8 @@ void main() {
       expect(n.state.unread, 0);
     });
 
-    test('a notification already seen elsewhere lands pre-viewed (no badge bump)',
+    test(
+        'a notification already seen elsewhere lands pre-viewed (no badge bump)',
         () {
       final n = NotificationHistoryNotifier();
       // The seen-key syncs in BEFORE the event itself replays here.

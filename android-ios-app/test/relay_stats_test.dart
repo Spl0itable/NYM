@@ -21,7 +21,8 @@ void main() {
   // RelayStats: new App-data / per-kind / shard fields + serialization.
   // ---------------------------------------------------------------------------
   group('RelayStats new fields', () {
-    test('recordApiData folds bytes into api + global totals and per-action', () {
+    test('recordApiData folds bytes into api + global totals and per-action',
+        () {
       final s = RelayStats();
       expect(s.hasApiData, isFalse);
       s.recordApiData('pm-get', sent: 100, recv: 900);
@@ -45,7 +46,8 @@ void main() {
       expect(s.apiActionStats['settings-get']!.count, 1);
     });
 
-    test('recordRelayKind tallies per-relay per-kind; non-wss → relay-pool', () {
+    test('recordRelayKind tallies per-relay per-kind; non-wss → relay-pool',
+        () {
       final s = RelayStats();
       s.recordRelayKind('wss://a.relay', 20000, 120);
       s.recordRelayKind('wss://a.relay', 20000, 80);
@@ -63,8 +65,8 @@ void main() {
       final s = RelayStats();
       s.recordApiData('auth', sent: 10, recv: 20);
       s.recordRelayKind('wss://a', 1, 33);
-      s.shardInfo.add(ShardInfo(
-          id: 'geo-0', status: 'connected', connected: 2, total: 5));
+      s.shardInfo.add(
+          ShardInfo(id: 'geo-0', status: 'connected', connected: 2, total: 5));
 
       final snap = s.snapshot();
       // Mutate the live object after snapshotting.
@@ -88,7 +90,8 @@ void main() {
   // RelayPoolProxy: geo-relay sharding + shard-info + per-kind tracking.
   // ---------------------------------------------------------------------------
   group('RelayPoolProxy geo relays', () {
-    test('updateGeoRelays opens a geo shard socket and pushes its RELAYS', () async {
+    test('updateGeoRelays opens a geo shard socket and pushes its RELAYS',
+        () async {
       final fakes = <_FakeChannel>[];
       final proxy = RelayPoolProxy(
         relays: RelayConfig.defaultRelays,
@@ -115,7 +118,8 @@ void main() {
       // The new socket got a RELAYS frame carrying the geo relay.
       final newSock = fakes.last;
       expect(
-          newSock.sent.any((m) => m.contains('RELAYS') && m.contains('geo-a.example')),
+          newSock.sent
+              .any((m) => m.contains('RELAYS') && m.contains('geo-a.example')),
           isTrue);
       expect(proxy.geoRelayUrls, ['wss://geo-a.example']);
 
@@ -127,7 +131,8 @@ void main() {
       await proxy.disconnectAll();
     });
 
-    test('shrinking the geo set closes the now-empty geo shard socket', () async {
+    test('shrinking the geo set closes the now-empty geo shard socket',
+        () async {
       final fakes = <_FakeChannel>[];
       final proxy = RelayPoolProxy(
         relays: RelayConfig.defaultRelays,
@@ -173,7 +178,8 @@ void main() {
       await proxy.disconnectAll();
     });
 
-    test('per-kind breakdown tracks attributed-relay events post-dedup', () async {
+    test('per-kind breakdown tracks attributed-relay events post-dedup',
+        () async {
       final fakes = <_FakeChannel>[];
       final proxy = RelayPoolProxy(
         relays: RelayConfig.defaultRelays,
@@ -186,7 +192,9 @@ void main() {
         },
       );
       proxy.connectAll();
-      final sub = proxy.subscribe([NostrFilter(kinds: [20000])]);
+      final sub = proxy.subscribe([
+        NostrFilter(kinds: [20000])
+      ]);
       sub.events.listen((_) {});
 
       // EVENT with a trailing wss:// sourceRelay → attributed to that relay.
@@ -232,8 +240,10 @@ void main() {
       );
       pool.connectAll();
       pool.updateGeoRelays(['wss://geo-1.example', 'wss://geo-2.example']);
-      expect(pool.relayUrls, containsAll(
-          ['wss://a.relay', 'wss://geo-1.example', 'wss://geo-2.example']));
+      expect(
+          pool.relayUrls,
+          containsAll(
+              ['wss://a.relay', 'wss://geo-1.example', 'wss://geo-2.example']));
       // Adding the same url again is a no-op.
       pool.updateGeoRelays(['wss://geo-1.example']);
       expect(pool.relayUrls.where((u) => u == 'wss://geo-1.example').length, 1);
@@ -244,7 +254,8 @@ void main() {
   // NostrService: per-channel geo relay connection wires into the pool.
   // ---------------------------------------------------------------------------
   group('NostrService geo relay connection', () {
-    test('connectGeoRelaysForGeohash applies the closest geo relays to the pool',
+    test(
+        'connectGeoRelaysForGeohash applies the closest geo relays to the pool',
         () async {
       final rec = _GeoRecordingTransport();
       final svc = NostrService(
@@ -303,8 +314,8 @@ void main() {
     test('storageAction records per-action bytes into the sink', () async {
       final sink = RelayStats();
       ApiClient.apiStatsSink = sink;
-      final mock = MockClient((req) async =>
-          http.Response(jsonEncode({'ok': true}), 200));
+      final mock = MockClient(
+          (req) async => http.Response(jsonEncode({'ok': true}), 200));
       final c = ApiClient(client: mock, baseUrl: 'https://h/api/proxy');
       await c.storageAction({'action': 'settings-set', 'value': 'x'});
 
@@ -321,8 +332,8 @@ void main() {
 
     test('no sink set → no tracking (tests stay isolated)', () async {
       ApiClient.apiStatsSink = null;
-      final mock = MockClient((req) async =>
-          http.Response(jsonEncode({'relays': []}), 200));
+      final mock = MockClient(
+          (req) async => http.Response(jsonEncode({'relays': []}), 200));
       final c = ApiClient(client: mock, baseUrl: 'https://h/api/proxy');
       // Should not throw despite no sink.
       await c.geoRelays();
@@ -330,7 +341,8 @@ void main() {
   });
 }
 
-Identity _identity() => Identity(pubkey: 'a' * 64, privkey: null, nym: 'tester');
+Identity _identity() =>
+    Identity(pubkey: 'a' * 64, privkey: null, nym: 'tester');
 
 /// A PoolTransport that records every updateGeoRelays payload.
 class _GeoRecordingTransport implements PoolTransport {
@@ -353,7 +365,8 @@ class _GeoRecordingTransport implements PoolTransport {
   @override
   Future<int> publishDm(NostrEvent event) async => 0;
   @override
-  Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) async =>
+  Future<int> publishGeo(
+          NostrEvent event, List<String> closestRelayUrls) async =>
       0;
   @override
   Subscription subscribe(List<NostrFilter> filters, {String? subId}) =>

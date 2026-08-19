@@ -8,7 +8,8 @@ import 'package:nym_bar/models/message.dart';
 import 'package:nym_bar/state/app_state.dart';
 
 // Deterministic 64-hex pubkeys for the trust-graph tests.
-const _self = '0000000000000000000000000000000000000000000000000000000000001a2b';
+const _self =
+    '0000000000000000000000000000000000000000000000000000000000001a2b';
 const _stranger =
     '11111111111111111111111111111111111111111111111111111111deadbeef';
 const _vouchedA =
@@ -18,7 +19,8 @@ const _vouchedB =
 const _friend =
     '4444444444444444444444444444444444444444444444444444444444445e6f';
 
-Message _chanMsg(String pubkey, {String id = 'x', bool isOwn = false}) => Message(
+Message _chanMsg(String pubkey, {String id = 'x', bool isOwn = false}) =>
+    Message(
       id: id,
       pubkey: pubkey,
       author: 'nym#${pubkey.substring(pubkey.length - 4)}',
@@ -43,7 +45,8 @@ void main() {
       expect(AppDataTopic.vouches, 'nym-vouches');
     });
 
-    test('content is a JSON array of pubkeys, parsed back by parseVouchList', () {
+    test('content is a JSON array of pubkeys, parsed back by parseVouchList',
+        () {
       // Round-trip the exact content shape publishVouches writes
       // (jsonEncode(list)) through the ingest parser.
       final content = jsonEncode([_vouchedA, _vouchedB]);
@@ -159,7 +162,8 @@ void main() {
       expect(n.state.nymchatPubkeys.contains(_vouchedA), isFalse);
     });
 
-    test('a vouch from a ROOTED author (dev) adds its pubkeys to the graph', () {
+    test('a vouch from a ROOTED author (dev) adds its pubkeys to the graph',
+        () {
       final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
       final added = n.ingestVouchList(
         authorPubkey: kVerifiedDeveloperPubkey, // a seeded root

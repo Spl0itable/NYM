@@ -36,8 +36,22 @@ class MeshConstants {
   /// A peer with no traffic for this long is considered stale/offline.
   static const Duration stalePeerTimeout = Duration(minutes: 3);
 
-  /// How often we re-broadcast our identity announcement.
+  /// Nominal gap between identity re-announcements.
   static const Duration announceInterval = Duration(seconds: 30);
+
+  /// Random +/- spread applied to every announce gap.
+  ///
+  /// A metronome is itself a fingerprint: a passive listener can follow a
+  /// device between places by its beacon RHYTHM alone, without reading a single
+  /// field of the announcement. Jitter breaks that correlation. Kept small
+  /// enough that the worst case stays far under [stalePeerTimeout], so a peer
+  /// never drops us for being quiet.
+  static const Duration announceJitter = Duration(seconds: 8);
+
+  /// Announce gap while no peer is known. Nobody is listening, so the extra
+  /// beacons buy nothing and cost battery and exposure. Still well under
+  /// [stalePeerTimeout] — and with no peers there is nobody to time us out.
+  static const Duration announceIntervalIdle = Duration(seconds: 90);
 
   /// Fragment reassembly is abandoned after this long.
   static const Duration fragmentTimeout = Duration(seconds: 30);

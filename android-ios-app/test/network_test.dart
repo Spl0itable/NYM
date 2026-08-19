@@ -146,8 +146,8 @@ void main() {
     });
 
     test('inbound POOL:PING parses to keepalive', () {
-      expect(PoolMessage.parse(jsonEncode(['POOL:PING', 12345])),
-          isA<PoolPing>());
+      expect(
+          PoolMessage.parse(jsonEncode(['POOL:PING', 12345])), isA<PoolPing>());
     });
 
     test('inbound POOL:STATUS extracts connected relays', () {
@@ -382,8 +382,8 @@ void main() {
     test('relay-pool + proxy URLs target the fixed host', () {
       expect(ApiConfig.relayPoolUrl(),
           'wss://${ApiConfig.apiHost}/api/relay-pool');
-      expect(ApiConfig.proxyBaseUrl(),
-          'https://${ApiConfig.apiHost}/api/proxy');
+      expect(
+          ApiConfig.proxyBaseUrl(), 'https://${ApiConfig.apiHost}/api/proxy');
       expect(ApiConfig.userAgent, matches(RegExp(r'^NymchatApp/')));
     });
   });
@@ -413,7 +413,9 @@ void main() {
       // Each socket got its RELAYS config on open.
       expect(fakes.first.sent.first, contains('RELAYS'));
 
-      final sub = proxy.subscribe([NostrFilter(kinds: [20000])]);
+      final sub = proxy.subscribe([
+        NostrFilter(kinds: [20000])
+      ]);
       // REQ went to every socket.
       for (final f in fakes) {
         expect(f.sent.any((m) => m.contains('"REQ"') || m.contains('REQ')),
@@ -464,7 +466,9 @@ void main() {
         },
       );
       proxy.connectAll();
-      final sub = proxy.subscribe([NostrFilter(kinds: [1059])]);
+      final sub = proxy.subscribe([
+        NostrFilter(kinds: [1059])
+      ]);
       final got = <String>[];
       sub.events.listen((e) => got.add(e.id));
 
@@ -514,8 +518,8 @@ void main() {
       final n = await proxy.publishDm(wrap);
       expect(n, fakes.length);
       for (final f in fakes) {
-        final dm = f.sent.firstWhere((m) => m.contains('DM_EVENT'),
-            orElse: () => '');
+        final dm =
+            f.sent.firstWhere((m) => m.contains('DM_EVENT'), orElse: () => '');
         expect(dm, isNotEmpty);
         final decoded = jsonDecode(dm) as List;
         expect(decoded[0], 'DM_EVENT');
@@ -524,7 +528,8 @@ void main() {
       await proxy.disconnectAll();
     });
 
-    test('publishGeo sends GEO_EVENT with urls; plain EVENT when none', () async {
+    test('publishGeo sends GEO_EVENT with urls; plain EVENT when none',
+        () async {
       final fakes = <_FakeChannel>[];
       final proxy = RelayPoolProxy(
         relays: RelayConfig.defaultRelays,
@@ -697,7 +702,8 @@ class _NoopTransport implements PoolTransport {
   @override
   Future<int> publishDm(NostrEvent event) async => 0;
   @override
-  Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) async =>
+  Future<int> publishGeo(
+          NostrEvent event, List<String> closestRelayUrls) async =>
       0;
   @override
   Subscription subscribe(List<NostrFilter> filters, {String? subId}) =>
@@ -740,7 +746,8 @@ class _RecordingTransport implements PoolTransport {
   }
 
   @override
-  Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) async {
+  Future<int> publishGeo(
+      NostrEvent event, List<String> closestRelayUrls) async {
     geoCalls.add((event, closestRelayUrls));
     return 1;
   }
@@ -779,8 +786,7 @@ class _FakeChannel implements WebSocketChannel {
   String? get closeReason => null;
 
   @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      super.noSuchMethod(invocation);
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _FakeSink implements WebSocketSink {
@@ -812,6 +818,5 @@ class _FakeSink implements WebSocketSink {
   Future<dynamic> get done => Future<void>.value();
 
   @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      super.noSuchMethod(invocation);
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

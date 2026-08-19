@@ -12,8 +12,7 @@ Color _hex(String h) {
 }
 
 /// rgba() with 0..1 alpha.
-Color _rgba(int r, int g, int b, double a) =>
-    Color.fromRGBO(r, g, b, a);
+Color _rgba(int r, int g, int b, double a) => Color.fromRGBO(r, g, b, a);
 
 /// Per-theme accent tokens: [primary, secondary, text, textDim, textBright,
 /// lightning] for dark and light. (docs/specs/02 §3.1–3.6)
@@ -218,8 +217,9 @@ ThemeData buildNymThemeData(NymColors c) {
   final base = c.isLight
       ? ThemeData.light(useMaterial3: true)
       : ThemeData.dark(useMaterial3: true);
-  final scheme = (c.isLight ? const ColorScheme.light() : const ColorScheme.dark())
-      .copyWith(
+  final scheme =
+      (c.isLight ? const ColorScheme.light() : const ColorScheme.dark())
+          .copyWith(
     brightness: c.brightness,
     primary: c.primary,
     onPrimary: c.bg,

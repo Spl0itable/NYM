@@ -12,6 +12,8 @@ import '../core/theme/nym_metrics.dart';
 import '../features/calls/call_overlay.dart';
 import '../features/calls/call_providers.dart';
 import '../features/calls/incoming_call.dart';
+import '../features/mesh/mesh_controller.dart' show meshScreenOpenProvider;
+import '../features/mesh/mesh_screen.dart';
 import '../features/nymbot/bot_credits_modal.dart';
 import '../features/nymbot/nymbot_providers.dart'
     show BotBuyRequest, botBuyRequestProvider, botChatControllerProvider;
@@ -273,6 +275,12 @@ class HomeShellState extends ConsumerState<HomeShell>
       if (prev != next && _narrow && _drawerOpen && mounted) {
         setState(() => _drawerOpen = false);
       }
+      // Switching conversations also dismisses the mesh overlay (a sidebar
+      // tap, a peer tap, or a notification tap should land you IN the chat,
+      // with the mesh screen out of the way).
+      if (prev != next && ref.read(meshScreenOpenProvider)) {
+        ref.read(meshScreenOpenProvider.notifier).state = false;
+      }
     });
 
     final c = context.nym;
@@ -283,12 +291,11 @@ class HomeShellState extends ConsumerState<HomeShell>
     _narrow = !isWide;
 
     // Deck (multi-column) vs single chat view (`nym_chat_view_mode`).
-    final useColumns =
-        ref.watch(settingsProvider.select((s) => s.useColumns));
+    final useColumns = ref.watch(settingsProvider.select((s) => s.useColumns));
     // Ghost swaps the ambient glow to white tints with no vignette
     // (`body.theme-ghost::before`).
-    final isGhost = ref.watch(
-        settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
+    final isGhost =
+        ref.watch(settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
 
     return Scaffold(
       backgroundColor: c.bg,
@@ -318,22 +325,28 @@ class HomeShellState extends ConsumerState<HomeShell>
   /// stay mounted), matching the PWA, which hides only `#messagesScroller` and
   /// shows `#columnsStrip` in its place (styles-columns.css:9-15) — never the
   /// `.chat-header` or `.input-container`.
-  Widget _content(BuildContext context, bool useColumns, {bool compact = false}) {
+  Widget _content(BuildContext context, bool useColumns,
+      {bool compact = false}) {
     return ChatPane(
       compact: compact,
       useColumns: useColumns,
-      onOpenSidebar:
-          compact ? () => setState(() => _drawerOpen = true) : null,
+      onOpenSidebar: compact ? () => setState(() => _drawerOpen = true) : null,
       onStartCall: _startCall,
       onStartGroupCall: _startGroupCall,
     );
   }
 
   Widget _wide(BuildContext context, bool useColumns) {
+    // The mesh screen swaps into the content area like any other view; the
+    // persistent sidebar stays put (so it needs no hamburger — onOpenSidebar
+    // stays null).
+    final meshOpen = ref.watch(meshScreenOpenProvider);
     return Row(
       children: [
         const SizedBox(width: NymDimens.sidebarWidth, child: Sidebar()),
-        Expanded(child: _content(context, useColumns)),
+        Expanded(
+          child: meshOpen ? const MeshScreen() : _content(context, useColumns),
+        ),
       ],
     );
   }
@@ -358,6 +371,17 @@ class HomeShellState extends ConsumerState<HomeShell>
           child: _content(context, useColumns, compact: true),
         ),
 
+        // Mesh screen overlay — INSIDE the shell, beneath the dim scrim and
+        // drawer, so the sidebar opens over it like on any other screen and the
+        // shell's left-edge swipe keeps working. Closed by any conversation
+        // switch (see the view listener in build) or its own back chevron.
+        if (ref.watch(meshScreenOpenProvider))
+          Positioned.fill(
+            child: MeshScreen(
+              onOpenSidebar: () => setState(() => _drawerOpen = true),
+            ),
+          ),
+
         // Dim backdrop (`.mobile-overlay`): rgba(0,0,0,0.6) that snaps between
         // display:none/block with NO fade (styles-shell.css:1-14). Only with
         // solid-ui (default ON — Transparency off) does light mode drop the
@@ -369,8 +393,7 @@ class HomeShellState extends ConsumerState<HomeShell>
             onTap: () => setState(() => _drawerOpen = false),
             child: Container(
               color: Colors.black.withValues(
-                alpha: ref.watch(settingsProvider
-                            .select((s) => s.solidUi)) &&
+                alpha: ref.watch(settingsProvider.select((s) => s.solidUi)) &&
                         context.nym.isLight
                     ? 0.35
                     : 0.6,

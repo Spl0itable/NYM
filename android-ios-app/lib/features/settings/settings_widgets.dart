@@ -480,7 +480,8 @@ class SegmentGroup<T> extends StatelessWidget {
                   curve: NymMotion.curve,
                   // `.color-mode-btn { padding: 8px 4px; border: 1px solid
                   //   transparent }`; `.active { border-color: primary@.2 }`.
-                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                   decoration: BoxDecoration(
                     color: s.value == value
                         ? c.primaryA(0.15)

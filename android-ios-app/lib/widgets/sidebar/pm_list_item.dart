@@ -12,6 +12,7 @@ import '../context_menu/profile_badges.dart';
 import '../nym_icons.dart';
 import 'pm_context_menu.dart';
 import 'sidebar_row_gestures.dart';
+import 'sidebar_row_menu_button.dart';
 
 /// A single PM thread row (`.pm-item`, pms.js `createPMConversation`). Same box
 /// metrics as `.channel-item` with a 26px PM avatar (`margin-right:4px`), the
@@ -73,142 +74,152 @@ class PMListItem extends ConsumerWidget {
         // `.pm-item.active` shares `.channel-item.active`: primary fill/
         // border/glow + a 3px primary accent bar (NOT purple).
         builder: (context, hovered) => Stack(
-            children: [
-              Container(
-                constraints: const BoxConstraints(minHeight: 36),
-                // `:hover { padding-left: 14px }` (rest 12px).
-                padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 9, 12, 9),
-                decoration: BoxDecoration(
-                  // `.pm-item.active` fill is primary@0.10 + a primary@0.05 glow
-                  // (dark); `body.light-mode` neutralises it to black@0.06 with
-                  // `box-shadow:none` (styles-themes-responsive.css:1139), the
-                  // primary@0.20 border + primary accent bar stay. Hover
-                  // (loses to active): white@0.06 dark / black@0.04 light
-                  // (styles-shell.css:368-374 / styles-themes-responsive:1132).
-                  color: active
-                      ? (c.isLight
-                          ? Colors.black.withValues(alpha: 0.06)
-                          : c.primaryA(0.10))
-                      : hovered
-                          ? (c.isLight
-                              ? Colors.black.withValues(alpha: 0.04)
-                              : Colors.white.withValues(alpha: 0.06))
-                          : Colors.transparent,
-                  borderRadius: NymRadius.rxs,
-                  border: Border.all(
-                    color: active ? c.primaryA(0.20) : Colors.transparent,
-                    width: 1,
-                  ),
-                  boxShadow: active && !c.isLight
-                      ? [BoxShadow(color: c.primaryA(0.05), blurRadius: 12)]
-                      : null,
+          children: [
+            Container(
+              constraints: const BoxConstraints(minHeight: 36),
+              // `:hover { padding-left: 14px }` (rest 12px).
+              padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 9, 12, 9),
+              decoration: BoxDecoration(
+                // `.pm-item.active` fill is primary@0.10 + a primary@0.05 glow
+                // (dark); `body.light-mode` neutralises it to black@0.06 with
+                // `box-shadow:none` (styles-themes-responsive.css:1139), the
+                // primary@0.20 border + primary accent bar stay. Hover
+                // (loses to active): white@0.06 dark / black@0.04 light
+                // (styles-shell.css:368-374 / styles-themes-responsive:1132).
+                color: active
+                    ? (c.isLight
+                        ? Colors.black.withValues(alpha: 0.06)
+                        : c.primaryA(0.10))
+                    : hovered
+                        ? (c.isLight
+                            ? Colors.black.withValues(alpha: 0.04)
+                            : Colors.white.withValues(alpha: 0.06))
+                        : Colors.transparent,
+                borderRadius: NymRadius.rxs,
+                border: Border.all(
+                  color: active ? c.primaryA(0.20) : Colors.transparent,
+                  width: 1,
                 ),
-                child: Row(
-                  children: [
-                    // `.avatar-pm`: 26px, margin-right 4 (no sidebar status dot).
-                    NymAvatar(seed: pubkey, size: 26, imageUrl: picture),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      // `.pm-name { flex: 1 }`: color --text-dim, normal
-                      // weight, with a dim `.nym-suffix` tail. `white-space:
-                      // normal` + `word-break:break-word` (styles-shell.css:
-                      // 418-429) — long names WRAP onto multiple lines, no
-                      // ellipsis. Flair/verified/friend badges live INSIDE the
-                      // name span in the PWA DOM (pms.js:2759), so they hug
-                      // (and wrap with) the text instead of floating right.
-                      child: Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(text: base),
-                            TextSpan(
-                              text: '#$suffix',
-                              style: TextStyle(
-                                color: c.textDim.withValues(alpha: 0.7),
-                                fontSize: textSize * 0.9,
-                                fontWeight: FontWeight.w100,
+                boxShadow: active && !c.isLight
+                    ? [BoxShadow(color: c.primaryA(0.05), blurRadius: 12)]
+                    : null,
+              ),
+              child: Row(
+                children: [
+                  // `.avatar-pm`: 26px, margin-right 4 (no sidebar status dot).
+                  NymAvatar(seed: pubkey, size: 26, imageUrl: picture),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    // `.pm-name { flex: 1 }`: color --text-dim, normal
+                    // weight, with a dim `.nym-suffix` tail. `white-space:
+                    // normal` + `word-break:break-word` (styles-shell.css:
+                    // 418-429) — long names WRAP onto multiple lines, no
+                    // ellipsis. Flair/verified/friend badges live INSIDE the
+                    // name span in the PWA DOM (pms.js:2759), so they hug
+                    // (and wrap with) the text instead of floating right.
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: base),
+                          TextSpan(
+                            text: '#$suffix',
+                            style: TextStyle(
+                              color: c.textDim.withValues(alpha: 0.7),
+                              fontSize: textSize * 0.9,
+                              fontWeight: FontWeight.w100,
+                            ),
+                          ),
+                          WidgetSpan(
+                            alignment: PlaceholderAlignment.middle,
+                            child: Consumer(
+                              builder: (context, ref, _) => CosmeticNymBadges(
+                                cosmetics:
+                                    ref.watch(userCosmeticsProvider(pubkey)),
+                                flairSize: 14,
+                                supporterHeight: 14,
                               ),
                             ),
+                          ),
+                          if (isDev || isBot)
+                            const WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: Padding(
+                                padding: EdgeInsets.only(left: 4),
+                                child: VerifiedBadge(size: 14),
+                              ),
+                            ),
+                          if (isFriend)
+                            const WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: Padding(
+                                padding: EdgeInsets.only(left: 2),
+                                child: FriendBadge(size: 14),
+                              ),
+                            ),
+                          if (mesh)
                             WidgetSpan(
                               alignment: PlaceholderAlignment.middle,
-                              child: Consumer(
-                                builder: (context, ref, _) =>
-                                    CosmeticNymBadges(
-                                  cosmetics:
-                                      ref.watch(userCosmeticsProvider(pubkey)),
-                                  flairSize: 14,
-                                  supporterHeight: 14,
-                                ),
+                              child: Padding(
+                                padding: const EdgeInsets.only(left: 4),
+                                child: NymSvgIcon(NymIcons.bluetooth,
+                                    size: 12, color: c.primary),
                               ),
                             ),
-                            if (isDev || isBot)
-                              const WidgetSpan(
-                                alignment: PlaceholderAlignment.middle,
-                                child: Padding(
-                                  padding: EdgeInsets.only(left: 4),
-                                  child: VerifiedBadge(size: 14),
-                                ),
-                              ),
-                            if (isFriend)
-                              const WidgetSpan(
-                                alignment: PlaceholderAlignment.middle,
-                                child: Padding(
-                                  padding: EdgeInsets.only(left: 2),
-                                  child: FriendBadge(size: 14),
-                                ),
-                              ),
-                            if (mesh)
-                              WidgetSpan(
-                                alignment: PlaceholderAlignment.middle,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(left: 4),
-                                  child: NymSvgIcon(NymIcons.bluetooth,
-                                      size: 12, color: c.primary),
-                                ),
-                              ),
-                          ],
-                        ),
-                        style: TextStyle(
-                          color: c.textDim,
-                          fontSize: textSize,
-                          fontWeight: FontWeight.w400,
-                          height: 1.3,
-                        ),
+                        ],
+                      ),
+                      style: TextStyle(
+                        color: c.textDim,
+                        fontSize: textSize,
+                        fontWeight: FontWeight.w400,
+                        height: 1.3,
                       ),
                     ),
-                    // `.channel-badges { margin-left: 5px; flex-shrink: 0 }` —
-                    // the unread pill sits flush right, forming a column.
-                    if (unread > 0) ...[
-                      const SizedBox(width: 5),
-                      _UnreadPill(count: unread),
-                    ],
+                  ),
+                  // `.channel-badges { margin-left: 5px; flex-shrink: 0 }` —
+                  // the unread pill sits flush right, forming a column.
+                  if (unread > 0) ...[
+                    const SizedBox(width: 5),
+                    _UnreadPill(count: unread),
                   ],
-                ),
+                  // Same menu the hold opens, to the right of the unread
+                  // pill (`.row-menu-btn`).
+                  if (pubkey.isNotEmpty) ...[
+                    const SizedBox(width: 2),
+                    SidebarRowMenuButton(
+                      onShowMenu: (pos) {
+                        showPmContextMenu(context, ref, pubkey, pos);
+                        return true;
+                      },
+                    ),
+                  ],
+                ],
               ),
-              if (active)
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: FractionallySizedBox(
-                      heightFactor: 0.6,
-                      child: Container(
-                        width: 3,
-                        decoration: BoxDecoration(
-                          color: c.primary,
-                          borderRadius: const BorderRadius.only(
-                            topRight: Radius.circular(3),
-                            bottomRight: Radius.circular(3),
-                          ),
-                          boxShadow: [
-                            BoxShadow(color: c.primaryA(0.4), blurRadius: 8),
-                          ],
+            ),
+            if (active)
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: FractionallySizedBox(
+                    heightFactor: 0.6,
+                    child: Container(
+                      width: 3,
+                      decoration: BoxDecoration(
+                        color: c.primary,
+                        borderRadius: const BorderRadius.only(
+                          topRight: Radius.circular(3),
+                          bottomRight: Radius.circular(3),
                         ),
+                        boxShadow: [
+                          BoxShadow(color: c.primaryA(0.4), blurRadius: 8),
+                        ],
                       ),
                     ),
                   ),
                 ),
-            ],
+              ),
+          ],
         ),
       ),
     );

@@ -5,7 +5,8 @@ import 'package:nym_bar/models/message.dart';
 import 'package:nym_bar/models/nostr_event.dart';
 import 'package:nym_bar/state/app_state.dart';
 
-NostrEvent _chanMsg(String d, int ts, {String? id, String pubkey = 'author_pk'}) =>
+NostrEvent _chanMsg(String d, int ts,
+        {String? id, String pubkey = 'author_pk'}) =>
     NostrEvent(
       id: id ?? 'cm_${d}_${ts}_$pubkey',
       pubkey: pubkey,
@@ -82,7 +83,8 @@ void main() {
     expect(n.state.channelLastActivity['#news'], now * 1000);
   });
 
-  test('channelLastActivity tracks the newest message across cache+backfill', () {
+  test('channelLastActivity tracks the newest message across cache+backfill',
+      () {
     final n = AppStateNotifier()..goLive('self', 'me#0001');
     n.hydrateAllMessages({
       '#news': [_cached('#news', now - 10000)],

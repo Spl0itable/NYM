@@ -196,8 +196,8 @@ class ApiActionStat {
   int bytesSent;
   int bytesReceived;
   int get bytes => bytesSent + bytesReceived;
-  ApiActionStat copy() =>
-      ApiActionStat(count: count, bytesSent: bytesSent, bytesReceived: bytesReceived);
+  ApiActionStat copy() => ApiActionStat(
+      count: count, bytesSent: bytesSent, bytesReceived: bytesReceived);
 }
 
 /// One shard's fan-in summary for the proxy-mode shard line (app.js:7409). The

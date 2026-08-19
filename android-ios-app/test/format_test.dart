@@ -73,7 +73,9 @@ void main() {
       // The quoted body should contain the text "hi".
       final para = q.children.whereType<ParagraphBlock>().first;
       expect(
-        para.inlines.whereType<TextSpanNode>().any((t) => t.text.contains('hi')),
+        para.inlines
+            .whereType<TextSpanNode>()
+            .any((t) => t.text.contains('hi')),
         isTrue,
       );
     });
@@ -200,7 +202,9 @@ void main() {
       expect(inlines.whereType<EmojiNode>(), isEmpty);
       expect(inlines.whereType<CustomEmojiNode>(), isEmpty);
       expect(
-        inlines.whereType<TextSpanNode>().any((t) => t.text.contains(':notanemoji:')),
+        inlines
+            .whereType<TextSpanNode>()
+            .any((t) => t.text.contains(':notanemoji:')),
         isTrue,
       );
     });
@@ -228,6 +232,52 @@ void main() {
       final media = blocks.whereType<MediaBlock>();
       expect(media, hasLength(1));
       expect(media.first.items, hasLength(2));
+    });
+
+    test('audio URL -> AudioBlock with a download filename', () {
+      final blocks = NymFormat.format('https://blossom.band/abc123.mp3');
+      final audio = blocks.whereType<AudioBlock>();
+      expect(audio, hasLength(1));
+      expect(audio.first.url, 'https://blossom.band/abc123.mp3');
+      expect(audio.first.fileName, 'abc123.mp3');
+      // Never a bare link and never a gallery tile.
+      expect(blocks.whereType<MediaBlock>(), isEmpty);
+    });
+
+    test('every audio extension is recognised', () {
+      for (final ext in ['mp3', 'm4a', 'aac', 'wav', 'flac', 'opus', 'oga']) {
+        final blocks = NymFormat.format('https://x.com/clip.$ext');
+        expect(blocks.whereType<AudioBlock>(), hasLength(1),
+            reason: '.$ext should render a player');
+      }
+    });
+
+    test('.ogg and .webm stay with video, which can be either', () {
+      for (final ext in ['ogg', 'webm', 'mp4', 'mov']) {
+        final blocks = NymFormat.format('https://x.com/clip.$ext');
+        expect(blocks.whereType<AudioBlock>(), isEmpty, reason: '.$ext');
+        expect(
+            blocks.whereType<MediaBlock>().first.items.single.isVideo, isTrue,
+            reason: '.$ext');
+      }
+    });
+
+    test('audio next to an image does not join the gallery', () {
+      final blocks =
+          NymFormat.format('https://x.com/a.png https://x.com/b.mp3');
+      expect(blocks.whereType<MediaBlock>().first.items, hasLength(1));
+      expect(blocks.whereType<AudioBlock>(), hasLength(1));
+    });
+
+    test('audio playback URL rides the media proxy like other media', () {
+      final blocks = NymFormat.format(
+        'https://x.com/a.mp3',
+        const FormatContext(proxyBase: 'https://p.test/api/proxy'),
+      );
+      final audio = blocks.whereType<AudioBlock>().single;
+      expect(audio.url, startsWith('https://p.test/api/proxy?url='));
+      // The label still names the real file, not the proxy URL.
+      expect(audio.fileName, 'a.mp3');
     });
 
     test('plain URL -> LinkNode', () {

@@ -123,7 +123,8 @@ void main() {
     n.ingestEvents(events); // batched path (one emit)
     sw.stop();
     // ignore: avoid_print
-    print('INGEST: $n2 channel messages (batched) in ${sw.elapsedMilliseconds}ms '
+    print(
+        'INGEST: $n2 channel messages (batched) in ${sw.elapsedMilliseconds}ms '
         '=> ${(sw.elapsedMicroseconds / n2).toStringAsFixed(0)} us/event');
   });
 }

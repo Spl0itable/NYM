@@ -232,8 +232,8 @@ class _CopyButtonState extends State<_CopyButton> {
           decoration: BoxDecoration(
             color: fill,
             borderRadius: NymRadius.rsm,
-            border: Border.all(
-                color: copied ? c.primaryA(0.5) : c.primaryA(0.3)),
+            border:
+                Border.all(color: copied ? c.primaryA(0.5) : c.primaryA(0.3)),
             boxShadow: _hover && !copied
                 ? [BoxShadow(color: c.primaryA(0.1), blurRadius: 15)]
                 : null,

@@ -76,7 +76,8 @@ void main() {
     });
 
     test('named (non-geohash) channel → 23333', () {
-      final m = _channelMsg(eventKind: 23333, geohash: null, channel: 'nymchat');
+      final m =
+          _channelMsg(eventKind: 23333, geohash: null, channel: 'nymchat');
       expect(
         inferOriginalKind(m, view: const ChatView.channel('nymchat')),
         '23333',
@@ -124,7 +125,8 @@ void main() {
           messageId: 'm1',
         );
 
-    test('own message includes Edit + EditProfile + Mention, excludes PM/Zap/'
+    test(
+        'own message includes Edit + EditProfile + Mention, excludes PM/Zap/'
         'Report/Block/Slap/Hug', () {
       final actions = buildContextMenuActions(target(isSelf: true));
       expect(actions, contains(CtxAction.edit));
@@ -180,7 +182,8 @@ void main() {
       ]);
     });
 
-    test('profile-only mode shows PM / AddToGroup / GiftCredits / Friend / '
+    test(
+        'profile-only mode shows PM / AddToGroup / GiftCredits / Friend / '
         'Report / Block', () {
       // ui-context.js:640-654 hides Mention/Translate/Slap/Hug/mod/Edit; with no
       // messageId/content the message-scoped items fall away, leaving these.
@@ -272,13 +275,14 @@ void main() {
 
     test('lnurlpUrl splits a lightning address', () {
       final u = Lnurl.lnurlpUrl('sats@walletofsatoshi.com');
-      expect(u.toString(),
-          'https://walletofsatoshi.com/.well-known/lnurlp/sats');
+      expect(
+          u.toString(), 'https://walletofsatoshi.com/.well-known/lnurlp/sats');
       expect(Lnurl.lnurlpUrl('invalid'), isNull);
     });
   });
 
-  testWidgets('tapping a reaction badge invokes toggleReaction', (tester) async {
+  testWidgets('tapping a reaction badge invokes toggleReaction',
+      (tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final kv = await KeyValueStore.open();
 

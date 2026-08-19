@@ -60,8 +60,8 @@ void main() {
       final signing = Uint8List.fromList(List.filled(32, 0x01));
       // wrong version byte
       expect(
-        AuthenticatedPeerStatePacket.decode(
-            Uint8List.fromList([0x02, 0x01, 0x01, 0x08, 0x02, 0x20, ...signing])),
+        AuthenticatedPeerStatePacket.decode(Uint8List.fromList(
+            [0x02, 0x01, 0x01, 0x08, 0x02, 0x20, ...signing])),
         isNull,
       );
       // signing key one byte short

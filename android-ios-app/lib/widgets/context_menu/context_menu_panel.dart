@@ -121,7 +121,8 @@ class ContextMenuPanel extends ConsumerWidget {
     final group = inGroup ? _groupById(s, s.view.id) : null;
     final iAmOwner = group != null && group.createdBy == self;
     final iAmMod = group != null && group.mods.contains(self);
-    final targetIsMember = group != null && group.members.contains(target.pubkey);
+    final targetIsMember =
+        group != null && group.members.contains(target.pubkey);
     final targetIsOwner = group != null && group.createdBy == target.pubkey;
     final targetIsMod = group != null && group.mods.contains(target.pubkey);
     return CtxTarget(
@@ -816,8 +817,8 @@ class ContextMenuPanel extends ConsumerWidget {
         tr("Delete this member's message for everyone in the group?"),
         okLabel: tr('Delete'),
         danger: true,
-        action: () =>
-            controller.modDeleteGroupMessage(_groupId(ref), messageId, t.pubkey),
+        action: () => controller.modDeleteGroupMessage(
+            _groupId(ref), messageId, t.pubkey),
       );
     }
   }
@@ -965,8 +966,7 @@ class _ActionItemState extends State<_ActionItem> {
     // On hover, a neutral row's label + icon shift to `--primary`
     // (`.context-menu-item:hover { color: var(--primary) }`); colored rows keep
     // their resting tint.
-    final Color labelColor =
-        isNeutral && _hover ? c.primary : widget.color;
+    final Color labelColor = isNeutral && _hover ? c.primary : widget.color;
     final Color iconColor =
         isNeutral ? (_hover ? c.primary : c.textDim) : widget.color;
     return MouseRegion(
@@ -979,7 +979,9 @@ class _ActionItemState extends State<_ActionItem> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: _hover
-                ? (widget.color == c.danger ? c.dangerHoverOverlay : c.hoverOverlay)
+                ? (widget.color == c.danger
+                    ? c.dangerHoverOverlay
+                    : c.hoverOverlay)
                 : null,
             borderRadius: NymRadius.rxs,
           ),
@@ -1194,7 +1196,9 @@ class _ProfileImageViewer extends StatelessWidget {
           Positioned(
             top: 14,
             right: 14,
-            child: SafeArea(child: CtxCloseButton(onTap: () => Navigator.of(context).maybePop())),
+            child: SafeArea(
+                child: CtxCloseButton(
+                    onTap: () => Navigator.of(context).maybePop())),
           ),
         ],
       ),

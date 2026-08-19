@@ -60,10 +60,13 @@ class MeshChannelEncryption {
       secretKey: key,
       nonce: _aesGcm.newNonce(),
     );
-    final out = Uint8List(box.nonce.length + box.cipherText.length + box.mac.bytes.length);
+    final out = Uint8List(
+        box.nonce.length + box.cipherText.length + box.mac.bytes.length);
     out.setRange(0, box.nonce.length, box.nonce);
-    out.setRange(box.nonce.length, box.nonce.length + box.cipherText.length, box.cipherText);
-    out.setRange(box.nonce.length + box.cipherText.length, out.length, box.mac.bytes);
+    out.setRange(box.nonce.length, box.nonce.length + box.cipherText.length,
+        box.cipherText);
+    out.setRange(
+        box.nonce.length + box.cipherText.length, out.length, box.mac.bytes);
     return out;
   }
 

@@ -192,8 +192,7 @@ class CommandDispatcher {
     final parsed = parseCommand(line);
     final spec = parsed.spec;
     if (spec == null) {
-      engine.systemMessage(
-          tr('Unknown command: {cmd}', {'cmd': parsed.token}));
+      engine.systemMessage(tr('Unknown command: {cmd}', {'cmd': parsed.token}));
       return true;
     }
 
@@ -268,11 +267,16 @@ class CommandDispatcher {
           return true;
         }, () => spec.formatter!(args));
       case 'slap':
-        _actionTarget(args, 'slap',
+        _actionTarget(
+            args,
+            'slap',
             tr('Usage: /slap nym, /slap nym#xxxx, or /slap [pubkey]'),
-            (mention) => '/me slaps $mention around a bit with a large trout 🐟');
+            (mention) =>
+                '/me slaps $mention around a bit with a large trout 🐟');
       case 'hug':
-        _actionTarget(args, 'hug',
+        _actionTarget(
+            args,
+            'hug',
             tr('Usage: /hug nym, /hug nym#xxxx, or /hug [pubkey]'),
             (mention) => '/me gives $mention a warm hug 🫂');
       case 'bold':
@@ -354,8 +358,8 @@ class CommandDispatcher {
 
   void _pm(String args) {
     if (args.isEmpty) {
-      engine.systemMessage(
-          tr('Usage: /pm @nym, /pm nym#xxxx, or /pm [pubkey]'));
+      engine
+          .systemMessage(tr('Usage: /pm @nym, /pm nym#xxxx, or /pm [pubkey]'));
       return;
     }
     final t = resolveTarget(args, engine.users);
@@ -413,8 +417,7 @@ class CommandDispatcher {
     }
   }
 
-  void _action(
-      String args, bool Function() validate, String Function() build) {
+  void _action(String args, bool Function() validate, String Function() build) {
     if (!validate()) return;
     final rl = rateLimiter.check();
     if (!rl.allowed) {
@@ -444,8 +447,7 @@ class CommandDispatcher {
     engine.sendToCurrentTarget(build(mention));
   }
 
-  void _modTarget(
-      String args, void Function(String pubkey)? hook, String usage,
+  void _modTarget(String args, void Function(String pubkey)? hook, String usage,
       {String? blockSelf}) {
     if (args.trim().isEmpty) {
       engine.systemMessage(usage);

@@ -154,7 +154,8 @@ class AppConfirmResult {
 
 /// Internal pop payload (so a single dialog can resolve confirm/checkbox/prompt).
 class AppDialogResult {
-  const AppDialogResult({required this.confirmed, this.checked = false, this.value});
+  const AppDialogResult(
+      {required this.confirmed, this.checked = false, this.value});
   final bool confirmed;
   final bool checked;
   final String? value;
@@ -331,8 +332,7 @@ class _AppDialogState extends State<_AppDialog> {
                                   height: 1.45,
                                 ),
                               ),
-                              if (widget.checkboxLabel != null)
-                                _checkboxRow(c),
+                              if (widget.checkboxLabel != null) _checkboxRow(c),
                               if (widget.isPrompt) _promptField(c),
                             ],
                           ),

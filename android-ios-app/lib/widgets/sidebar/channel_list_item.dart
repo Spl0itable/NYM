@@ -4,10 +4,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/channels/channel_context_menu.dart';
+import '../../features/channels/geohash_place_cache.dart';
 import '../../features/settings/settings_helpers.dart';
 import '../../models/channel.dart';
 import '../nym_icons.dart';
 import 'sidebar_row_gestures.dart';
+import 'sidebar_row_menu_button.dart';
 
 /// The grey "pinned/favorited" tint the PWA paints on a `.channel-item.pinned`
 /// row when it is not the active channel (`rgba(150,150,160,…)`,
@@ -57,8 +59,7 @@ class ChannelListItem extends ConsumerWidget {
     // state always wins.
     final showPinned = pinned && !active;
     // Geohash rows get a `title="{getGeohashLocation(geohash)}"` hover tooltip.
-    final location =
-        entry.isGeohash ? geohashLocationLabel(entry.geohash) : '';
+    final location = entry.isGeohash ? geohashLocationLabel(entry.geohash) : '';
 
     // `.channel-item.active` fill is primary@0.10 + a primary@0.05 glow (dark);
     // `body.light-mode` neutralises it to black@0.06 with `box-shadow:none`
@@ -75,13 +76,18 @@ class ChannelListItem extends ConsumerWidget {
         : Colors.white.withValues(alpha: 0.06);
     final Color borderColor = active
         ? c.primaryA(0.20)
-        : (showPinned ? _pinnedGrey.withValues(alpha: 0.20) : Colors.transparent);
+        : (showPinned
+            ? _pinnedGrey.withValues(alpha: 0.20)
+            : Colors.transparent);
     final List<BoxShadow>? glow = active
         ? (c.isLight
             ? null
             : [BoxShadow(color: c.primaryA(0.05), blurRadius: 12)])
         : (showPinned
-            ? [BoxShadow(color: _pinnedGrey.withValues(alpha: 0.05), blurRadius: 12)]
+            ? [
+                BoxShadow(
+                    color: _pinnedGrey.withValues(alpha: 0.05), blurRadius: 12)
+              ]
             : null);
 
     final nameText = Text(
@@ -94,6 +100,19 @@ class ChannelListItem extends ConsumerWidget {
         fontWeight: FontWeight.w400,
         height: 1.3,
       ),
+    );
+
+    // Name plus the location line beneath it (`.channel-sub`).
+    final nameBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        nameText,
+        _ChannelLocationLine(
+          geohash: entry.isGeohash ? entry.geohash : '',
+          textSize: textSize,
+        ),
+      ],
     );
 
     return Padding(
@@ -134,15 +153,16 @@ class ChannelListItem extends ConsumerWidget {
                 child: Row(
                   children: [
                     if (mesh) ...[
-                      NymSvgIcon(NymIcons.bluetooth, size: 12, color: c.primary),
+                      NymSvgIcon(NymIcons.bluetooth,
+                          size: 12, color: c.primary),
                       const SizedBox(width: 6),
                     ],
                     Expanded(
                       // `.channel-name` inherits `--text` weight normal even
                       // when active (active changes bg/border/bar only).
                       child: location.isEmpty
-                          ? nameText
-                          : Tooltip(message: location, child: nameText),
+                          ? nameBlock
+                          : Tooltip(message: location, child: nameBlock),
                     ),
                     // PWA `.channel-badges` only ever contains the unread
                     // pill. `.std-badge` / `.geohash-badge` are DEAD CSS —
@@ -152,6 +172,18 @@ class ChannelListItem extends ConsumerWidget {
                     if (unread > 0) ...[
                       const SizedBox(width: 5),
                       _UnreadPill(count: unread),
+                    ],
+                    // Same menu the hold opens. Suppressed where there would
+                    // be no menu to open (#nymchat has no actions), so the
+                    // control never appears as a dead tap target.
+                    if (buildChannelMenuActions(context, ref, entry)
+                        .isNotEmpty) ...[
+                      const SizedBox(width: 2),
+                      SidebarRowMenuButton(
+                        semanticLabel: 'Channel menu',
+                        onShowMenu: (pos) => maybeShowChannelContextMenu(
+                            context, ref, entry, pos),
+                      ),
                     ],
                   ],
                 ),
@@ -225,5 +257,104 @@ class _UnreadPill extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// The dim location line under a sidebar channel name: the reverse-geocoded
+/// place for a geohash channel, "Not a geohash" for a named one — the same
+/// information the channel header carries.
+///
+/// A geohash paints its decoded coordinates immediately (local, no network) and
+/// upgrades in place when the queued lookup lands, so the row is never empty and
+/// never sits on a spinner. Resolution goes through [GeohashPlaceCache], which
+/// persists and rate-limits; a place already cached costs no request at all.
+class _ChannelLocationLine extends ConsumerStatefulWidget {
+  const _ChannelLocationLine({required this.geohash, required this.textSize});
+
+  /// Empty for a named (non-geohash) channel.
+  final String geohash;
+  final double textSize;
+
+  @override
+  ConsumerState<_ChannelLocationLine> createState() =>
+      _ChannelLocationLineState();
+}
+
+class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine> {
+  String? _place;
+
+  @override
+  void initState() {
+    super.initState();
+    _prime();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChannelLocationLine old) {
+    super.didUpdateWidget(old);
+    if (old.geohash != widget.geohash) {
+      _place = null;
+      _prime();
+    }
+  }
+
+  void _prime() {
+    final gh = widget.geohash;
+    if (gh.isEmpty) return;
+    final cache = ref.read(geohashPlaceCacheProvider);
+    final hit = cache.cached(gh);
+    if (hit != null) {
+      _place = hit;
+      return;
+    }
+    cache.resolve(gh).then((place) {
+      if (!mounted || place.isEmpty || widget.geohash != gh) return;
+      setState(() => _place = place);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final gh = widget.geohash;
+    final text =
+        gh.isEmpty ? 'Not a geohash' : (_place ?? geohashLocationLabel(gh));
+    if (text.isEmpty) return const SizedBox.shrink();
+    final style = TextStyle(
+      color: c.textDim,
+      fontSize: widget.textSize - 3,
+      height: 1.25,
+    );
+    // Same split as the channel header (chat_pane.dart `_locationLine`): the
+    // city half is the only part allowed to ellipsize, so a narrow sidebar
+    // renders "Long City Na…, Country" instead of dropping the country. Only
+    // a resolved place name has the "City, Country" shape — raw coordinates
+    // and 'Not a geohash' stay a single run.
+    final splitIdx = _place != null ? text.lastIndexOf(', ') : -1;
+    final Widget line;
+    if (splitIdx > 0 && splitIdx < text.length - 2) {
+      line = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              text.substring(0, splitIdx),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: style,
+            ),
+          ),
+          Text(text.substring(splitIdx), maxLines: 1, style: style),
+        ],
+      );
+    } else {
+      line = Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+    return Padding(padding: const EdgeInsets.only(top: 1), child: line);
   }
 }

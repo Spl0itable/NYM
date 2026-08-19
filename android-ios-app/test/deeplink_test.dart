@@ -77,7 +77,8 @@ void main() {
     });
 
     test('#gjoin=<token> → groupInvite with parsed payload', () {
-      final link = parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken');
+      final link =
+          parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken');
       expect(link, isNotNull);
       expect(link!.kind, NymLinkKind.groupInvite);
       expect(link.inviteToken, kValidInviteToken);
@@ -89,7 +90,8 @@ void main() {
     });
 
     test('invite token is not lowercased (case-sensitive base64url)', () {
-      final link = parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken');
+      final link =
+          parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken');
       expect(link!.inviteToken, kValidInviteToken); // preserves mixed case
     });
 
@@ -121,7 +123,8 @@ void main() {
     });
 
     test('accepts a full #gjoin= input', () {
-      final t = parseGroupInvite('https://app.nymchat.app/#gjoin=$kValidInviteToken');
+      final t =
+          parseGroupInvite('https://app.nymchat.app/#gjoin=$kValidInviteToken');
       expect(t, isNotNull);
       expect(t!.epoch, 7);
     });

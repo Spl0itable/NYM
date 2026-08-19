@@ -79,7 +79,8 @@ class BitchatMessage {
       _lenPrefixed16(out, utf8.encode(content));
     }
 
-    if (originalSender != null) _lenPrefixed8(out, utf8.encode(originalSender!));
+    if (originalSender != null)
+      _lenPrefixed8(out, utf8.encode(originalSender!));
     if (recipientNickname != null) {
       _lenPrefixed8(out, utf8.encode(recipientNickname!));
     }

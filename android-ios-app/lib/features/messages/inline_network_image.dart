@@ -160,7 +160,8 @@ class InlineNetworkImage extends StatefulWidget {
   static const Map<String, String> imageFetchHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    'Accept':
+        'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
   };
 
   /// Drops [url] from every cache tier — the in-memory decode cache, the
@@ -252,10 +253,9 @@ class InlineNetworkImage extends StatefulWidget {
   /// True when [bytes] begin with an SVG/XML document head (guards the parser
   /// against an HTML error page or a raster blob).
   static bool _looksLikeSvg(Uint8List bytes) {
-    final head =
-        String.fromCharCodes(bytes.take(512).where((b) => b != 0))
-            .trimLeft()
-            .toLowerCase();
+    final head = String.fromCharCodes(bytes.take(512).where((b) => b != 0))
+        .trimLeft()
+        .toLowerCase();
     return head.startsWith('<svg') ||
         head.startsWith('<?xml') ||
         head.startsWith('<!doctype svg') ||
@@ -296,9 +296,8 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
 
   /// The source for the current mirror step: the caller's URL, or the imeta
   /// fallback mirror the failed loads have advanced to.
-  String get _baseUrl => _srcIndex == 0
-      ? widget.url
-      : widget.fallbackUrls[_srcIndex - 1];
+  String get _baseUrl =>
+      _srcIndex == 0 ? widget.url : widget.fallbackUrls[_srcIndex - 1];
 
   /// The URL for the current attempt: the base URL, or (on retry) the base URL
   /// with a cache-busting `_r=N` param appended (inline-bindings.js:176-180).

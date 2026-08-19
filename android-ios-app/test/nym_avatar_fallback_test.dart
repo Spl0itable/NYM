@@ -36,7 +36,8 @@ Widget _wrap(Widget child) =>
     MaterialApp(home: Scaffold(body: Center(child: child)));
 
 void main() {
-  testWidgets('remote avatar routes through InlineNetworkImage with a raw '
+  testWidgets(
+      'remote avatar routes through InlineNetworkImage with a raw '
       'fallback mirror', (tester) async {
     const rawUrl = 'https://cdn.example/alice.svg';
     await HttpOverrides.runZoned(() async {
@@ -72,7 +73,8 @@ void main() {
     await tester.pumpWidget(_wrap(const NymAvatar(seed: 'pk_none', size: 32)));
     await tester.pump();
     expect(find.byType(InlineNetworkImage), findsNothing,
-        reason: 'a pictureless user paints the identicon with no network fetch');
+        reason:
+            'a pictureless user paints the identicon with no network fetch');
     expect(find.byType(NymAvatar), findsOneWidget);
   });
 

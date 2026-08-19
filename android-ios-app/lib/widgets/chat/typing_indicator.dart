@@ -55,7 +55,8 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final out = <String>[];
     app.typing.forEach((k, expiry) {
-      if (k.startsWith(prefix) && expiry > now) out.add(k.substring(prefix.length));
+      if (k.startsWith(prefix) && expiry > now)
+        out.add(k.substring(prefix.length));
     });
     return out;
   }
@@ -183,8 +184,7 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
                           child: NymAvatar(
                             seed: visible[i],
                             size: 18,
-                            imageUrl:
-                                app.users[visible[i]]?.profile?.picture,
+                            imageUrl: app.users[visible[i]]?.profile?.picture,
                           ),
                         ),
                       ),
@@ -278,7 +278,8 @@ class _TypingDotsState extends State<_TypingDots>
           mainAxisSize: MainAxisSize.min,
           children: [
             for (var i = 0; i < 3; i++) ...[
-              if (i > 0) const SizedBox(width: 3), // `.typing-indicator-dots{gap:3}`
+              if (i > 0)
+                const SizedBox(width: 3), // `.typing-indicator-dots{gap:3}`
               Builder(builder: (_) {
                 // Stagger each dot by 0.15s / 1.2s ≈ 0.125 of the loop.
                 final phase = (_ctrl.value - i * 0.125) % 1.0;

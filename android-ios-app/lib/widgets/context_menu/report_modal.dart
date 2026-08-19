@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../common/keyboard_inset_dialog.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -26,7 +27,8 @@ class ReportModal extends StatefulWidget {
   final bool hasMessage;
 
   /// Called with (type, details, reportMessage) on Submit.
-  final void Function(String type, String details, bool reportMessage)? onSubmit;
+  final void Function(String type, String details, bool reportMessage)?
+      onSubmit;
 
   /// Report types, in the PWA's `#reportType` option order.
   static const types = <(String, String)>[
@@ -74,7 +76,7 @@ class _ReportModalState extends State<ReportModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
+    return KeyboardInsetDialog(
       child: Container(
         // `.modal-content { max-height: 90vh; overflow-y:auto }`
         // (styles-components.css:25-26) — cap height so the inner
@@ -128,159 +130,163 @@ class _ReportModalState extends State<ReportModal> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                  // `.modal-header` — 22px primary UPPERCASE ls1.5 w700, 1px
-                  // glass bottom rule, padding-bottom 14, margin-bottom 24.
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 24),
-                    padding: const EdgeInsets.only(bottom: 14),
-                    decoration: BoxDecoration(
-                      border: Border(bottom: BorderSide(color: c.glassBorder)),
+                    // `.modal-header` — 22px primary UPPERCASE ls1.5 w700, 1px
+                    // glass bottom rule, padding-bottom 14, margin-bottom 24.
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 24),
+                      padding: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        border:
+                            Border(bottom: BorderSide(color: c.glassBorder)),
+                      ),
+                      child: Text(tr('REPORT USER/CONTENT'),
+                          style: TextStyle(
+                              color: c.primary,
+                              // `.modal-header h2` overrides the 22px parent to
+                              // 20px (styles-features.css:1914-1918).
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.5)),
                     ),
-                    child: Text(tr('REPORT USER/CONTENT'),
-                        style: TextStyle(
-                            color: c.primary,
-                            // `.modal-header h2` overrides the 22px parent to
-                            // 20px (styles-features.css:1914-1918).
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.5)),
-                  ),
-                  // `.nm-h-6` "Reporting:" — text-dim, body-size, mb15. Nym span
-                  // is `.nm-primary`.
-                  Text.rich(TextSpan(children: [
-                    TextSpan(
-                        text: tr('Reporting: '),
-                        style: TextStyle(color: c.textDim, fontSize: 15)),
-                    TextSpan(
-                        text: widget.targetNym,
-                        style: TextStyle(color: c.primary, fontSize: 15)),
-                  ])),
-                  const SizedBox(height: 15),
-                  // `.nm-h-8` label — block, text-dim, body-size, mb10.
-                  Text(tr('Report Type:'),
-                      style: TextStyle(color: c.textDim, fontSize: 15)),
-                  const SizedBox(height: 10),
-                  // `.nm-h-9` select — padding 10, bg white/0.05, color --text,
-                  // radius 12.
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: BoxDecoration(
-                      // `body.light-mode select` → black@0.04 fill / black@0.1
-                      // border (white@0.05 / glass in dark).
-                      color: c.insetFill,
-                      border: Border.all(color: c.insetBorder),
-                      borderRadius: NymRadius.rsm,
-                    ),
-                    child: DropdownButton<String>(
-                      value: _type,
-                      isExpanded: true,
-                      underline: const SizedBox.shrink(),
-                      dropdownColor: c.bgSecondary,
-                      style: TextStyle(color: c.text, fontSize: 15),
-                      items: [
-                        for (final t in ReportModal.types)
-                          DropdownMenuItem(value: t.$1, child: Text(tr(t.$2))),
-                      ],
-                      onChanged: (v) => setState(() => _type = v ?? _type),
-                    ),
-                  ),
-                  const SizedBox(height: 20), // `.nm-h-7` block margin-bottom
-                  // `.nm-h-8` label with `.nm-h-2` lowercase "(optional)" + ":".
-                  Text.rich(TextSpan(
-                    text: tr('Additional Details'),
-                    style: TextStyle(color: c.textDim, fontSize: 15),
-                    children: [
+                    // `.nm-h-6` "Reporting:" — text-dim, body-size, mb15. Nym span
+                    // is `.nm-primary`.
+                    Text.rich(TextSpan(children: [
                       TextSpan(
-                        text: tr(' (optional)'),
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w400, letterSpacing: 0),
-                      ),
-                      const TextSpan(text: ':'),
-                    ],
-                  )),
-                  const SizedBox(height: 10),
-                  // `.nm-h-10` textarea — padding 10, bg white/0.05, color
-                  // --text, radius 12.
-                  TextField(
-                    controller: _details,
-                    maxLines: 4,
-                    style: TextStyle(color: c.text, fontSize: 15),
-                    decoration: InputDecoration(
-                      hintText:
-                          tr('Provide any additional context for this report...'),
-                      hintStyle: TextStyle(color: c.textDim),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.all(10),
-                      filled: true,
-                      // `body.light-mode textarea` → black@0.04 fill / black@0.1
-                      // border (white@0.05 / glass in dark).
-                      fillColor: c.insetFill,
-                      border: OutlineInputBorder(
+                          text: tr('Reporting: '),
+                          style: TextStyle(color: c.textDim, fontSize: 15)),
+                      TextSpan(
+                          text: widget.targetNym,
+                          style: TextStyle(color: c.primary, fontSize: 15)),
+                    ])),
+                    const SizedBox(height: 15),
+                    // `.nm-h-8` label — block, text-dim, body-size, mb10.
+                    Text(tr('Report Type:'),
+                        style: TextStyle(color: c.textDim, fontSize: 15)),
+                    const SizedBox(height: 10),
+                    // `.nm-h-9` select — padding 10, bg white/0.05, color --text,
+                    // radius 12.
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        // `body.light-mode select` → black@0.04 fill / black@0.1
+                        // border (white@0.05 / glass in dark).
+                        color: c.insetFill,
+                        border: Border.all(color: c.insetBorder),
                         borderRadius: NymRadius.rsm,
-                        borderSide: BorderSide(color: c.insetBorder),
                       ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: NymRadius.rsm,
-                        borderSide: BorderSide(color: c.insetBorder),
+                      child: DropdownButton<String>(
+                        value: _type,
+                        isExpanded: true,
+                        underline: const SizedBox.shrink(),
+                        dropdownColor: c.bgSecondary,
+                        style: TextStyle(color: c.text, fontSize: 15),
+                        items: [
+                          for (final t in ReportModal.types)
+                            DropdownMenuItem(
+                                value: t.$1, child: Text(tr(t.$2))),
+                        ],
+                        onChanged: (v) => setState(() => _type = v ?? _type),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 15), // `.nm-h-11` block margin-bottom
-                  // `.nm-h-12` — whole label clickable, text-dim, body-size,
-                  // checkbox margin-right 8 (`.nm-h-13`).
-                  InkWell(
-                    onTap: widget.hasMessage
-                        ? () => setState(() => _reportMessage = !_reportMessage)
-                        : null,
-                    child: Row(
+                    const SizedBox(height: 20), // `.nm-h-7` block margin-bottom
+                    // `.nm-h-8` label with `.nm-h-2` lowercase "(optional)" + ":".
+                    Text.rich(TextSpan(
+                      text: tr('Additional Details'),
+                      style: TextStyle(color: c.textDim, fontSize: 15),
                       children: [
-                        SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: Checkbox(
-                            value: _reportMessage,
-                            onChanged: widget.hasMessage
-                                ? (v) =>
-                                    setState(() => _reportMessage = v ?? false)
-                                : null,
-                            activeColor: c.primary,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                            visualDensity: VisualDensity.compact,
-                          ),
+                        TextSpan(
+                          text: tr(' (optional)'),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w400, letterSpacing: 0),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            tr('Report specific message (if unchecked, reports the user profile)'),
-                            style: TextStyle(color: c.textDim, fontSize: 15),
-                          ),
+                        const TextSpan(text: ':'),
+                      ],
+                    )),
+                    const SizedBox(height: 10),
+                    // `.nm-h-10` textarea — padding 10, bg white/0.05, color
+                    // --text, radius 12.
+                    TextField(
+                      controller: _details,
+                      maxLines: 4,
+                      style: TextStyle(color: c.text, fontSize: 15),
+                      decoration: InputDecoration(
+                        hintText: tr(
+                            'Provide any additional context for this report...'),
+                        hintStyle: TextStyle(color: c.textDim),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.all(10),
+                        filled: true,
+                        // `body.light-mode textarea` → black@0.04 fill / black@0.1
+                        // border (white@0.05 / glass in dark).
+                        fillColor: c.insetFill,
+                        border: OutlineInputBorder(
+                          borderRadius: NymRadius.rsm,
+                          borderSide: BorderSide(color: c.insetBorder),
                         ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: NymRadius.rsm,
+                          borderSide: BorderSide(color: c.insetBorder),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(
+                        height: 15), // `.nm-h-11` block margin-bottom
+                    // `.nm-h-12` — whole label clickable, text-dim, body-size,
+                    // checkbox margin-right 8 (`.nm-h-13`).
+                    InkWell(
+                      onTap: widget.hasMessage
+                          ? () =>
+                              setState(() => _reportMessage = !_reportMessage)
+                          : null,
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: Checkbox(
+                              value: _reportMessage,
+                              onChanged: widget.hasMessage
+                                  ? (v) => setState(
+                                      () => _reportMessage = v ?? false)
+                                  : null,
+                              activeColor: c.primary,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              tr('Report specific message (if unchecked, reports the user profile)'),
+                              style: TextStyle(color: c.textDim, fontSize: 15),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    // `.modal-actions` — center, gap 10.
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _cancelBtn(c),
+                        const SizedBox(width: 10),
+                        _submitBtn(c),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 15),
-                  // `.modal-actions` — center, gap 10.
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _cancelBtn(c),
-                      const SizedBox(width: 10),
-                      _submitBtn(c),
-                    ],
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            // `.modal-close` — 32px circular glass chip at `top:14; right:14`
-            // from the modal edge. The Stack sits inside the 32px content
-            // padding, so offset -18 lands the chip 14px from the edge.
-            Positioned(
-              top: -18,
-              right: -18,
-              child: _closeButton(c),
-            ),
-          ],
+              // `.modal-close` — 32px circular glass chip at `top:14; right:14`
+              // from the modal edge. The Stack sits inside the 32px content
+              // padding, so offset -18 lands the chip 14px from the edge.
+              Positioned(
+                top: -18,
+                right: -18,
+                child: _closeButton(c),
+              ),
+            ],
           ),
         ),
       ),

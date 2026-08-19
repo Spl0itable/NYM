@@ -81,15 +81,15 @@ void main() {
     });
 
     test('offer / answer nest sdp as { type, sdp }', () {
-      final offer = CallSignal.offer(
-          callId: 'c', sdpType: 'offer', sdp: 'v=0...');
+      final offer =
+          CallSignal.offer(callId: 'c', sdpType: 'offer', sdp: 'v=0...');
       expect(offer, {
         'type': 'offer',
         'callId': 'c',
         'sdp': {'type': 'offer', 'sdp': 'v=0...'},
       });
-      final answer = CallSignal.answer(
-          callId: 'c', sdpType: 'answer', sdp: 'v=0...');
+      final answer =
+          CallSignal.answer(callId: 'c', sdpType: 'answer', sdp: 'v=0...');
       expect(answer['type'], 'answer');
       expect((answer['sdp'] as Map)['type'], 'answer');
     });
@@ -123,7 +123,8 @@ void main() {
           {'type': 'reaction', 'callId': 'c', 'emoji': '🔥'});
     });
 
-    test('reaction omits emojiTags when absent/empty (calls.js if(tags.length))',
+    test(
+        'reaction omits emojiTags when absent/empty (calls.js if(tags.length))',
         () {
       // No tags supplied → field absent (unicode reaction, like the PWA).
       expect(
@@ -141,8 +142,8 @@ void main() {
       final tags = [
         ['emoji', 'partyblob', 'https://e.example/partyblob.png'],
       ];
-      final p =
-          CallSignal.reaction(callId: 'c', emoji: ':partyblob:', emojiTags: tags);
+      final p = CallSignal.reaction(
+          callId: 'c', emoji: ':partyblob:', emojiTags: tags);
       expect(p['type'], 'reaction');
       expect(p['emoji'], ':partyblob:');
       expect(p['emojiTags'], tags);
@@ -216,16 +217,16 @@ void main() {
 
   group('acceptCalls preference gate', () {
     test('disabled never rings', () {
-      expect(
-          shouldRingForInvite(acceptCalls: 'disabled', isFriend: true), isFalse);
-      expect(
-          shouldRingForInvite(acceptCalls: 'disabled', isFriend: false), isFalse);
+      expect(shouldRingForInvite(acceptCalls: 'disabled', isFriend: true),
+          isFalse);
+      expect(shouldRingForInvite(acceptCalls: 'disabled', isFriend: false),
+          isFalse);
     });
     test('friends rings only for friends', () {
       expect(
           shouldRingForInvite(acceptCalls: 'friends', isFriend: true), isTrue);
-      expect(
-          shouldRingForInvite(acceptCalls: 'friends', isFriend: false), isFalse);
+      expect(shouldRingForInvite(acceptCalls: 'friends', isFriend: false),
+          isFalse);
     });
     test('enabled always rings', () {
       expect(

@@ -35,6 +35,12 @@ const List<String> kEmojiCategoryOrder = <String>[
   'flags',
 ];
 
+// FORMATTING: the tables below are dense on purpose, mirroring the web
+// client's source. `dart format` explodes them to one entry per line, and
+// the `// dart format off` directive cannot protect them because it needs
+// language version >= 3.7 while this package is on ^3.6.0 (legacy
+// formatter, which ignores the directive). Keep this file OUT of
+// repo-wide format passes.
 /// Built-in unicode emoji grouped by category, in the PWA's exact order.
 /// Verbatim from `js/app.js` `this.allEmojis` (lines 781-793).
 const Map<String, List<String>> kEmojisByCategory = <String, List<String>>{

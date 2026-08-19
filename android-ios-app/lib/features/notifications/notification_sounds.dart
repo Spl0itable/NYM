@@ -55,8 +55,7 @@ class SoundDescriptor {
   final List<SoundNote> notes;
 
   /// Total duration in seconds (sum of d + gap), used to size the buffer.
-  double get totalDuration =>
-      notes.fold(0.0, (acc, n) => acc + n.d + n.gap);
+  double get totalDuration => notes.fold(0.0, (acc, n) => acc + n.d + n.gap);
 }
 
 /// The complete sound table, verbatim from notifications.js. Keys match
@@ -192,19 +191,32 @@ const Map<String, SoundDescriptor> kNotificationSounds = {
     wave: SoundWave.square,
     gain: 0.06,
     notes: [
-      SoundNote(f: 522.7, d: 0.033), SoundNote(f: 391.1, d: 0.033),
-      SoundNote(f: 522.7, d: 0.033), SoundNote(f: 658.0, d: 0.033),
-      SoundNote(f: 782.2, d: 0.033), SoundNote(f: 1045.4, d: 0.033),
-      SoundNote(f: 782.2, d: 0.033), SoundNote(f: 414.3, d: 0.033),
-      SoundNote(f: 522.7, d: 0.033), SoundNote(f: 621.4, d: 0.033),
-      SoundNote(f: 828.6, d: 0.033), SoundNote(f: 621.4, d: 0.033),
-      SoundNote(f: 828.6, d: 0.033), SoundNote(f: 1045.4, d: 0.033),
-      SoundNote(f: 1242.9, d: 0.033), SoundNote(f: 1645.0, d: 0.033),
-      SoundNote(f: 1242.9, d: 0.033), SoundNote(f: 466.1, d: 0.033),
-      SoundNote(f: 585.7, d: 0.033), SoundNote(f: 694.8, d: 0.033),
-      SoundNote(f: 932.2, d: 0.033), SoundNote(f: 694.8, d: 0.033),
-      SoundNote(f: 932.2, d: 0.033), SoundNote(f: 1165.2, d: 0.033),
-      SoundNote(f: 1381.0, d: 0.033), SoundNote(f: 1864.3, d: 0.033),
+      SoundNote(f: 522.7, d: 0.033),
+      SoundNote(f: 391.1, d: 0.033),
+      SoundNote(f: 522.7, d: 0.033),
+      SoundNote(f: 658.0, d: 0.033),
+      SoundNote(f: 782.2, d: 0.033),
+      SoundNote(f: 1045.4, d: 0.033),
+      SoundNote(f: 782.2, d: 0.033),
+      SoundNote(f: 414.3, d: 0.033),
+      SoundNote(f: 522.7, d: 0.033),
+      SoundNote(f: 621.4, d: 0.033),
+      SoundNote(f: 828.6, d: 0.033),
+      SoundNote(f: 621.4, d: 0.033),
+      SoundNote(f: 828.6, d: 0.033),
+      SoundNote(f: 1045.4, d: 0.033),
+      SoundNote(f: 1242.9, d: 0.033),
+      SoundNote(f: 1645.0, d: 0.033),
+      SoundNote(f: 1242.9, d: 0.033),
+      SoundNote(f: 466.1, d: 0.033),
+      SoundNote(f: 585.7, d: 0.033),
+      SoundNote(f: 694.8, d: 0.033),
+      SoundNote(f: 932.2, d: 0.033),
+      SoundNote(f: 694.8, d: 0.033),
+      SoundNote(f: 932.2, d: 0.033),
+      SoundNote(f: 1165.2, d: 0.033),
+      SoundNote(f: 1381.0, d: 0.033),
+      SoundNote(f: 1864.3, d: 0.033),
       SoundNote(f: 1381.0, d: 0.15),
     ],
   ),

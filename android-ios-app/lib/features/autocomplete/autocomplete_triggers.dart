@@ -41,7 +41,8 @@ final RegExp _channelRe = RegExp(r'(?:^|\s)#([^\s]*)$');
 final RegExp _kaomojiRe = RegExp(r'(?:^|\s)\\([a-z]*)$', caseSensitive: false);
 // Emoji shortcode run after a colon (`/(?:^|\s):([a-z0-9_+-]*)$/i`). Only
 // evaluated when none of the above match (the PWA's `else` branch).
-final RegExp _emojiRe = RegExp(r'(?:^|\s):([a-z0-9_+\-]*)$', caseSensitive: false);
+final RegExp _emojiRe =
+    RegExp(r'(?:^|\s):([a-z0-9_+\-]*)$', caseSensitive: false);
 
 /// Detects the active trigger for [text] at caret [caret] (defaults to end).
 ///
@@ -56,9 +57,8 @@ final RegExp _emojiRe = RegExp(r'(?:^|\s):([a-z0-9_+\-]*)$', caseSensitive: fals
 /// stay live past a space, matching the PWA's line-level `value.startsWith('?')`
 /// (commands.js:436-468, `showBotCommandPalette` with `inBotPM`).
 TriggerMatch detectTrigger(String text, {int? caret, bool botPM = false}) {
-  final c = (caret == null || caret < 0 || caret > text.length)
-      ? text.length
-      : caret;
+  final c =
+      (caret == null || caret < 0 || caret > text.length) ? text.length : caret;
   final before = text.substring(0, c);
 
   // Command palette: input begins with '/' and has no space yet OR is still on

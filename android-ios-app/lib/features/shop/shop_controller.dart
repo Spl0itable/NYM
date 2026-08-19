@@ -21,7 +21,8 @@ import 'shop_models.dart';
 /// nostr controller's [Identity]); kept out of [ShopController]'s constructor so
 /// the controller stays free of a nostr_controller dependency.
 class ShopIdentity {
-  const ShopIdentity({required this.pubkey, required this.privkey, this.signer});
+  const ShopIdentity(
+      {required this.pubkey, required this.privkey, this.signer});
 
   /// 64-hex identity public key.
   final String pubkey;
@@ -146,7 +147,8 @@ class ShopController extends StateNotifier<ShopState> {
     active = active.copyWith(
       style: styleKey != null && styleKey.isNotEmpty ? styleKey : null,
       clearStyle: styleKey == null || styleKey.isEmpty,
-      flair: flairKey != null && flairKey.isNotEmpty ? [flairKey] : active.flair,
+      flair:
+          flairKey != null && flairKey.isNotEmpty ? [flairKey] : active.flair,
     );
     state = ShopState(owned: owned, active: active);
   }
@@ -230,7 +232,8 @@ class ShopController extends StateNotifier<ShopState> {
   /// `activateFlair`, :588-628 — every branch calls `displaySystemMessage`).
   void _announceToggle(String itemId, {required bool deactivated}) {
     final name = ShopCatalog.byId(itemId)?.name ?? itemId;
-    onSystemMessage?.call(deactivated ? 'Deactivated $name' : 'Activated $name');
+    onSystemMessage
+        ?.call(deactivated ? 'Deactivated $name' : 'Activated $name');
   }
 
   /// Toggle a message style. Only one is active at a time (`activateMessageStyle`).
@@ -581,7 +584,8 @@ class ShopController extends StateNotifier<ShopState> {
     if (ownedJson is Map) {
       final next = <String, OwnedItem>{};
       ownedJson.forEach((id, info) {
-        final m = info is Map ? info.cast<String, dynamic>() : <String, dynamic>{};
+        final m =
+            info is Map ? info.cast<String, dynamic>() : <String, dynamic>{};
         next[id.toString()] = OwnedItem(
           itemId: id.toString(),
           // Server `at` is ms epoch; OwnedItem stores ms (toJson writes `at`).
@@ -1009,7 +1013,8 @@ final shopControllerProvider =
 /// The state is a `Map<pubkey, ShopStatusActive>` (`otherUsersShopItems`,
 /// shop.js:268). Persisted across sessions in [StorageKeys] so cosmetics show
 /// immediately on the next launch (`nym_shop_active_cache`, shop.js:290).
-class OtherUsersShopController extends StateNotifier<Map<String, ShopStatusActive>> {
+class OtherUsersShopController
+    extends StateNotifier<Map<String, ShopStatusActive>> {
   OtherUsersShopController(this._kv, {ApiClient? api})
       : _api = api ?? ApiClient(),
         super(const {}) {
@@ -1156,7 +1161,8 @@ class OtherUsersShopController extends StateNotifier<Map<String, ShopStatusActiv
         final items = entry['items'];
         if (items is! Map) return;
         final key = pk.toString().toLowerCase();
-        restored[key] = ShopStatusActive.fromJson(items.cast<String, dynamic>());
+        restored[key] =
+            ShopStatusActive.fromJson(items.cast<String, dynamic>());
         _updatedAt[key] = (entry['updatedAt'] as num?)?.toInt() ?? 0;
       });
       if (restored.isNotEmpty) state = restored;

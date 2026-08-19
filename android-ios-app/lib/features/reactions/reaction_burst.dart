@@ -252,7 +252,11 @@ class _BurstWidgetState extends State<_BurstWidget>
               decoration: const BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [Color(0xFFFFD86B), Color(0xFFFF7B1F), Color(0x00FF7B1F)],
+                  colors: [
+                    Color(0xFFFFD86B),
+                    Color(0xFFFF7B1F),
+                    Color(0x00FF7B1F)
+                  ],
                   stops: [0.0, 0.7, 1.0],
                 ),
               ),

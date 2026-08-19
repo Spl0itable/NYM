@@ -28,7 +28,8 @@ NostrEvent _chanMsg(String sender, String channel, int createdAt) => NostrEvent(
 /// only ever writes one `state.messages[key]`), independent of the exact key.
 List<int> _channelTimestamps(AppStateNotifier n) {
   final lists = n.state.messages.values.where((l) => l.isNotEmpty).toList();
-  expect(lists.length, 1, reason: 'expected exactly one populated channel list');
+  expect(lists.length, 1,
+      reason: 'expected exactly one populated channel list');
   return [for (final m in lists.single) m.createdAt];
 }
 

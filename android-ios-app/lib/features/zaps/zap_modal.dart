@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../widgets/common/keyboard_inset_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -156,9 +157,8 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       final params = await Lnurl.fetchPayParams(widget.lightningAddress);
       var comment = _commentController.text.trim();
       if (comment.isEmpty) {
-        comment = widget.messageId != null
-            ? 'Zap for your message'
-            : 'Profile zap';
+        comment =
+            widget.messageId != null ? 'Zap for your message' : 'Profile zap';
       }
       // Build (and sign) the NIP-57 zap request only when the provider supports
       // it; buildZapRequest returns null when there is no live signer.
@@ -318,7 +318,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
+    return KeyboardInsetDialog(
       child: Container(
         constraints: const BoxConstraints(maxWidth: 400),
         width: MediaQuery.of(context).size.width * 0.9,
@@ -361,24 +361,24 @@ class _ZapModalState extends ConsumerState<ZapModal> {
                   children: [
                     _header(c),
                     const SizedBox(height: 24), // `.modal-header` margin-bottom
-                // `#zapRecipientInfo` (`.nm-h-75`) — centered, body-size, mb20.
-                Text(
-                  widget.messageId != null
-                      ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
-                      : tr("Zapping @{nym}'s profile",
-                          {'nym': widget.recipientNym}),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: c.textDim, fontSize: 15),
-                ),
-                const SizedBox(height: 20),
-                if (_phase == _Phase.amount) ..._amountSection(c),
-                if (_phase == _Phase.generating) _status(c, checking: true),
-                if (_phase == _Phase.error) _status(c),
-                if (_phase == _Phase.invoice) ..._invoiceSection(c),
-                if (_phase == _Phase.invoice && _statusText.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _status(c, checking: _checkingManual),
-                ],
+                    // `#zapRecipientInfo` (`.nm-h-75`) — centered, body-size, mb20.
+                    Text(
+                      widget.messageId != null
+                          ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
+                          : tr("Zapping @{nym}'s profile",
+                              {'nym': widget.recipientNym}),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: c.textDim, fontSize: 15),
+                    ),
+                    const SizedBox(height: 20),
+                    if (_phase == _Phase.amount) ..._amountSection(c),
+                    if (_phase == _Phase.generating) _status(c, checking: true),
+                    if (_phase == _Phase.error) _status(c),
+                    if (_phase == _Phase.invoice) ..._invoiceSection(c),
+                    if (_phase == _Phase.invoice && _statusText.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _status(c, checking: _checkingManual),
+                    ],
                     if (_phase == _Phase.paid) _paidSection(c),
                     const SizedBox(height: 20),
                     _actions(c),
@@ -503,9 +503,8 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           // `.zap-amount-btn` resting border = `--glass-border`; selected →
           // lightning/0.5.
           border: Border.all(
-            color: selected
-                ? c.lightning.withValues(alpha: 0.5)
-                : c.glassBorder,
+            color:
+                selected ? c.lightning.withValues(alpha: 0.5) : c.glassBorder,
           ),
           borderRadius: NymRadius.rsm,
           // `.zap-amount-btn.selected` → soft lightning glow.
@@ -575,7 +574,8 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           decoration: BoxDecoration(
             color: Colors.white,
             // `.zap-invoice-qr` — 2px lightning/0.3 border.
-            border: Border.all(color: c.lightning.withValues(alpha: 0.3), width: 2),
+            border:
+                Border.all(color: c.lightning.withValues(alpha: 0.3), width: 2),
             borderRadius: NymRadius.rsm,
           ),
           child: QrImageView(
@@ -663,7 +663,8 @@ class _ZapModalState extends ConsumerState<ZapModal> {
             SizedBox(
               width: 15,
               height: 15,
-              child: CircularProgressIndicator(strokeWidth: 2, color: c.primary),
+              child:
+                  CircularProgressIndicator(strokeWidth: 2, color: c.primary),
             ),
             const SizedBox(width: 8),
           ],

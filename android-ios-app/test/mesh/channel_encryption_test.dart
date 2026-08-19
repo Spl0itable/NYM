@@ -5,13 +5,15 @@ import 'package:nym_bar/services/mesh/noise/channel_encryption.dart';
 
 void main() {
   group('MeshChannelEncryption', () {
-    test('same password + channel yields the same key (deterministic)', () async {
+    test('same password + channel yields the same key (deterministic)',
+        () async {
       final a = await MeshChannelEncryption.deriveKey('hunter2', '#festival');
       final b = await MeshChannelEncryption.deriveKey('hunter2', '#festival');
       expect(await a.extractBytes(), equals(await b.extractBytes()));
     });
 
-    test('channel name is the salt — different channel, different key', () async {
+    test('channel name is the salt — different channel, different key',
+        () async {
       final a = await MeshChannelEncryption.deriveKey('hunter2', '#festival');
       final b = await MeshChannelEncryption.deriveKey('hunter2', '#afterparty');
       expect(await a.extractBytes(), isNot(equals(await b.extractBytes())));

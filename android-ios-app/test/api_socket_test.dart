@@ -42,7 +42,8 @@ class _FakeRemoteSigner implements EventSigner {
   @override
   Future<String> nip44Encrypt(String peer, String plaintext) async => plaintext;
   @override
-  Future<String> nip44Decrypt(String peer, String ciphertext) async => ciphertext;
+  Future<String> nip44Decrypt(String peer, String ciphertext) async =>
+      ciphertext;
 }
 
 /// A fake `/api` WebSocket the test drives: queued auto-replies are injected in
@@ -51,7 +52,8 @@ class _FakeRemoteSigner implements EventSigner {
 class _FakeApiChannel implements WebSocketChannel {
   _FakeApiChannel(this._onSend);
 
-  final StreamController<dynamic> _inbound = StreamController<dynamic>.broadcast();
+  final StreamController<dynamic> _inbound =
+      StreamController<dynamic>.broadcast();
   final List<String> sent = [];
   late final _FakeSink _sink = _FakeSink(sent, _inbound, _onSend);
 
@@ -142,8 +144,21 @@ void main() {
           // profile-get is a public read → no AUTH; just a REQ.
           if (frame[0] == 'REQ') {
             final id = frame[1];
-            ch.inject(['ITEM', id, ['pk', {'event': {'id': 'e1'}}]]);
-            ch.inject(['END', id, {'x-has-more': '0'}]);
+            ch.inject([
+              'ITEM',
+              id,
+              [
+                'pk',
+                {
+                  'event': {'id': 'e1'}
+                }
+              ]
+            ]);
+            ch.inject([
+              'END',
+              id,
+              {'x-has-more': '0'}
+            ]);
           }
         });
         return channel;
@@ -182,7 +197,12 @@ void main() {
           if (frame[0] == 'AUTH') {
             ch.inject(['AUTH_OK']);
           } else if (frame[0] == 'REQ') {
-            ch.inject(['RES', frame[1], 200, {'owned': {}, 'active': {}}]);
+            ch.inject([
+              'RES',
+              frame[1],
+              200,
+              {'owned': {}, 'active': {}}
+            ]);
           }
         });
         return channel;
@@ -199,7 +219,8 @@ void main() {
       expect(frames.first[0], 'AUTH');
       final req = frames.firstWhere((f) => f[0] == 'REQ');
       final extra = req[3] as Map;
-      expect(extra.containsKey('auth'), isFalse, reason: 'socket is authed once');
+      expect(extra.containsKey('auth'), isFalse,
+          reason: 'socket is authed once');
       expect(extra.containsKey('pubkey'), isFalse);
       expect(extra.containsKey('action'), isFalse);
     });
@@ -245,7 +266,12 @@ void main() {
         return _makeChannel((ch, frame) {
           // Public read → no AUTH; reply with a server error frame.
           if (frame[0] == 'REQ') {
-            ch.inject(['RES', frame[1], 500, {'error': 'Internal server error'}]);
+            ch.inject([
+              'RES',
+              frame[1],
+              500,
+              {'error': 'Internal server error'}
+            ]);
           }
         });
       });
@@ -258,8 +284,8 @@ void main() {
     test('socket error frame + HTTP error → ApiException from HTTP', () async {
       // When BOTH transports fail, the caller still sees a thrown ApiException
       // (the HTTP error), so mutating callers can surface the server message.
-      final client = MockClient((req) async =>
-          http.Response(jsonEncode({'error': 'Payment not confirmed yet.'}), 402));
+      final client = MockClient((req) async => http.Response(
+          jsonEncode({'error': 'Payment not confirmed yet.'}), 402));
       final api = ApiClient(client: client);
       api.setApiSocketAuthBuilder(() async => {'kind': 27235, 'id': 'x'});
       api.activateApiSocket(factory: (url) {
@@ -267,7 +293,12 @@ void main() {
           if (frame[0] == 'AUTH') {
             ch.inject(['AUTH_OK']);
           } else if (frame[0] == 'REQ') {
-            ch.inject(['RES', frame[1], 402, {'error': 'Payment not confirmed yet.'}]);
+            ch.inject([
+              'RES',
+              frame[1],
+              402,
+              {'error': 'Payment not confirmed yet.'}
+            ]);
           }
         });
       });
@@ -321,7 +352,12 @@ void main() {
           if (frame[0] == 'AUTH') {
             ch.inject(['AUTH_OK']);
           } else if (frame[0] == 'REQ') {
-            ch.inject(['RES', frame[1], 200, {'owned': {}, 'active': {}}]);
+            ch.inject([
+              'RES',
+              frame[1],
+              200,
+              {'owned': {}, 'active': {}}
+            ]);
           }
         });
       });
@@ -349,7 +385,8 @@ void main() {
   });
 
   group('Nip98Auth.buildSigned (remote-signer-capable auth)', () {
-    test('signs kind-27235 auth via a NIP-46 remote signer with action/url tags',
+    test(
+        'signs kind-27235 auth via a NIP-46 remote signer with action/url tags',
         () async {
       Nip98Auth.clearAuthCache();
       addTearDown(Nip98Auth.clearAuthCache);

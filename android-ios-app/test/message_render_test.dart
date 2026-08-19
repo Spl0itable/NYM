@@ -103,7 +103,8 @@ void main() {
       // decoder (which throws "ImageDecoder unimplemented"). We assert on the
       // proxied URL the renderer feeds the widget — `isSvgUrl` must still see the
       // `.svg` inside the proxy `url=` query. (Avoids a real SVG fetch.)
-      final proxied = proxiedMedia('https://cdn.example/vector.svg', emoji: true);
+      final proxied =
+          proxiedMedia('https://cdn.example/vector.svg', emoji: true);
       expect(isSvgUrl(proxied), isTrue);
     });
 

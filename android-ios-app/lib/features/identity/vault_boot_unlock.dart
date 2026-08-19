@@ -93,7 +93,8 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         password = _pw.text;
         // `unlockVault`'s own guard (key-vault.js:257) — like every unlock
         // failure it surfaces through the "Unlock failed" card, not inline.
-        if (password.isEmpty) throw StateError(tr('Enter your password or PIN.'));
+        if (password.isEmpty)
+          throw StateError(tr('Enter your password or PIN.'));
       }
       // `unlockVault` derives the key, verifies the check token (throws on a
       // wrong factor) and returns the decrypted secrets. We hand them to the

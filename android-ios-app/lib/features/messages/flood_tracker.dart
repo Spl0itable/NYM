@@ -152,7 +152,8 @@ class FloodTracker {
       if (normalized.length < kContentFloodMinLen) continue;
       final hashes = contentHashes.putIfAbsent(pubkey, () => {});
       // Evict entries older than the 120 s window.
-      hashes.removeWhere((_, info) => now - info.lastSeen > kContentFloodWindowMs);
+      hashes.removeWhere(
+          (_, info) => now - info.lastSeen > kContentFloodWindowMs);
       final hash = fnv1a32(normalized);
       final info = hashes.putIfAbsent(hash, () => _ContentInfo());
       info.count++;

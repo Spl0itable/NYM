@@ -86,7 +86,8 @@ class Nip46SignerAdapter implements EventSigner {
   bool get isRemote => true;
 
   @override
-  Future<NostrEvent> sign(UnsignedEvent unsigned) => _remote.signEvent(unsigned);
+  Future<NostrEvent> sign(UnsignedEvent unsigned) =>
+      _remote.signEvent(unsigned);
 
   @override
   Future<String> nip44Encrypt(String peerPubkey, String plaintext) =>

@@ -85,6 +85,22 @@ class QuoteAction extends ComposerAction {
   final String content;
 }
 
+/// Append [text] to the composer (used by the OS share sheet: a shared link or
+/// text lands in the input of the chosen conversation for the user to review
+/// before sending).
+class InsertTextAction extends ComposerAction {
+  const InsertTextAction(this.text);
+  final String text;
+}
+
+/// Attach the local files at [paths] to the composer as if picked from the
+/// gallery (used by the OS share sheet for shared images/videos). Runs through
+/// the composer's normal upload / mesh-file pipeline.
+class ShareFilesAction extends ComposerAction {
+  const ShareFilesAction(this.paths);
+  final List<String> paths;
+}
+
 /// Holds the most-recent un-consumed composer action (or null).
 class InteractionHooks extends StateNotifier<ComposerAction?> {
   InteractionHooks() : super(null);
@@ -93,6 +109,12 @@ class InteractionHooks extends StateNotifier<ComposerAction?> {
 
   void requestQuote({required String fullNym, required String content}) =>
       state = QuoteAction(fullNym: fullNym, content: content);
+
+  /// Append shared text/URL to the composer (OS share sheet).
+  void requestInsertText(String text) => state = InsertTextAction(text);
+
+  /// Attach shared local files to the composer (OS share sheet).
+  void requestShareFiles(List<String> paths) => state = ShareFilesAction(paths);
 
   /// Clears the pending action once the composer has applied it.
   void consume() => state = null;

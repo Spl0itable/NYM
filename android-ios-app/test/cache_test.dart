@@ -144,8 +144,19 @@ void main() {
       final store = await _openStore();
       // [[emoji, [[reactor, value], ...]], ...]
       final entries = [
-        ['👍', [['pkA', 1], ['pkB', 1]]],
-        ['🔥', [['pkC', 1]]],
+        [
+          '👍',
+          [
+            ['pkA', 1],
+            ['pkB', 1]
+          ]
+        ],
+        [
+          '🔥',
+          [
+            ['pkC', 1]
+          ]
+        ],
       ];
       await store.saveReactions('msg1', entries);
       final all = await store.loadAllReactions();

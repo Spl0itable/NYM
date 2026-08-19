@@ -16,8 +16,19 @@ void main() {
     test('categories are non-empty and in the PWA order', () {
       // Order matches `allEmojis` in js/app.js:780.
       expect(kEmojiCategoryOrder, <String>[
-        'smileys', 'people', 'gestures', 'hearts', 'symbols', 'objects',
-        'clothing', 'nature', 'food', 'activities', 'travel', 'weather', 'flags',
+        'smileys',
+        'people',
+        'gestures',
+        'hearts',
+        'symbols',
+        'objects',
+        'clothing',
+        'nature',
+        'food',
+        'activities',
+        'travel',
+        'weather',
+        'flags',
       ]);
       for (final cat in kEmojiCategoryOrder) {
         expect(kEmojisByCategory[cat], isNotNull, reason: '$cat present');
@@ -84,16 +95,15 @@ void main() {
         () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
         // [shortcode, url] pairs (nym_custom_emojis).
-        'nym_custom_emojis':
-            '[["partyparrot","https://e.example/parrot.gif"],'
+        'nym_custom_emojis': '[["partyparrot","https://e.example/parrot.gif"],'
             // `smile` is a built-in unicode shortcode -> must be ignored.
             '["smile","https://e.example/should-be-ignored.gif"],'
             // invalid url scheme -> ignored.
             '["bad","ftp://nope"]]',
         'nym_custom_emoji_packs':
             '[{"pubkey":"abc","identifier":"pack1","title":"Pack One",'
-            '"created_at":100,"emojis":[{"shortcode":"blobcat",'
-            '"url":"https://e.example/blob.gif"}]}]',
+                '"created_at":100,"emojis":[{"shortcode":"blobcat",'
+                '"url":"https://e.example/blob.gif"}]}]',
       });
       final prefs = await SharedPreferences.getInstance();
       final state = loadCustomEmojiState(prefs);

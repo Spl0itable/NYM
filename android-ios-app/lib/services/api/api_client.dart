@@ -22,8 +22,7 @@ typedef ApiSocketFactory = WebSocketChannel Function(Uri url);
 
 /// The real native `/api` socket factory: an [IOWebSocketChannel] carrying the
 /// `NymchatApp/<ver>` UA (same gate the relay sockets pass).
-WebSocketChannel defaultApiSocketFactory(Uri url) =>
-    IOWebSocketChannel.connect(
+WebSocketChannel defaultApiSocketFactory(Uri url) => IOWebSocketChannel.connect(
       url,
       headers: {'User-Agent': ApiConfig.userAgent},
     );
@@ -354,7 +353,8 @@ class ApiSocket {
         onDone: () => fail(StateError('api socket closed')),
         cancelOnError: true,
       );
-      timer = Timer(_connectTimeout, () => fail(StateError('api socket timeout')));
+      timer =
+          Timer(_connectTimeout, () => fail(StateError('api socket timeout')));
 
       if (needAuth) {
         final sent = _send(['AUTH', authEvent]);
@@ -421,7 +421,8 @@ class ApiSocket {
     if (p == null) return;
     if (t == 'RES') {
       _pending.remove(id);
-      final status = (msg.length > 2 && msg[2] is num) ? (msg[2] as num).toInt() : 200;
+      final status =
+          (msg.length > 2 && msg[2] is num) ? (msg[2] as num).toInt() : 200;
       final data = (msg.length > 3 && msg[3] is Map)
           ? (msg[3] as Map).cast<String, dynamic>()
           : <String, dynamic>{};
@@ -442,7 +443,8 @@ class ApiSocket {
     } else if (t == 'END') {
       _pending.remove(id);
       final hdrs = (msg.length > 3 && msg[3] is Map) ? msg[3] as Map : const {};
-      final hasMore = '${hdrs['x-has-more'] ?? hdrs['X-Has-More'] ?? ''}' == '1';
+      final hasMore =
+          '${hdrs['x-has-more'] ?? hdrs['X-Has-More'] ?? ''}' == '1';
       p.complete(ApiSocketResult(
           status: 200, data: const {}, items: p.items, hasMore: hasMore));
     }
@@ -809,7 +811,8 @@ class ApiClient {
   String geoRelaysUrl() => '$_baseUrl?action=geo-relays';
 
   /// `GET /api/proxy?action=geocode&lat&lng&zoom&lang` (relays.js:3210).
-  String geocodeUrl(double lat, double lng, {int zoom = 10, String lang = 'en'}) =>
+  String geocodeUrl(double lat, double lng,
+          {int zoom = 10, String lang = 'en'}) =>
       '$_baseUrl?action=geocode&lat=$lat&lng=$lng&zoom=$zoom&lang=$lang';
 
   /// `GET /api/proxy?action=giphy&q=<q>&api_key=<key>` (relays.js:3221).
@@ -925,7 +928,8 @@ class ApiClient {
     String target, {
     String source = 'auto',
   }) async {
-    final payload = jsonEncode({'text': text, 'source': source, 'target': target});
+    final payload =
+        jsonEncode({'text': text, 'source': source, 'target': target});
     final res = await _client.post(
       Uri.parse('$_baseUrl?action=translate'),
       headers: _headers({'Content-Type': 'application/json'}),
@@ -1048,7 +1052,8 @@ class ApiClient {
   Future<List<GeoRelay>> geoRelays() async {
     final u = geoRelaysUrl();
     final res = await _client.get(Uri.parse(u), headers: _headers());
-    _trackApiData('geo-relays', sent: _bodyLen(u), recv: _bodyLen(res.bodyBytes));
+    _trackApiData('geo-relays',
+        sent: _bodyLen(u), recv: _bodyLen(res.bodyBytes));
     if (res.statusCode != 200) return const [];
     final data = jsonDecode(_utf8Body(res));
     if (data is! Map || data['relays'] is! List) return const [];

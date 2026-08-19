@@ -26,7 +26,8 @@ void main() {
     });
   });
 
-  group('isSpamMessage — known-spam strings (fire even when aggressive off)', () {
+  group('isSpamMessage — known-spam strings (fire even when aggressive off)',
+      () {
     test('"joined the channel via bitchat.land" is always spam', () {
       expect(SpamFilter.isSpamMessage('joined the channel via bitchat.land'),
           isTrue);
@@ -58,7 +59,8 @@ void main() {
 
   group('isSpamMessage — early-return guards (NOT spam)', () {
     test('a URL is never spam', () {
-      expect(SpamFilter.isSpamMessage('check https://example.com/foo'), isFalse);
+      expect(
+          SpamFilter.isSpamMessage('check https://example.com/foo'), isFalse);
       expect(SpamFilter.isSpamMessage('www.example.com'), isFalse);
     });
 
@@ -213,8 +215,7 @@ void main() {
     });
 
     test('a random single token scores at or above the threshold', () {
-      expect(SpamFilter.spamScore('Xq7zkwjpQmbvxz'),
-          greaterThanOrEqualTo(3));
+      expect(SpamFilter.spamScore('Xq7zkwjpQmbvxz'), greaterThanOrEqualTo(3));
     });
 
     test('repeated identical tokens add the repeat-spam weight', () {
@@ -225,7 +226,7 @@ void main() {
     test('zero-width characters are stripped before scoring', () {
       // Embedding a zero-width space inside a random token must not let it
       // dodge the single-token analysis (the token is reassembled after strip).
-        const zwsp = '\u200B'; // ZERO WIDTH SPACE
+      const zwsp = '\u200B'; // ZERO WIDTH SPACE
       expect(
         SpamFilter.spamScore('Xq7zk${zwsp}wjpQmbvxz'),
         greaterThanOrEqualTo(3),

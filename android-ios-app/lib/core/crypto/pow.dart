@@ -122,9 +122,8 @@ List<List<String>> _powGrind(Map<String, Object?> args) {
   final kind = args['kind'] as int;
   final content = args['content'] as String;
   final difficulty = args['difficulty'] as int;
-  final base = (args['tags'] as List)
-      .map((t) => (t as List).cast<String>())
-      .toList();
+  final base =
+      (args['tags'] as List).map((t) => (t as List).cast<String>()).toList();
   final tags = <List<String>>[
     for (final t in base)
       if (t.isEmpty || t[0] != 'nonce') List<String>.from(t),

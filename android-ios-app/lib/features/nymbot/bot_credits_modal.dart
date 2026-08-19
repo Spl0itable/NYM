@@ -87,7 +87,14 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   /// Preset purchase tiers (PWA `_botCreditTiers` / `_botProCreditPresets`,
   /// zaps.js:349-352).
   static const List<int> _standardPresets = [100, 500, 1000, 2500, 5000, 10000];
-  static const List<int> _proPresets = [2000, 5000, 10000, 20000, 50000, 100000];
+  static const List<int> _proPresets = [
+    2000,
+    5000,
+    10000,
+    20000,
+    50000,
+    100000
+  ];
 
   @override
   void initState() {
@@ -140,11 +147,11 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
     return _selectedPreset;
   }
 
-  String _satLabel(int sats) =>
-      sats >= 1000 ? '${(sats / 1000).toStringAsFixed(sats % 1000 == 0 ? 0 : 1)}K' : '$sats';
+  String _satLabel(int sats) => sats >= 1000
+      ? '${(sats / 1000).toStringAsFixed(sats % 1000 == 0 ? 0 : 1)}K'
+      : '$sats';
 
-  String get _creditWord =>
-      _tier == CreditTier.pro ? tr('Pro') : tr('credits');
+  String get _creditWord => _tier == CreditTier.pro ? tr('Pro') : tr('credits');
 
   @override
   Widget build(BuildContext context) {
@@ -174,8 +181,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                   padding: const EdgeInsets.only(bottom: 14),
                   margin: const EdgeInsets.only(bottom: 20),
                   decoration: BoxDecoration(
-                    border:
-                        Border(bottom: BorderSide(color: c.glassBorder)),
+                    border: Border(bottom: BorderSide(color: c.glassBorder)),
                   ),
                   child: Text(
                     tr('SEND LIGHTNING ZAP'),
@@ -200,54 +206,58 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                 ),
                 const SizedBox(height: 14),
                 if (_invoice == null) ...[
-              _tierToggle(c),
-              const SizedBox(height: 12),
-              _amountGrid(c),
-              const SizedBox(height: 12),
-              _customRow(c),
-              const SizedBox(height: 10),
-              _estimate(c),
-              _pricingNote(c),
-              if (_error != null) ...[
-                const SizedBox(height: 8),
-                Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
-              ],
-              const SizedBox(height: 14),
-              // `.send-btn` chrome (styles-chat.css:1920-1943): translucent
-              // primary/0.1 pill, primary/0.3 border, h42, 12px UPPERCASE
-              // ls1.5 w600 primary label, disabled opacity 0.35. While
-              // generating, the PWA pairs the 15px `.loader` with
-              // "Generating invoice..." (zaps.js:588-590).
-              ModalChrome.sendButton(
-                c,
-                widget.isGift
-                    ? tr('Generate gift invoice')
-                    : tr('Pay with Lightning'),
-                (_loading || _amountSats == null) ? null : _generate,
-                fullWidth: true,
-                child: _loading
-                    ? Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _loader(c),
-                          const SizedBox(width: 8),
-                          Text(
-                            tr('GENERATING INVOICE…'),
-                            style: TextStyle(
-                              color: c.primary,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 1.5,
-                            ),
-                          ),
-                        ],
-                      )
-                    : null,
-              ),
+                  _tierToggle(c),
+                  const SizedBox(height: 12),
+                  _amountGrid(c),
+                  const SizedBox(height: 12),
+                  _customRow(c),
+                  const SizedBox(height: 10),
+                  _estimate(c),
+                  _pricingNote(c),
+                  if (_error != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_error!,
+                        style: TextStyle(color: c.danger, fontSize: 12)),
+                  ],
+                  const SizedBox(height: 14),
+                  // `.send-btn` chrome (styles-chat.css:1920-1943): translucent
+                  // primary/0.1 pill, primary/0.3 border, h42, 12px UPPERCASE
+                  // ls1.5 w600 primary label, disabled opacity 0.35. While
+                  // generating, the PWA pairs the 15px `.loader` with
+                  // "Generating invoice..." (zaps.js:588-590).
+                  ModalChrome.sendButton(
+                    c,
+                    widget.isGift
+                        ? tr('Generate gift invoice')
+                        : tr('Pay with Lightning'),
+                    (_loading || _amountSats == null) ? null : _generate,
+                    fullWidth: true,
+                    child: _loading
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _loader(c),
+                              const SizedBox(width: 8),
+                              Text(
+                                tr('GENERATING INVOICE…'),
+                                style: TextStyle(
+                                  color: c.primary,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 1.5,
+                                ),
+                              ),
+                            ],
+                          )
+                        : null,
+                  ),
                 ] else
-                  _InvoiceView(invoice: _invoice!, colors: c, onBack: () {
-                    setState(() => _invoice = null);
-                  }),
+                  _InvoiceView(
+                      invoice: _invoice!,
+                      colors: c,
+                      onBack: () {
+                        setState(() => _invoice = null);
+                      }),
               ],
             ),
           ),
@@ -326,8 +336,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
       crossAxisSpacing: 8,
       childAspectRatio: 1.5,
       children: [
-        for (final sats in _presets)
-          _amountBtn(c, sats),
+        for (final sats in _presets) _amountBtn(c, sats),
       ],
     );
   }
@@ -351,7 +360,11 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
             color: selected ? c.lightning.withValues(alpha: 0.5) : c.border,
           ),
           boxShadow: selected
-              ? [BoxShadow(color: c.lightning.withValues(alpha: 0.15), blurRadius: 15)]
+              ? [
+                  BoxShadow(
+                      color: c.lightning.withValues(alpha: 0.15),
+                      blurRadius: 15)
+                ]
               : null,
         ),
         child: Column(
@@ -416,7 +429,8 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
         : tr('≈ {n} {tier} credits', {'n': credits, 'tier': tierWord});
     return Text(
       text,
-      style: TextStyle(color: c.text, fontSize: 13, fontWeight: FontWeight.w600),
+      style:
+          TextStyle(color: c.text, fontSize: 13, fontWeight: FontWeight.w600),
     );
   }
 
@@ -442,7 +456,8 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
             Padding(
               padding: const EdgeInsets.only(bottom: 2),
               child: Text(l,
-                  style: TextStyle(color: c.textDim, fontSize: 11, height: 1.35)),
+                  style:
+                      TextStyle(color: c.textDim, fontSize: 11, height: 1.35)),
             ),
         ],
       ),
@@ -701,8 +716,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
               child: _iconBtn(
                 c,
                 tr('Copy Invoice'),
-                () =>
-                    Clipboard.setData(ClipboardData(text: widget.invoice.pr)),
+                () => Clipboard.setData(ClipboardData(text: widget.invoice.pr)),
               ),
             ),
             const SizedBox(width: 10),
@@ -732,8 +746,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
               Flexible(
                 child: Text(_status,
                     textAlign: TextAlign.center,
-                    style:
-                        TextStyle(color: _checking ? c.warning : c.text)),
+                    style: TextStyle(color: _checking ? c.warning : c.text)),
               ),
             ],
           ),

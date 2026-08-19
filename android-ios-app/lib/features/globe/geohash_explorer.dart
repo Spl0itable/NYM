@@ -33,8 +33,7 @@ const String kAdmin1Asset =
     'assets/data/ne_50m_admin_1_states_provinces_lakes.json';
 
 /// Path to the bundled populated-places (cities) GeoJSON (F4).
-const String kCitiesAsset =
-    'assets/data/ne_50m_populated_places_simple.json';
+const String kCitiesAsset = 'assets/data/ne_50m_populated_places_simple.json';
 
 /// Zoom at/above which the admin-1 + city detail layers are lazy-loaded
 /// (geohash-globe.js:10-11: ADMIN1_ZOOM_THRESHOLD / CITY_ZOOM_THRESHOLD).
@@ -324,8 +323,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   /// PWA would show it: `settings.sortByProximity && userLocation` (matches
   /// `showYourLocation` in geohash-globe.js:236).
   ({double lat, double lng})? _userLocation() {
-    final sortByProximity =
-        ref.read(settingsProvider).sortByProximity;
+    final sortByProximity = ref.read(settingsProvider).sortByProximity;
     final loc = ref.read(userLocationProvider);
     if (!sortByProximity || loc == null) return null;
     return (lat: loc.lat, lng: loc.lng);
@@ -763,14 +761,14 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       child: Row(
         children: [
           _controlBtn('+',
-              onTap: () =>
-                  _setView(_view.zoomedAt(1.6, size.center(Offset.zero), size),
-                      size),
+              onTap: () => _setView(
+                  _view.zoomedAt(1.6, size.center(Offset.zero), size), size),
               width: 34),
           const SizedBox(width: 10),
           _controlBtn('−',
               onTap: () => _setView(
-                  _view.zoomedAt(1 / 1.6, size.center(Offset.zero), size), size),
+                  _view.zoomedAt(1 / 1.6, size.center(Offset.zero), size),
+                  size),
               width: 34),
           const SizedBox(width: 10),
           _controlBtn(tr('Reset View'), onTap: () => _resetView(size)),
@@ -787,26 +785,20 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       left: inset,
       child: Row(
         children: [
-          _controlBtn(tr('Heat'),
-              active: _heatmap,
-              onTap: () {
-                setState(() => _heatmap = !_heatmap);
-                _savePrefs();
-              }),
+          _controlBtn(tr('Heat'), active: _heatmap, onTap: () {
+            setState(() => _heatmap = !_heatmap);
+            _savePrefs();
+          }),
           const SizedBox(width: 10),
-          _controlBtn(tr('Day / Night'),
-              active: _daynight,
-              onTap: () {
-                setState(() => _daynight = !_daynight);
-                _savePrefs();
-              }),
+          _controlBtn(tr('Day / Night'), active: _daynight, onTap: () {
+            setState(() => _daynight = !_daynight);
+            _savePrefs();
+          }),
           const SizedBox(width: 10),
-          _controlBtn(tr('Geohash'),
-              active: _grid,
-              onTap: () {
-                setState(() => _grid = !_grid);
-                _savePrefs();
-              }),
+          _controlBtn(tr('Geohash'), active: _grid, onTap: () {
+            setState(() => _grid = !_grid);
+            _savePrefs();
+          }),
         ],
       ),
     );
@@ -848,7 +840,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
             if (showYourLocation) ...[
               const SizedBox(height: 5),
               _legendRow(
-                dotColor: nym.warning, // `.nm-geo-2 { background: var(--warning); }`
+                dotColor:
+                    nym.warning, // `.nm-geo-2 { background: var(--warning); }`
                 label: tr('Your Location'),
                 fontSize: fontSize,
               ),
@@ -875,9 +868,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           decoration: BoxDecoration(
             color: dotColor,
             shape: BoxShape.circle,
-            boxShadow: glow == null
-                ? null
-                : [BoxShadow(color: glow, blurRadius: 5)],
+            boxShadow:
+                glow == null ? null : [BoxShadow(color: glow, blurRadius: 5)],
           ),
         ),
         const SizedBox(width: 8),
@@ -981,8 +973,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     // PWA rows (channels.js:361-372): Coordinates (decimal, 4dp), Location
     // (reverse-geocoded, "Loading location..." until resolved), Distance (only
     // when a user location is known), Messages. No Status row.
-    final coords =
-        '${ch.lat.toStringAsFixed(4)}, ${ch.lng.toStringAsFixed(4)}';
+    final coords = '${ch.lat.toStringAsFixed(4)}, ${ch.lng.toStringAsFixed(4)}';
     final user = _userLocation();
     final distance = user == null
         ? null

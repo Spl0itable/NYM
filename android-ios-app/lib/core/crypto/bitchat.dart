@@ -27,8 +27,7 @@ Uint8List _hmacSha256(Uint8List key, Uint8List data) {
   return mac.process(data);
 }
 
-Uint8List _hkdfExtract(Uint8List salt, Uint8List ikm) =>
-    _hmacSha256(salt, ikm);
+Uint8List _hkdfExtract(Uint8List salt, Uint8List ikm) => _hmacSha256(salt, ikm);
 
 Uint8List _hkdfExpand(Uint8List prk, Uint8List info, int length) {
   const hashLen = 32;
@@ -74,7 +73,11 @@ Uint8List _deriveKey(Uint8List sharedPoint) {
 }
 
 String _b64UrlNoPad(Uint8List bytes) {
-  return base64.encode(bytes).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  return base64
+      .encode(bytes)
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replaceAll('=', '');
 }
 
 Uint8List _b64UrlDecode(String s) {
@@ -260,10 +263,10 @@ String? _tryUtf8(Uint8List bytes, int start, int end) {
   }
 }
 
-bool _looksLikeUuid(String s) => RegExp(
-        r'^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$',
-        caseSensitive: false)
-    .hasMatch(s);
+bool _looksLikeUuid(String s) =>
+    RegExp(r'^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$',
+            caseSensitive: false)
+        .hasMatch(s);
 
 /// Encodes [content] as a bitchat `bitchat1:` PRIVATE_MESSAGE packet — the
 /// inverse of [decodeBitchatPacket] and a 1:1 port of the PWA's

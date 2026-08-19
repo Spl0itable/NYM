@@ -153,8 +153,7 @@ GroupInviteToken? parseGroupInvite(String tokenOrInput) {
     if (obj is! Map) return null;
     if (obj['v'] != 1) return null;
     final g = (obj['g'] ?? '').toString();
-    if (!RegExp(
-            r'^([0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$',
+    if (!RegExp(r'^([0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$',
             caseSensitive: false)
         .hasMatch(g)) {
       return null;
@@ -210,7 +209,8 @@ NymLink? parseNymLink(String url) {
   // 2) Channel-ref chip `#<e|g|c>:<id>` (message-format.js formatter +
   //    handleChannelLink). `handleChannelLink` strips only the legacy `g:`
   //    prefix before sanitizing; `e:`/`c:` ids fall through as channel names.
-  final ref = RegExp(r'^([egc]):(.+)$', caseSensitive: false).firstMatch(fragment);
+  final ref =
+      RegExp(r'^([egc]):(.+)$', caseSensitive: false).firstMatch(fragment);
   if (ref != null) {
     final prefix = ref.group(1)!.toLowerCase();
     // The fragment regex already split the `<prefix>:` off; the id after it is

@@ -1,7 +1,7 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 1.0.1+191
+version: 1.0.1+204
 
 environment:
   sdk: ^3.6.0
@@ -30,7 +30,7 @@ dependencies:
 
   # Storage
   shared_preferences: ^2.3.2
-  sqflite: ^2.3.3
+  sqflite_sqlcipher: ^3.1.0
   path_provider: ^2.0.0
   path: ^1.9.0
   flutter_secure_storage: ^9.2.2
@@ -43,6 +43,8 @@ dependencies:
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
   share_plus: ^10.0.2
+  # Receive content shared INTO the app from other apps' share sheets.
+  receive_sharing_intent: ^1.8.1
   url_launcher: any
   # Inline video playback for video messages / galleries (PWA <video>).
   video_player: ^2.9.1

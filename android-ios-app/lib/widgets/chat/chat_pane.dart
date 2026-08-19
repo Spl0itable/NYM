@@ -13,6 +13,7 @@ import '../../features/emoji/emoji_prefetch.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/notifications/notifications_panel.dart';
 import '../../features/nymbot/bot_chat_screen.dart' show BotChatScreen;
+import '../../features/channels/geohash_place_cache.dart';
 import '../../features/nymbot/nymbot_providers.dart'
     show BotChatState, botChatControllerProvider;
 import '../../features/onboarding/tutorial_overlay.dart';
@@ -25,7 +26,6 @@ import '../../features/shop/shop_modal.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
 import '../../models/user.dart';
-import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
@@ -225,16 +225,20 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   int _index = -1;
   bool _navigating = false;
 
-  // Per-geohash reverse-geocoded place-name cache feeding `.channel-location`
-  // (mirrors `_geohashPlaceCache`, channels.js:1058/1070). Keyed by lowercased
-  // geohash → resolved "city, country" (or "Unknown location"). A monotonic
-  // token (mirrors `_geocodeToken`, geohash_explorer.dart:382) guards against a
-  // stale response overwriting the cache after the active view has changed.
-  final ApiClient _api = ApiClient();
-  final Map<String, String> _placeCache = {};
-  // Geohashes with a resolve already in flight, so the build path doesn't fire
-  // a duplicate request every rebuild.
-  final Set<String> _placePending = {};
+  // Reverse-geocoded place names come from the shared [GeohashPlaceCache], not
+  // a Map on this State. That cache persists, is rate-limited to Nominatim's
+  // 1 req/s, and is the SAME instance the sidebar rows read — so opening a
+  // channel whose row already resolved its place costs no request, and neither
+  // survives-nothing-on-relaunch nor a duplicate lookup per surface applies any
+  // more.
+  //
+  // Geohashes whose lookup FAILED are tracked here so the header falls back to
+  // the coordinate label rather than sitting on "Loading location..." forever
+  // (the PWA's catch branch, channels.js:1029). Failures are deliberately not
+  // cached by the service, so they retry on a later visit.
+  final Set<String> _placeFailed = {};
+  // Monotonic token (mirrors `_geocodeToken`, geohash_explorer.dart:382) so a
+  // late response can't force a redundant rebuild after the view moved on.
   int _geocodeToken = 0;
 
   bool get _canBack => _index > 0;
@@ -836,10 +840,12 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
         // geocode is in flight, and the coordinate label (`getGeohashLocation`)
         // only as the catch fallback. Kick off resolution for this geohash.
         final ghKey = gh.toLowerCase();
-        final cached = _placeCache[ghKey];
+        final cached = ref.read(geohashPlaceCacheProvider).cached(ghKey);
         final String place;
         if (cached != null) {
           place = cached;
+        } else if (_placeFailed.contains(ghKey)) {
+          place = geohashLocationLabel(ghKey);
         } else {
           _resolvePlaceName(ghKey);
           // Three-dot literal, as the PWA writes it (channels.js:1006).
@@ -882,44 +888,23 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     }
   }
 
-  /// Reverse-geocodes a geohash → "city, country" and caches it under [ghKey]
-  /// (lowercased geohash), mirroring `_resolveGeohashPlaceName`
-  /// (channels.js:1058) + the explorer's `_fetchLocation`
-  /// (geohash_explorer.dart:393-413). De-duped via [_placePending] so each
-  /// geohash resolves once; a monotonic [_geocodeToken] (mirrors
-  /// geohash_explorer.dart:382) keyed on the resolve order guards the rebuild so
-  /// a stale response never forces a redundant setState after the view moved on.
-  Future<void> _resolvePlaceName(String ghKey) async {
-    if (_placeCache.containsKey(ghKey) || _placePending.contains(ghKey)) return;
+  /// Kicks off a reverse geocode for [ghKey] through the shared, persistent
+  /// [GeohashPlaceCache] and rebuilds when it lands.
+  ///
+  /// The service owns de-duplication (concurrent callers for one geohash share
+  /// a single request, including this header and its sidebar row), the >=1.1s
+  /// spacing Nominatim requires, and persistence. All this adds is the rebuild
+  /// and the failed-lookup fallback.
+  void _resolvePlaceName(String ghKey) {
     if (!isValidGeohash(ghKey)) return;
-    _placePending.add(ghKey);
+    final cache = ref.read(geohashPlaceCacheProvider);
+    if (cache.cached(ghKey) != null) return;
     final token = ++_geocodeToken;
-    String result;
-    try {
-      final coords = decodeGeohash(ghKey);
-      final data = await _api.geocode(coords.lat, coords.lng, zoom: 10);
-      final addr = (data['address'] as Map?) ?? const {};
-      String s(Object? v) => v is String ? v : '';
-      final city = [
-        s(addr['city']),
-        s(addr['town']),
-        s(addr['village']),
-        s(addr['county']),
-      ].firstWhere((x) => x.isNotEmpty, orElse: () => '');
-      final country = s(addr['country']);
-      result = [city, country].where((x) => x.isNotEmpty).join(', ');
-      if (result.isEmpty) result = tr('Unknown location');
-    } catch (_) {
-      // Catch fallback: the PWA drops to the raw coordinate label on geocode
-      // failure (channels.js:1029).
-      result = geohashLocationLabel(ghKey);
-    }
-    _placePending.remove(ghKey);
-    // The result is cached by geohash (never the wrong key), so always store it;
-    // only rebuild if still mounted and this was the latest resolve requested.
-    _placeCache[ghKey] = result;
-    if (!mounted || token != _geocodeToken) return;
-    setState(() {});
+    cache.resolve(ghKey).then((place) {
+      if (place.isEmpty) _placeFailed.add(ghKey);
+      if (!mounted || token != _geocodeToken) return;
+      setState(() {});
+    });
   }
 
   /// PWA `_pmLastSeenText` (pms.js:36): bot → "Always at your service";

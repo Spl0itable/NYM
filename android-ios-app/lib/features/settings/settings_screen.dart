@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import '../../widgets/common/keyboard_inset_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -391,7 +392,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       visibleSections.add((spec: s, groups: groups));
     }
 
-    return Center(
+    return KeyboardInsetDialog(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
@@ -453,13 +454,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             //   color: text-dim; font-size: 13px;
                             //   text-align: center }`.
                             Padding(
-                              padding:
-                                  const EdgeInsets.fromLTRB(32, 18, 32, 6),
+                              padding: const EdgeInsets.fromLTRB(32, 18, 32, 6),
                               child: Text(
                                 tr('No settings match your search.'),
                                 textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: c.textDim, fontSize: 13),
+                                style:
+                                    TextStyle(color: c.textDim, fontSize: 13),
                               ),
                             ),
                           for (final s in visibleSections)
@@ -646,8 +646,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // reads the new `_statusMode`.
     if (prevShowStatus != d.showStatus) {
       final appState = ref.read(appStateProvider);
-      final awayMsg =
-          appState.users[appState.selfPubkey]?.awayMessage ?? '';
+      final awayMsg = appState.users[appState.selfPubkey]?.awayMessage ?? '';
       unawaited(ref.read(nostrControllerProvider).publishPresence(
             awayMsg.isNotEmpty ? 'away' : 'online',
             awayMessage: awayMsg,
@@ -708,7 +707,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
     }
     ctrl.setPowDifficulty(_draftPow);
-    ctrl.setBlurImages(_draftBlur, pubkey: ref.read(appStateProvider).selfPubkey);
+    ctrl.setBlurImages(_draftBlur,
+        pubkey: ref.read(appStateProvider).selfPubkey);
 
     // Cache-PMs side-effect: wipe existing decrypted PM/group cache only when
     // the value flipped on→off (PWA app.js:3853-3858), not on every save.
@@ -860,15 +860,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// `saveBlockedChannels`/`saveBlockedKeywords`). The store has no typed
   /// set-setter, so we serialize through `setString`.
   void _persistStringSet(String key, Set<String> values) {
-    ref
-        .read(keyValueStoreProvider)
-        .setString(key, jsonEncode(values.toList()));
+    ref.read(keyValueStoreProvider).setString(key, jsonEncode(values.toList()));
   }
 
   /// Persists the live blocked-keyword Set to `nym_blocked_keywords`.
   void _persistBlockedKeywords() {
-    _persistStringSet(
-        StorageKeys.blockedKeywords, ref.read(appStateProvider).blockedKeywords);
+    _persistStringSet(StorageKeys.blockedKeywords,
+        ref.read(appStateProvider).blockedKeywords);
   }
 
   /// Quick React emoji "Change" (F5): open the emoji picker; a pick commits
@@ -935,10 +933,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     required Settings Function(Settings draft) apply,
   }) {
     _mutate(apply);
-    final hasPersistedEmoji =
-        (ref.read(keyValueStoreProvider).getString(StorageKeys.swipeReactEmoji) ??
-                '')
-            .isNotEmpty;
+    final hasPersistedEmoji = (ref
+                .read(keyValueStoreProvider)
+                .getString(StorageKeys.swipeReactEmoji) ??
+            '')
+        .isNotEmpty;
     if (next == 'react' && prev != 'react' && !hasPersistedEmoji) {
       _openSwipeReactPicker(ctrl);
     }
@@ -1046,9 +1045,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ref.read(settingsProvider.notifier).reloadFromStore();
 
     if (!mounted) return;
-    _systemMessage(tr(
-        'Settings reset to defaults. Cache, group memberships, and login '
-        'preserved.'));
+    _systemMessage(
+        tr('Settings reset to defaults. Cache, group memberships, and login '
+            'preserved.'));
     Navigator.of(context).maybePop();
   }
 
@@ -1159,7 +1158,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // The custom-wallpaper thumbnail shown on the Upload tile when custom mode
     // is active (`initWallpaperUI`, app.js:4211-4227).
     final customWallpaperPath = s.wallpaperType == 'custom'
-        ? ref.read(keyValueStoreProvider).getString(StorageKeys.wallpaperCustomUrl)
+        ? ref
+            .read(keyValueStoreProvider)
+            .getString(StorageKeys.wallpaperCustomUrl)
         : null;
     return [
       // App language (static-text localization). Opens the full language
@@ -1350,7 +1351,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       // Text Size slider with live preview + reset. Live-applied/committed
       // (PWA `commitTextSize`, app.js:2182).
       _GroupSpec(
-        text: tr('Text Size Adjust the size of all text across the app '
+        text: tr(
+            'Text Size Adjust the size of all text across the app '
             '{size}px Reset',
             {'size': (_textSizePreview ?? s.textSize.toDouble()).round()}),
         child: FormGroup(
@@ -1366,7 +1368,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             },
             onReset: () {
               ctrl.setTextSize(NymTextSize.defaultSize.round());
-              _mutate((d) => d.copyWith(textSize: NymTextSize.defaultSize.round()));
+              _mutate(
+                  (d) => d.copyWith(textSize: NymTextSize.defaultSize.round()));
               setState(() => _textSizePreview = null);
             },
           ),
@@ -1499,8 +1502,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             {'options': _optText(powItems)}),
         child: FormGroup(
           label: tr('Proof of Work Difficulty'),
-          hint: tr(
-              'Enable for anti-spam to require messages have a minimum PoW'),
+          hint:
+              tr('Enable for anti-spam to require messages have a minimum PoW'),
           child: FormSelect<int>(
             value: _draftPow,
             items: powItems,
@@ -1770,13 +1773,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       _GroupSpec(
-        text: tr(
-            'Blocked Users Unblock {list}',
-            {
-              'list': app.blockedUsers.isEmpty
-                  ? tr('No blocked users')
-                  : app.blockedUsers.map(_nymLabelFor).join(' ')
-            }),
+        text: tr('Blocked Users Unblock {list}', {
+          'list': app.blockedUsers.isEmpty
+              ? tr('No blocked users')
+              : app.blockedUsers.map(_nymLabelFor).join(' ')
+        }),
         child: FormGroup(
           label: tr('Blocked Users'),
           child: _blockedProfilesLoading
@@ -1813,8 +1814,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final m = RegExp(r'^([\s\S]*?)#([0-9a-f]{4})$', caseSensitive: false)
         .firstMatch(nym);
     if (m == null) {
-      return TextSpan(
-          text: nym, style: TextStyle(color: c.text, fontSize: 13));
+      return TextSpan(text: nym, style: TextStyle(color: c.text, fontSize: 13));
     }
     return TextSpan(
       children: [
@@ -1924,8 +1924,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 (value: true, label: tr('Enabled')),
                 (value: false, label: tr('Disabled')),
               ],
-              onChanged: (v) =>
-                  _mutate((d) => d.copyWith(autoTranslatePMs: v)),
+              onChanged: (v) => _mutate((d) => d.copyWith(autoTranslatePMs: v)),
             ),
           ),
         ),
@@ -1992,8 +1991,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       // app.js:6843-6852). `s` is the draft, so toggling re-renders this.
       if (s.showTimestamps) ...[
         _GroupSpec(
-          text: tr('Time Format {options}',
-              {'options': _optText(timeFormatItems)}),
+          text: tr(
+              'Time Format {options}', {'options': _optText(timeFormatItems)}),
           child: FormGroup(
             label: tr('Time Format'),
             child: FormSelect<String>(
@@ -2010,8 +2009,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               {'options': _optText(dateFormatItems)}),
           child: FormGroup(
             label: tr('Date Format'),
-            hint: tr(
-                'Used in the full timestamp shown when tapping a message '
+            hint: tr('Used in the full timestamp shown when tapping a message '
                 'time'),
             child: FormSelect<String>(
               value: s.dateFormat,
@@ -2088,8 +2086,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               {'options': _optText(proximityItems)}),
           child: FormGroup(
             label: tr('Sort Geohash Channels by Proximity'),
-            hint: tr(
-                'Sort geohash channels by distance from your location'),
+            hint: tr('Sort geohash channels by distance from your location'),
             // Save-gated: the PWA reads `#proximitySelect` and runs the
             // geolocation permission flow inside `saveSettings`
             // (app.js:3728/3917-3950), not on-change. The grant/deny resolution
@@ -2128,13 +2125,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
         _GroupSpec(
-          text: tr(
-              'Hidden Channels Unhide {list}',
-              {
-                'list': state.hiddenChannels.isEmpty
-                    ? tr('No hidden channels')
-                    : state.hiddenChannels.map(_hiddenChannelLabel).join(' ')
-              }),
+          text: tr('Hidden Channels Unhide {list}', {
+            'list': state.hiddenChannels.isEmpty
+                ? tr('No hidden channels')
+                : state.hiddenChannels.map(_hiddenChannelLabel).join(' ')
+          }),
           child: FormGroup(
             label: tr('Hidden Channels'),
             child: _removableList(
@@ -2156,13 +2151,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
         _GroupSpec(
-          text: tr(
-              'Blocked Channels Unblock {list}',
-              {
-                'list': state.blockedChannels.isEmpty
-                    ? tr('No blocked channels')
-                    : state.blockedChannels.map(_blockedChannelLabel).join(' ')
-              }),
+          text: tr('Blocked Channels Unblock {list}', {
+            'list': state.blockedChannels.isEmpty
+                ? tr('No blocked channels')
+                : state.blockedChannels.map(_blockedChannelLabel).join(' ')
+          }),
           child: FormGroup(
             label: tr('Blocked Channels'),
             child: _removableList(
@@ -2531,13 +2524,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       _GroupSpec(
-        text: tr(
-            'Pending Settings Transfers Accept Reject {list}',
-            {
-              'list': transfers.isEmpty
-                  ? tr('No pending transfers')
-                  : transfers.map((t) => t.fromNym).join(' ')
-            }),
+        text: tr('Pending Settings Transfers Accept Reject {list}', {
+          'list': transfers.isEmpty
+              ? tr('No pending transfers')
+              : transfers.map((t) => t.fromNym).join(' ')
+        }),
         child: FormGroup(
           label: tr('Pending Settings Transfers'),
           child: _pendingTransfers(),
@@ -2609,9 +2600,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       width: double.infinity,
       constraints: const BoxConstraints(maxHeight: 200),
       decoration: BoxDecoration(
-        color: c.isLight
-            ? c.bg
-            : Colors.white.withValues(alpha: 0.03),
+        color: c.isLight ? c.bg : Colors.white.withValues(alpha: 0.03),
         borderRadius: NymRadius.rsm,
         border: Border.all(color: c.glassBorder),
       ),
@@ -2828,13 +2817,13 @@ const String _kSettingsSectionsCollapsedKey = 'nym_settings_sections_collapsed';
 /// Theme options, verbatim and in order from `#themeSelect`
 /// (index.html:1370-1380) — a standard `.form-select` dropdown.
 List<({NymThemeKey value, String label})> _themeOptions() => [
-  (value: NymThemeKey.bitchat, label: tr('Bitchat (Multicolor)')),
-  (value: NymThemeKey.matrix, label: tr('Matrix Green')),
-  (value: NymThemeKey.amber, label: tr('Amber Terminal')),
-  (value: NymThemeKey.cyber, label: tr('Cyberpunk')),
-  (value: NymThemeKey.hacker, label: tr('Hacker Blue')),
-  (value: NymThemeKey.ghost, label: tr('Ghost (B&W)')),
-];
+      (value: NymThemeKey.bitchat, label: tr('Bitchat (Multicolor)')),
+      (value: NymThemeKey.matrix, label: tr('Matrix Green')),
+      (value: NymThemeKey.amber, label: tr('Amber Terminal')),
+      (value: NymThemeKey.cyber, label: tr('Cyberpunk')),
+      (value: NymThemeKey.hacker, label: tr('Hacker Blue')),
+      (value: NymThemeKey.ghost, label: tr('Ghost (B&W)')),
+    ];
 
 /// Wallpaper picker: 3-column grid of the 8 built-in patterns + Upload, with
 /// the selected option ringed in the accent color.
@@ -3008,8 +2997,8 @@ class _WallpaperPicker extends StatelessWidget {
                 ? Image.network(
                     proxiedAvatarUrl(path) ?? path,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => NymSvgIcon(NymIcons.upload,
-                        size: 20, color: c.textDim),
+                    errorBuilder: (_, __, ___) =>
+                        NymSvgIcon(NymIcons.upload, size: 20, color: c.textDim),
                   )
                 : Image.file(File(path), fit: BoxFit.cover),
           ),
@@ -3149,8 +3138,8 @@ class _ViewPicker extends StatelessWidget {
     //   rgba(0,0,0,.3); border-radius: var(--radius-xs) }`; selected →
     //   primary@.08 dark / primary@.12 light (styles-columns.css:480-486
     //   `body.light-mode .view-option.selected .view-preview`).
-    Widget previewBox(bool selected, MainAxisAlignment align,
-        List<Widget> cols) {
+    Widget previewBox(
+        bool selected, MainAxisAlignment align, List<Widget> cols) {
       return Container(
         constraints: const BoxConstraints(minHeight: 90),
         width: double.infinity,
@@ -3184,7 +3173,8 @@ class _ViewPicker extends StatelessWidget {
             // — flex 1:3:1 spacers give the 3/5 = 60% centered column.
             preview: previewBox(singleSel, MainAxisAlignment.center, const [
               Spacer(),
-              Expanded(flex: 3, child: _VpCol(bars: [true, false, true, false])),
+              Expanded(
+                  flex: 3, child: _VpCol(bars: [true, false, true, false])),
               Spacer(),
             ]),
           ),
@@ -3418,12 +3408,10 @@ class _TextSizeRow extends StatelessWidget {
               thumbColor: c.primary,
               overlayColor: c.primaryA(0.2),
               trackHeight: 4,
-              thumbShape:
-                  const RoundSliderThumbShape(enabledThumbRadius: 8),
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
             ),
             child: Slider(
-              value: value.clamp(
-                  NymTextSize.min, NymTextSize.max),
+              value: value.clamp(NymTextSize.min, NymTextSize.max),
               min: NymTextSize.min,
               max: NymTextSize.max,
               divisions: (NymTextSize.max - NymTextSize.min).round(),
@@ -3456,26 +3444,26 @@ class _TextSizeRow extends StatelessWidget {
 
 /// Notification-sound options, verbatim and in order from `#soundSelect`.
 List<({String value, String label})> _soundOptions() => [
-  (value: 'beep', label: tr('Classic Beep')),
-  (value: 'low', label: tr('Low Tone')),
-  (value: 'high', label: tr('High Ping')),
-  (value: 'uhoh', label: tr('ICQ Uh-Oh')),
-  (value: 'msnding', label: tr('MSN Alert')),
-  (value: 'nudge', label: tr('MSN Nudge')),
-  (value: 'nokia', label: tr('Nokia SMS')),
-  (value: 'nokiatune', label: tr('Nokia Tune')),
-  (value: 'dialup', label: tr('Dial-Up Modem')),
-  (value: 'coin', label: tr('Mario Coin')),
-  (value: 'oneup', label: tr('Mario 1-Up')),
-  (value: 'powerup', label: tr('Mario Power-Up')),
-  (value: 'secret', label: tr('Zelda Secret')),
-  (value: 'gameboy', label: tr('Game Boy Boot')),
-  (value: 'tetris', label: tr('Tetris')),
-  (value: 'pokeheal', label: tr('Pokémon Heal')),
-  (value: 'chirp', label: tr('Communicator Chirp')),
-  (value: 'f1', label: tr('F1 Radio')),
-  (value: 'none', label: tr('Silent')),
-];
+      (value: 'beep', label: tr('Classic Beep')),
+      (value: 'low', label: tr('Low Tone')),
+      (value: 'high', label: tr('High Ping')),
+      (value: 'uhoh', label: tr('ICQ Uh-Oh')),
+      (value: 'msnding', label: tr('MSN Alert')),
+      (value: 'nudge', label: tr('MSN Nudge')),
+      (value: 'nokia', label: tr('Nokia SMS')),
+      (value: 'nokiatune', label: tr('Nokia Tune')),
+      (value: 'dialup', label: tr('Dial-Up Modem')),
+      (value: 'coin', label: tr('Mario Coin')),
+      (value: 'oneup', label: tr('Mario 1-Up')),
+      (value: 'powerup', label: tr('Mario Power-Up')),
+      (value: 'secret', label: tr('Zelda Secret')),
+      (value: 'gameboy', label: tr('Game Boy Boot')),
+      (value: 'tetris', label: tr('Tetris')),
+      (value: 'pokeheal', label: tr('Pokémon Heal')),
+      (value: 'chirp', label: tr('Communicator Chirp')),
+      (value: 'f1', label: tr('F1 Radio')),
+      (value: 'none', label: tr('Silent')),
+    ];
 
 /// Translation-language options, verbatim and in order from
 /// `#translateLanguageSelect` (empty value = Disabled).

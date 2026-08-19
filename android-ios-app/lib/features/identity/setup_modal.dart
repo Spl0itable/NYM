@@ -27,8 +27,8 @@ enum _SetupTab { signup, login }
 /// Opens an absolute [url] in the external browser (ToS/PP footer links).
 TapGestureRecognizer _linkTap(String url) {
   return TapGestureRecognizer()
-    ..onTap = () =>
-        launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    ..onTap =
+        () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
 }
 
 /// First-run setup screen mirroring `#setupModal` (index.html 1257–1346).
@@ -174,12 +174,12 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     String? url;
     try {
       url = await ref.read(nostrControllerProvider).uploadImage(
-            bytes,
-            contentType: contentType,
-            onProgress: (p) {
-              if (mounted) setState(() => _uploadProgress = p);
-            },
-          );
+        bytes,
+        contentType: contentType,
+        onProgress: (p) {
+          if (mounted) setState(() => _uploadProgress = p);
+        },
+      );
     } catch (_) {
       url = null;
     }
@@ -408,23 +408,23 @@ class _SetupModalState extends ConsumerState<SetupModal> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 500),
               child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (invite != null) ...[
-                      _InviteBanner(text: invite, c: c),
-                      const SizedBox(height: 16),
-                    ],
-                    // `.setup-tabs` (index.html:1204-1206): Sign up / Login —
-                    // replaces the old "Login with nsec…" link; the Login tab
-                    // swaps in the login fields inline (no popup).
-                    _setupTabs(c),
-                    if (_tab == _SetupTab.signup)
-                      ..._signupPanel(c)
-                    else
-                      ..._loginPanel(c),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (invite != null) ...[
+                    _InviteBanner(text: invite, c: c),
+                    const SizedBox(height: 16),
                   ],
-                ),
+                  // `.setup-tabs` (index.html:1204-1206): Sign up / Login —
+                  // replaces the old "Login with nsec…" link; the Login tab
+                  // swaps in the login fields inline (no popup).
+                  _setupTabs(c),
+                  if (_tab == _SetupTab.signup)
+                    ..._signupPanel(c)
+                  else
+                    ..._loginPanel(c),
+                ],
+              ),
             ),
           ),
         ),
@@ -686,8 +686,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         children: [
           Expanded(
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.05),
                 borderRadius: NymRadius.rsm,
@@ -823,8 +822,9 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       maxLines: maxLines,
       obscureText: obscureText,
       onChanged: showCounter ? (_) => setState(() {}) : null,
-      inputFormatters:
-          maxLength == null ? null : [LengthLimitingTextInputFormatter(maxLength)],
+      inputFormatters: maxLength == null
+          ? null
+          : [LengthLimitingTextInputFormatter(maxLength)],
       style: TextStyle(
         color: c.isLight ? const Color(0xFF000000) : c.textBright,
         fontSize: 15,

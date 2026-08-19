@@ -320,8 +320,7 @@ class CryptoWorker {
       }
     }
     return [
-      for (final m in results)
-        m == null ? null : NostrEvent.fromJson(m),
+      for (final m in results) m == null ? null : NostrEvent.fromJson(m),
     ];
   }
 

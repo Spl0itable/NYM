@@ -274,6 +274,72 @@ class GroupManager {
     );
   }
 
+  /// Sends a key-resync REQUEST to the other members: our stored view of their
+  /// rotating ephemeral keys may be stale after a long offline gap, so the
+  /// wraps target their REAL pubkeys (the stored keys are exactly what's
+  /// suspect), carrying our current key + `resync_req` so members reply with
+  /// theirs (PWA `_maybeSendGroupKeyResyncs`).
+  Future<bool> sendKeyResyncRequest({
+    required Group group,
+    required String selfPubkey,
+    MessagingSettings settings = const MessagingSettings(),
+  }) async {
+    if (!_service.canSign) return false;
+    final others = group.members.where((pk) => pk != selfPubkey).toList();
+    if (others.isEmpty) return false;
+    final eph = keysFor(group.id).ensureSelf();
+    _refreshServiceKeys();
+    final rumor = GroupLogic.buildControlRumor(
+      group: group,
+      selfPubkey: selfPubkey,
+      type: GroupControlType.keyResync,
+      extraTags: [
+        ['resync_req', '1'],
+        ['ephemeral_pk', eph.pk],
+      ],
+      nymMessageId: GroupLogic.generateGroupId(),
+      recipients: others,
+    );
+    return _service.publishGroupMessage(
+      rumor: rumor,
+      recipients: others,
+      encryptTo: (pk) => pk,
+      settings: settings,
+    );
+  }
+
+  /// Replies to a member's key-resync request with our current ephemeral key
+  /// (current, not rotated), wrapped to the key they just advertised (already
+  /// recorded via the generic `ephemeral_pk` extraction). Rate limiting is the
+  /// caller's responsibility (PWA `_maybeReplyKeyResync`).
+  Future<bool> sendKeyResyncReply({
+    required Group group,
+    required String selfPubkey,
+    required String requesterPubkey,
+    MessagingSettings settings = const MessagingSettings(),
+  }) async {
+    if (!_service.canSign) return false;
+    final ek = keysFor(group.id);
+    final eph = ek.ensureSelf();
+    _refreshServiceKeys();
+    final rumor = GroupLogic.buildControlRumor(
+      group: group,
+      selfPubkey: selfPubkey,
+      type: GroupControlType.keyResync,
+      extraTags: [
+        ['ephemeral_pk', eph.pk],
+      ],
+      nymMessageId: GroupLogic.generateGroupId(),
+      recipients: [requesterPubkey],
+    );
+    return _service.publishGroupMessage(
+      rumor: rumor,
+      recipients: [requesterPubkey],
+      encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
+      settings: settings,
+    );
+  }
+
   /// Sends a control event of [type] with [extraTags] (role checks are the
   /// caller's responsibility — see [GroupLogic.canModerate]).
   Future<bool> sendControl({

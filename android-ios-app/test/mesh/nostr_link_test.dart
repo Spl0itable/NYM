@@ -51,7 +51,8 @@ void main() {
       );
       final decoded = IdentityAnnouncement.decode(ann.encode()!)!;
       expect(decoded.nostrLink, equals(link));
-      expect(NostrLink.verify(decoded.nostrLink!, decoded.noisePublicKey), pubkey);
+      expect(
+          NostrLink.verify(decoded.nostrLink!, decoded.noisePublicKey), pubkey);
     });
 
     test('a bitchat-style announcement (no link) decodes with a null link', () {

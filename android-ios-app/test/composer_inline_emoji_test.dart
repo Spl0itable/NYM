@@ -30,8 +30,7 @@ import 'package:nym_bar/widgets/chat/composer.dart';
 /// True when [s] contains any Unicode Private-Use-Area code point (U+E000…U+F8FF)
 /// — the sentinel range. The wire-safety invariant requires this to be FALSE for
 /// anything that reaches the send path.
-bool _hasPua(String s) =>
-    s.runes.any((r) => r >= 0xE000 && r <= 0xF8FF);
+bool _hasPua(String s) => s.runes.any((r) => r >= 0xE000 && r <= 0xF8FF);
 
 /// A controller seeded with a fixed shortcode→url map (what the composer feeds in
 /// from `liveCustomEmojiProvider.codeToUrl` during `build`).

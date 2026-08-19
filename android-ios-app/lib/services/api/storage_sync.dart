@@ -253,8 +253,9 @@ class StorageSync {
       'dateFormat': s.dateFormat,
       'chatLayout': s.chatLayout,
       'chatViewMode': s.chatViewMode,
-      'columnsLayout':
-          kv != null ? _kvJsonList(kv, StorageKeys.columnsLayout) : const <dynamic>[],
+      'columnsLayout': kv != null
+          ? _kvJsonList(kv, StorageKeys.columnsLayout)
+          : const <dynamic>[],
       'columnsWallpaper': s.columnsWallpaper,
       'nickStyle': s.nickStyle,
       'colorMode': s.colorMode.name,
@@ -323,7 +324,8 @@ class StorageSync {
           kv.getString(StorageKeys.keypairMode) ?? 'persistent';
       // Non-sensitive "I protect my identity key at rest" hint — no key
       // material ever syncs (settings.js:160-164).
-      flat['encryptAtRestPreferred'] = kv.getBool(StorageKeys.encryptAtRestPref);
+      flat['encryptAtRestPreferred'] =
+          kv.getBool(StorageKeys.encryptAtRestPref);
       // Translate / emoji / gif favorites (settings.js:132-136).
       flat['translateFavoriteLanguages'] =
           _kvJsonList(kv, StorageKeys.translateFavorites);
@@ -338,14 +340,19 @@ class StorageSync {
       }
       flat['recentEmojis'] =
           _kvJsonList(kv, StorageKeys.recentEmojis).take(24).toList();
+      // Only publish a swipe-react emoji the user actually picked. `Settings`
+      // defaults the field to ❤️, so a device that never chose one would
+      // otherwise broadcast that default over the pick made on another device.
+      if ((kv.getString(StorageKeys.swipeReactEmoji) ?? '').isEmpty) {
+        flat.remove('swipeReactEmoji');
+      }
       flat['groupNotifyMentionsOnly'] =
           kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
       flat['notifyFriendsOnly'] =
           kv.getString(StorageKeys.notifyFriendsOnly) == 'true';
       // Device-spanning onboarding flags (settings.js:156-158).
       flat['tutorialSeen'] = kv.getString(StorageKeys.tutorialSeen) == 'true';
-      flat['botPmWelcomed'] =
-          kv.getString(StorageKeys.botpmWelcomed) == 'true';
+      flat['botPmWelcomed'] = kv.getString(StorageKeys.botpmWelcomed) == 'true';
       flat['botPmClearedAt'] =
           kv.getInt(StorageKeys.botpmClearedAt, defaultValue: 0);
     }
@@ -484,7 +491,9 @@ class StorageSync {
     if (trimmed.isEmpty) return null;
     try {
       final m = jsonDecode(trimmed);
-      if (m is Map && m['geohash'] is String && (m['geohash'] as String).isNotEmpty) {
+      if (m is Map &&
+          m['geohash'] is String &&
+          (m['geohash'] as String).isNotEmpty) {
         final type = m['type'] is String ? m['type'] as String : 'geohash';
         return {'type': type, 'geohash': m['geohash'] as String};
       }
@@ -881,7 +890,8 @@ class StorageSync {
     }
 
     // Group message history → nymchat-history-<gid>-<YYYYMM>-<shard>.
-    const shardBudget = 30000; // ~30 KB of message JSON per shard (settings.js:497).
+    const shardBudget =
+        30000; // ~30 KB of message JSON per shard (settings.js:497).
     for (final e in historyByConvKey.entries) {
       final convKey = e.key;
       final msgs = e.value;
@@ -1091,8 +1101,9 @@ class StorageSync {
         if (plain == null) continue;
         final payload = jsonDecode(plain);
         if (payload is! Map<String, dynamic>) continue;
-        final realCat =
-            payload['__cat'] is String ? payload['__cat'] as String : e.key.toString();
+        final realCat = payload['__cat'] is String
+            ? payload['__cat'] as String
+            : e.key.toString();
         payload.remove('__cat');
         decoded.add(_DecodedCategory(
           category: realCat,
@@ -1140,7 +1151,8 @@ class StorageSync {
       } else if (c.startsWith('nymchat-keys-')) {
         final ek = d.payload['groupEphemeralKeys'];
         if (ek is Map) {
-          ek.forEach((gid, entry) => groupEphemeralKeys[gid.toString()] = entry);
+          ek.forEach(
+              (gid, entry) => groupEphemeralKeys[gid.toString()] = entry);
         }
       } else if (c.startsWith('nymchat-history-')) {
         final hist = d.payload['groupMessageHistory'];
@@ -1162,7 +1174,9 @@ class StorageSync {
     // recently saved value wins; fall back to the legacy monolithic blob only
     // when no section blobs exist (settings.js:824).
     final core = decoded.where((d) => isCore(d.category)).toList();
-    final sections = core.where((d) => d.category != 'nymchat-settings').toList()
+    final sections = core
+        .where((d) => d.category != 'nymchat-settings')
+        .toList()
       ..sort((a, b) => a.updatedAt.compareTo(b.updatedAt));
     final toApply = sections.isNotEmpty
         ? sections
@@ -1219,7 +1233,8 @@ class StorageSync {
   /// empty list on any failure / when nothing is newer than [sinceMs]. The
   /// legacy monolithic `nymchat-settings` blob is included as a single offer
   /// only when no section blobs exist (mirroring `settingsGet`'s fallback).
-  Future<List<SettingsTransferOffer>> settingsTransfersSince(int sinceMs) async {
+  Future<List<SettingsTransferOffer>> settingsTransfersSince(
+      int sinceMs) async {
     Map<String, dynamic> data;
     try {
       data = await _api.storageAction({
@@ -1816,7 +1831,8 @@ class StorageSync {
     final rawLast = data['last'];
     if (rawLast is Map) {
       rawLast.forEach((name, ts) {
-        if (ts is num && ts > 0) last[name.toString().toLowerCase()] = ts.toInt();
+        if (ts is num && ts > 0)
+          last[name.toString().toLowerCase()] = ts.toInt();
       });
     }
     return ChannelActivityResult(activity: activity, last: last);

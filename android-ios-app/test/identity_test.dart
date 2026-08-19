@@ -257,7 +257,8 @@ void main() {
     Color hsl(double h, double s, double l) =>
         HSLColor.fromAHSL(1, h, s / 100, l / 100).toColor();
 
-    test('"0"*64 -> dark hsl(259,85,80) / light hsl(259,75,25) [bucket 720]', () {
+    test('"0"*64 -> dark hsl(259,85,80) / light hsl(259,75,25) [bucket 720]',
+        () {
       final pk = '0' * 64;
       expect(bitchatUserColor(pk, isLight: false), hsl(259, 85, 80));
       expect(bitchatUserColor(pk, isLight: true), hsl(259, 75, 25));
@@ -270,7 +271,8 @@ void main() {
     });
 
     test('deterministic per pubkey', () {
-      const pk = '3bf0c63fa1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a459d';
+      const pk =
+          '3bf0c63fa1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a459d';
       expect(bitchatUserColor(pk, isLight: false),
           bitchatUserColor(pk, isLight: false));
     });
@@ -296,8 +298,7 @@ void main() {
 }
 
 /// A wipe-target store fake that records whether it was wiped.
-class _FakeStore
-    implements PanicPrefsStore, PanicSecureStore, PanicCacheStore {
+class _FakeStore implements PanicPrefsStore, PanicSecureStore, PanicCacheStore {
   bool wiped = false;
   @override
   Future<void> wipe() async => wiped = true;

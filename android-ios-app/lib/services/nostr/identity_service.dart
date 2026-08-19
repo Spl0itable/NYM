@@ -153,7 +153,8 @@ class IdentityService {
   /// via [_durableLoginNym]).
   Future<Identity> loginWithNsec(String nsec) async {
     final input = nsec.trim();
-    final sk = bech32.decodeNsec(input); // throws on invalid (len-checked below)
+    final sk =
+        bech32.decodeNsec(input); // throws on invalid (len-checked below)
     if (sk.length != 32) {
       throw const FormatException('nsec must decode to 32 bytes');
     }
@@ -165,7 +166,8 @@ class IdentityService {
     await _kv.setString(StorageKeys.nostrLoginPubkey, pubkey);
     await _secretSet(SecretKeys.nostrLoginNsec, input);
     try {
-      await _kv.setString(StorageKeys.nostrLoginNpub, bech32.encodeNpub(pubkey));
+      await _kv.setString(
+          StorageKeys.nostrLoginNpub, bech32.encodeNpub(pubkey));
     } catch (_) {}
 
     // Drop ephemeral profile data so it doesn't clobber the persistent identity

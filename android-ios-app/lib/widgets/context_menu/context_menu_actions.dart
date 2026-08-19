@@ -130,13 +130,9 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
       t.iAmOwner &&
       !t.targetIsOwner &&
       !t.targetIsMod;
-  final showRemoveMod = t.inGroup &&
-      t.targetIsMember &&
-      !t.isSelf &&
-      t.iAmOwner &&
-      t.targetIsMod;
-  final showTransfer =
-      t.inGroup && t.targetIsMember && !t.isSelf && t.iAmOwner;
+  final showRemoveMod =
+      t.inGroup && t.targetIsMember && !t.isSelf && t.iAmOwner && t.targetIsMod;
+  final showTransfer = t.inGroup && t.targetIsMember && !t.isSelf && t.iAmOwner;
 
   // Mod/owner can delete another member's message in the current group.
   final canDeleteOwn = t.isSelf && hasMessage;

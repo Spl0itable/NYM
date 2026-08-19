@@ -37,7 +37,8 @@ void main() {
   // A display-revision–scoped provider recomputes (returns a fresh instance)
   // ONLY when its inputs change. Identity comparison of consecutive reads is a
   // synchronous, reliable probe for "did this provider re-run?".
-  test('messagesForCurrentViewProvider re-runs on a message, NOT on typing', () {
+  test('messagesForCurrentViewProvider re-runs on a message, NOT on typing',
+      () {
     final c = ProviderContainer();
     addTearDown(c.dispose);
     final notifier = c.read(appStateProvider.notifier)
@@ -79,7 +80,8 @@ void main() {
         reason: 'a reaction must advance the display revision');
   });
 
-  test('a reaction re-runs messagesForCurrentViewProvider (so reactions render)',
+  test(
+      'a reaction re-runs messagesForCurrentViewProvider (so reactions render)',
       () {
     final c = ProviderContainer();
     addTearDown(c.dispose);
@@ -122,8 +124,7 @@ void main() {
       final rev = n.state.displayRev;
 
       // Same nym, only the online/away status flips → ambient.
-      n.setUserPresence(
-          pubkey: 'bob_pk', status: UserStatus.away, nym: 'bob');
+      n.setUserPresence(pubkey: 'bob_pk', status: UserStatus.away, nym: 'bob');
       expect(n.state.displayRev, rev,
           reason: 'a bare status change must not rebuild the message list');
       // …but the store still reflects it (sidebar/header read this).

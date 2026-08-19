@@ -9,6 +9,20 @@ import '../pms/pm_logic.dart';
 /// Max retained previous ephemeral keys per group (post-compromise recovery).
 const int kEphemeralPrevKeysMax = 30;
 
+/// Membership cap: every group message costs one gift wrap per member, so
+/// membership is bounded to keep per-message fan-out (encrypt + publish work)
+/// bounded (PWA `MAX_GROUP_MEMBERS`).
+const int kMaxGroupMembers = 100;
+
+/// Key-resync heartbeat: after being offline this long, our stored view of
+/// other members' rotating ephemeral keys may have expired off relays, so we
+/// proactively re-exchange current keys (PWA `GROUP_RESYNC_OFFLINE_GAP_SEC`).
+const int kGroupResyncOfflineGapSec = 3 * 24 * 60 * 60;
+
+/// Per-group cooldown between key-resync requests (PWA
+/// `GROUP_RESYNC_COOLDOWN_SEC`).
+const int kGroupResyncCooldownSec = 24 * 60 * 60;
+
 /// An ephemeral keypair (raw 32-byte sk + 64-hex x-only pk).
 class EphemeralKey {
   EphemeralKey({required this.sk, required this.pk});
@@ -99,7 +113,9 @@ class GroupEphemeralKeys {
   /// `{ members, memberKeyTs?, self?: { current, prev[] } }`. `memberKeyTs` is
   /// only emitted when non-empty (the PWA gates it on `ek._memberKeyTs`).
   Map<String, dynamic> toSyncJson() {
-    final entry = <String, dynamic>{'members': Map<String, String>.from(members)};
+    final entry = <String, dynamic>{
+      'members': Map<String, String>.from(members)
+    };
     if (memberKeyTs.isNotEmpty) {
       entry['memberKeyTs'] = Map<String, int>.from(memberKeyTs);
     }
@@ -265,6 +281,7 @@ class GroupLogic {
       ['allow_invites', g.allowMemberInvites ? '1' : '0'],
       ['invite_enabled', g.inviteEnabled ? '1' : '0'],
       ['invite_epoch', '${g.inviteEpoch}'],
+      ['share_history', g.shareHistory ? '1' : '0'],
     ];
   }
 
@@ -300,6 +317,7 @@ class GroupLogic {
       ['allow_invites', group.allowMemberInvites ? '1' : '0'],
       ['invite_enabled', group.inviteEnabled ? '1' : '0'],
       ['invite_epoch', '${group.inviteEpoch}'],
+      ['share_history', group.shareHistory ? '1' : '0'],
       ['x', nymMessageId],
       ['ephemeral_pk', ephemeralPk],
     ];
@@ -342,6 +360,7 @@ class GroupLogic {
       ['allow_invites', group.allowMemberInvites ? '1' : '0'],
       ['invite_enabled', group.inviteEnabled ? '1' : '0'],
       ['invite_epoch', '${group.inviteEpoch}'],
+      ['share_history', group.shareHistory ? '1' : '0'],
       ['x', nymMessageId],
     ];
     return UnsignedEvent(
@@ -385,6 +404,7 @@ class GroupLogic {
       ['allow_invites', group.allowMemberInvites ? '1' : '0'],
       ['invite_enabled', group.inviteEnabled ? '1' : '0'],
       ['invite_epoch', '${group.inviteEpoch}'],
+      ['share_history', group.shareHistory ? '1' : '0'],
       ['x', nymMessageId],
       ['ephemeral_pk', ephemeralPk],
     ];
@@ -440,24 +460,68 @@ class GroupLogic {
 
   // ---- stale guard ---------------------------------------------------------
 
-  /// Rejects an out-of-order moderation rumor: `ts < lastModTs`, or equal ts
-  /// with the same recorded event id. (docs/specs/03 §4.5)
-  static bool isStaleModEvent(Group g, int ts, String? eventId) {
+  /// Stable identifier for a moderation rumor, used for exact-replay dedup.
+  /// Prefers the shared `x` tag id (identical across every member's wrap),
+  /// falling back to the local wrap [eventId].
+  static String? modEventKey(List<List<String>> tags, String? eventId) =>
+      tagValue(tags, 'x') ?? eventId;
+
+  /// Rejects an out-of-order moderation rumor.
+  ///
+  /// Moderation events are ordered PER TARGET pubkey, not globally: relays can
+  /// deliver distinct mod events out of order (promote A @100 after kick B
+  /// @105) and a single global timestamp gate silently drops the older one
+  /// even though it was never seen. Exact replays are caught by the seen-id
+  /// set. Events without a target ([targetPubkey] null — ownership transfers)
+  /// keep the global gate, since authority for later events was already
+  /// derived from the current owner.
+  static bool isStaleModEvent(Group g, int ts, String? modKey,
+      {String? targetPubkey}) {
+    if (modKey != null && g.modSeenIds.contains(modKey)) return true;
+    if (targetPubkey != null) {
+      return ts < (g.modTsByTarget[targetPubkey] ?? 0);
+    }
     final last = g.lastModTs;
     if (ts < last) return true;
-    if (ts == last && eventId != null && g.lastModEventId == eventId) {
+    if (ts == last && modKey != null && g.lastModEventId == modKey) {
       return true;
     }
     return false;
   }
 
-  /// Records an applied moderation event's ts/id (clamped to now+300s).
-  static void recordModEvent(Group g, int ts, String? eventId) {
+  /// Records an applied moderation event's ts/id (clamped to now+300s):
+  /// seen-id dedup, the target's moderation clock, and the global watermark.
+  static void recordModEvent(Group g, int ts, String? modKey,
+      {String? targetPubkey}) {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final clamped = ts < nowSec + 300 ? ts : nowSec + 300;
+    if (modKey != null && !g.modSeenIds.contains(modKey)) {
+      g.modSeenIds.add(modKey);
+      if (g.modSeenIds.length > 100) {
+        g.modSeenIds.removeRange(0, g.modSeenIds.length - 100);
+      }
+    }
+    if (targetPubkey != null) bumpModTargetTs(g, targetPubkey, clamped);
     if (clamped >= g.lastModTs) {
       g.lastModTs = clamped;
-      if (eventId != null) g.lastModEventId = eventId;
+      if (modKey != null) g.lastModEventId = modKey;
+    }
+  }
+
+  /// Advances a target's moderation clock (also used when a member is
+  /// re-added, so a replayed pre-re-add kick can't remove them again).
+  /// Bounded to the most recent 200 targets.
+  static void bumpModTargetTs(Group g, String targetPubkey, int ts) {
+    if (targetPubkey.isEmpty) return;
+    if (ts >= (g.modTsByTarget[targetPubkey] ?? 0)) {
+      g.modTsByTarget[targetPubkey] = ts;
+    }
+    if (g.modTsByTarget.length > 200) {
+      final keys = g.modTsByTarget.keys.toList()
+        ..sort((a, b) => g.modTsByTarget[a]!.compareTo(g.modTsByTarget[b]!));
+      for (final k in keys.take(g.modTsByTarget.length - 200)) {
+        g.modTsByTarget.remove(k);
+      }
     }
   }
 
@@ -512,17 +576,18 @@ class GroupLogic {
     String? eventId,
     String selfPubkey = '',
   }) {
+    final modKey = modEventKey(tags, eventId);
     switch (type) {
       case GroupControlType.removeMember:
         final target = tagValue(tags, 'kick');
         if (target == null) return GroupControlResult.invalid;
-        if (isStaleModEvent(group, ts, eventId)) {
+        if (isStaleModEvent(group, ts, modKey, targetPubkey: target)) {
           return GroupControlResult.stale;
         }
         // A member removing *themselves* is a voluntary leave — always allowed,
         // no role required, and never bans (groups.js `leaveGroup`).
         if (senderPubkey == target) {
-          recordModEvent(group, ts, eventId);
+          recordModEvent(group, ts, modKey, targetPubkey: target);
           group.members.remove(target);
           group.mods.remove(target);
           _modLog(group, type: 'leave', actor: senderPubkey, target: target);
@@ -538,7 +603,7 @@ class GroupLogic {
             return GroupControlResult.unauthorized;
           }
         }
-        recordModEvent(group, ts, eventId);
+        recordModEvent(group, ts, modKey, targetPubkey: target);
         group.members.remove(target);
         group.mods.remove(target);
         final banned = _hasTag(tags, 'ban', '1');
@@ -552,13 +617,13 @@ class GroupLogic {
       case GroupControlType.unban:
         final target = tagValue(tags, 'unban');
         if (target == null) return GroupControlResult.invalid;
-        if (isStaleModEvent(group, ts, eventId)) {
+        if (isStaleModEvent(group, ts, modKey, targetPubkey: target)) {
           return GroupControlResult.stale;
         }
         if (!isOwner(group, senderPubkey)) {
           return GroupControlResult.unauthorized;
         }
-        recordModEvent(group, ts, eventId);
+        recordModEvent(group, ts, modKey, targetPubkey: target);
         group.banned.remove(target);
         _modLog(group, type: 'unban', actor: senderPubkey, target: target);
         return GroupControlResult.applied;
@@ -566,13 +631,13 @@ class GroupLogic {
       case GroupControlType.promoteMod:
         final target = tagValue(tags, 'mod');
         if (target == null) return GroupControlResult.invalid;
-        if (isStaleModEvent(group, ts, eventId)) {
+        if (isStaleModEvent(group, ts, modKey, targetPubkey: target)) {
           return GroupControlResult.stale;
         }
         if (!isOwner(group, senderPubkey)) {
           return GroupControlResult.unauthorized;
         }
-        recordModEvent(group, ts, eventId);
+        recordModEvent(group, ts, modKey, targetPubkey: target);
         if (!group.mods.contains(target)) group.mods.add(target);
         _modLog(group, type: 'promote', actor: senderPubkey, target: target);
         return GroupControlResult.applied;
@@ -580,13 +645,13 @@ class GroupLogic {
       case GroupControlType.revokeMod:
         final target = tagValue(tags, 'mod');
         if (target == null) return GroupControlResult.invalid;
-        if (isStaleModEvent(group, ts, eventId)) {
+        if (isStaleModEvent(group, ts, modKey, targetPubkey: target)) {
           return GroupControlResult.stale;
         }
         if (!isOwner(group, senderPubkey)) {
           return GroupControlResult.unauthorized;
         }
-        recordModEvent(group, ts, eventId);
+        recordModEvent(group, ts, modKey, targetPubkey: target);
         group.mods.remove(target);
         _modLog(group, type: 'revoke', actor: senderPubkey, target: target);
         return GroupControlResult.applied;
@@ -594,13 +659,15 @@ class GroupLogic {
       case GroupControlType.transferOwner:
         final newOwner = tagValue(tags, 'owner');
         if (newOwner == null) return GroupControlResult.invalid;
-        if (isStaleModEvent(group, ts, eventId)) {
+        // Ownership transfers keep GLOBAL ordering (no targetPubkey): later
+        // events' authority was already derived from the current owner.
+        if (isStaleModEvent(group, ts, modKey)) {
           return GroupControlResult.stale;
         }
         if (!isOwner(group, senderPubkey)) {
           return GroupControlResult.unauthorized;
         }
-        recordModEvent(group, ts, eventId);
+        recordModEvent(group, ts, modKey);
         group.createdBy = newOwner;
         group.mods.remove(newOwner);
         _modLog(group, type: 'transfer', actor: senderPubkey, target: newOwner);
@@ -626,6 +693,13 @@ class GroupLogic {
           }
         }
         if (added.isEmpty) return GroupControlResult.noop;
+        // Advance each (re-)added member's moderation clock so a replayed
+        // pre-re-add kick arriving later can't remove them again.
+        final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        final addTs = ts < nowSec + 300 ? ts : nowSec + 300;
+        for (final pk in added) {
+          bumpModTargetTs(group, pk, addTs);
+        }
         return GroupControlResult.applied;
 
       case GroupControlType.metadata:
@@ -642,7 +716,8 @@ class GroupLogic {
         }
         group.members.remove(senderPubkey);
         group.mods.remove(senderPubkey);
-        _modLog(group, type: 'leave', actor: senderPubkey, target: senderPubkey);
+        _modLog(group,
+            type: 'leave', actor: senderPubkey, target: senderPubkey);
         return GroupControlResult.applied;
 
       case GroupControlType.deleteMessage:
@@ -746,6 +821,14 @@ class GroupLogic {
       final v = int.tryParse(epoch) ?? 0;
       if (v != g.inviteEpoch) {
         g.inviteEpoch = v;
+        changed = true;
+      }
+    }
+    final shareHist = tagValue(tags, 'share_history');
+    if (shareHist != null) {
+      final v = shareHist == '1';
+      if (v != g.shareHistory) {
+        g.shareHistory = v;
         changed = true;
       }
     }

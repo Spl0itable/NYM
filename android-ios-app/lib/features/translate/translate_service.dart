@@ -80,7 +80,8 @@ class TranslateService {
     //    (`translate.js:302-307`).
     final translatable = <_Chunk>[];
     for (var i = 0; i < parts.length; i++) {
-      if (i.isOdd) continue; // odd indices are preserved tokens — leave verbatim.
+      if (i.isOdd)
+        continue; // odd indices are preserved tokens — leave verbatim.
       final part = parts[i];
       if (part.trim().isEmpty) continue;
       final m = _rxEdgeWhitespace.firstMatch(part)!;
@@ -202,7 +203,9 @@ class TranslateService {
         .trim();
     // Strip a trailing timestamp like "12:34 PM" / "23:59".
     return lines
-        .replaceAll(RegExp(r'\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$', caseSensitive: false), '')
+        .replaceAll(
+            RegExp(r'\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$', caseSensitive: false),
+            '')
         .trim();
   }
 }

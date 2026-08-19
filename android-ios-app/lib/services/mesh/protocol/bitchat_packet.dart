@@ -130,13 +130,11 @@ class BinaryProtocol {
     final headerSize = _headerSize(version);
     final hasRecipient = packet.recipientID != null;
     final hasSignature = packet.signature != null;
-    final hasRoute = version >= 2 &&
-        packet.route != null &&
-        packet.route!.isNotEmpty;
+    final hasRoute =
+        version >= 2 && packet.route != null && packet.route!.isNotEmpty;
 
-    final routeBytes = hasRoute
-        ? 1 + (packet.route!.length.clamp(0, 255) * senderIdSize)
-        : 0;
+    final routeBytes =
+        hasRoute ? 1 + (packet.route!.length.clamp(0, 255) * senderIdSize) : 0;
     final capacity = headerSize +
         senderIdSize +
         (hasRecipient ? recipientIdSize : 0) +
@@ -187,7 +185,8 @@ class BinaryProtocol {
 
     final result = buf.toBytes();
     if (padding) {
-      return MessagePadding.pad(result, MessagePadding.optimalBlockSize(result.length));
+      return MessagePadding.pad(
+          result, MessagePadding.optimalBlockSize(result.length));
     }
     return result;
   }
@@ -199,7 +198,8 @@ class BinaryProtocol {
     final direct = _decodeCore(data);
     if (direct != null) return direct;
     final unpadded = MessagePadding.unpad(data);
-    if (identical(unpadded, data) || unpadded.length == data.length) return null;
+    if (identical(unpadded, data) || unpadded.length == data.length)
+      return null;
     return _decodeCore(unpadded);
   }
 

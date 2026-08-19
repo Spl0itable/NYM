@@ -33,8 +33,12 @@ class PacketFragmenter {
     final routeSize = hasRoute ? (1 + packet.route!.length * 8) : 0;
     const fragmentHeaderSize = FragmentPayload.headerSize;
     const paddingBuffer = 16;
-    final overhead =
-        headerSize + 8 + recipientSize + routeSize + fragmentHeaderSize + paddingBuffer;
+    final overhead = headerSize +
+        8 +
+        recipientSize +
+        routeSize +
+        fragmentHeaderSize +
+        paddingBuffer;
     var maxDataSize = MeshConstants.fragmentSizeThreshold - overhead;
     if (maxDataSize > MeshConstants.maxFragmentSize) {
       maxDataSize = MeshConstants.maxFragmentSize;
@@ -109,8 +113,8 @@ class FragmentReassembler {
 
   void _evictExpired() {
     final now = DateTime.now();
-    _assemblies.removeWhere((_, a) =>
-        now.difference(a.startedAt) > MeshConstants.fragmentTimeout);
+    _assemblies.removeWhere(
+        (_, a) => now.difference(a.startedAt) > MeshConstants.fragmentTimeout);
   }
 
   void clear() => _assemblies.clear();

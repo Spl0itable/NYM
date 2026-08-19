@@ -65,8 +65,7 @@ class BotCommand {
   final bool isFree;
 
   /// True when [other] (a lower-cased token without `?`) names this command.
-  bool matches(String token) =>
-      token == name || aliases.contains(token);
+  bool matches(String token) => token == name || aliases.contains(token);
 }
 
 /// The full, ordered catalogue. Order + wording mirror README lines 178-219.
@@ -76,8 +75,7 @@ const List<BotCommand> kBotCommands = [
     name: 'ask',
     group: BotCommandGroup.aiKnowledge,
     usage: '?ask <question>',
-    description:
-        "Ask the AI anything (also triggered via @Nymbot <question>)",
+    description: "Ask the AI anything (also triggered via @Nymbot <question>)",
   ),
   BotCommand(
     name: 'define',
@@ -345,5 +343,4 @@ BotCommand? lookupBotCommand(String keyword) =>
     _kByToken[keyword.toLowerCase().replaceFirst('?', '')];
 
 /// Whether [keyword] (with or without `?`) is a recognised README command.
-bool isKnownBotCommand(String keyword) =>
-    lookupBotCommand(keyword) != null;
+bool isKnownBotCommand(String keyword) => lookupBotCommand(keyword) != null;

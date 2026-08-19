@@ -234,7 +234,8 @@ class NostrService {
   /// discarded the duplicate rumor — a primary cause of the slow-to-open /
   /// slow-after-background behavior. This set lets a replay skip the whole
   /// unwrap. Process-wide (survives resume) and bounded (oldest-first eviction).
-  static final LinkedHashSet<String> _processedWrapIds = LinkedHashSet<String>();
+  static final LinkedHashSet<String> _processedWrapIds =
+      LinkedHashSet<String>();
   static const int _processedWrapCap = 100000;
 
   /// Bounds the number of in-flight remote-signer (NIP-46) `nip44_decrypt`
@@ -250,7 +251,8 @@ class NostrService {
   /// Seeds [ids] as already-verified signatures (e.g. channel message ids
   /// restored from the local cache — verified when first received) so the
   /// cold-boot archive/live replay of that history skips re-verification.
-  static void seedVerifiedIds(Iterable<String> ids) => _verifier.markVerified(ids);
+  static void seedVerifiedIds(Iterable<String> ids) =>
+      _verifier.markVerified(ids);
 
   /// Seeds [wrapIds] as already-unwrapped (e.g. cached PM message ids, which
   /// ARE their wrap ids — see `_onGiftWrap`) so the cold-boot PM restore skips
@@ -309,9 +311,7 @@ class NostrService {
         // auto-fallback: the caller owns the transport.
         _autoFallback = pool == null && useProxy,
         signer = signer ??
-            (identity.privkey != null
-                ? LocalSigner(identity.privkey!)
-                : null),
+            (identity.privkey != null ? LocalSigner(identity.privkey!) : null),
         _pool = pool ??
             (useProxy
                 ? RelayPoolProxy(
@@ -548,8 +548,7 @@ class NostrService {
     // exactly like the PWA (relays.js:2497-2498).
     if (channelMode) {
       filters.add(NostrFilter(kinds: [EventKind.geoChannel], since: chSince));
-      filters
-          .add(NostrFilter(kinds: [EventKind.namedChannel], since: chSince));
+      filters.add(NostrFilter(kinds: [EventKind.namedChannel], since: chSince));
     }
     // Reactions on OUR channel messages (`#p:[self]` + `#k` channel kinds,
     // relays.js:2501-2504). The `#k` gate is what keeps foreign kind-7 traffic
@@ -884,7 +883,8 @@ class NostrService {
 
   Future<void> _detachSockets(PoolTransport p) async {
     if (p is RelayPoolProxy) {
-      p.onProxyUnreachable = null; // don't let a teardown close fire the trigger
+      p.onProxyUnreachable =
+          null; // don't let a teardown close fire the trigger
       await p.disconnectSocketsOnly();
     } else if (p is RelayPool) {
       await p.disconnectSocketsOnly();
@@ -1004,7 +1004,8 @@ class NostrService {
   /// (docs/specs/03 §1.4) Returns the [Subscription].
   Subscription? _channelTypingSub;
   String? _channelTypingKey;
-  Subscription subscribeChannelTyping(String channelKey, {bool isGeohash = true}) {
+  Subscription subscribeChannelTyping(String channelKey,
+      {bool isGeohash = true}) {
     // Dedup identity is (tag-kind, key) — a named channel whose name is a valid
     // geohash string must NOT reuse the geohash sub, and vice versa. Only reuse
     // the cached sub when it is STILL OPEN: after a proxy pool-swap or any close
@@ -1128,7 +1129,8 @@ class NostrService {
     unawaited(_handleGiftWrap(wrap));
   }
 
-  Future<void> _handleGiftWrap(NostrEvent wrap, {bool fromArchive = false}) async {
+  Future<void> _handleGiftWrap(NostrEvent wrap,
+      {bool fromArchive = false}) async {
     final handlers = _handlers;
     if (handlers?.onGiftWrap == null) return;
     // Already unwrapped this process (a boot/resume archive replay, or the live
@@ -1171,8 +1173,7 @@ class NostrService {
     if (res == null) return;
 
     await _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
-        fromArchive: fromArchive,
-        isBitchat: res.isBitchat);
+        fromArchive: fromArchive, isBitchat: res.isBitchat);
   }
 
   /// True when [wrap] is addressed (`['p', …]`) to our identity pubkey (vs an
@@ -1195,8 +1196,8 @@ class NostrService {
   ) async {
     try {
       final sealJson = await sig.nip44Decrypt(wrap.pubkey, wrap.content);
-      final seal = NostrEvent.fromJson(
-          jsonDecode(sealJson) as Map<String, dynamic>);
+      final seal =
+          NostrEvent.fromJson(jsonDecode(sealJson) as Map<String, dynamic>);
       final rumorJson = await sig.nip44Decrypt(seal.pubkey, seal.content);
       final rumor = jsonDecode(rumorJson) as Map<String, dynamic>;
       return (seal: seal, rumor: rumor);
@@ -1294,7 +1295,8 @@ class NostrService {
   void fetchProfiles(List<String> pubkeys) {
     if (pubkeys.isEmpty) return;
     final sub = pool.subscribe([
-      NostrFilter(kinds: [EventKind.profile], authors: pubkeys, limit: pubkeys.length),
+      NostrFilter(
+          kinds: [EventKind.profile], authors: pubkeys, limit: pubkeys.length),
     ]);
     // Route through [_routeInbound] so a fetched SELF kind-0 also advances the
     // profile-save watermark (nostr-core.js:625-627).
@@ -1401,7 +1403,9 @@ class NostrService {
     // (reactions.js: geohash → ['g',gh]; else named → ['d',channel]).
     if (originalKind == '20000' && geohash != null && geohash.isNotEmpty) {
       tags.add(['g', geohash]);
-    } else if (originalKind == '23333' && channel != null && channel.isNotEmpty) {
+    } else if (originalKind == '23333' &&
+        channel != null &&
+        channel.isNotEmpty) {
       tags.add(['d', channel]);
     }
     final signed = await sig.sign(
@@ -1650,7 +1654,8 @@ class NostrService {
     String recipientPubkey, {
     int? expiration,
   }) async {
-    final wrap = await _buildWrap(rumor, recipientPubkey, expiration: expiration);
+    final wrap =
+        await _buildWrap(rumor, recipientPubkey, expiration: expiration);
     if (wrap == null) return null;
     // Gift wraps (kind 1059) publish via DM_EVENT so the proxy gives them
     // priority to the default relays (relays.js `sendDMToRelays`). In direct
@@ -1776,7 +1781,8 @@ class NostrService {
       ],
       content: '',
     );
-    final wrap = await _wrapAndPublish(rumor, encryptToPubkey ?? recipientPubkey);
+    final wrap =
+        await _wrapAndPublish(rumor, encryptToPubkey ?? recipientPubkey);
     return wrap != null;
   }
 

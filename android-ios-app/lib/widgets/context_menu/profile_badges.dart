@@ -90,9 +90,8 @@ class FriendBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // `body.light-mode .friend-badge svg { fill: #0288d1; stroke: #0288d1 }`.
-    final color = context.nym.isLight
-        ? const Color(0xFF0288D1)
-        : const Color(0xFF4FC3F7);
+    final color =
+        context.nym.isLight ? const Color(0xFF0288D1) : const Color(0xFF4FC3F7);
     return SizedBox(
       width: size,
       height: size,

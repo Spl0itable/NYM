@@ -125,7 +125,8 @@ class IdentityVault {
   /// Enable the vault: derive a key from [password], encrypt the existing
   /// plaintext secrets, and persist the salt/method/check-token + flag.
   /// Mirrors `enableVault`. [method] is `'password'`, `'pin'` or `'biometric'`.
-  Future<void> enable({required String method, required String password}) async {
+  Future<void> enable(
+      {required String method, required String password}) async {
     if (isEnabled) throw StateError('Encryption is already enabled.');
     final isBio = method == 'biometric';
     if (!isBio && password.length < 4) {
@@ -141,8 +142,7 @@ class IdentityVault {
       await _secure.set(name, await _encrypt(key, cur));
     }
 
-    await _kv.setString(
-        StorageKeys.vaultSalt, base64.encode(salt));
+    await _kv.setString(StorageKeys.vaultSalt, base64.encode(salt));
     // The PWA stores `'password'` for both password AND PIN factors (a PIN is a
     // digit-only password); only biometric is distinct (key-vault.js:180).
     await _kv.setString(
@@ -203,9 +203,7 @@ class IdentityVault {
     for (final name in vaultKeys) {
       final blob = await _secure.get(name);
       if (blob == null) continue;
-      out[name] = blob.startsWith('enc:v1:')
-          ? await _decrypt(key, blob)
-          : blob;
+      out[name] = blob.startsWith('enc:v1:') ? await _decrypt(key, blob) : blob;
     }
     return out;
   }

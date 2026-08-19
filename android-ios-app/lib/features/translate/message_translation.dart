@@ -48,8 +48,7 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
   late final TranslateService _service = widget.service ?? TranslateService();
 
   String get _target =>
-      widget.targetLang ??
-      ref.read(settingsProvider).translateLanguage;
+      widget.targetLang ?? ref.read(settingsProvider).translateLanguage;
 
   @override
   void initState() {
@@ -157,15 +156,15 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
                     text: tr('Already in {lang} (nothing to translate)',
                         {'lang': languageName(_target)}),
                     // `.translation-error`: 0.85em of the block base.
-                    style: TextStyle(
-                        color: c.danger, fontSize: baseSize * 0.85),
+                    style:
+                        TextStyle(color: c.danger, fontSize: baseSize * 0.85),
                   ),
                 ],
               ),
             );
           }
-          final showLang = res.detectedLanguage != 'auto' &&
-              res.detectedLanguage != _target;
+          final showLang =
+              res.detectedLanguage != 'auto' && res.detectedLanguage != _target;
           return Text.rich(
             TextSpan(
               style:
@@ -191,4 +190,3 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
     );
   }
 }
-

@@ -44,7 +44,11 @@ class _SharedPrefsAdapter implements PanicPrefsStore {
           );
           await prefs.setString(
             k,
-            'panic:${base64.encode([...box.nonce, ...box.cipherText, ...box.mac.bytes])}',
+            'panic:${base64.encode([
+                  ...box.nonce,
+                  ...box.cipherText,
+                  ...box.mac.bytes
+                ])}',
           );
         } catch (_) {}
       }

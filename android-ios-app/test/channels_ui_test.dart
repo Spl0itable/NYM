@@ -118,8 +118,7 @@ void main() {
       expect(labels, isNot(contains('Leave channel')));
     });
 
-    testWidgets('#nymchat returns an empty menu (PWA parity)',
-        (tester) async {
+    testWidgets('#nymchat returns an empty menu (PWA parity)', (tester) async {
       late BuildContext ctx;
       late WidgetRef ref;
       await _pumpProbe(tester, (c, r) {
@@ -194,8 +193,10 @@ void main() {
   // the consumer the controller's `_discoverChannelActivity` feeds with the
   // channel-active / channel-active-named / channel-activity results.
   group('D1 channel activity seeding', () {
-    const self = '0000000000000000000000000000000000000000000000000000000000001a2b';
-    const nowSec = 1750000000; // fixed boot-era timestamp for deterministic `last`.
+    const self =
+        '0000000000000000000000000000000000000000000000000000000000001a2b';
+    const nowSec =
+        1750000000; // fixed boot-era timestamp for deterministic `last`.
 
     test('discovered geohash channels register in the sidebar + last-activity',
         () {
@@ -203,8 +204,58 @@ void main() {
       // Two discovered geohash cells with 24-bucket activity + exact last-seen.
       n.applyChannelActivity(
         {
-          '9q8y': [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-          'u4pr': [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          '9q8y': [
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          'u4pr': [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
         },
         {'9q8y': nowSec, 'u4pr': nowSec - 3600},
         geohash: true,
@@ -227,7 +278,32 @@ void main() {
       expect(n.state.channels.map((c) => c.key), ['nymchat']);
       n.applyChannelActivity(
         {
-          'nymchat': [5, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          'nymchat': [
+            5,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
         },
         {'nymchat': nowSec},
         geohash: true,
@@ -250,7 +326,32 @@ void main() {
       n.applyChannelActivity(
         {
           // 3 + 2 = 5 messages across the active window.
-          '9q8y': [3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          '9q8y': [
+            3,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
         },
         {'9q8y': nowSec},
         geohash: true,
@@ -261,7 +362,32 @@ void main() {
       // A discovery pass (no seedUnread) must NOT badge.
       n.applyChannelActivity(
         {
-          '9q8y': [9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          '9q8y': [
+            9,
+            9,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
         },
         const {},
         geohash: true,
@@ -272,13 +398,39 @@ void main() {
       // D1 is a floor: a smaller re-probe must NOT lower an existing badge.
       n.applyChannelActivity(
         {
-          '9q8y': [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          '9q8y': [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
         },
         const {},
         geohash: true,
         seedUnread: true,
       );
-      expect(n.state.unreadCounts['#9q8y'], 5, reason: 'floor only ever raises');
+      expect(n.state.unreadCounts['#9q8y'], 5,
+          reason: 'floor only ever raises');
     });
 
     test('blocked channels are neither surfaced nor seeded', () {
@@ -286,7 +438,32 @@ void main() {
       n.blockChannel('spamcell'); // would need to be a real key; use a word
       n.applyChannelActivity(
         {
-          'spamcell': [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          'spamcell': [
+            9,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
         },
         {'spamcell': nowSec},
         geohash: false,

@@ -125,7 +125,8 @@ Nip46Socket _defaultSocketFactory(String relayUrl) {
 /// are already connected in the background, so we just listen there. An
 /// arbitrary `bunker://` relay not in the pool (and the no-pool case) falls back
 /// to a dedicated raw WebSocket.
-Nip46SocketFactory _makeDefaultFactory(PoolTransport? Function()? poolProvider) {
+Nip46SocketFactory _makeDefaultFactory(
+    PoolTransport? Function()? poolProvider) {
   return (relayUrl) {
     final pool = poolProvider?.call();
     if (pool != null &&
@@ -568,7 +569,8 @@ class Nip46Service implements Nip46Signer {
     _socketSub = null;
     final socket = _socketFactory(relay);
     if (socket is _FailingNip46Socket) {
-      debugPrint('[NIP46] Socket open failed; skipping subscribe. error=${socket.error}');
+      debugPrint(
+          '[NIP46] Socket open failed; skipping subscribe. error=${socket.error}');
       _connected = false;
       return;
     }
@@ -791,9 +793,10 @@ class Nip46Service implements Nip46Signer {
   }
 
   @override
-  Future<String> nip44Decrypt(String thirdPartyPubkey, String ciphertext)
-      async {
-    final r = await sendRequest('nip44_decrypt', [thirdPartyPubkey, ciphertext]);
+  Future<String> nip44Decrypt(
+      String thirdPartyPubkey, String ciphertext) async {
+    final r =
+        await sendRequest('nip44_decrypt', [thirdPartyPubkey, ciphertext]);
     return r as String;
   }
 

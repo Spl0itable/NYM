@@ -40,7 +40,8 @@ void main() {
     });
 
     test('nickname-only profile round-trips', () {
-      final decoded = MeshProfile.decode(MeshProfile(nickname: 'bob').encode())!;
+      final decoded =
+          MeshProfile.decode(MeshProfile(nickname: 'bob').encode())!;
       expect(decoded.nickname, 'bob');
       expect(decoded.avatar, isNull);
       expect(decoded.nostrPubkey, isNull);
@@ -49,15 +50,16 @@ void main() {
     test('decode tolerates unknown forward-compat fields', () {
       // type 0x7F, len 2, value — an unknown field between known ones.
       final base = MeshProfile(nickname: 'x').encode();
-      final withUnknown = Uint8List.fromList(
-          [...base, 0x7F, 0x00, 0x02, 0xAB, 0xCD]);
+      final withUnknown =
+          Uint8List.fromList([...base, 0x7F, 0x00, 0x02, 0xAB, 0xCD]);
       final decoded = MeshProfile.decode(withUnknown)!;
       expect(decoded.nickname, 'x');
     });
 
     test('decode returns null on truncated length', () {
       // type 0x10, len 0x00FF but no bytes follow.
-      expect(MeshProfile.decode(Uint8List.fromList([0x10, 0x00, 0xFF])), isNull);
+      expect(
+          MeshProfile.decode(Uint8List.fromList([0x10, 0x00, 0xFF])), isNull);
     });
   });
 }

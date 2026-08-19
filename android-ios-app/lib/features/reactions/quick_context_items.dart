@@ -55,8 +55,8 @@ List<QuickContextItem> buildQuickContextItems(
     items.add(QuickContextItem(
       label: tr('Slap with Trout'),
       svg: ctxActionSvg(CtxAction.slap),
-      onTap: () => controller
-          .sendCurrent('/me slaps @$fullNym around a bit with a large trout 🐟'),
+      onTap: () => controller.sendCurrent(
+          '/me slaps @$fullNym around a bit with a large trout 🐟'),
     ));
     items.add(QuickContextItem(
       label: tr('Give warm Hug'),
@@ -142,7 +142,8 @@ Future<void> _zap(
     recipientNym: baseNym,
     lightningAddress: lnAddr,
     messageId: message.id,
-    originalKind: inferOriginalKind(message, view: ref.read(currentViewProvider)),
+    originalKind:
+        inferOriginalKind(message, view: ref.read(currentViewProvider)),
   );
 }
 

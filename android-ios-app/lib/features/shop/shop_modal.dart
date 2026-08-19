@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import '../../widgets/common/keyboard_inset_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -52,7 +53,9 @@ String _errorMessage(Object e) {
   if (e is ApiException) {
     try {
       final j = jsonDecode(e.body);
-      if (j is Map && j['error'] is String && (j['error'] as String).isNotEmpty) {
+      if (j is Map &&
+          j['error'] is String &&
+          (j['error'] as String).isNotEmpty) {
         return j['error'] as String;
       }
     } catch (_) {}
@@ -112,7 +115,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
+    return KeyboardInsetDialog(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
@@ -287,7 +290,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       }
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Widget _tabs(NymColors c) {
@@ -448,8 +452,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       availability: availability,
       // Stamp a sample Genesis edition (#69) only on the unowned preview; the
       // inventory shows the owner's real edition via ShopEditionNumber instead.
-      sampleEdition:
-          (!inventory && item.id == 'flair-genesis') ? 69 : null,
+      sampleEdition: (!inventory && item.id == 'flair-genesis') ? 69 : null,
       onBuy: () => _buy(item),
       onActivate: () => _activate(item),
       onGift: () => _gift(item),
@@ -495,10 +498,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   /// active-items summary blocks, then every purchased item with its edition #,
   /// acquired date, recovery code and Transfer action.
   Widget _inventoryBody(NymColors c, ShopState state) {
-    final owned = state.owned.keys
-        .map(ShopCatalog.byId)
-        .whereType<ShopItem>()
-        .toList();
+    final owned =
+        state.owned.keys.map(ShopCatalog.byId).whereType<ShopItem>().toList();
     if (owned.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(40),
@@ -510,17 +511,12 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       );
     }
     final active = state.active;
-    final activeStyle = active.style != null
-        ? ShopCatalog.byId(active.style!)
-        : null;
-    final activeFlairs = active.flair
-        .map(ShopCatalog.byId)
-        .whereType<ShopItem>()
-        .toList();
-    final activeCosmetics = active.cosmetics
-        .map(ShopCatalog.byId)
-        .whereType<ShopItem>()
-        .toList();
+    final activeStyle =
+        active.style != null ? ShopCatalog.byId(active.style!) : null;
+    final activeFlairs =
+        active.flair.map(ShopCatalog.byId).whereType<ShopItem>().toList();
+    final activeCosmetics =
+        active.cosmetics.map(ShopCatalog.byId).whereType<ShopItem>().toList();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -1277,7 +1273,8 @@ class _ActiveItemsPreview extends ConsumerWidget {
               ),
               TextSpan(
                 text: '#$suffix',
-                style: TextStyle(color: authorColor, fontWeight: FontWeight.w400),
+                style:
+                    TextStyle(color: authorColor, fontWeight: FontWeight.w400),
               ),
             ]),
           ),
@@ -1409,9 +1406,8 @@ class _SupporterContentLine extends StatelessWidget {
           ),
           border: Border(
             left: BorderSide(
-              color: isLight
-                  ? const Color(0xFFB8960A)
-                  : const Color(0xFFFFD700),
+              color:
+                  isLight ? const Color(0xFFB8960A) : const Color(0xFFFFD700),
               width: 3,
             ),
           ),
@@ -1568,7 +1564,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
+    return KeyboardInsetDialog(
       child: Material(
         color: Colors.transparent,
         child: ConstrainedBox(
@@ -1643,7 +1639,8 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
                   const SizedBox(height: 8),
                   Text(
                     _error!,
-                    style: const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12),
+                    style:
+                        const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12),
                   ),
                 ],
                 const SizedBox(height: 16),
@@ -1818,7 +1815,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
         try {
           final res = await _api.proxiedJsonFetch(verify);
           final data = jsonDecode(utf8.decode(res.bodyBytes));
-          paid = data is Map && (data['settled'] == true || data['paid'] == true);
+          paid =
+              data is Map && (data['settled'] == true || data['paid'] == true);
         } catch (_) {
           // keep polling (shop.js:1280)
         }
@@ -1870,9 +1868,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
     unawaited(() async {
       // `Object`-typed so this forwards the receipt whether the controller
       // completes with the matched event JSON or (legacy) a bare `true`.
-      final Object detected = await ref
-          .read(nostrControllerProvider)
-          .listenForShopReceipt(inv.pr);
+      final Object detected =
+          await ref.read(nostrControllerProvider).listenForShopReceipt(inv.pr);
       if (!mounted || _settling) return;
       final receipt =
           detected is Map ? Map<String, dynamic>.from(detected) : null;
@@ -2015,7 +2012,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final recipient = widget.recipientPubkey;
-    return Center(
+    return KeyboardInsetDialog(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
@@ -2038,8 +2035,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
                     Text(
                       recipient != null
                           ? tr('Gifting: {name}', {'name': widget.item.name})
-                          : tr('Purchasing: {name}',
-                              {'name': widget.item.name}),
+                          : tr(
+                              'Purchasing: {name}', {'name': widget.item.name}),
                       style: TextStyle(
                         color: c.text,
                         fontSize: 16,
@@ -2185,8 +2182,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
           Container(
             padding: const EdgeInsets.all(12),
             color: Colors.white,
-            child: QrImageView(
-                data: pr, size: 200, backgroundColor: Colors.white),
+            child:
+                QrImageView(data: pr, size: 200, backgroundColor: Colors.white),
           ),
           const SizedBox(height: 12),
           Text(tr('Scan with a Lightning wallet to pay.'),
@@ -2204,8 +2201,8 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
               Expanded(
                 child: OutlinedButton(
                   onPressed: _openWallet,
-                  child:
-                      Text(tr('Open Wallet'), style: TextStyle(color: c.primary)),
+                  child: Text(tr('Open Wallet'),
+                      style: TextStyle(color: c.primary)),
                 ),
               ),
             ],

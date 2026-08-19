@@ -30,15 +30,13 @@ class NoisePayload {
 
   /// A delivery acknowledgement for [messageID] — over the mesh the payload is
   /// simply the UTF-8 message id (bitchat `.delivered`).
-  static NoisePayload delivered(String messageID) =>
-      NoisePayload(NoisePayloadType.delivered,
-          Uint8List.fromList(utf8.encode(messageID)));
+  static NoisePayload delivered(String messageID) => NoisePayload(
+      NoisePayloadType.delivered, Uint8List.fromList(utf8.encode(messageID)));
 
   /// A read receipt for [messageID] — payload is the UTF-8 message id
   /// (bitchat `.readReceipt`).
-  static NoisePayload readReceipt(String messageID) =>
-      NoisePayload(NoisePayloadType.readReceipt,
-          Uint8List.fromList(utf8.encode(messageID)));
+  static NoisePayload readReceipt(String messageID) => NoisePayload(
+      NoisePayloadType.readReceipt, Uint8List.fromList(utf8.encode(messageID)));
 
   /// The UTF-8 message id from a receipt payload ([delivered]/[readReceipt]).
   String receiptMessageId() => utf8.decode(data, allowMalformed: true);
@@ -88,8 +86,7 @@ class PrivateMessagePacket {
       final length = data[offset + 1];
       offset += 2;
       if (offset + length > data.length) return null;
-      final value =
-          Uint8List.sublistView(data, offset, offset + length);
+      final value = Uint8List.sublistView(data, offset, offset + length);
       offset += length;
       switch (type) {
         case _tlvMessageId:

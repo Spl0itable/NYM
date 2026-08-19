@@ -153,7 +153,8 @@ class CallSignal {
       };
 
   /// `{ type:'share', callId, on }`
-  static Map<String, dynamic> share({required String callId, required bool on}) =>
+  static Map<String, dynamic> share(
+          {required String callId, required bool on}) =>
       {'type': 'share', 'callId': callId, 'on': on};
 
   /// `{ type:'reaction', callId, emoji }`, plus an optional `emojiTags` array of
@@ -243,7 +244,14 @@ class CallSignal {
 
 /// The 8 default reaction-bar emoji (calls.js `_callReactionDefaults`, 1102).
 const List<String> kCallReactionDefaults = [
-  '👍', '❤️', '😂', '😮', '👏', '🎉', '🙌', '🔥'
+  '👍',
+  '❤️',
+  '😂',
+  '😮',
+  '👏',
+  '🎉',
+  '🙌',
+  '🔥'
 ];
 
 /// Builds the call reactions-bar emoji list: recents-first, padded with the 8

@@ -104,7 +104,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     // ignore: avoid_print
-    print('view after tap: ${container.read(appStateProvider).view.storageKey}');
+    print(
+        'view after tap: ${container.read(appStateProvider).view.storageKey}');
     // ignore: avoid_print
     print('BotChatScreen mounted: '
         '${find.byType(BotChatScreen).evaluate().isNotEmpty}');

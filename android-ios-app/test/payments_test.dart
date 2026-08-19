@@ -43,8 +43,7 @@ void main() {
         );
 
     test('amount is encoded in millisats', () {
-      final uri =
-          Lnurl.buildCallbackUrl(params: params(), amountSats: 21);
+      final uri = Lnurl.buildCallbackUrl(params: params(), amountSats: 21);
       expect(uri.queryParameters['amount'], '21000'); // 21 * 1000
     });
 
@@ -223,7 +222,8 @@ void main() {
           headers: {'content-type': 'application/json'},
         );
       });
-      return ApiClient(client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
+      return ApiClient(
+          client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
     }
 
     setUp(() => captured = []);
@@ -270,7 +270,8 @@ void main() {
     });
 
     test('shop-redeem body has uppercased code', () async {
-      api = buildApi((_) => {'itemId': 'style-rainbow', 'owned': {}, 'active': {}});
+      api = buildApi(
+          (_) => {'itemId': 'style-rainbow', 'owned': {}, 'active': {}});
       await api.storageAction({
         'action': 'shop-redeem',
         'pubkey': _testPub,
@@ -323,7 +324,8 @@ void main() {
       });
       return ShopController(
         kv,
-        api: ApiClient(client: client, baseUrl: 'https://web.nymchat.app/api/proxy'),
+        api: ApiClient(
+            client: client, baseUrl: 'https://web.nymchat.app/api/proxy'),
       );
     }
 
@@ -398,8 +400,8 @@ void main() {
         return http.Response('{"paid":true}', 200,
             headers: {'content-type': 'application/json'});
       });
-      final api =
-          ApiClient(client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
+      final api = ApiClient(
+          client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
       final paid = await api.zapVerify(
         pr: 'lnbc1',
         verifyUrl: 'https://v/1',
@@ -409,16 +411,17 @@ void main() {
     });
 
     test('paid:false → false', () async {
-      final client = MockClient((_) async => http.Response('{"paid":false}', 200));
-      final api =
-          ApiClient(client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
+      final client =
+          MockClient((_) async => http.Response('{"paid":false}', 200));
+      final api = ApiClient(
+          client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
       expect(await api.zapVerify(pr: 'lnbc1'), isFalse);
     });
 
     test('non-200 / malformed → false (poll keeps retrying)', () async {
       final client = MockClient((_) async => http.Response('boom', 500));
-      final api =
-          ApiClient(client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
+      final api = ApiClient(
+          client: client, baseUrl: 'https://web.nymchat.app/api/proxy');
       expect(await api.zapVerify(pr: 'lnbc1'), isFalse);
     });
   });
@@ -433,12 +436,14 @@ void main() {
         sent = jsonDecode(req.body) as Map<String, dynamic>;
         expect(req.url.path, '/api/bot');
         return http.Response(
-          jsonEncode({'pr': 'lnbc1', 'invoiceId': 'c' * 64, 'serverVerify': true}),
+          jsonEncode(
+              {'pr': 'lnbc1', 'invoiceId': 'c' * 64, 'serverVerify': true}),
           200,
           headers: {'content-type': 'application/json'},
         );
       });
-      final svc = NymbotService(client: client, baseUrl: 'https://web.nymchat.app/api/bot');
+      final svc = NymbotService(
+          client: client, baseUrl: 'https://web.nymchat.app/api/bot');
       final inv = await svc.buy(
         amountSats: 1000,
         tier: CreditTier.pro,
@@ -460,7 +465,8 @@ void main() {
         return http.Response('{"transferred":42}', 200,
             headers: {'content-type': 'application/json'});
       });
-      final svc = NymbotService(client: client, baseUrl: 'https://web.nymchat.app/api/bot');
+      final svc = NymbotService(
+          client: client, baseUrl: 'https://web.nymchat.app/api/bot');
       final res = await svc.transfer(pubkey: _testPub, targetPubkey: 'e' * 64);
       expect(sent!['action'], 'transfer-credits');
       expect(sent!['targetPubkey'], 'e' * 64);
@@ -524,7 +530,8 @@ void main() {
       expect(ShopCatalog.all.length, 51);
     });
 
-    test('bundle-everything resolves to every non-limited, non-bundle item', () {
+    test('bundle-everything resolves to every non-limited, non-bundle item',
+        () {
       final comps = ShopCatalog.bundleComponents('bundle-everything');
       // 18 styles + 18 flair + 9 special, none of which carry maxSupply.
       expect(comps.length, 45);
@@ -550,7 +557,11 @@ void main() {
       );
       expect(
         ShopCatalog.bundleComponents('bundle-legendary'),
-        ['cosmetic-aura-phoenix', 'cosmetic-aura-rainbow', 'cosmetic-bubble-hologram'],
+        [
+          'cosmetic-aura-phoenix',
+          'cosmetic-aura-rainbow',
+          'cosmetic-bubble-hologram'
+        ],
       );
     });
   });

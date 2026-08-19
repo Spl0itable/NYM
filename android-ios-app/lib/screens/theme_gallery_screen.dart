@@ -78,7 +78,8 @@ class ThemeGalleryScreen extends ConsumerWidget {
                   Switch(
                     value: settings.transparencyEnabled,
                     thumbColor: WidgetStateProperty.resolveWith((states) {
-                      if (states.contains(WidgetState.selected)) return c.primary;
+                      if (states.contains(WidgetState.selected))
+                        return c.primary;
                       return null;
                     }),
                     onChanged: ctrl.setTransparencyEnabled,
@@ -161,7 +162,8 @@ class ThemeGalleryScreen extends ConsumerWidget {
                 spacing: 8,
                 children: [
                   _pill(c, '3', c.primary, c.bg),
-                  _pill(c, 'GEOHASH', c.warning, c.warning.withValues(alpha: 0.1)),
+                  _pill(c, 'GEOHASH', c.warning,
+                      c.warning.withValues(alpha: 0.1)),
                   _pill(c, 'STD', c.blue, c.blue.withValues(alpha: 0.1)),
                   _pill(c, '⚡ 21', c.lightning,
                       c.lightning.withValues(alpha: 0.12)),
@@ -197,7 +199,9 @@ class ThemeGalleryScreen extends ConsumerWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? c.primaryA(0.15) : Colors.white.withValues(alpha: 0.05),
+          color: selected
+              ? c.primaryA(0.15)
+              : Colors.white.withValues(alpha: 0.05),
           borderRadius: NymRadius.rxs,
           border: Border.all(
             color: selected ? c.primaryA(0.3) : c.glassBorder,
@@ -253,8 +257,8 @@ class ThemeGalleryScreen extends ConsumerWidget {
       decoration: BoxDecoration(
         color: active ? c.primaryA(0.10) : Colors.transparent,
         borderRadius: NymRadius.rxs,
-        border: Border.all(
-            color: active ? c.primaryA(0.20) : Colors.transparent),
+        border:
+            Border.all(color: active ? c.primaryA(0.20) : Colors.transparent),
       ),
       child: Row(
         children: [
@@ -288,8 +292,7 @@ class ThemeGalleryScreen extends ConsumerWidget {
           Text(time, style: TextStyle(color: c.textDim, fontSize: 12)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(content,
-                style: TextStyle(color: c.text, fontSize: 15)),
+            child: Text(content, style: TextStyle(color: c.text, fontSize: 15)),
           ),
         ],
       ),
@@ -339,8 +342,7 @@ class ThemeGalleryScreen extends ConsumerWidget {
           border: Border.all(color: c.glassBorder),
         ),
         child: Text(label,
-            style: TextStyle(
-                color: c.text, fontSize: 12, letterSpacing: 0.8)),
+            style: TextStyle(color: c.text, fontSize: 12, letterSpacing: 0.8)),
       );
 
   Widget _pill(NymColors c, String text, Color fg, Color bg) => Container(

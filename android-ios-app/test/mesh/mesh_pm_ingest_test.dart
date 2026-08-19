@@ -105,7 +105,8 @@ void main() {
     n.ingestPMMessage(Message(
       id: 'nostr-spam-1',
       author: 'stranger',
-      pubkey: 'abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabca0',
+      pubkey:
+          'abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabca0',
       content: spammy,
       createdAt: 1700000001,
       ms: 1700000001123,

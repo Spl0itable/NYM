@@ -133,7 +133,8 @@ class EventMapper {
     if (e.kind != EventKind.reaction) return null;
     final target = e.tagValue('e');
     if (target == null) return null;
-    final remove = e.tagsNamed('action').any((t) => t.length > 1 && t[1] == 'remove');
+    final remove =
+        e.tagsNamed('action').any((t) => t.length > 1 && t[1] == 'remove');
     return ReactionInfo(
       messageId: target,
       emoji: e.content,

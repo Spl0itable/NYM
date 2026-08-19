@@ -15,8 +15,10 @@ import 'package:nym_bar/services/storage/key_value_store.dart';
 import 'package:nym_bar/state/app_state.dart';
 import 'package:nym_bar/state/settings_provider.dart';
 
-const _self = '0000000000000000000000000000000000000000000000000000000000001a2b';
-const _other = '11111111111111111111111111111111111111111111111111111111deadbeef';
+const _self =
+    '0000000000000000000000000000000000000000000000000000000000001a2b';
+const _other =
+    '11111111111111111111111111111111111111111111111111111111deadbeef';
 
 Future<ProviderContainer> _container() async {
   SharedPreferences.setMockInitialValues(<String, Object>{});

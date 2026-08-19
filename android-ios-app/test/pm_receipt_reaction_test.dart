@@ -128,7 +128,8 @@ void main() {
     expect(b.readers.containsKey('reader_pk'), isTrue);
   });
 
-  test('a reader who reads a newer own message BEFORE it lands waterfalls '
+  test(
+      'a reader who reads a newer own message BEFORE it lands waterfalls '
       'correctly once it does', () {
     final n = AppStateNotifier()..goLive('self_pk', 'me#0001');
     n.ingestEvent(NostrEvent(
@@ -168,7 +169,8 @@ void main() {
     expect(newer.readers.containsKey('reader_pk'), isTrue);
   });
 
-  test('a channel receipt that beats our own echo renders once the optimistic '
+  test(
+      'a channel receipt that beats our own echo renders once the optimistic '
       'row reconciles to its real event id', () {
     final n = AppStateNotifier()..goLive('self_pk', 'me#0001');
     n.switchView(const ChatView.channel('room3'));
@@ -201,7 +203,8 @@ void main() {
         reason: 'buffered receipt must render once the row owns its real id');
   });
 
-  test('waterfall is per-conversation: a reader shows in each channel they read',
+  test(
+      'waterfall is per-conversation: a reader shows in each channel they read',
       () {
     final n = AppStateNotifier()..goLive('self_pk', 'me#0001');
     n.ingestEvent(NostrEvent(

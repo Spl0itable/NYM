@@ -211,10 +211,12 @@ void main() {
     });
 
     test('parseFileOfferTag returns null when no offer tag present', () {
-      expect(parseFileOfferTag([
-        ['n', 'alice'],
-        ['g', '9q8y'],
-      ], seeder), isNull);
+      expect(
+          parseFileOfferTag([
+            ['n', 'alice'],
+            ['g', '9q8y'],
+          ], seeder),
+          isNull);
     });
   });
 
@@ -222,7 +224,8 @@ void main() {
   // Wire payload shapes — kind 25051 signaling + kind 25052 file status
   // ===========================================================================
   group('p2p wire payloads', () {
-    test('25051 signaling payload is p-tagged with the JSON data as content', () {
+    test('25051 signaling payload is p-tagged with the JSON data as content',
+        () {
       final target = 'c' * 64;
       final data = offerSignal(
         sdp: {'type': 'offer', 'sdp': 'v=0...'},
@@ -403,8 +406,7 @@ void main() {
       final t = _FakeTransport(self);
       final svc = P2PService(t);
       addTearDown(svc.dispose);
-      final offer =
-          svc.shareFile(bytes: bytes, name: 'share.bin', type: '');
+      final offer = svc.shareFile(bytes: bytes, name: 'share.bin', type: '');
       expect(svc.seeding.containsKey(offer.offerId), isTrue);
       expect(offer.seederPubkey, self);
       expect(offer.type, 'application/octet-stream');
@@ -421,12 +423,12 @@ void main() {
 
       expect(svc.isUnseeded(offer.offerId), isTrue);
       expect(svc.seeding.containsKey(offer.offerId), isFalse);
-      final ev = t.published
-          .firstWhere((e) => e.kind == P2PConstants.fileStatusKind);
+      final ev =
+          t.published.firstWhere((e) => e.kind == P2PConstants.fileStatusKind);
       expect(ev.tags.any((x) => x[0] == 'offer_id' && x[1] == offer.offerId),
           isTrue);
-      expect(ev.tags.any((x) => x[0] == 'status' && x[1] == 'unseeded'),
-          isTrue);
+      expect(
+          ev.tags.any((x) => x[0] == 'status' && x[1] == 'unseeded'), isTrue);
       expect(ev.tags.any((x) => x[0] == 'g' && x[1] == '9q8y'), isTrue);
     });
   });

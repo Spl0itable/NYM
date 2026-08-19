@@ -55,7 +55,8 @@ class LinkPreviewData {
         description: r.description ?? '',
         image: (r.image != null && r.image!.isNotEmpty) ? r.image : null,
         siteName: r.siteName ?? '',
-        favicon: (r.favicon != null && r.favicon!.isNotEmpty) ? r.favicon : null,
+        favicon:
+            (r.favicon != null && r.favicon!.isNotEmpty) ? r.favicon : null,
       );
 }
 
@@ -144,8 +145,7 @@ class _Card extends StatelessWidget {
         },
         borderRadius: NymRadius.rsm,
         child: ConstrainedBox(
-          constraints:
-              BoxConstraints(maxWidth: narrow ? double.infinity : 400),
+          constraints: BoxConstraints(maxWidth: narrow ? double.infinity : 400),
           child: Container(
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.03),

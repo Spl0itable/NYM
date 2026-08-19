@@ -276,7 +276,9 @@ class LocalizationService {
   }
 
   bool get _anyPending =>
-      _pending.isNotEmpty || _primePending.isNotEmpty || _sweepPending.isNotEmpty;
+      _pending.isNotEmpty ||
+      _primePending.isNotEmpty ||
+      _sweepPending.isNotEmpty;
 
   void _scheduleFlush() {
     if (_flushing || !_anyPending) return;

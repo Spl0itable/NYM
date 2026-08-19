@@ -12,7 +12,6 @@ import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
-import '../../widgets/sidebar/sidebar.dart';
 import '../i18n/i18n.dart';
 import 'mesh_bridge.dart' show kMeshNearbyChannel;
 import 'mesh_controller.dart';
@@ -23,71 +22,113 @@ import 'mesh_diagnostics.dart';
 /// ChatPane — this screen only shows radio status and the peers in range, and
 /// lets you start (or jump into) a mesh DM with a nearby peer or the public
 /// `#mesh` channel.
+///
+/// NOT a pushed route: this renders as an overlay INSIDE the home shell (toggled
+/// by [meshScreenOpenProvider]), beneath the shell's off-canvas drawer. So the
+/// sidebar opens OVER it like on any other screen, the shell's left-edge swipe
+/// works unchanged, and any conversation switch — a sidebar tap, a peer tap, a
+/// notification tap — closes the overlay and reveals the chat, exactly like the
+/// rest of the app.
 class MeshScreen extends ConsumerStatefulWidget {
-  const MeshScreen({super.key});
+  const MeshScreen({super.key, this.onOpenSidebar});
 
-  /// Pushes the mesh screen with a route that does NOT install iOS's left-edge
-  /// back-swipe gesture. That system pop-gesture otherwise wins the gesture
-  /// arena over the Scaffold's `drawerEdgeDragWidth`, so a left-to-right swipe
-  /// pops this route ("go back to last place") instead of opening the sidebar.
-  /// With no route pop-gesture, the drawer's own edge-drag handles the swipe and
-  /// the sidebar slides in, matching the rest of the app.
-  static Route<void> route() => _MeshPageRoute();
+  /// Opens the shell's off-canvas drawer (compact layouts). Null on wide
+  /// layouts, where the sidebar is permanently visible.
+  final VoidCallback? onOpenSidebar;
 
   @override
   ConsumerState<MeshScreen> createState() => _MeshScreenState();
 }
 
-/// A [MaterialPageRoute] whose transition never installs the Cupertino
-/// interactive back-swipe. We force the (non-Cupertino) fade-upwards builder so
-/// that on iOS no `_CupertinoBackGestureDetector` is wrapped around the page —
-/// leaving the left-edge swipe to the mesh screen's own drawer edge-drag. The
-/// small cost is a fade-up push instead of the iOS horizontal slide.
-class _MeshPageRoute extends MaterialPageRoute<void> {
-  _MeshPageRoute() : super(builder: (_) => const MeshScreen());
-
-  @override
-  Widget buildTransitions(
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    return const FadeUpwardsPageTransitionsBuilder().buildTransitions<void>(
-        this, context, animation, secondaryAnimation, child);
-  }
-}
-
 class _MeshScreenState extends ConsumerState<MeshScreen> {
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  /// Closes the mesh overlay, revealing whatever conversation is active in the
+  /// shell beneath.
+  void _close() {
+    ref.read(meshScreenOpenProvider.notifier).state = false;
+  }
+
+  /// Sanitizes a mesh-group name the way channel names are sanitized elsewhere
+  /// (lowercase; letters and digits only) so the same name resolves to the
+  /// same room on every device. Returns '' when nothing usable remains.
+  String _sanitizeGroupName(String raw) {
+    final lower = raw.trim().toLowerCase().replaceAll(RegExp(r'^#+'), '');
+    final cleaned =
+        lower.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+    return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
+  }
+
+  /// Prompts for a mesh-group name + optional password, joins/creates it via
+  /// the mesh controller (which registers the channel and derives the AES key
+  /// when a password is given), then opens it in the normal chat view.
+  Future<void> _promptJoinMeshGroup() async {
+    final nameCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    final c = context.nym;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.bgSecondary,
+        title: Text(tr('Mesh group'), style: TextStyle(color: c.text)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              autofocus: true,
+              style: TextStyle(color: c.text),
+              decoration: InputDecoration(
+                prefixText: '#',
+                prefixStyle: TextStyle(color: c.textDim),
+                hintText: tr('group name'),
+                hintStyle: TextStyle(color: c.textDim),
+              ),
+              onSubmitted: (_) => Navigator.of(ctx).pop(true),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: passCtrl,
+              obscureText: true,
+              style: TextStyle(color: c.text),
+              decoration: InputDecoration(
+                hintText: tr('password (optional — encrypts the group)'),
+                hintStyle: TextStyle(color: c.textDim),
+              ),
+              onSubmitted: (_) => Navigator.of(ctx).pop(true),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(tr('Cancel'), style: TextStyle(color: c.textDim)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(tr('Join'), style: TextStyle(color: c.primary)),
+          ),
+        ],
+      ),
+    );
+    if (result != true || !mounted) return;
+    final name = _sanitizeGroupName(nameCtrl.text);
+    if (name.isEmpty) return;
+    await ref
+        .read(meshControllerProvider.notifier)
+        .joinChannel(name, password: passCtrl.text);
+    if (!mounted) return;
+    ref.read(appStateProvider.notifier).switchChannel(name);
+    _close();
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final mesh = ref.watch(meshControllerProvider);
-
+    // Deliberately do NOT watch meshControllerProvider at this level. It ticks
+    // constantly while the radio scans (every discovered/dropped peer, link and
+    // availability change); only the status bar and peers list need the live
+    // state, so they watch it in local Consumers.
     return Scaffold(
-      key: _scaffoldKey,
       backgroundColor: c.bg,
-      // The same off-canvas sidebar the rest of the app uses. Selecting a
-      // conversation from it pops the mesh screen so the chosen chat (which
-      // lives in the shell beneath this route) is revealed. Scaffold handles
-      // the left-edge swipe-to-open natively via [drawerEdgeDragWidth].
-      drawerEdgeDragWidth: 60,
-      // Opaque backing behind the sidebar. The Sidebar surface is the app-wide
-      // translucent `bgSecondary` (0.85), which everywhere else composites over
-      // the shell's WallpaperLayer/ambient glow. This pushed route has no such
-      // backdrop, so without a solid layer the drawer reads as see-through — the
-      // mesh screen (its Bluetooth glyph and all) bleeds through and the sidebar
-      // looks blank. A solid `c.bg` under it restores the normal opaque surface.
-      drawer: Container(
-        width: NymDimens.sidebarDrawerWidth,
-        color: c.bg,
-        child: Sidebar(
-          compact: true,
-          onItemSelected: () => Navigator.of(context).maybePop(),
-        ),
-      ),
       appBar: AppBar(
         backgroundColor: c.bgSecondary,
         foregroundColor: c.text,
@@ -104,16 +145,14 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
             _MeshNavBtn(
               svg: NymIcons.chevronLeft,
               tooltip: tr('Go back'),
-              onTap: Navigator.of(context).canPop()
-                  ? () => Navigator.of(context).maybePop()
-                  : null,
+              // Back = close the overlay, revealing the active conversation.
+              onTap: _close,
             ),
             _MeshNavBtn(
               svg: NymIcons.chevronRight,
               tooltip: tr('Go forward'),
-              // A pushed leaf route has nothing ahead of it — the forward
-              // chevron rests disabled, exactly as the chat header's does until
-              // you've navigated back.
+              // Nothing ahead of the mesh overlay — rests disabled, exactly as
+              // the chat header's does until you've navigated back.
               onTap: null,
             ),
             const SizedBox(width: 4),
@@ -121,34 +160,38 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
             const SizedBox(width: 8),
             Text(tr('Bluetooth Mesh'),
                 style: TextStyle(
-                    color: c.text,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600)),
+                    color: c.text, fontSize: 16, fontWeight: FontWeight.w600)),
           ],
         ),
         actions: [
           _MeshHeaderToggle(
             svg: NymIcons.bell,
             tooltip: tr('Notifications'),
-            badge: ref.watch(settingsProvider
-                    .select((s) => s.notificationsEnabled))
-                ? ref.watch(
-                    notificationHistoryProvider.select((s) => s.unread))
+            badge: ref.watch(
+                    settingsProvider.select((s) => s.notificationsEnabled))
+                ? ref.watch(notificationHistoryProvider.select((s) => s.unread))
                 : 0,
             onTap: () => showNotificationsPanel(context),
           ),
-          const SizedBox(width: 8),
-          _MeshHeaderToggle(
-            svg: NymIcons.menu,
-            tooltip: tr('Menu'),
-            onTap: () => _scaffoldKey.currentState?.openDrawer(),
-          ),
+          if (widget.onOpenSidebar != null) ...[
+            const SizedBox(width: 8),
+            _MeshHeaderToggle(
+              svg: NymIcons.menu,
+              tooltip: tr('Menu'),
+              // Instance fields don't promote; the surrounding null check
+              // guarantees this.
+              onTap: widget.onOpenSidebar!,
+            ),
+          ],
           const SizedBox(width: 12),
         ],
       ),
       body: Column(
         children: [
-          _StatusBar(mesh: mesh, colors: c),
+          Consumer(builder: (context, ref, _) {
+            return _StatusBar(
+                mesh: ref.watch(meshControllerProvider), colors: c);
+          }),
           // The public #mesh channel — opens in the normal chat view, where it
           // weaves together Nostr (kind-20000) and Bluetooth-mesh messages.
           ListTile(
@@ -175,11 +218,44 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
               ref
                   .read(appStateProvider.notifier)
                   .switchChannel(kMeshNearbyChannel);
-              Navigator.of(context).maybePop();
+              // Explicit close: the shell's view-change listener also closes
+              // the overlay, but not when #mesh was ALREADY the active view.
+              _close();
             },
           ),
+          // Join or create a NAMED mesh group. Unlike #mesh (one public room in
+          // range), a named group is a topic room only its members see; a
+          // password makes it end-to-end encrypted over the air (PBKDF2 →
+          // AES-GCM, MeshChannelEncryption). Everyone in range who joins the
+          // same name (and knows the password) is in the group — membership is
+          // by shared name, mirroring how mesh chat rooms work rather than a
+          // per-member roster.
+          ListTile(
+            leading: Container(
+              width: 38,
+              height: 38,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: c.primary.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: NymSvgIcon(NymIcons.groupAddMembers,
+                  size: 18, color: c.primary),
+            ),
+            title: Text(tr('Join or create a mesh group'),
+                style: TextStyle(color: c.text)),
+            subtitle: Text(tr('A named room · optional password for privacy'),
+                style: TextStyle(color: c.textDim, fontSize: 12)),
+            trailing: Icon(Icons.add, size: 18, color: c.primary),
+            onTap: _promptJoinMeshGroup,
+          ),
           Divider(height: 1, color: c.border),
-          Expanded(child: _PeersList(mesh: mesh, colors: c)),
+          Expanded(
+            child: Consumer(builder: (context, ref, _) {
+              return _PeersList(
+                  mesh: ref.watch(meshControllerProvider), colors: c);
+            }),
+          ),
           Divider(height: 1, color: c.border),
           _MeshDiagnostics(colors: c),
         ],
@@ -344,9 +420,7 @@ class _MeshHeaderToggle extends StatelessWidget {
       height: 40,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: c.isLight
-            ? const Color(0xD9FFFFFF)
-            : const Color(0xCC141423),
+        color: c.isLight ? const Color(0xD9FFFFFF) : const Color(0xCC141423),
         borderRadius: NymRadius.rsm,
         border: Border.all(
           color:
@@ -373,8 +447,7 @@ class _MeshHeaderToggle extends StatelessWidget {
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: c.danger,
-                      borderRadius:
-                          const BorderRadius.all(Radius.circular(8)),
+                      borderRadius: const BorderRadius.all(Radius.circular(8)),
                     ),
                     child: Text(
                       badge > 99 ? '99+' : '$badge',
@@ -431,9 +504,11 @@ class _StatusBar extends ConsumerWidget {
           ),
           if (needsPermission)
             TextButton(
-              onPressed: () =>
-                  ref.read(meshControllerProvider.notifier).openSystemSettings(),
-              child: Text(tr('Enable'), style: TextStyle(color: colors.primary)),
+              onPressed: () => ref
+                  .read(meshControllerProvider.notifier)
+                  .openSystemSettings(),
+              child:
+                  Text(tr('Enable'), style: TextStyle(color: colors.primary)),
             ),
           Switch(
             value: enabled,
@@ -508,7 +583,9 @@ class _PeersList extends ConsumerWidget {
         ref.read(meshControllerProvider.notifier).bridge?.openPeerDm(peer);
     if (pubkey == null) return;
     ref.read(appStateProvider.notifier).switchView(ChatView.pm(pubkey));
-    Navigator.of(context).maybePop();
+    // Explicit close in case this DM was already the active view (the shell's
+    // view-change listener wouldn't fire then).
+    ref.read(meshScreenOpenProvider.notifier).state = false;
   }
 
   @override

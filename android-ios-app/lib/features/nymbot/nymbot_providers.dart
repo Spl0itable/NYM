@@ -52,16 +52,16 @@ bool isBotCommand(String text) {
 /// True when [text] mentions `@Nymbot` (case-insensitive), which routes the
 /// message to `?ask` (README line 179: also triggered via an `@Nymbot`
 /// mention followed by the question). The mention may appear anywhere.
-bool isNymbotMention(String text) =>
-    _nymbotMention.hasMatch(text);
+bool isNymbotMention(String text) => _nymbotMention.hasMatch(text);
 
 /// `@Nymbot` as a word (not part of a longer handle like `@Nymbotz`),
 /// optionally carrying the `#xxxx` pubkey discriminator the mention flair now
 /// serializes on the wire (`@Nymbot#4bb2`, autocomplete_queries.dart). Without
 /// swallowing that suffix, [stripNymbotMention] left `#4bb2` behind and the bot
 /// answered its own discriminator instead of the intended question.
-final RegExp _nymbotMention =
-    RegExp(r'(^|[^A-Za-z0-9_])@Nymbot(?:#[0-9a-f]{4})?\b', caseSensitive: false);
+final RegExp _nymbotMention = RegExp(
+    r'(^|[^A-Za-z0-9_])@Nymbot(?:#[0-9a-f]{4})?\b',
+    caseSensitive: false);
 
 /// Strips a leading `@Nymbot` mention (and its optional `#xxxx` discriminator)
 /// and returns the remaining question text, for turning `@Nymbot what is nostr`
@@ -183,8 +183,9 @@ class BotChatState {
     List<Message>? infoMessages,
   }) =>
       BotChatState(
-        proModel:
-            identical(proModel, _sentinel) ? this.proModel : proModel as ProModel?,
+        proModel: identical(proModel, _sentinel)
+            ? this.proModel
+            : proModel as ProModel?,
         git: identical(git, _sentinel) ? this.git : git as GitConfig?,
         balance: balance ?? this.balance,
         balanceKnown: balanceKnown ?? this.balanceKnown,
@@ -682,8 +683,8 @@ class BotChatController extends StateNotifier<BotChatState> {
     _persistGit(null);
   }
 
-  void setBalance(BotBalance b) => state = state.copyWith(
-      balance: b, balanceKnown: true, balanceUnavailable: false);
+  void setBalance(BotBalance b) => state =
+      state.copyWith(balance: b, balanceKnown: true, balanceUnavailable: false);
 
   // --- Command dispatch (the PWA `_handleBotPM` command branches) -------------
 
@@ -703,8 +704,9 @@ class BotChatController extends StateNotifier<BotChatState> {
       return;
     }
     if (RegExp(r'^\?buy\b', caseSensitive: false).hasMatch(trimmed)) {
-      _ref.read(botBuyRequestProvider.notifier).request(
-          state.isPro ? CreditTier.pro : CreditTier.standard);
+      _ref
+          .read(botBuyRequestProvider.notifier)
+          .request(state.isPro ? CreditTier.pro : CreditTier.standard);
       return;
     }
     if (RegExp(r'^\?model\b', caseSensitive: false).hasMatch(trimmed)) {
@@ -880,9 +882,9 @@ class BotChatController extends StateNotifier<BotChatState> {
       // Nymbot replies may lead with a <think> reasoning block — split it into
       // its own field so previews/search see only the visible reply
       // (pms.js:1255-1262).
-      final tm = RegExp(r'^\s*<think>([\s\S]*?)<\/think>\s*',
-              caseSensitive: false)
-          .firstMatch(msg.content);
+      final tm =
+          RegExp(r'^\s*<think>([\s\S]*?)<\/think>\s*', caseSensitive: false)
+              .firstMatch(msg.content);
       if (tm != null && msg.content.substring(tm.end).trim().isNotEmpty) {
         msg.thinking = tm.group(1)?.trim();
         msg.content = msg.content.substring(tm.end);
@@ -1021,8 +1023,9 @@ class BotChatController extends StateNotifier<BotChatState> {
               : "You're out of Nymbot credits (${e.balance} left). "
                   'Zap Nymbot or type ?buy to purchase more.'));
       _applyLedgerBalance(e.balance, pro: e.pro);
-      _ref.read(botBuyRequestProvider.notifier).request(
-          e.pro ? CreditTier.pro : CreditTier.standard);
+      _ref
+          .read(botBuyRequestProvider.notifier)
+          .request(e.pro ? CreditTier.pro : CreditTier.standard);
     } on NymbotException catch (e) {
       _setBotTyping(false);
       // A response DID come back — the PWA advances read receipts before its
@@ -1233,33 +1236,35 @@ class BotChatController extends StateNotifier<BotChatState> {
       statusBits.add(
           'repo: ${git.repo}${git.allowWrites ? ' (writes on)' : ' (read-only)'}');
     }
-    _displayBotInfoMessage([
-      '**📖 Nymbot premium guide**',
-      // The status line renders in italics (`<em>`, pms.js:1749).
-      '*You right now: ${statusBits.join(' · ')}.*',
-      '',
-      '**1. Standard premium (this chat)**',
-      'Each message is auto-routed to the best AI model for its task. Replies cost **standard credits** (10 sats each, bulk bonuses from 500 sats): 1 credit for general chat, creative writing, or translation; 2 credits for coding or reasoning/math.',
-      '',
-      '**2. Nymbot Pro**',
-      'Pin every reply to a specific frontier model instead of auto-routing. Pro replies spend separate **Pro credits** (100 sats each, bulk bonuses from 5K sats):',
-      ...modelLines,
-      'Pick with `?model <name>` (e.g. `?model claude-opus`), back to standard with `?model off`. Buy Pro credits via `?buy` → Pro switch.',
-      '',
-      '**3. Git repos (Pro)**',
-      'Connect a repository — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg & self-hosted) — and Pro replies become a coding agent over your real code: it lists, reads, and searches files, and with writes enabled it commits to a branch (or directly) and opens pull/merge requests.',
-      'Setup: `?git provider github|gitlab|gitea [host]` → `?git token <pat>` → `?git repos` → `?git repo owner/name [branch]` → optionally `?git writes on`. Type `?git` anytime for status.',
-      "Repo tasks use up to 6 model calls, each at the model's Pro credit price — only calls actually used are charged. Your token stays on this device, is never published to relays, and is never stored server-side.",
-      '',
-      '**4. Credits**',
-      '`?balance` shows both balances · `?buy` purchases over Lightning (Standard/Pro switch) · `?gift @nym#xxxx` gifts credits · `?transfer @nym#xxxx confirm` moves your ENTIRE balance (both pools) to another pubkey.',
-      'Credits are tied to your nym — save your nsec (sidebar → your nym → Reveal private key) so they survive a new session.',
-      '',
-      '**5. Chat tricks**',
-      'Start a message with `!` for a one-off answer that ignores history · `?clear` wipes the conversation · quote-reply any message to ask a follow-up about it.',
-      '',
-      'This guide is free — type `?help` anytime.',
-    ].join('\n'), id: 'nymbot-help-${DateTime.now().millisecondsSinceEpoch}');
+    _displayBotInfoMessage(
+        [
+          '**📖 Nymbot premium guide**',
+          // The status line renders in italics (`<em>`, pms.js:1749).
+          '*You right now: ${statusBits.join(' · ')}.*',
+          '',
+          '**1. Standard premium (this chat)**',
+          'Each message is auto-routed to the best AI model for its task. Replies cost **standard credits** (10 sats each, bulk bonuses from 500 sats): 1 credit for general chat, creative writing, or translation; 2 credits for coding or reasoning/math.',
+          '',
+          '**2. Nymbot Pro**',
+          'Pin every reply to a specific frontier model instead of auto-routing. Pro replies spend separate **Pro credits** (100 sats each, bulk bonuses from 5K sats):',
+          ...modelLines,
+          'Pick with `?model <name>` (e.g. `?model claude-opus`), back to standard with `?model off`. Buy Pro credits via `?buy` → Pro switch.',
+          '',
+          '**3. Git repos (Pro)**',
+          'Connect a repository — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg & self-hosted) — and Pro replies become a coding agent over your real code: it lists, reads, and searches files, and with writes enabled it commits to a branch (or directly) and opens pull/merge requests.',
+          'Setup: `?git provider github|gitlab|gitea [host]` → `?git token <pat>` → `?git repos` → `?git repo owner/name [branch]` → optionally `?git writes on`. Type `?git` anytime for status.',
+          "Repo tasks use up to 6 model calls, each at the model's Pro credit price — only calls actually used are charged. Your token stays on this device, is never published to relays, and is never stored server-side.",
+          '',
+          '**4. Credits**',
+          '`?balance` shows both balances · `?buy` purchases over Lightning (Standard/Pro switch) · `?gift @nym#xxxx` gifts credits · `?transfer @nym#xxxx confirm` moves your ENTIRE balance (both pools) to another pubkey.',
+          'Credits are tied to your nym — save your nsec (sidebar → your nym → Reveal private key) so they survive a new session.',
+          '',
+          '**5. Chat tricks**',
+          'Start a message with `!` for a one-off answer that ignores history · `?clear` wipes the conversation · quote-reply any message to ask a follow-up about it.',
+          '',
+          'This guide is free — type `?help` anytime.',
+        ].join('\n'),
+        id: 'nymbot-help-${DateTime.now().millisecondsSinceEpoch}');
   }
 
   // --- ?gift (pms.js `_handleBotPM` ?gift branch, :2426-2441) -----------------
@@ -1279,8 +1284,8 @@ class BotChatController extends StateNotifier<BotChatState> {
           '(e.g. ?gift @cyber_wolf#a3f2).');
       return;
     }
-    final giftNym =
-        stripPubkeySuffix(_appState.users[giftPubkey]?.nym ?? giftPubkey.substring(0, 8));
+    final giftNym = stripPubkeySuffix(
+        _appState.users[giftPubkey]?.nym ?? giftPubkey.substring(0, 8));
     // Open the gift-credit modal prefilled with the recipient
     // (`showBotCreditsModal({pubkey, nym})`) via the shared mailbox the shell
     // listens to.
@@ -1362,9 +1367,11 @@ class BotChatController extends StateNotifier<BotChatState> {
         moved.add('$transferred credit${transferred == 1 ? '' : 's'}');
       }
       if (proTransferred > 0) {
-        moved.add('$proTransferred Pro credit${proTransferred == 1 ? '' : 's'}');
+        moved
+            .add('$proTransferred Pro credit${proTransferred == 1 ? '' : 's'}');
       }
-      _system('Transferred ${moved.isEmpty ? '0 credits' : moved.join(' and ')} '
+      _system(
+          'Transferred ${moved.isEmpty ? '0 credits' : moved.join(' and ')} '
           'to @$targetNym. Your balance is now 0.');
     } on NymbotException catch (e) {
       // `status >= 400` → `'Transfer failed: ' + (data.error || 'request
@@ -1519,8 +1526,8 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
       final fullName = NymbotService.gitRepoFullName(cfg, res.data);
       final branchArg = parts.length > 2 ? parts[2] : '';
-      final branchOk =
-          branchArg.isNotEmpty && RegExp(r'^[\w./-]{1,100}$').hasMatch(branchArg);
+      final branchOk = branchArg.isNotEmpty &&
+          RegExp(r'^[\w./-]{1,100}$').hasMatch(branchArg);
       cfg = cfg.copyWith(
         repo: fullName.isNotEmpty ? fullName : repo,
         branch: branchOk ? branchArg : null,
@@ -1642,10 +1649,9 @@ class BotChatController extends StateNotifier<BotChatState> {
     if (_pubkey == null) return null;
     // A gift to my own pubkey is just a normal self-buy (PWA drops the
     // recipient when `giftPk === this.pubkey`, zaps.js:606).
-    final recip =
-        (recipientPubkey != null && recipientPubkey != _pubkey)
-            ? recipientPubkey
-            : null;
+    final recip = (recipientPubkey != null && recipientPubkey != _pubkey)
+        ? recipientPubkey
+        : null;
     return _service.buy(
       amountSats: amountSats,
       tier: tier,
@@ -1789,11 +1795,14 @@ const String botWelcomeText =
     '• `?clear` — wipe this chat and start fresh.\n'
     '• `?balance` — check your credit balance (also shown in the header).\n'
     '• `?buy` — purchase more credits. `?gift @nym#xxxx` — gift credits to someone.\n'
-    '• `?model` — go **Pro**: pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.1, Codex) for every reply, paid with separate Pro credits.\n'
+    '• `?model` — go **Pro**: pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.6 Sol, Gemini, Grok, Kimi K3, Qwen, MiniMax) for every reply, paid with separate Pro credits.\n'
+    '• `?image <description>` — generate a picture. On Pro, add `--model <name>` to pick a frontier generator (Nano Banana Pro, Imagen 4, FLUX 2, Seedream, GPT Image 2, Grok Imagine, Recraft) — `?image models` lists them free.\n'
+    '• `?speak <text>` — get it read aloud as a voice clip.\n'
+    '• Send or link a picture — models that can see will look at the image itself, not just the link.\n'
     '• `?git` — connect a git repo (GitHub, GitLab, Gitea/Codeberg) so Pro replies read your actual code and can even commit, branch, and open PRs — like a chat-based coding agent.\n'
     '• `?transfer @nym#xxxx confirm` — move ALL your credits to another pubkey (great for switching nyms).\n'
     '\n'
-    "**Pricing:** general chat, creative writing, and translation replies cost **1 credit**. Coding and reasoning/math replies cost **2 credits** (they use larger models). Pro replies start at **1–2 Pro credits** and scale with reply length (each model's range is in `?model`). Credits are tied to your nym — save your nsec so you don't lose them.\n"
+    "**Pricing:** general chat, creative writing, and translation replies cost **1 credit**. Coding and reasoning/math replies cost **2 credits** (they use larger models). Pro replies start at **1–2 Pro credits** and scale with reply length (each model's range is in `?model`). `?image` costs **5 credits** (2 Pro) and `?speak` **3 credits** (1 Pro), charged per generation — nothing is charged if it fails. Credits are tied to your nym — save your nsec so you don't lose them.\n"
     '\n'
     'So, what can I help you with?';
 

@@ -25,16 +25,41 @@ class SpamFilter {
   /// (`_RX_ZERO_WIDTH`, nostr-core.js:806:
   /// `/[zero-width + bidi-control ranges]/g`. The `g`
   /// flag is irrelevant in Dart; [String.replaceAll] removes every occurrence.
-  static final RegExp _rxZeroWidth = RegExp(
-      '[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]');
+  static final RegExp _rxZeroWidth =
+      RegExp('[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]');
 
   /// Bigrams that are vanishingly rare in real English words; their presence in
   /// a long alphanumeric token is a tell of randomized/spam strings
   /// (`_RARE_BIGRAMS`, nostr-core.js:807). Kept verbatim and in order.
   static const List<String> _rareBigrams = [
-    'xw', 'xz', 'xj', 'xk', 'wx', 'wz', 'wj', 'wq', 'jq', 'jx', 'jz',
-    'kq', 'kx', 'kz', 'vq', 'vx', 'vz', 'zx', 'zk', 'zp', 'pq', 'pz',
-    'fq', 'fz', 'gq', 'gz', 'hq', 'hz',
+    'xw',
+    'xz',
+    'xj',
+    'xk',
+    'wx',
+    'wz',
+    'wj',
+    'wq',
+    'jq',
+    'jx',
+    'jz',
+    'kq',
+    'kx',
+    'kz',
+    'vq',
+    'vx',
+    'vz',
+    'zx',
+    'zk',
+    'zp',
+    'pq',
+    'pz',
+    'fq',
+    'fz',
+    'gq',
+    'gz',
+    'hq',
+    'hz',
   ];
 
   // --- Reusable patterns (compiled once; the PWA inlines these as literals) ---

@@ -100,8 +100,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
           decoration: BoxDecoration(
             color: c.bgSecondary,
             border: Border(top: BorderSide(color: c.glassBorder)),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(16)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
           ),
           clipBehavior: Clip.antiAlias,
           child: EmojiPicker(
@@ -200,8 +199,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                       bottom: 92,
                       child: _PresenterMenu(
                         call: call,
-                        selfPubkey:
-                            ref.read(appStateProvider).selfPubkey,
+                        selfPubkey: ref.read(appStateProvider).selfPubkey,
                         onToggleRestrict: () => service
                             .setScreenShareRestricted(!call.shareRestricted),
                         onAssign: service.assignPresenter,
@@ -273,7 +271,8 @@ class _Top extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    final kindLabel = call.kind == CallKind.video ? tr('Video call') : tr('Audio call');
+    final kindLabel =
+        call.kind == CallKind.video ? tr('Video call') : tr('Audio call');
 
     Widget id;
     if (call.isGroup) {
@@ -508,8 +507,7 @@ class _Tile extends StatelessWidget {
           color: c.bgTertiary,
           // `.call-tile` border = `var(--border)` (primary@0.20), primary
           // when presenting.
-          border: Border.all(
-              color: sharing ? c.primary : c.border, width: 1),
+          border: Border.all(color: sharing ? c.primary : c.border, width: 1),
           borderRadius: BorderRadius.circular(14),
           // `body.light-mode .call-tile { box-shadow: 0 2px 12px
           // rgba(0,0,0,0.12) }` (styles-features.css:4800).
@@ -548,7 +546,8 @@ class _Tile extends StatelessWidget {
               Positioned(
                 top: 8,
                 right: 8,
-                child: _Badge(text: tr('Presenting'), color: c.primary, fg: c.bg),
+                child:
+                    _Badge(text: tr('Presenting'), color: c.primary, fg: c.bg),
               ),
             // `.call-tile-name`: bottom-left, black@0.55, radius 8, decorated,
             // `max-width: calc(100% - 16px)` (styles-features.css:4756-4769) —
@@ -771,8 +770,9 @@ class _ReactionsBar extends StatelessWidget {
     // recent when its pack is still known (PWA `_callReactionBarEmojis`,
     // calls.js:1106-1118 → `known()`); without the predicate every custom code
     // is treated as unknown and dropped.
-    final codeToUrl =
-        ProviderScope.containerOf(context).read(liveCustomEmojiProvider).codeToUrl;
+    final codeToUrl = ProviderScope.containerOf(context)
+        .read(liveCustomEmojiProvider)
+        .codeToUrl;
     final emojis = callReactionBarEmojis(recents,
         isKnownCustom: (code) => codeToUrl.containsKey(code));
     return Center(
@@ -787,7 +787,8 @@ class _ReactionsBar extends StatelessWidget {
           border: Border.all(color: c.border),
           borderRadius: BorderRadius.circular(22),
           boxShadow: const [
-            BoxShadow(color: Color(0x66000000), blurRadius: 30, offset: Offset(0, 8)),
+            BoxShadow(
+                color: Color(0x66000000), blurRadius: 30, offset: Offset(0, 8)),
           ],
         ),
         child: Wrap(
@@ -817,8 +818,8 @@ class _ReactionsBar extends StatelessWidget {
             // calls.js:1134) opens the full picker.
             _ReactBarBtn(
               onTap: onMore,
-              child: Text('＋',
-                  style: TextStyle(fontSize: 24, color: c.textDim)),
+              child:
+                  Text('＋', style: TextStyle(fontSize: 24, color: c.textDim)),
             ),
           ],
         ),
@@ -924,8 +925,8 @@ class _ChatPanel extends ConsumerWidget {
                 // styled text, not an SVG glyph.
                 IconButton(
                   icon: Text('✕',
-                      style: TextStyle(
-                          color: c.textDim, fontSize: 20, height: 1)),
+                      style:
+                          TextStyle(color: c.textDim, fontSize: 20, height: 1)),
                   onPressed: onClose,
                 ),
               ],
@@ -947,7 +948,8 @@ class _ChatPanel extends ConsumerWidget {
               ),
             ),
           ),
-          if (call.typingPubkeys.isNotEmpty) _TypingLine(pubkeys: call.typingPubkeys),
+          if (call.typingPubkeys.isNotEmpty)
+            _TypingLine(pubkeys: call.typingPubkeys),
           _InputRow(
             call: call,
             controller: controller,
@@ -976,8 +978,8 @@ class _ChatRow extends ConsumerWidget {
   final ValueChanged<String> onMorePicker;
 
   void _openQuickReact(BuildContext context, Rect anchor) {
-    final recents = ProviderScope.containerOf(context)
-        .read(recentEmojisProvider);
+    final recents =
+        ProviderScope.containerOf(context).read(recentEmojisProvider);
     // A non-self chat row's quick-react popup exposes a "User options" affordance
     // (PWA `_showCallChatQuickReact` 3-dot `data-qr="menu"`, calls.js:1526,1566)
     // that opens the shared user context menu. Rendered as the inline
@@ -1104,8 +1106,8 @@ class _ChatRow extends ConsumerWidget {
     // The list's 14px horizontal gutter; a gold-edged row starts 8px earlier
     // (`margin-left: -8px`).
     return Padding(
-      padding: EdgeInsets.only(
-          left: (supporter || auraGold) ? 6 : 14, right: 14),
+      padding:
+          EdgeInsets.only(left: (supporter || auraGold) ? 6 : 14, right: 14),
       child: row,
     );
   }
@@ -1122,8 +1124,8 @@ class _ChatRow extends ConsumerWidget {
     // ~18px kTouchSlop and still fire after a small scroll drift.
     return RawGestureDetector(
       gestures: <Type, GestureRecognizerFactory>{
-        _CallChatLongPressRecognizer: GestureRecognizerFactoryWithHandlers<
-            _CallChatLongPressRecognizer>(
+        _CallChatLongPressRecognizer:
+            GestureRecognizerFactoryWithHandlers<_CallChatLongPressRecognizer>(
           () => _CallChatLongPressRecognizer(debugOwner: this),
           (r) => r
             ..onLongPressStart = (d) {
@@ -1142,45 +1144,45 @@ class _ChatRow extends ConsumerWidget {
       child: Padding(
         padding: const EdgeInsets.only(right: 28),
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // `.call-chat-from`: decorated nym (non-self primary, self dim
-          // "You"), `font-size: 0.75rem` = 12px (styles-features.css:4874-4877).
-          if (msg.isSelf)
-            Text(tr('You'),
-                style: TextStyle(
-                    color: c.textDim,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600))
-          else
-            // Chat-from nym → shared user context menu (PWA `callNickMenu` →
-            // `showCallUserMenu`, inline-bindings.js:289).
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => showCallUserMenu(context, msg.pubkey),
-              child: CallNym(
-                pubkey: msg.pubkey,
-                baseColor: c.primary,
-                baseStyle:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                badgeSize: 11,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // `.call-chat-from`: decorated nym (non-self primary, self dim
+            // "You"), `font-size: 0.75rem` = 12px (styles-features.css:4874-4877).
+            if (msg.isSelf)
+              Text(tr('You'),
+                  style: TextStyle(
+                      color: c.textDim,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600))
+            else
+              // Chat-from nym → shared user context menu (PWA `callNickMenu` →
+              // `showCallUserMenu`, inline-bindings.js:289).
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => showCallUserMenu(context, msg.pubkey),
+                child: CallNym(
+                  pubkey: msg.pubkey,
+                  baseColor: c.primary,
+                  baseStyle: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600),
+                  badgeSize: 11,
+                ),
               ),
+            const SizedBox(height: 2),
+            // Bubble with @mention highlighting (`_formatCallChatText`).
+            Text.rich(
+              callChatTextSpans(msg.text, base, c.primary),
+              textAlign: TextAlign.left,
             ),
-          const SizedBox(height: 2),
-          // Bubble with @mention highlighting (`_formatCallChatText`).
-          Text.rich(
-            callChatTextSpans(msg.text, base, c.primary),
-            textAlign: TextAlign.left,
-          ),
-          // Reaction count badges.
-          if (msg.reactions.isNotEmpty) ...[
-            const SizedBox(height: 3),
-            _ReactionBadges(msg: msg, onReact: onReact),
+            // Reaction count badges.
+            if (msg.reactions.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              _ReactionBadges(msg: msg, onReact: onReact),
+            ],
+            // Read receipt (self only): right-aligned ✓/✓✓ in 1:1, reader
+            // avatars in group (`.call-chat-readers { justify-content:flex-end }`).
+            if (msg.isSelf) _Receipt(msg: msg, isGroup: isGroup),
           ],
-          // Read receipt (self only): right-aligned ✓/✓✓ in 1:1, reader
-          // avatars in group (`.call-chat-readers { justify-content:flex-end }`).
-          if (msg.isSelf) _Receipt(msg: msg, isGroup: isGroup),
-        ],
         ),
       ),
     );
@@ -1307,9 +1309,8 @@ class _ReactionBadges extends StatelessWidget {
                   border: Border.all(
                       // `.call-chat-reaction` border = `var(--border)`
                       // (primary@0.20); self adds the solid primary border.
-                      color: entry.value.contains(selfPk)
-                          ? c.primary
-                          : c.border),
+                      color:
+                          entry.value.contains(selfPk) ? c.primary : c.border),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Row(
@@ -1364,7 +1365,8 @@ class _Receipt extends ConsumerWidget {
       anchorRect: anchor,
       emoji: '',
       // `.reactors-modal-header`: "Seen by <count>".
-      title: tr('Seen by {count}', {'count': abbreviateNumber(msg.readers.length)}),
+      title: tr(
+          'Seen by {count}', {'count': abbreviateNumber(msg.readers.length)}),
       reactors: [
         for (final e in msg.readers.entries)
           ReactorEntry(
@@ -1449,15 +1451,15 @@ class _Receipt extends ConsumerWidget {
       );
     }
     // 1:1 ✓ (sent) / ✓✓ (read) — right-aligned receipt.
-    final read = msg.delivery == CallChatDelivery.read || msg.readers.isNotEmpty;
+    final read =
+        msg.delivery == CallChatDelivery.read || msg.readers.isNotEmpty;
     return Align(
       alignment: Alignment.centerRight,
       child: Padding(
         padding: const EdgeInsets.only(top: 2),
         child: Text(
           read ? '✓✓' : '✓',
-          style: TextStyle(
-              color: read ? c.primary : c.textDim, fontSize: 11),
+          style: TextStyle(color: read ? c.primary : c.textDim, fontSize: 11),
         ),
       ),
     );
@@ -1798,7 +1800,10 @@ class _MentionAutocompleteState extends State<_MentionAutocomplete> {
           border: Border.all(color: c.border),
           borderRadius: BorderRadius.circular(10),
           boxShadow: const [
-            BoxShadow(color: Color(0x59000000), blurRadius: 16, offset: Offset(0, -4)),
+            BoxShadow(
+                color: Color(0x59000000),
+                blurRadius: 16,
+                offset: Offset(0, -4)),
           ],
         ),
         clipBehavior: Clip.antiAlias,
@@ -1886,8 +1891,7 @@ class _PresenterMenu extends ConsumerWidget {
       selfPubkey,
       ...call.participants.map((p) => p.pubkey),
     ];
-    final requests =
-        call.presentRequests.where(members.contains).toList();
+    final requests = call.presentRequests.where(members.contains).toList();
 
     String nameOf(String pk) =>
         pk == selfPubkey ? tr('You') : stripPubkeySuffix(users[pk]?.nym ?? pk);
@@ -1907,7 +1911,8 @@ class _PresenterMenu extends ConsumerWidget {
           border: Border.all(color: c.border),
           borderRadius: BorderRadius.circular(14),
           boxShadow: const [
-            BoxShadow(color: Color(0x66000000), blurRadius: 30, offset: Offset(0, 8)),
+            BoxShadow(
+                color: Color(0x66000000), blurRadius: 30, offset: Offset(0, 8)),
           ],
         ),
         child: SingleChildScrollView(
@@ -1935,8 +1940,8 @@ class _PresenterMenu extends ConsumerWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(tr('Only the presenter can share'),
-                            style: TextStyle(
-                                color: c.textBright, fontSize: 14)),
+                            style:
+                                TextStyle(color: c.textBright, fontSize: 14)),
                       ),
                     ],
                   ),
@@ -2173,7 +2178,8 @@ class _Controls extends StatelessWidget {
             // PWA toggles `.active` (red) on the SAME mic glyph when muted.
             svg: NymIcons.callMic,
             active: call.muted,
-            tooltip: call.muted ? tr('Unmute microphone') : tr('Mute microphone'),
+            tooltip:
+                call.muted ? tr('Unmute microphone') : tr('Mute microphone'),
             onTap: onMute,
           ),
           if (isVideo)
@@ -2182,7 +2188,8 @@ class _Controls extends StatelessWidget {
               // (red) when the camera is off.
               svg: NymIcons.video,
               active: call.cameraOff,
-              tooltip: call.cameraOff ? tr('Turn on camera') : tr('Turn off camera'),
+              tooltip:
+                  call.cameraOff ? tr('Turn on camera') : tr('Turn off camera'),
               onTap: onCamera,
             ),
           _CtrlBtn(
@@ -2192,7 +2199,9 @@ class _Controls extends StatelessWidget {
             requestMode: !call.sharing && !call.canShareScreen,
             tooltip: call.sharing
                 ? tr('Stop sharing screen')
-                : (call.canShareScreen ? tr('Share screen') : tr('Request to present')),
+                : (call.canShareScreen
+                    ? tr('Share screen')
+                    : tr('Request to present')),
             onTap: onShare,
           ),
           // Presenter button — mods only, badge = pending requests.

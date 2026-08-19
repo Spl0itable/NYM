@@ -64,7 +64,10 @@ List<RelayShard> shardRelaysByRole(
       !_blockedRelays.contains(url) &&
       !permanentBlacklist.contains(url);
 
-  final geoSet = <String>{for (final u in geoRelayUrls) if (isValid(u)) u};
+  final geoSet = <String>{
+    for (final u in geoRelayUrls)
+      if (isValid(u)) u
+  };
   final appValid = isValid(appRelay);
 
   // Critical = default relays (+ DM relays), excluding the app relay.
@@ -77,7 +80,10 @@ List<RelayShard> shardRelaysByRole(
   if (appValid) reservedSet.add(appRelay);
 
   // Geo = CSV relays not already reserved.
-  final geo = <String>[for (final u in geoSet) if (!reservedSet.contains(u)) u];
+  final geo = <String>[
+    for (final u in geoSet)
+      if (!reservedSet.contains(u)) u
+  ];
 
   // Discovered = anything in allRelays not already reserved or geo (canon-dedup).
   final geoForDiscovered = <String>{...geo};
@@ -114,11 +120,15 @@ List<RelayShard> shardRelaysByRole(
   // Dedicated app relay shard.
   if (appValid) {
     shards.add(RelayShard(
-        id: 'app-0', role: 'critical', relays: [appRelay], dmRelays: [appRelay]));
+        id: 'app-0',
+        role: 'critical',
+        relays: [appRelay],
+        dmRelays: [appRelay]));
   }
 
   final criticalDmRelays = <String>[
-    for (final u in dmRelays) if (isValid(u) && u != appRelay) u
+    for (final u in dmRelays)
+      if (isValid(u) && u != appRelay) u
   ];
   final criticalChunks = chunk(critical);
   for (var i = 0; i < criticalChunks.length; i++) {
@@ -147,7 +157,10 @@ List<RelayShard> shardRelaysByRole(
 
   if (shards.isEmpty) {
     shards.add(RelayShard(
-        id: 'critical-0', role: 'critical', relays: const [], dmRelays: const []));
+        id: 'critical-0',
+        role: 'critical',
+        relays: const [],
+        dmRelays: const []));
   }
   return shards;
 }
@@ -177,8 +190,8 @@ class PoolFrame {
       jsonEncode(<dynamic>['DM_EVENT', e.toJson()]);
 
   /// `["REQ",subId,...filters]`
-  static String req(String subId, List<NostrFilter> filters) => jsonEncode(
-      <dynamic>['REQ', subId, ...filters.map((f) => f.toJson())]);
+  static String req(String subId, List<NostrFilter> filters) =>
+      jsonEncode(<dynamic>['REQ', subId, ...filters.map((f) => f.toJson())]);
 
   /// `["CLOSE",subId]`
   static String close(String subId) => jsonEncode(<dynamic>['CLOSE', subId]);
@@ -278,7 +291,8 @@ sealed class PoolMessage {
         // this relay (relays.js:2117 `_permanentlyBlacklistRelay`).
         final url = arr.length > 1 ? arr[1]?.toString() ?? '' : '';
         if (!url.startsWith('wss://')) return null;
-        final reason = arr.length > 2 ? arr[2]?.toString() ?? 'banned' : 'banned';
+        final reason =
+            arr.length > 2 ? arr[2]?.toString() ?? 'banned' : 'banned';
         return PoolRelayBan(url, reason);
       default:
         // POOL:SHARDS / NOTICE / AUTH — unhandled by transport.
@@ -784,7 +798,8 @@ class RelayPoolProxy implements PoolTransport {
   /// closest relays are known the PWA falls back to a plain `["EVENT",e]`
   /// (relays.js:3390-3401), so we mirror that here.
   @override
-  Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) async {
+  Future<int> publishGeo(
+      NostrEvent event, List<String> closestRelayUrls) async {
     if (closestRelayUrls.isEmpty) {
       return _broadcast(PoolFrame.event(event));
     }

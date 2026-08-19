@@ -313,8 +313,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
           // (styles-components.css:1214-1215); the phone placement adds
           // `max-width: 90%` inline (reactions.js:883, innerWidth ≤768).
           constraints: BoxConstraints(
-              maxWidth:
-                  width <= 768 ? (width * 0.9).clamp(0.0, 350.0) : 350.0,
+              maxWidth: width <= 768 ? (width * 0.9).clamp(0.0, 350.0) : 350.0,
               maxHeight: maxPanelHeight),
           child: LayoutBuilder(builder: (context, constraints) {
             final height = constraints.maxHeight.isFinite
@@ -421,8 +420,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     // Light mode restyles this input via `body.light-mode input`
     // (styles-themes-responsive.css:561-569): fill rgba(0,0,0,0.04) and
     // border rgba(0,0,0,0.1), both !important, in every state.
-    final borderColor =
-        c.isLight ? const Color(0x1A000000) : c.glassBorder;
+    final borderColor = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     // Some callers mount the picker inside an OverlayPortal / LookupBoundary.
     // TextField requires a Material ancestor *within the closest*
     // LookupBoundary, so wrap the input itself defensively.
@@ -436,7 +434,8 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         // !important }` (styles-themes-responsive.css:1063-1068), which beats
         // the generic `body.light-mode input { color: #000 }` rule (:583-593)
         // on specificity — so light mode uses the themed `--text`.
-        style: TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
+        style:
+            TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
         cursorColor: c.isLight ? c.text : c.textBright,
         decoration: InputDecoration(
           isDense: true,

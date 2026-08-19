@@ -105,7 +105,8 @@ void main() {
       final svc = TranslateService(
         api: ApiClient(client: mock, baseUrl: 'https://h/api/proxy'),
       );
-      expect(() => svc.translate('x', 'es'), throwsA(isA<TranslateException>()));
+      expect(
+          () => svc.translate('x', 'es'), throwsA(isA<TranslateException>()));
     });
   });
 

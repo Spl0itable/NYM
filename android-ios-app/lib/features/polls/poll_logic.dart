@@ -99,7 +99,9 @@ class PollLogic {
   /// True when a kind-30078 event is a poll-vote (`['t','nym-poll-vote']`).
   static bool isPollVoteEvent(NostrEvent e) =>
       e.kind == EventKind.pollVoteKind &&
-      e.tagsNamed('t').any((t) => t.length > 1 && t[1] == AppDataTopic.pollVote);
+      e
+          .tagsNamed('t')
+          .any((t) => t.length > 1 && t[1] == AppDataTopic.pollVote);
 
   /// True if an `['expiration', ts]` tag is present and already in the past
   /// (polls.js skips expired polls and votes on receive). [nowSec] injectable.

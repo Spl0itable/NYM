@@ -102,7 +102,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull, reason: '$name threw while rendering');
+      expect(tester.takeException(), isNull,
+          reason: '$name threw while rendering');
       expect(find.byType(SvgPicture), findsOneWidget, reason: '$name missing');
     }
   });

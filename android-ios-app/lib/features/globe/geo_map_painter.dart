@@ -68,15 +68,13 @@ class GeoMapStyle {
       border: isLight ? const Color(0xFF9AAEBA) : const Color(0xFF2C4357),
       // dark: rgba(180,200,220,0.22) -> 0x38 alpha;
       // light: rgba(120,140,160,0.55) -> 0x8C alpha.
-      adminBorder:
-          isLight ? const Color(0x8C788CA0) : const Color(0x38B4C8DC),
+      adminBorder: isLight ? const Color(0x8C788CA0) : const Color(0x38B4C8DC),
       graticule: isLight
           ? const Color(0x0D000000) // rgba(0,0,0,0.05)
           : const Color(0x0AFFFFFF), // rgba(255,255,255,0.04)
       label: isLight ? const Color(0xD91E2837) : const Color(0xD9DCE8F5),
       // dark: rgba(190,205,220,0.65) -> 0xA6; light: rgba(70,80,95,0.75) -> 0xBF.
-      adminLabel:
-          isLight ? const Color(0xBF46505F) : const Color(0xA6BECDDC),
+      adminLabel: isLight ? const Color(0xBF46505F) : const Color(0xA6BECDDC),
       // dark: rgba(220,232,245,0.9) -> 0xE6; light: rgba(60,70,85,0.85) -> 0xD9.
       cityDot: isLight ? const Color(0xD93C4655) : const Color(0xE6DCE8F5),
       // dark: rgba(220,232,245,0.85) -> 0xD9; light: rgba(50,60,75,0.85) -> 0xD9.
@@ -244,10 +242,7 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   for (final pt in points) {
     final p = view.project(pt.lng, pt.lat, size);
     final sx = p.dx * heatScale, sy = p.dy * heatScale;
-    if (sx < -radius ||
-        sx > w2 + radius ||
-        sy < -radius ||
-        sy > h2 + radius) {
+    if (sx < -radius || sx > w2 + radius || sy < -radius || sy > h2 + radius) {
       continue;
     }
     final weight = math.log(pt.messages + 1) / denom;
@@ -272,8 +267,7 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   final picture = recorder.endRecording();
   final accum = await picture.toImage(w2, h2);
   picture.dispose();
-  final bytes =
-      await accum.toByteData(format: ui.ImageByteFormat.rawRgba);
+  final bytes = await accum.toByteData(format: ui.ImageByteFormat.rawRgba);
   accum.dispose();
   if (bytes == null) return null;
 
@@ -602,8 +596,8 @@ class GeoMapPainter extends CustomPainter {
     // this frame — the next rebuild paints it.
     final img = heatmapImage;
     if (img != null) {
-      final src = Rect.fromLTWH(
-          0, 0, img.width.toDouble(), img.height.toDouble());
+      final src =
+          Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble());
       final dst = Offset.zero & size;
       canvas.drawImageRect(
         img,
@@ -780,8 +774,7 @@ class GeoMapPainter extends CustomPainter {
 
     final tpStroke = make(strokePaint);
     final tpFill = make(fillPaint);
-    final offset =
-        center - Offset(tpFill.width / 2, tpFill.height / 2);
+    final offset = center - Offset(tpFill.width / 2, tpFill.height / 2);
     tpStroke.paint(canvas, offset);
     tpFill.paint(canvas, offset);
   }

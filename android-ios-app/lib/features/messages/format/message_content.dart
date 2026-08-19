@@ -24,7 +24,8 @@ import '../../../services/platform/deep_links.dart';
 import '../../../state/app_state.dart';
 import '../../../state/nostr_controller.dart';
 import '../../../state/settings_provider.dart';
-import '../../../widgets/chat/messages_list.dart' show messageListScrollerProvider;
+import '../../../widgets/chat/messages_list.dart'
+    show messageListScrollerProvider;
 import '../../../widgets/common/app_dialog.dart';
 import '../../../widgets/common/nym_avatar.dart';
 import '../../../widgets/context_menu/context_menu_actions.dart';
@@ -36,6 +37,7 @@ import '../inline_network_image.dart';
 import '../media_fallbacks.dart';
 import 'link_preview.dart';
 import 'nym_format.dart';
+import 'audio_message.dart';
 import 'video_message.dart';
 
 /// Shared stateless [ApiClient] for media/emoji proxy URL construction. The
@@ -159,7 +161,8 @@ class MessageContent extends ConsumerWidget {
       final users = ref.read(usersProvider);
       // `node.base` already carries the leading `@`; re-attach the `#suffix` so
       // a suffixed mention disambiguates to the right pubkey.
-      final raw = node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
+      final raw =
+          node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
       final t = resolveTarget(raw, users);
       if (t == null) return; // unknown mention → inert (PWA: no pubkey → no-op)
       final app = ref.read(appStateProvider);
@@ -263,6 +266,7 @@ class MessageContent extends ConsumerWidget {
           }
         case CodeBlock():
         case MediaBlock():
+        case AudioBlock():
           break;
       }
     }
@@ -321,6 +325,8 @@ class MessageContent extends ConsumerWidget {
         );
       case MediaBlock(:final items):
         return _MediaGallery(items: items, blur: blurImages);
+      case AudioBlock(:final url, :final fileName):
+        return AudioMessage(url: url, fileName: fileName);
     }
   }
 }
@@ -331,7 +337,12 @@ class MessageContent extends ConsumerWidget {
 /// :1094-1099, `blockquote` :1270-1279, `h1,h2,h3` :1312-1317); plain text
 /// lines keep the 4px line gap.
 double _blockMargin(FormatBlock block) => switch (block) {
-      MediaBlock() || CodeBlock() || QuoteBlock() || HeadingBlock() => 10,
+      MediaBlock() ||
+      AudioBlock() ||
+      CodeBlock() ||
+      QuoteBlock() ||
+      HeadingBlock() =>
+        10,
       ParagraphBlock() => 4,
     };
 
@@ -349,7 +360,12 @@ double _blockGap(FormatBlock a, FormatBlock b) {
 /// carry it; a paragraph's 4px is a line gap between siblings, not a margin,
 /// so text sits flush at the edges exactly like the PWA.
 double _blockEdgeMargin(FormatBlock block) => switch (block) {
-      MediaBlock() || CodeBlock() || QuoteBlock() || HeadingBlock() => 10,
+      MediaBlock() ||
+      AudioBlock() ||
+      CodeBlock() ||
+      QuoteBlock() ||
+      HeadingBlock() =>
+        10,
       ParagraphBlock() => 0,
     };
 
@@ -467,20 +483,28 @@ class _RichInline extends StatelessWidget {
         // (styles-chat.css:1074-1077).
         return TextSpan(children: [
           for (final ch in children)
-            _span(context, c, ch,
-                base.merge(TextStyle(fontWeight: FontWeight.w700, color: c.textBright))),
+            _span(
+                context,
+                c,
+                ch,
+                base.merge(TextStyle(
+                    fontWeight: FontWeight.w700, color: c.textBright))),
         ]);
       case ItalicNode(:final children):
         return TextSpan(children: [
           for (final ch in children)
-            _span(context, c, ch, base.merge(const TextStyle(fontStyle: FontStyle.italic))),
+            _span(context, c, ch,
+                base.merge(const TextStyle(fontStyle: FontStyle.italic))),
         ]);
       case StrikeNode(:final children):
         // `del { text-decoration:line-through; color: var(--text-dim) }`
         // (styles-chat.css:1325-1328).
         return TextSpan(children: [
           for (final ch in children)
-            _span(context, c, ch,
+            _span(
+                context,
+                c,
+                ch,
                 base.merge(TextStyle(
                     decoration: TextDecoration.lineThrough, color: c.textDim))),
         ]);
@@ -529,7 +553,8 @@ class _RichInline extends StatelessWidget {
         // rides on [base], so the glyph resolves to Noto Color Emoji here.
         return TextSpan(
           text: unicode,
-          style: base.merge(TextStyle(fontSize: size * (emojiOnly ? 2.5 : 1.0))),
+          style:
+              base.merge(TextStyle(fontSize: size * (emojiOnly ? 2.5 : 1.0))),
         );
       case MentionNode():
         return WidgetSpan(
@@ -546,7 +571,8 @@ class _RichInline extends StatelessWidget {
         // Hover→primary is desktop-only and omitted on touch.
         return TextSpan(
           text: '#$name',
-          style: base.merge(const TextStyle(decoration: TextDecoration.underline)),
+          style:
+              base.merge(const TextStyle(decoration: TextDecoration.underline)),
           recognizer: onChannelRef == null
               ? null
               : _ChannelRefTap(name, isGeohash, onChannelRef!),
@@ -711,8 +737,8 @@ class _MentionChip extends ConsumerWidget {
 
 /// Taps a `#channel` reference → switch to that channel (geohash or named).
 class _ChannelRefTap extends TapGestureRecognizer {
-  _ChannelRefTap(
-      String name, bool isGeohash, void Function(String name, bool isGeohash) cb) {
+  _ChannelRefTap(String name, bool isGeohash,
+      void Function(String name, bool isGeohash) cb) {
     onTap = () => cb(name, isGeohash);
   }
 }
@@ -855,75 +881,808 @@ class _HlTok {
 /// `jsx`/`tsx` alias `js`/`ts`.
 const Map<String, List<String>> _kHlKeywords = {
   'js': [
-    'async','await','break','case','catch','class','const','continue','debugger','default','delete','do','else','export','extends','finally','for','from','function','if','import','in','instanceof','let','new','null','of','return','static','super','switch','this','throw','true','false','try','typeof','undefined','var','void','while','with','yield',
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'debugger',
+    'default',
+    'delete',
+    'do',
+    'else',
+    'export',
+    'extends',
+    'finally',
+    'for',
+    'from',
+    'function',
+    'if',
+    'import',
+    'in',
+    'instanceof',
+    'let',
+    'new',
+    'null',
+    'of',
+    'return',
+    'static',
+    'super',
+    'switch',
+    'this',
+    'throw',
+    'true',
+    'false',
+    'try',
+    'typeof',
+    'undefined',
+    'var',
+    'void',
+    'while',
+    'with',
+    'yield',
   ],
   'py': [
-    'False','None','True','and','as','assert','async','await','break','class','continue','def','del','elif','else','except','finally','for','from','global','if','import','in','is','lambda','nonlocal','not','or','pass','raise','return','try','while','with','yield','match','case',
+    'False',
+    'None',
+    'True',
+    'and',
+    'as',
+    'assert',
+    'async',
+    'await',
+    'break',
+    'class',
+    'continue',
+    'def',
+    'del',
+    'elif',
+    'else',
+    'except',
+    'finally',
+    'for',
+    'from',
+    'global',
+    'if',
+    'import',
+    'in',
+    'is',
+    'lambda',
+    'nonlocal',
+    'not',
+    'or',
+    'pass',
+    'raise',
+    'return',
+    'try',
+    'while',
+    'with',
+    'yield',
+    'match',
+    'case',
   ],
   'rs': [
-    'as','async','await','break','const','continue','crate','dyn','else','enum','extern','false','fn','for','if','impl','in','let','loop','match','mod','move','mut','pub','ref','return','self','Self','static','struct','super','trait','true','type','unsafe','use','where','while','yield','box',
+    'as',
+    'async',
+    'await',
+    'break',
+    'const',
+    'continue',
+    'crate',
+    'dyn',
+    'else',
+    'enum',
+    'extern',
+    'false',
+    'fn',
+    'for',
+    'if',
+    'impl',
+    'in',
+    'let',
+    'loop',
+    'match',
+    'mod',
+    'move',
+    'mut',
+    'pub',
+    'ref',
+    'return',
+    'self',
+    'Self',
+    'static',
+    'struct',
+    'super',
+    'trait',
+    'true',
+    'type',
+    'unsafe',
+    'use',
+    'where',
+    'while',
+    'yield',
+    'box',
   ],
   'go': [
-    'break','case','chan','const','continue','default','defer','else','fallthrough','for','func','go','goto','if','import','interface','map','package','range','return','select','struct','switch','type','var','true','false','nil','iota',
+    'break',
+    'case',
+    'chan',
+    'const',
+    'continue',
+    'default',
+    'defer',
+    'else',
+    'fallthrough',
+    'for',
+    'func',
+    'go',
+    'goto',
+    'if',
+    'import',
+    'interface',
+    'map',
+    'package',
+    'range',
+    'return',
+    'select',
+    'struct',
+    'switch',
+    'type',
+    'var',
+    'true',
+    'false',
+    'nil',
+    'iota',
   ],
   'java': [
-    'abstract','assert','boolean','break','byte','case','catch','char','class','const','continue','default','do','double','else','enum','extends','final','finally','float','for','goto','if','implements','import','instanceof','int','interface','long','native','new','null','package','private','protected','public','return','short','static','strictfp','super','switch','synchronized','this','throw','throws','transient','try','void','volatile','while','true','false',
+    'abstract',
+    'assert',
+    'boolean',
+    'break',
+    'byte',
+    'case',
+    'catch',
+    'char',
+    'class',
+    'const',
+    'continue',
+    'default',
+    'do',
+    'double',
+    'else',
+    'enum',
+    'extends',
+    'final',
+    'finally',
+    'float',
+    'for',
+    'goto',
+    'if',
+    'implements',
+    'import',
+    'instanceof',
+    'int',
+    'interface',
+    'long',
+    'native',
+    'new',
+    'null',
+    'package',
+    'private',
+    'protected',
+    'public',
+    'return',
+    'short',
+    'static',
+    'strictfp',
+    'super',
+    'switch',
+    'synchronized',
+    'this',
+    'throw',
+    'throws',
+    'transient',
+    'try',
+    'void',
+    'volatile',
+    'while',
+    'true',
+    'false',
   ],
   'c': [
-    'auto','break','case','char','const','continue','default','do','double','else','enum','extern','float','for','goto','if','inline','int','long','register','restrict','return','short','signed','sizeof','static','struct','switch','typedef','union','unsigned','void','volatile','while','_Bool','_Complex','_Imaginary','bool','true','false','NULL','nullptr',
+    'auto',
+    'break',
+    'case',
+    'char',
+    'const',
+    'continue',
+    'default',
+    'do',
+    'double',
+    'else',
+    'enum',
+    'extern',
+    'float',
+    'for',
+    'goto',
+    'if',
+    'inline',
+    'int',
+    'long',
+    'register',
+    'restrict',
+    'return',
+    'short',
+    'signed',
+    'sizeof',
+    'static',
+    'struct',
+    'switch',
+    'typedef',
+    'union',
+    'unsigned',
+    'void',
+    'volatile',
+    'while',
+    '_Bool',
+    '_Complex',
+    '_Imaginary',
+    'bool',
+    'true',
+    'false',
+    'NULL',
+    'nullptr',
   ],
   'cpp': [
-    'alignas','alignof','and','asm','auto','bool','break','case','catch','char','class','co_await','co_return','co_yield','const','constexpr','const_cast','continue','decltype','default','delete','do','double','dynamic_cast','else','enum','explicit','export','extern','false','final','float','for','friend','goto','if','inline','int','long','mutable','namespace','new','noexcept','not','nullptr','operator','or','override','private','protected','public','register','reinterpret_cast','return','short','signed','sizeof','static','static_cast','struct','switch','template','this','thread_local','throw','true','try','typedef','typeid','typename','union','unsigned','using','virtual','void','volatile','while','xor',
+    'alignas',
+    'alignof',
+    'and',
+    'asm',
+    'auto',
+    'bool',
+    'break',
+    'case',
+    'catch',
+    'char',
+    'class',
+    'co_await',
+    'co_return',
+    'co_yield',
+    'const',
+    'constexpr',
+    'const_cast',
+    'continue',
+    'decltype',
+    'default',
+    'delete',
+    'do',
+    'double',
+    'dynamic_cast',
+    'else',
+    'enum',
+    'explicit',
+    'export',
+    'extern',
+    'false',
+    'final',
+    'float',
+    'for',
+    'friend',
+    'goto',
+    'if',
+    'inline',
+    'int',
+    'long',
+    'mutable',
+    'namespace',
+    'new',
+    'noexcept',
+    'not',
+    'nullptr',
+    'operator',
+    'or',
+    'override',
+    'private',
+    'protected',
+    'public',
+    'register',
+    'reinterpret_cast',
+    'return',
+    'short',
+    'signed',
+    'sizeof',
+    'static',
+    'static_cast',
+    'struct',
+    'switch',
+    'template',
+    'this',
+    'thread_local',
+    'throw',
+    'true',
+    'try',
+    'typedef',
+    'typeid',
+    'typename',
+    'union',
+    'unsigned',
+    'using',
+    'virtual',
+    'void',
+    'volatile',
+    'while',
+    'xor',
   ],
   'sh': [
-    'if','then','else','elif','fi','for','in','do','done','while','until','case','esac','function','return','break','continue','exit','export','local','readonly','set','unset','source','alias','declare','typeset','true','false',
+    'if',
+    'then',
+    'else',
+    'elif',
+    'fi',
+    'for',
+    'in',
+    'do',
+    'done',
+    'while',
+    'until',
+    'case',
+    'esac',
+    'function',
+    'return',
+    'break',
+    'continue',
+    'exit',
+    'export',
+    'local',
+    'readonly',
+    'set',
+    'unset',
+    'source',
+    'alias',
+    'declare',
+    'typeset',
+    'true',
+    'false',
   ],
   'sql': [
-    'SELECT','FROM','WHERE','INSERT','UPDATE','DELETE','CREATE','DROP','ALTER','TABLE','INDEX','VIEW','JOIN','LEFT','RIGHT','INNER','OUTER','FULL','ON','AS','AND','OR','NOT','NULL','IS','IN','LIKE','BETWEEN','GROUP','BY','ORDER','HAVING','LIMIT','OFFSET','UNION','ALL','DISTINCT','INTO','VALUES','SET','PRIMARY','KEY','FOREIGN','REFERENCES','DEFAULT','UNIQUE','CHECK','CASE','WHEN','THEN','ELSE','END','WITH','RETURNING','BEGIN','COMMIT','ROLLBACK','TRANSACTION','IF','EXISTS','TRUE','FALSE',
+    'SELECT',
+    'FROM',
+    'WHERE',
+    'INSERT',
+    'UPDATE',
+    'DELETE',
+    'CREATE',
+    'DROP',
+    'ALTER',
+    'TABLE',
+    'INDEX',
+    'VIEW',
+    'JOIN',
+    'LEFT',
+    'RIGHT',
+    'INNER',
+    'OUTER',
+    'FULL',
+    'ON',
+    'AS',
+    'AND',
+    'OR',
+    'NOT',
+    'NULL',
+    'IS',
+    'IN',
+    'LIKE',
+    'BETWEEN',
+    'GROUP',
+    'BY',
+    'ORDER',
+    'HAVING',
+    'LIMIT',
+    'OFFSET',
+    'UNION',
+    'ALL',
+    'DISTINCT',
+    'INTO',
+    'VALUES',
+    'SET',
+    'PRIMARY',
+    'KEY',
+    'FOREIGN',
+    'REFERENCES',
+    'DEFAULT',
+    'UNIQUE',
+    'CHECK',
+    'CASE',
+    'WHEN',
+    'THEN',
+    'ELSE',
+    'END',
+    'WITH',
+    'RETURNING',
+    'BEGIN',
+    'COMMIT',
+    'ROLLBACK',
+    'TRANSACTION',
+    'IF',
+    'EXISTS',
+    'TRUE',
+    'FALSE',
   ],
   'ts': [
     // KW.js ++ the TS-only additions (`syntax-highlight.js:16`).
-    'async','await','break','case','catch','class','const','continue','debugger','default','delete','do','else','export','extends','finally','for','from','function','if','import','in','instanceof','let','new','null','of','return','static','super','switch','this','throw','true','false','try','typeof','undefined','var','void','while','with','yield',
-    'any','as','boolean','declare','enum','interface','is','keyof','module','namespace','never','number','readonly','satisfies','string','symbol','type','unique','unknown','infer','public','private','protected','abstract','implements',
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'debugger',
+    'default',
+    'delete',
+    'do',
+    'else',
+    'export',
+    'extends',
+    'finally',
+    'for',
+    'from',
+    'function',
+    'if',
+    'import',
+    'in',
+    'instanceof',
+    'let',
+    'new',
+    'null',
+    'of',
+    'return',
+    'static',
+    'super',
+    'switch',
+    'this',
+    'throw',
+    'true',
+    'false',
+    'try',
+    'typeof',
+    'undefined',
+    'var',
+    'void',
+    'while',
+    'with',
+    'yield',
+    'any',
+    'as',
+    'boolean',
+    'declare',
+    'enum',
+    'interface',
+    'is',
+    'keyof',
+    'module',
+    'namespace',
+    'never',
+    'number',
+    'readonly',
+    'satisfies',
+    'string',
+    'symbol',
+    'type',
+    'unique',
+    'unknown',
+    'infer',
+    'public',
+    'private',
+    'protected',
+    'abstract',
+    'implements',
   ],
 };
 
 /// Per-language builtin/identifier sets (`syntax-highlight.js` `BUILTINS`).
 const Map<String, List<String>> _kHlBuiltins = {
   'js': [
-    'console','window','document','globalThis','Math','JSON','Object','Array','String','Number','Boolean','Date','Map','Set','Promise','RegExp','Symbol','BigInt','Error','fetch','setTimeout','setInterval','clearTimeout','clearInterval','queueMicrotask','structuredClone',
+    'console',
+    'window',
+    'document',
+    'globalThis',
+    'Math',
+    'JSON',
+    'Object',
+    'Array',
+    'String',
+    'Number',
+    'Boolean',
+    'Date',
+    'Map',
+    'Set',
+    'Promise',
+    'RegExp',
+    'Symbol',
+    'BigInt',
+    'Error',
+    'fetch',
+    'setTimeout',
+    'setInterval',
+    'clearTimeout',
+    'clearInterval',
+    'queueMicrotask',
+    'structuredClone',
   ],
   'py': [
-    'print','len','range','int','str','float','bool','list','dict','tuple','set','frozenset','bytes','bytearray','open','input','type','isinstance','enumerate','zip','map','filter','sorted','sum','min','max','abs','round','any','all','self','cls','__init__','__name__','super',
+    'print',
+    'len',
+    'range',
+    'int',
+    'str',
+    'float',
+    'bool',
+    'list',
+    'dict',
+    'tuple',
+    'set',
+    'frozenset',
+    'bytes',
+    'bytearray',
+    'open',
+    'input',
+    'type',
+    'isinstance',
+    'enumerate',
+    'zip',
+    'map',
+    'filter',
+    'sorted',
+    'sum',
+    'min',
+    'max',
+    'abs',
+    'round',
+    'any',
+    'all',
+    'self',
+    'cls',
+    '__init__',
+    '__name__',
+    'super',
   ],
   'rs': [
-    'Vec','String','Option','Result','Box','Rc','Arc','HashMap','HashSet','BTreeMap','Some','None','Ok','Err','println','print','format','vec','assert','assert_eq','assert_ne','panic','dbg','todo','unimplemented','unreachable','i8','i16','i32','i64','i128','u8','u16','u32','u64','u128','f32','f64','bool','char','str','isize','usize',
+    'Vec',
+    'String',
+    'Option',
+    'Result',
+    'Box',
+    'Rc',
+    'Arc',
+    'HashMap',
+    'HashSet',
+    'BTreeMap',
+    'Some',
+    'None',
+    'Ok',
+    'Err',
+    'println',
+    'print',
+    'format',
+    'vec',
+    'assert',
+    'assert_eq',
+    'assert_ne',
+    'panic',
+    'dbg',
+    'todo',
+    'unimplemented',
+    'unreachable',
+    'i8',
+    'i16',
+    'i32',
+    'i64',
+    'i128',
+    'u8',
+    'u16',
+    'u32',
+    'u64',
+    'u128',
+    'f32',
+    'f64',
+    'bool',
+    'char',
+    'str',
+    'isize',
+    'usize',
   ],
   'go': [
-    'append','cap','close','copy','delete','len','make','new','panic','print','println','recover','complex','imag','real','string','int','int8','int16','int32','int64','uint','uint8','uint16','uint32','uint64','uintptr','byte','rune','float32','float64','bool','error',
+    'append',
+    'cap',
+    'close',
+    'copy',
+    'delete',
+    'len',
+    'make',
+    'new',
+    'panic',
+    'print',
+    'println',
+    'recover',
+    'complex',
+    'imag',
+    'real',
+    'string',
+    'int',
+    'int8',
+    'int16',
+    'int32',
+    'int64',
+    'uint',
+    'uint8',
+    'uint16',
+    'uint32',
+    'uint64',
+    'uintptr',
+    'byte',
+    'rune',
+    'float32',
+    'float64',
+    'bool',
+    'error',
   ],
   'ts': [
-    'console','window','document','globalThis','Math','JSON','Object','Array','String','Number','Boolean','Date','Map','Set','Promise','RegExp','Symbol','BigInt','Error','fetch','Partial','Readonly','Record','Pick','Omit','Required','Exclude','Extract','ReturnType','Parameters',
+    'console',
+    'window',
+    'document',
+    'globalThis',
+    'Math',
+    'JSON',
+    'Object',
+    'Array',
+    'String',
+    'Number',
+    'Boolean',
+    'Date',
+    'Map',
+    'Set',
+    'Promise',
+    'RegExp',
+    'Symbol',
+    'BigInt',
+    'Error',
+    'fetch',
+    'Partial',
+    'Readonly',
+    'Record',
+    'Pick',
+    'Omit',
+    'Required',
+    'Exclude',
+    'Extract',
+    'ReturnType',
+    'Parameters',
   ],
   'sh': [
-    'echo','cat','grep','sed','awk','cd','ls','rm','cp','mv','mkdir','rmdir','touch','chmod','chown','find','xargs','curl','wget','tar','gzip','gunzip','zip','unzip','ps','kill','top','df','du','wc','sort','uniq','head','tail','tr','tee','printf','read','test','sleep','date','env','which',
+    'echo',
+    'cat',
+    'grep',
+    'sed',
+    'awk',
+    'cd',
+    'ls',
+    'rm',
+    'cp',
+    'mv',
+    'mkdir',
+    'rmdir',
+    'touch',
+    'chmod',
+    'chown',
+    'find',
+    'xargs',
+    'curl',
+    'wget',
+    'tar',
+    'gzip',
+    'gunzip',
+    'zip',
+    'unzip',
+    'ps',
+    'kill',
+    'top',
+    'df',
+    'du',
+    'wc',
+    'sort',
+    'uniq',
+    'head',
+    'tail',
+    'tr',
+    'tee',
+    'printf',
+    'read',
+    'test',
+    'sleep',
+    'date',
+    'env',
+    'which',
   ],
   'c': [
-    'printf','scanf','fprintf','sprintf','snprintf','malloc','calloc','realloc','free','memcpy','memset','memcmp','strlen','strcpy','strncpy','strcmp','strncmp','strcat','strncat','strchr','strstr','fopen','fclose','fread','fwrite','fgets','fputs','exit','abort','assert','sizeof','NULL','stdin','stdout','stderr','std','cout','cin','cerr','endl','vector','string','map','unordered_map','set','unordered_set','pair','make_pair','shared_ptr','unique_ptr',
+    'printf',
+    'scanf',
+    'fprintf',
+    'sprintf',
+    'snprintf',
+    'malloc',
+    'calloc',
+    'realloc',
+    'free',
+    'memcpy',
+    'memset',
+    'memcmp',
+    'strlen',
+    'strcpy',
+    'strncpy',
+    'strcmp',
+    'strncmp',
+    'strcat',
+    'strncat',
+    'strchr',
+    'strstr',
+    'fopen',
+    'fclose',
+    'fread',
+    'fwrite',
+    'fgets',
+    'fputs',
+    'exit',
+    'abort',
+    'assert',
+    'sizeof',
+    'NULL',
+    'stdin',
+    'stdout',
+    'stderr',
+    'std',
+    'cout',
+    'cin',
+    'cerr',
+    'endl',
+    'vector',
+    'string',
+    'map',
+    'unordered_map',
+    'set',
+    'unordered_set',
+    'pair',
+    'make_pair',
+    'shared_ptr',
+    'unique_ptr',
   ],
 };
 
 /// Language aliases (`syntax-highlight.js` `LANG_ALIAS`).
 const Map<String, String> _kHlLangAlias = {
-  'javascript': 'js', 'node': 'js', 'nodejs': 'js',
+  'javascript': 'js',
+  'node': 'js',
+  'nodejs': 'js',
   'typescript': 'ts',
-  'python': 'py', 'python3': 'py',
+  'python': 'py',
+  'python3': 'py',
   'rust': 'rs',
   'golang': 'go',
-  'bash': 'sh', 'shell': 'sh', 'zsh': 'sh', 'sh': 'sh',
-  'c++': 'cpp', 'cxx': 'cpp',
-  'objective-c': 'c', 'objc': 'c',
-  'html': 'xml', 'svg': 'xml', 'xhtml': 'xml',
+  'bash': 'sh',
+  'shell': 'sh',
+  'zsh': 'sh',
+  'sh': 'sh',
+  'c++': 'cpp',
+  'cxx': 'cpp',
+  'objective-c': 'c',
+  'objc': 'c',
+  'html': 'xml',
+  'svg': 'xml',
+  'xhtml': 'xml',
   'yml': 'yaml',
 };
 
@@ -1018,8 +1777,8 @@ List<_HlTok> _highlightCss(String src) {
     } else if (_rxHlNum.hasMatch(t)) {
       out.add(_HlTok(t, _HlClass.number));
     } else if (RegExp(r'\w').hasMatch(t) &&
-        RegExp(r':\s*$')
-            .hasMatch(src.substring(m.start, (m.start + t.length + 4).clamp(0, src.length)))) {
+        RegExp(r':\s*$').hasMatch(src.substring(
+            m.start, (m.start + t.length + 4).clamp(0, src.length)))) {
       // A property name (`name:`). The PWA trims the trailing run then re-emits
       // it; we keep the slice whole, tagging it builtin (a property token).
       out.add(_HlTok(t, _HlClass.builtin));
@@ -1042,12 +1801,15 @@ List<_HlTok> _highlightGeneric(String src, String lang) {
   final kws = (_kHlKeywords[lang] ?? const <String>[]).toSet();
   final builtins = (_kHlBuiltins[lang] ?? const <String>[]).toSet();
   final isShell = lang == 'sh';
-  final lineComment = (lang == 'py' || lang == 'sh' || lang == 'yaml' || lang == 'rb')
-      ? RegExp(r'^#.*')
-      : RegExp(r'^\/\/.*');
-  final RegExp? blockComment = (lang == 'py') ? null : RegExp(r'^\/\*[\s\S]*?\*\/');
-  final RegExp? pyDocstring =
-      (lang == 'py') ? RegExp(r'''^("""[\s\S]*?"""|\x27\x27\x27[\s\S]*?\x27\x27\x27)''') : null;
+  final lineComment =
+      (lang == 'py' || lang == 'sh' || lang == 'yaml' || lang == 'rb')
+          ? RegExp(r'^#.*')
+          : RegExp(r'^\/\/.*');
+  final RegExp? blockComment =
+      (lang == 'py') ? null : RegExp(r'^\/\*[\s\S]*?\*\/');
+  final RegExp? pyDocstring = (lang == 'py')
+      ? RegExp(r'''^("""[\s\S]*?"""|\x27\x27\x27[\s\S]*?\x27\x27\x27)''')
+      : null;
 
   final out = <_HlTok>[];
   var i = 0;
@@ -1188,10 +1950,12 @@ class _CodeBox extends StatelessWidget {
             style: base.copyWith(
               color: _hlColor(tok.cls, c.textBright),
               // `.hl-comment { font-style: italic }`; `.hl-keyword { font-weight:600 }`.
-              fontStyle:
-                  tok.cls == _HlClass.comment ? FontStyle.italic : FontStyle.normal,
-              fontWeight:
-                  tok.cls == _HlClass.keyword ? FontWeight.w600 : FontWeight.normal,
+              fontStyle: tok.cls == _HlClass.comment
+                  ? FontStyle.italic
+                  : FontStyle.normal,
+              fontWeight: tok.cls == _HlClass.keyword
+                  ? FontWeight.w600
+                  : FontWeight.normal,
             ),
           ),
       ],
@@ -1328,6 +2092,7 @@ int _blockTextLength(FormatBlock block) {
     case QuoteBlock():
       return _quoteTextLength(block);
     case MediaBlock():
+    case AudioBlock():
       return 0; // media renders as elements, no text content
   }
 }
@@ -1412,7 +2177,8 @@ void _appendBlockText(StringBuffer buf, FormatBlock block) {
         _appendBlockText(buf, child);
       }
     case MediaBlock():
-      break; // <img>/<video> — no text content
+    case AudioBlock():
+      break; // <img>/<video>/<audio> — no text content
   }
 }
 
@@ -1513,7 +2279,8 @@ Message? resolveQuotedMessage(
     final raw = m.content.replaceAll(_rxWs, ' ').trim();
     if (raw.isEmpty) continue;
     final replyOnly = _stripQuoteLines(m.content);
-    final score = _scoreHaystack(replyOnly.isNotEmpty ? replyOnly : raw, needle);
+    final score =
+        _scoreHaystack(replyOnly.isNotEmpty ? replyOnly : raw, needle);
     if (score > bestScore) {
       bestScore = score;
       best = m;
@@ -1582,10 +2349,10 @@ class _QuoteBox extends ConsumerWidget {
     // chat-bubbles mode — a translucent black@0.25 / white@0.35 wash over the
     // primary-tinted bubble plate instead. No hover brightening in solid: the
     // override's specificity (0,2,2) beats `blockquote:hover` (0,2,1).
-    final ghost = ref.watch(
-        settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
-    final bubbles = ref.watch(
-        settingsProvider.select((s) => s.chatLayout == 'bubbles'));
+    final ghost =
+        ref.watch(settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
+    final bubbles =
+        ref.watch(settingsProvider.select((s) => s.chatLayout == 'bubbles'));
     bool hostIsSelf() {
       final id = hostMessageId;
       if (id == null || id.isEmpty) return false;
@@ -1635,6 +2402,7 @@ class _QuoteBox extends ConsumerWidget {
         ),
       );
     }
+
     // `.message-content > blockquote { cursor: pointer }` (styles-chat.css:1276):
     // ONLY the top-level quote is tappable; tapping it jumps the list to the
     // quoted source message and flashes it (PWA `_scrollToQuotedMessage`, bound
@@ -1784,6 +2552,8 @@ class _QuoteBox extends ConsumerWidget {
         );
       case MediaBlock(:final items):
         return _MediaGallery(items: items);
+      case AudioBlock(:final url, :final fileName):
+        return AudioMessage(url: url, fileName: fileName);
     }
   }
 }
@@ -1868,10 +2638,8 @@ class _MediaTile extends ConsumerWidget {
 
   /// Opens [item] (and its image siblings) in the fullscreen viewer.
   void _openFullscreen(BuildContext context) {
-    final urls = (gallery ?? [item])
-        .where((m) => !m.isVideo)
-        .map((m) => m.url)
-        .toList();
+    final urls =
+        (gallery ?? [item]).where((m) => !m.isVideo).map((m) => m.url).toList();
     if (urls.isEmpty) return;
     final idx = urls.indexOf(item.url);
     _FullscreenImageViewer.open(context, urls, idx < 0 ? 0 : idx);
@@ -1889,8 +2657,7 @@ class _MediaTile extends ConsumerWidget {
     final c = context.nym;
     // Single image: radius `--radius-sm` (=12); gallery cell: square (radius 0,
     // the grid clips). (styles-chat.css:941-950, 1012-1023.)
-    final radius =
-        inGallery ? BorderRadius.zero : NymRadius.rsm;
+    final radius = inGallery ? BorderRadius.zero : NymRadius.rsm;
 
     // NIP-92 imeta Blossom mirrors recorded for this URL (`ingestImetaTags` /
     // the upload path), retried when the primary source fails — the PWA's
@@ -1991,8 +2758,8 @@ class _MediaTile extends ConsumerWidget {
             boxShadow: hovered
                 ? [
                     BoxShadow(
-                      color: Colors.black
-                          .withValues(alpha: c.isLight ? 0.1 : 0.4),
+                      color:
+                          Colors.black.withValues(alpha: c.isLight ? 0.1 : 0.4),
                       offset: const Offset(0, 4),
                       blurRadius: 16,
                     ),
@@ -2052,8 +2819,7 @@ class _FullscreenImageViewer extends StatefulWidget {
   final List<String> urls;
   final int initialIndex;
 
-  static Future<void> open(
-      BuildContext context, List<String> urls, int index) {
+  static Future<void> open(BuildContext context, List<String> urls, int index) {
     return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder<void>(
         opaque: false,
@@ -2174,9 +2940,8 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
     _startFocal = d.focalPoint;
     // 2 fingers → pinch; 1 finger → pan when zoomed, else swipe(-to-dismiss)
     // (`onStart`, app.js:2339-2357).
-    _mode = d.pointerCount >= 2
-        ? 'pinch'
-        : (_scale > _minScale ? 'pan' : 'swipe');
+    _mode =
+        d.pointerCount >= 2 ? 'pinch' : (_scale > _minScale ? 'pan' : 'swipe');
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
@@ -2206,8 +2971,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
         // fades `rgba(0,0,0, 0.4 * (1 - min(1, hypot/300)))` (app.js:2374-2383).
         _tx = dFocal.dx;
         _ty = dFocal.dy;
-        final progress =
-            math.min(1.0, Offset(_tx, _ty).distance / 300);
+        final progress = math.min(1.0, Offset(_tx, _ty).distance / 300);
         _swipeBgAlpha = 0.4 * (1 - progress);
       }
     });
@@ -2231,8 +2995,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
         _reset(animate: true);
         return;
       }
-      final closeDist =
-          hasGallery ? _ty.abs() : Offset(_tx, _ty).distance;
+      final closeDist = hasGallery ? _ty.abs() : Offset(_tx, _ty).distance;
       if (closeDist > 100) {
         Navigator.of(context).maybePop();
         return;
@@ -2425,8 +3188,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
             top: 20,
             right: 20,
             child: SafeArea(
-              child:
-                  _chip('×', 40, 24, () => Navigator.of(context).maybePop()),
+              child: _chip('×', 40, 24, () => Navigator.of(context).maybePop()),
             ),
           ),
         ],

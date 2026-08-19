@@ -88,7 +88,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   final _recipientFocus = FocusNode();
   // A non-focusable key sentinel around the recipient input so Backspace on an
   // empty field can pop the last chip without stealing the field's own focus.
-  final _recipientKeyFocus = FocusNode(skipTraversal: true, canRequestFocus: false);
+  final _recipientKeyFocus =
+      FocusNode(skipTraversal: true, canRequestFocus: false);
   final _groupNameController = TextEditingController();
   final _groupDescController = TextEditingController();
   final _messageController = TextEditingController();
@@ -110,6 +111,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   bool _uploading = false;
   String _uploadLabel = tr('Uploading…');
   double _uploadProgress = 0;
+
   /// Last upload error surfaced under the media section (PWA `displaySystemMessage`
   /// "Failed to upload image: …"); cleared on the next pick.
   String? _uploadError;
@@ -150,7 +152,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   /// filtered by the typed nym, sorted by `lastSeen` desc, capped at 10. On
   /// empty input this becomes the "recently seen users" list.
   List<User> get _suggestions {
-    final raw = _recipientController.text.trim().replaceFirst(RegExp(r'^@'), '');
+    final raw =
+        _recipientController.text.trim().replaceFirst(RegExp(r'^@'), '');
     final query = raw.toLowerCase();
     final self = ref.read(appStateProvider).selfPubkey;
     final picked = _recipients.map((r) => r.pubkey).toSet();
@@ -270,12 +273,12 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     if (bytes.length > cap) {
       final capMb = avatar ? 5 : 10;
       final actualMb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
-      setState(() => _uploadError = tr(
-          '{label} must be under {cap}MB (this is {actual}MB).', {
-        'label': avatar ? tr('Avatar') : tr('Banner'),
-        'cap': capMb,
-        'actual': actualMb,
-      }));
+      setState(() => _uploadError =
+              tr('{label} must be under {cap}MB (this is {actual}MB).', {
+            'label': avatar ? tr('Avatar') : tr('Banner'),
+            'cap': capMb,
+            'actual': actualMb,
+          }));
       return;
     }
 
@@ -283,19 +286,20 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
       _uploadError = null;
       _uploading = true;
       _uploadProgress = 0.15; // PWA seeds the fill at 15%.
-      _uploadLabel =
-          avatar ? tr('Uploading group avatar…') : tr('Uploading group banner…');
+      _uploadLabel = avatar
+          ? tr('Uploading group avatar…')
+          : tr('Uploading group banner…');
     });
 
     String? url;
     try {
       url = await ref.read(nostrControllerProvider).uploadImage(
-            bytes,
-            contentType: contentType,
-            onProgress: (p) {
-              if (mounted) setState(() => _uploadProgress = p);
-            },
-          );
+        bytes,
+        contentType: contentType,
+        onProgress: (p) {
+          if (mounted) setState(() => _uploadProgress = p);
+        },
+      );
     } catch (_) {
       url = null;
     }
@@ -383,7 +387,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                 offset: const Offset(0, 8),
               ),
               BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
-              BoxShadow(color: Colors.white.withValues(alpha: 0.05), spreadRadius: 1),
+              BoxShadow(
+                  color: Colors.white.withValues(alpha: 0.05), spreadRadius: 1),
             ],
           ),
           child: Stack(
@@ -433,54 +438,57 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                               ),
                             ),
                           _suggestionsList(c),
-                      if (_groupMode) ...[
-                        const SizedBox(height: 16),
-                        _label(c, tr('Group Name'), optional: true),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _groupNameController,
-                          maxLength: 40,
-                          onChanged: (_) => setState(() {}),
-                          style: TextStyle(color: c.textBright, fontSize: 15),
-                          decoration: _inputDecoration(
-                            c,
-                            tr('Enter a group name...'),
-                          ).copyWith(counterText: ''),
-                        ),
-                        // `pmGroupNameCharCount 0/40` (index.html:317).
-                        _charCount(c, _groupNameController.text.length, 40),
-                        const SizedBox(height: 16),
-                        _groupMediaSection(c),
-                        const SizedBox(height: 16),
-                        _label(c, tr('Description'), optional: true),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _groupDescController,
-                          maxLength: 150,
-                          maxLines: 3,
-                          onChanged: (_) => setState(() {}),
-                          style: TextStyle(color: c.textBright, fontSize: 15),
-                          decoration: _inputDecoration(
-                            c,
-                            tr("What's this group about?"),
-                          ).copyWith(counterText: ''),
-                        ),
-                        // `newGroupDescCharCount 0/150` (index.html:339).
-                        _charCount(c, _groupDescController.text.length, 150),
-                        const SizedBox(height: 12),
-                        _allowInvitesRow(c),
-                      ],
-                      // `pmInitialMessage` — "Message (optional)" (index.html:348).
-                      const SizedBox(height: 16),
-                      _label(c, tr('Message'), optional: true),
-                      const SizedBox(height: 8),
-                      TextField(
-                        controller: _messageController,
-                        maxLines: 3,
-                        style: TextStyle(color: c.textBright, fontSize: 15),
-                        decoration:
-                            _inputDecoration(c, tr('Start the conversation...')),
-                      ),
+                          if (_groupMode) ...[
+                            const SizedBox(height: 16),
+                            _label(c, tr('Group Name'), optional: true),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _groupNameController,
+                              maxLength: 40,
+                              onChanged: (_) => setState(() {}),
+                              style:
+                                  TextStyle(color: c.textBright, fontSize: 15),
+                              decoration: _inputDecoration(
+                                c,
+                                tr('Enter a group name...'),
+                              ).copyWith(counterText: ''),
+                            ),
+                            // `pmGroupNameCharCount 0/40` (index.html:317).
+                            _charCount(c, _groupNameController.text.length, 40),
+                            const SizedBox(height: 16),
+                            _groupMediaSection(c),
+                            const SizedBox(height: 16),
+                            _label(c, tr('Description'), optional: true),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _groupDescController,
+                              maxLength: 150,
+                              maxLines: 3,
+                              onChanged: (_) => setState(() {}),
+                              style:
+                                  TextStyle(color: c.textBright, fontSize: 15),
+                              decoration: _inputDecoration(
+                                c,
+                                tr("What's this group about?"),
+                              ).copyWith(counterText: ''),
+                            ),
+                            // `newGroupDescCharCount 0/150` (index.html:339).
+                            _charCount(
+                                c, _groupDescController.text.length, 150),
+                            const SizedBox(height: 12),
+                            _allowInvitesRow(c),
+                          ],
+                          // `pmInitialMessage` — "Message (optional)" (index.html:348).
+                          const SizedBox(height: 16),
+                          _label(c, tr('Message'), optional: true),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _messageController,
+                            maxLines: 3,
+                            style: TextStyle(color: c.textBright, fontSize: 15),
+                            decoration: _inputDecoration(
+                                c, tr('Start the conversation...')),
+                          ),
                         ],
                       ),
                     ),
@@ -628,7 +636,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
         constraints: const BoxConstraints(minHeight: 42),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: _recipientFocused ? 0.07 : 0.05),
+          color:
+              Colors.white.withValues(alpha: _recipientFocused ? 0.07 : 0.05),
           border: Border.all(
             color: _recipientFocused ? c.primaryA(0.3) : c.glassBorder,
           ),
@@ -707,7 +716,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
 
   /// The trimmed recipient input with a leading `@` stripped (the PWA parses the
   /// raw value for invites but lower-cases for the pubkey/nym checks).
-  String get _rawInput => _recipientController.text.trim().replaceFirst(RegExp(r'^@'), '');
+  String get _rawInput =>
+      _recipientController.text.trim().replaceFirst(RegExp(r'^@'), '');
 
   /// A group-invite token if the current input is a `#gjoin=…` link/token,
   /// decoded via the EXISTING `parseGroupInvite` (deep_links.dart). The PWA's
@@ -851,7 +861,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                 border: Border.all(color: c.glassBorder),
               ),
               // `.group-suggestion-ico` (pms.js:3545) — the 3-figure group glyph.
-              child: NymSvgIcon(NymIcons.groupGlyph, color: c.primary, size: 16),
+              child:
+                  NymSvgIcon(NymIcons.groupGlyph, color: c.primary, size: 16),
             ),
             const SizedBox(width: 6),
             Flexible(
@@ -965,7 +976,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                             // Route the uploaded banner through the media proxy
                             // (hides the user's IP from the image host, mirrors
                             // the PWA's getProxiedMediaUrl).
-                            image: NetworkImage(proxiedAvatarUrl(_groupBannerUrl)!),
+                            image: NetworkImage(
+                                proxiedAvatarUrl(_groupBannerUrl)!),
                             fit: BoxFit.cover,
                           )
                         : null,
@@ -1005,7 +1017,8 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                           ? DecorationImage(
                               // Proxy the uploaded avatar (IP-hiding parity with
                               // the PWA's getProxiedMediaUrl).
-                              image: NetworkImage(proxiedAvatarUrl(_groupAvatarUrl)!),
+                              image: NetworkImage(
+                                  proxiedAvatarUrl(_groupAvatarUrl)!),
                               fit: BoxFit.cover,
                             )
                           : null,
@@ -1067,8 +1080,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                   widthFactor: _uploadProgress.clamp(0.0, 1.0),
                   child: Container(
                     decoration: BoxDecoration(
-                      borderRadius:
-                          const BorderRadius.all(Radius.circular(10)),
+                      borderRadius: const BorderRadius.all(Radius.circular(10)),
                       gradient: LinearGradient(
                         colors: [c.primary, c.secondary],
                       ),

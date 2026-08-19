@@ -60,7 +60,8 @@ void main() {
       );
     });
 
-    test('round-trip: a member who knows the owner heals the avatar from the '
+    test(
+        'round-trip: a member who knows the owner heals the avatar from the '
         'piggyback tags on a regular message', () {
       final n = AppStateNotifier()..goLive('self_pk', 'me#0001');
       // The member already knows the group + its owner, but has no avatar yet
@@ -76,7 +77,10 @@ void main() {
       // The owner's regular message carries the piggyback; the inbound meta_ts
       // handler applies it via a metadata control apply.
       final piggyback = GroupLogic.groupMetaPiggybackTags(
-        _g(createdBy: 'owner_pk', metaUpdatedAt: 1700, avatar: 'https://cdn/a.png'),
+        _g(
+            createdBy: 'owner_pk',
+            metaUpdatedAt: 1700,
+            avatar: 'https://cdn/a.png'),
         'owner_pk',
       );
       n.applyGroupControl(

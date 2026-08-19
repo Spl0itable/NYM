@@ -338,9 +338,8 @@ class NotificationsService {
     // while the persisted history loads, `record()` calls are buffered (not in
     // `state.entries` yet), so scanning only the live entries let multi-relay
     // duplicates of one boot-time event double-popup.
-    final history = _ref
-        .read(notificationHistoryProvider.notifier)
-        .entriesForAlertDedup;
+    final history =
+        _ref.read(notificationHistoryProvider.notifier).entriesForAlertDedup;
     final isDupe = history.any((e) {
       if (eventId.isNotEmpty && e.eventId == eventId) return true;
       return e.title == title &&

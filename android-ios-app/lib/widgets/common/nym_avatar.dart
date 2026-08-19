@@ -104,9 +104,7 @@ class _NymAvatarState extends State<NymAvatar> {
     // avatar URL change (`cacheAvatarImage`). The NEW URL is a fresh cache key,
     // so it re-fetches automatically; this only cleans up the superseded one.
     final oldUrl = old.imageUrl;
-    if (oldUrl != null &&
-        oldUrl.isNotEmpty &&
-        oldUrl != widget.imageUrl) {
+    if (oldUrl != null && oldUrl.isNotEmpty && oldUrl != widget.imageUrl) {
       final oldProxied = proxiedAvatarUrl(oldUrl);
       if (oldProxied != null) InlineNetworkImage.evict(oldProxied);
       if (oldProxied != oldUrl) InlineNetworkImage.evict(oldUrl);
@@ -218,11 +216,10 @@ class _IdenticonPainter extends CustomPainter {
     final hue = (rand() * 360).floor();
     final sat = 60 + (rand() * 25).floor();
     final light = 50 + (rand() * 15).floor();
-    final fg = HSLColor.fromAHSL(1, hue.toDouble(), sat / 100, light / 100)
-        .toColor();
+    final fg =
+        HSLColor.fromAHSL(1, hue.toDouble(), sat / 100, light / 100).toColor();
     final bgHue = (hue + 180) % 360;
-    final bg =
-        HSLColor.fromAHSL(1, bgHue.toDouble(), 0.25, 0.18).toColor();
+    final bg = HSLColor.fromAHSL(1, bgHue.toDouble(), 0.25, 0.18).toColor();
 
     // Background fill.
     canvas.drawRect(Offset.zero & size, Paint()..color = bg);

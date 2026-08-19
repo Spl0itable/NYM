@@ -406,7 +406,8 @@ class ShopCatalog {
     ShopItem(
       id: 'style-eclipse',
       name: 'Eclipse',
-      description: 'A rare eclipse-themed message style. Limited drop of 1,000.',
+      description:
+          'A rare eclipse-themed message style. Limited drop of 1,000.',
       price: 9000,
       type: 'message-style',
       maxSupply: 1000,
@@ -433,7 +434,8 @@ class ShopCatalog {
     ShopItem(
       id: 'bundle-starter',
       name: 'Starter Pack',
-      description: 'Flame flair, Ice style and Frostbite cosmetic at a discount.',
+      description:
+          'Flame flair, Ice style and Frostbite cosmetic at a discount.',
       price: 3000,
       type: 'bundle',
       bundle: ['flair-flame', 'style-ice', 'cosmetic-frost'],

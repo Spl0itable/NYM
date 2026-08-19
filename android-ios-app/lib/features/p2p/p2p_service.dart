@@ -242,9 +242,8 @@ class P2PService extends ChangeNotifier {
   void cancelTransfer(String transferId, {bool silent = false}) {
     final transfer = _transfers.remove(transferId);
     _received.remove(transferId);
-    for (final id in _connections.keys
-        .where((id) => id.endsWith(transferId))
-        .toList()) {
+    for (final id
+        in _connections.keys.where((id) => id.endsWith(transferId)).toList()) {
       _cleanupConnection(id);
     }
     if (transfer != null && !silent) _system('Transfer cancelled');
@@ -432,8 +431,8 @@ class P2PService extends ChangeNotifier {
     final chunks = chunkBytes(bytes);
     for (final chunk in chunks) {
       if (dc.state != RTCDataChannelState.RTCDataChannelOpen) {
-        _updateStatus(transferId, P2PStatus.error,
-            'Connection closed during transfer');
+        _updateStatus(
+            transferId, P2PStatus.error, 'Connection closed during transfer');
         return;
       }
       // Backpressure: flutter_webrtc surfaces bufferedAmount; pause above the
@@ -498,7 +497,8 @@ class P2PService extends ChangeNotifier {
       return;
     }
     if (newTotal > transfer.offer.size) {
-      _abort(transferId, 'Transfer aborted: received more data than advertised');
+      _abort(
+          transferId, 'Transfer aborted: received more data than advertised');
       return;
     }
     chunks.add(bin);
@@ -573,9 +573,8 @@ class P2PService extends ChangeNotifier {
   void _abort(String transferId, String message) {
     _updateStatus(transferId, P2PStatus.error, message);
     _received.remove(transferId);
-    for (final id in _connections.keys
-        .where((id) => id.endsWith(transferId))
-        .toList()) {
+    for (final id
+        in _connections.keys.where((id) => id.endsWith(transferId)).toList()) {
       _cleanupConnection(id);
     }
     _system(message);

@@ -60,8 +60,8 @@ String _short(String s) => s.length <= 8 ? s : s.substring(0, 8);
 /// bug.) Hashing gives full 64-hex entropy, so the PM header shows a real
 /// `#abcd` suffix and a varied avatar colour instead of the `#0000` a
 /// zero-padded peerID produced.
-String meshStablePubkeyForPeerId(String peerID) => _hex(
-    NoiseCrypto.sha256(Uint8List.fromList(utf8.encode('mesh:${peerID.toLowerCase()}'))));
+String meshStablePubkeyForPeerId(String peerID) => _hex(NoiseCrypto.sha256(
+    Uint8List.fromList(utf8.encode('mesh:${peerID.toLowerCase()}'))));
 
 class MeshBridge {
   MeshBridge({
@@ -106,8 +106,10 @@ class MeshBridge {
 
   // ---- Markers consulted by the sidebar + send router ----------------------
 
-  bool isMeshChannelKey(String key) => _meshChannelKeys.contains(key.toLowerCase());
-  bool isMeshPmPubkey(String pubkey) => _meshPmPubkeys.contains(pubkey.toLowerCase());
+  bool isMeshChannelKey(String key) =>
+      _meshChannelKeys.contains(key.toLowerCase());
+  bool isMeshPmPubkey(String pubkey) =>
+      _meshPmPubkeys.contains(pubkey.toLowerCase());
 
   Set<String> get meshChannelKeys => _meshChannelKeys;
   Set<String> get meshPmPubkeys => _meshPmPubkeys;
@@ -239,7 +241,8 @@ class MeshBridge {
   }
 
   /// Resolves the radio peerID for an outgoing DM to [pubkey].
-  String? peerIdForPubkey(String pubkey) => _peerIdByPubkey[pubkey.toLowerCase()];
+  String? peerIdForPubkey(String pubkey) =>
+      _peerIdByPubkey[pubkey.toLowerCase()];
 
   /// Proactively opens a mesh DM with [peer] (from the peers list): registers
   /// the routing, marks the conversation mesh-backed, and ensures the PM row
@@ -356,11 +359,11 @@ class MeshBridge {
     _app.ingestPMMessage(m);
     final after = _appState.messages[storeKey]?.length ?? 0;
     final vis = visibleMessagesFor(_appState, storeKey).length;
-    MeshDiagnostics.instance.log(
-        'PM rx peer=${msg.senderPeerID} id=${_short(msg.messageId)} '
-        'key=$storeKey store=$before→$after vis=$vis '
-        'view=${_appState.view.storageKey} '
-        '${after > before ? 'LANDED' : 'DROPPED'}');
+    MeshDiagnostics.instance
+        .log('PM rx peer=${msg.senderPeerID} id=${_short(msg.messageId)} '
+            'key=$storeKey store=$before→$after vis=$vis '
+            'view=${_appState.view.storageKey} '
+            '${after > before ? 'LANDED' : 'DROPPED'}');
     _notifyPm(pubkey: pubkey, nym: nym, body: msg.content, ts: msg.timestampMs);
     // If this thread is already on-screen, ack it immediately.
     final view = _appState.view;
@@ -384,9 +387,7 @@ class MeshBridge {
     } else {
       final ch = (e.channel == null || e.channel!.isEmpty)
           ? kMeshNearbyChannel
-          : (e.channel!.startsWith('#')
-              ? e.channel!.substring(1)
-              : e.channel!);
+          : (e.channel!.startsWith('#') ? e.channel!.substring(1) : e.channel!);
       storageKey = '#${ch.toLowerCase()}';
     }
     _app.setTyping(
@@ -426,7 +427,8 @@ class MeshBridge {
     } else if (view.kind == ViewKind.pm) {
       final peerId = peerIdForPubkey(view.id);
       if (peerId != null) {
-        unawaited(_service.sendPrivateReaction(peerId, targetId, emoji, remove));
+        unawaited(
+            _service.sendPrivateReaction(peerId, targetId, emoji, remove));
       }
     }
   }
@@ -569,15 +571,24 @@ class MeshBridge {
       return 'image/jpeg';
     }
     if (b.length >= 8 &&
-        b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) {
+        b[0] == 0x89 &&
+        b[1] == 0x50 &&
+        b[2] == 0x4E &&
+        b[3] == 0x47) {
       return 'image/png';
     }
     if (b.length >= 6 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) {
       return 'image/gif';
     }
     if (b.length >= 12 &&
-        b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 &&
-        b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) {
+        b[0] == 0x52 &&
+        b[1] == 0x49 &&
+        b[2] == 0x46 &&
+        b[3] == 0x46 &&
+        b[8] == 0x57 &&
+        b[9] == 0x45 &&
+        b[10] == 0x42 &&
+        b[11] == 0x50) {
       return 'image/webp';
     }
     return fallback;

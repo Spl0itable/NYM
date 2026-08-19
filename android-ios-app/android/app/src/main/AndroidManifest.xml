@@ -62,11 +62,20 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
 
+    <!-- Backups are fully disabled: Auto Backup would copy the sqflite message
+         store and SharedPreferences (message history, group membership,
+         contacts) to the user's Google account, and adb backup could extract
+         the same data locally. allowBackup=false disables both; the rule files
+         are belt-and-braces for agents that consult rules despite the flag.
+         Identity secrets already live in the Keystore. -->
     <application
         android:label="Nymchat"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="false"
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".MainActivity"
@@ -103,6 +112,27 @@
                 <data android:scheme="https" android:host="app.nym.bar"/>
                 <data android:scheme="https" android:host="web.nymchat.app"/>
                 <data android:scheme="https" android:host="nymchat.app"/>
+            </intent-filter>
+            <!-- Share sheet: receive text/URLs shared from other apps
+                 (receive_sharing_intent). The plugin reads the SEND intent and
+                 delivers it to Dart, which shows the destination picker. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/*"/>
+            </intent-filter>
+            <!-- Share sheet: receive images/videos (single + multiple). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="video/*"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="video/*"/>
             </intent-filter>
         </activity>
         <meta-data

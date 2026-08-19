@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/core/crypto/keys.dart' show randomBytes;
+import 'package:nym_bar/services/mesh/mesh_constants.dart';
 import 'package:nym_bar/services/mesh/mesh_service.dart';
 import 'package:nym_bar/services/mesh/noise/noise_identity.dart';
 import 'package:nym_bar/services/mesh/protocol/bitchat_packet.dart';
@@ -73,11 +74,13 @@ class FakeMeshTransport implements MeshTransport {
     sentFrames.add(Uint8List.fromList(frame));
     bus.broadcastFrom(this, frame);
   }
+
   @override
   Future<MeshTransportAvailability> start() async {
     bus.markStarted(this);
     return MeshTransportAvailability.ready;
   }
+
   @override
   Future<void> stop() async {}
   @override
@@ -90,6 +93,32 @@ Future<T> _firstEvent<T>(Stream<T> stream,
 }
 
 void main() {
+  // The announce cadence is jittered and stretches while no peer is known.
+  // Both of those only stay SAFE while the worst-case gap remains under
+  // bitchat's stale-peer timeout — past it, peers drop each other for going
+  // quiet and the mesh silently partitions. Pin the relationship so a later
+  // tuning change can't cross it unnoticed.
+  group('announce cadence', () {
+    test('worst-case gap stays under the stale-peer timeout', () {
+      final busy = MeshConstants.announceInterval + MeshConstants.announceJitter;
+      final idle =
+          MeshConstants.announceIntervalIdle + MeshConstants.announceJitter;
+      expect(busy, lessThan(MeshConstants.stalePeerTimeout),
+          reason: 'a connected peer must never time us out between announces');
+      expect(idle, lessThan(MeshConstants.stalePeerTimeout),
+          reason: 'the idle cadence must still beat the stale timeout');
+    });
+
+    test('jitter cannot invert or zero an interval', () {
+      expect(MeshConstants.announceJitter,
+          lessThan(MeshConstants.announceInterval),
+          reason: 'a spread wider than the interval could schedule at <= 0');
+      expect(MeshConstants.announceIntervalIdle,
+          greaterThan(MeshConstants.announceInterval),
+          reason: 'the idle cadence should be slower, not faster');
+    });
+  });
+
   late RadioBus bus;
   late MeshService alice;
   late MeshService bob;
@@ -166,7 +195,8 @@ void main() {
     );
   });
 
-  test('public message is addressed to the BROADCAST recipient (bitchat interop)',
+  test(
+      'public message is addressed to the BROADCAST recipient (bitchat interop)',
       () async {
     await alice.start();
     await bob.start();
@@ -226,8 +256,8 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
     // 600 bytes forces 3 chunks (255-byte PM content cap).
-    final long = List.generate(600, (i) => String.fromCharCode(97 + i % 26))
-        .join();
+    final long =
+        List.generate(600, (i) => String.fromCharCode(97 + i % 26)).join();
 
     final chunks = <String>[];
     final done = Completer<void>();
@@ -307,7 +337,8 @@ void main() {
     expect(received, isFalse); // undecryptable → not surfaced
   });
 
-  test('a plaintext NAMED channel message keeps its channel (not folded to #mesh)',
+  test(
+      'a plaintext NAMED channel message keeps its channel (not folded to #mesh)',
       () async {
     await alice.start();
     await bob.start();

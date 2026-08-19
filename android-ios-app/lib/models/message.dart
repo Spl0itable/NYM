@@ -217,8 +217,7 @@ class Message {
   /// True when this is a `/me` emote (rendered as an italic action line). The
   /// PWA keys this off the raw content prefix (`messages.js:662`), so we accept
   /// either an explicit [MessageKind.me] or the `/me ` content prefix.
-  bool get isMeAction =>
-      kind == MessageKind.me || content.startsWith('/me ');
+  bool get isMeAction => kind == MessageKind.me || content.startsWith('/me ');
 
   DateTime get dateTime => DateTime.fromMillisecondsSinceEpoch(timestamp);
 

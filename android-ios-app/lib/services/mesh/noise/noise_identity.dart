@@ -3,7 +3,8 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import '../../../core/crypto/keys.dart' show bytesToHex, hexToBytes, randomBytes;
+import '../../../core/crypto/keys.dart'
+    show bytesToHex, hexToBytes, randomBytes;
 import 'noise_crypto.dart';
 
 /// The device's long-term mesh identity — a persistent X25519 static key (used
@@ -116,7 +117,6 @@ class NoiseIdentity {
       bytesToHex(NoiseCrypto.sha256(noiseStaticPublicKey)).substring(0, 16);
 
   /// True when [claimedPeerID] matches the peerID derived from [noiseKey].
-  static bool matchesClaimedPeerID(
-          String claimedPeerID, Uint8List noiseKey) =>
+  static bool matchesClaimedPeerID(String claimedPeerID, Uint8List noiseKey) =>
       claimedPeerID.toLowerCase() == derivePeerID(noiseKey).toLowerCase();
 }

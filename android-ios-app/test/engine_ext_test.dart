@@ -45,10 +45,10 @@ void main() {
       final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
 
       // Two reactors add 🔥, then one removes — count reflects the live set.
-      n.ingestEvent(_reaction(
-          messageId: 'm1', emoji: '🔥', reactor: 'alice', ts: 100));
-      n.ingestEvent(_reaction(
-          messageId: 'm1', emoji: '🔥', reactor: 'bob', ts: 101));
+      n.ingestEvent(
+          _reaction(messageId: 'm1', emoji: '🔥', reactor: 'alice', ts: 100));
+      n.ingestEvent(
+          _reaction(messageId: 'm1', emoji: '🔥', reactor: 'bob', ts: 101));
       var tally = n.state.reactions['m1']!;
       expect(tally.single.emoji, '🔥');
       expect(tally.single.count, 2);
@@ -56,12 +56,20 @@ void main() {
 
       // An OUT-OF-ORDER stale remove (ts 99 < add ts 100) must be ignored.
       n.ingestEvent(_reaction(
-          messageId: 'm1', emoji: '🔥', reactor: 'alice', ts: 99, remove: true));
+          messageId: 'm1',
+          emoji: '🔥',
+          reactor: 'alice',
+          ts: 99,
+          remove: true));
       expect(n.state.reactions['m1']!.single.count, 2);
 
       // A newer remove (ts 102 > add ts 100) removes alice.
       n.ingestEvent(_reaction(
-          messageId: 'm1', emoji: '🔥', reactor: 'alice', ts: 102, remove: true));
+          messageId: 'm1',
+          emoji: '🔥',
+          reactor: 'alice',
+          ts: 102,
+          remove: true));
       tally = n.state.reactions['m1']!;
       expect(tally.single.count, 1);
 
@@ -248,9 +256,8 @@ void main() {
         lastActivity: {'#bravo': 900, '#alpha': 100, '#zebra': 500},
         unreadCounts: {},
       );
-      final sorted = ChannelManager.sortChannels(channels, ctx)
-          .map((c) => c.key)
-          .toList();
+      final sorted =
+          ChannelManager.sortChannels(channels, ctx).map((c) => c.key).toList();
       // nymchat → active → pinned(by activity desc) → unpinned by activity.
       expect(sorted, ['nymchat', 'active-ch', 'bravo', 'alpha', 'zebra']);
     });
@@ -266,9 +273,8 @@ void main() {
         sortByProximity: true,
         userLocation: const UserLocation(lat: 37.77, lng: -122.41),
       );
-      final sorted = ChannelManager.sortChannels(channels, ctx)
-          .map((c) => c.key)
-          .toList();
+      final sorted =
+          ChannelManager.sortChannels(channels, ctx).map((c) => c.key).toList();
       expect(sorted.first, '9q8y');
     });
 
@@ -280,9 +286,8 @@ void main() {
         lastActivity: {'#a': 100, '#b': 100, '#c': 200},
         unreadCounts: {'#a': 5, '#b': 1},
       );
-      final sorted = ChannelManager.sortChannels(channels, ctx)
-          .map((c) => c.key)
-          .toList();
+      final sorted =
+          ChannelManager.sortChannels(channels, ctx).map((c) => c.key).toList();
       expect(sorted, ['c', 'a', 'b']); // c highest activity; a>b on unread
     });
 
@@ -388,7 +393,9 @@ void main() {
       expect(z.unverifiedSats, 50);
     });
 
-    test('verified receipt upgrades a previously-unverified payment (no double count)', () {
+    test(
+        'verified receipt upgrades a previously-unverified payment (no double count)',
+        () {
       final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
       // Gift-wrapped (unverified) announcement lands first.
       n.recordMessageZap(

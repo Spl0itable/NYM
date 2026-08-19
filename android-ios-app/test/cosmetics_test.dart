@@ -233,7 +233,8 @@ void main() {
       expect(supporterStyleDecoration.textShadows, isNotNull);
     });
 
-    test('light mode swaps the bright dark colour for the PWA light tone + '
+    test(
+        'light mode swaps the bright dark colour for the PWA light tone + '
         'drops the glow', () {
       // style-neon: #FF00FF + glow (dark) → #990099, no glow (light).
       final dark = messageStyleDecoration('style-neon');
@@ -314,7 +315,8 @@ void main() {
     test('satoshi has NO glow on the message (preview-only) + body is not bold',
         () {
       final deco = messageStyleDecoration('style-satoshi')!;
-      expect(deco.textShadows, isNull, reason: 'no text-shadow on satoshi body');
+      expect(deco.textShadows, isNull,
+          reason: 'no text-shadow on satoshi body');
       // `font-weight: bold` lives on the inner `> *` children
       // (styles-features.css:572), NOT the `.message-content` container — so the
       // bare body text is NORMAL weight.
@@ -399,7 +401,8 @@ void main() {
       ]) {
         final a = resolveCosmeticAuras(withAura(id)).single;
         expect(a.gradient, isNotNull, reason: '$id IRC row gradient');
-        expect(a.bubblePaintsGradient, isFalse, reason: '$id bubble box-shadow only');
+        expect(a.bubblePaintsGradient, isFalse,
+            reason: '$id bubble box-shadow only');
       }
     });
 
@@ -409,11 +412,12 @@ void main() {
     });
 
     test('light gold uses the PWA #b8960a border + softened ring/glow', () {
-      final goldLight = resolveCosmeticAuras(withAura('cosmetic-aura-gold'),
-              isLight: true)
-          .single;
+      final goldLight =
+          resolveCosmeticAuras(withAura('cosmetic-aura-gold'), isLight: true)
+              .single;
       expect(goldLight.borderAccent, const Color(0xFFB8960A));
-      expect(goldLight.insetColor, const Color(0x4DB48C00)); // rgba(180,140,0,.3)
+      expect(
+          goldLight.insetColor, const Color(0x4DB48C00)); // rgba(180,140,0,.3)
       expect(goldLight.glowBlurFor(bubble: false), 12.0);
     });
 
@@ -421,7 +425,8 @@ void main() {
       // The PWA ships a `body.light-mode` aura rule ONLY for gold
       // (styles-themes-responsive.css:923-931); every other aura/special has
       // no light override and must resolve its dark values in light mode.
-      final goldDark = resolveCosmeticAuras(withAura('cosmetic-aura-gold')).single;
+      final goldDark =
+          resolveCosmeticAuras(withAura('cosmetic-aura-gold')).single;
       final goldLight =
           resolveCosmeticAuras(withAura('cosmetic-aura-gold'), isLight: true)
               .single;
@@ -450,12 +455,16 @@ void main() {
     });
 
     test('prism ring + hologram still flag the overlay painter', () {
-      expect(resolveCosmeticAuras(withAura('cosmetic-aura-rainbow'))
-          .single
-          .prismRing, isTrue);
-      expect(resolveCosmeticAuras(withAura('cosmetic-bubble-hologram'))
-          .single
-          .hologram, isTrue);
+      expect(
+          resolveCosmeticAuras(withAura('cosmetic-aura-rainbow'))
+              .single
+              .prismRing,
+          isTrue);
+      expect(
+          resolveCosmeticAuras(withAura('cosmetic-bubble-hologram'))
+              .single
+              .hologram,
+          isTrue);
     });
   });
 
@@ -539,8 +548,7 @@ void main() {
 
     // P0: the prism ring / holographic sheen must paint in IRC (previously the
     // overlay painter was bubble-only, so IRC rainbow/hologram showed just a glow).
-    Future<void> pumpIrcCosmetic(
-        WidgetTester tester, String cosmeticId) async {
+    Future<void> pumpIrcCosmetic(WidgetTester tester, String cosmeticId) async {
       final kv = await () async {
         SharedPreferences.setMockInitialValues(<String, Object>{});
         return KeyValueStore.open();
@@ -603,7 +611,8 @@ void main() {
         (tester) async {
       await pumpIrcCosmetic(tester, 'cosmetic-aura-gold');
       expect(overlayFinder(), findsNothing,
-          reason: 'gold is a row border/glow in IRC, not an overlay-painter aura');
+          reason:
+              'gold is a row border/glow in IRC, not an overlay-painter aura');
     });
   });
 

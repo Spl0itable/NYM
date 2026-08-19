@@ -55,7 +55,8 @@ List<List<String>> _piggyback({
 
 void main() {
   group('BUG2 — group avatar/banner converges', () {
-    test('bare message-shell (createdBy null) heals avatar + owner from the '
+    test(
+        'bare message-shell (createdBy null) heals avatar + owner from the '
         'owner metadata piggyback', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
@@ -76,7 +77,9 @@ void main() {
         groupId: 'gX',
         type: GroupControlType.metadata,
         tags: _piggyback(
-            metaTs: 1700, avatar: 'https://cdn/a.png', banner: 'https://cdn/b.png'),
+            metaTs: 1700,
+            avatar: 'https://cdn/a.png',
+            banner: 'https://cdn/b.png'),
         senderPubkey: 'owner',
         ts: 1700,
       );
@@ -85,11 +88,13 @@ void main() {
       expect(g.avatar, 'https://cdn/a.png');
       expect(g.banner, 'https://cdn/b.png');
       expect(g.createdBy, 'owner',
-          reason: 'the owner-only metadata establishes the owner on a bare shell');
+          reason:
+              'the owner-only metadata establishes the owner on a bare shell');
       expect(g.metaUpdatedAt, 1700);
     });
 
-    test('a NON-owner cannot overwrite a KNOWN owner (anti-spoof preserved)', () {
+    test('a NON-owner cannot overwrite a KNOWN owner (anti-spoof preserved)',
+        () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
       final n = container.read(appStateProvider.notifier)
@@ -192,7 +197,8 @@ void main() {
   });
 
   group('BUG1 — group notifications record + count unread', () {
-    test('an unread group notification lands in history and bumps the badge, '
+    test(
+        'an unread group notification lands in history and bumps the badge, '
         'like a PM', () async {
       final container = ProviderContainer();
       addTearDown(container.dispose);
@@ -222,7 +228,8 @@ void main() {
       );
 
       final state = container.read(notificationHistoryProvider);
-      final groupEntries = state.entries.where((e) => e.type == 'group').toList();
+      final groupEntries =
+          state.entries.where((e) => e.type == 'group').toList();
       expect(groupEntries.length, 1);
       expect(groupEntries.single.viewed, isFalse,
           reason: 'a fresh unread group notification must not be pre-viewed');
@@ -230,7 +237,8 @@ void main() {
           reason: 'both the PM and the group notification count as unread');
     });
 
-    test('a historical (silent) but recent group notification still records '
+    test(
+        'a historical (silent) but recent group notification still records '
         'unread', () async {
       final container = ProviderContainer();
       addTearDown(container.dispose);
@@ -253,7 +261,8 @@ void main() {
 
       final state = container.read(notificationHistoryProvider);
       expect(state.entries.any((e) => e.type == 'group'), isTrue,
-          reason: 'a recent silent group message still enters the bell history');
+          reason:
+              'a recent silent group message still enters the bell history');
       expect(state.unread, greaterThanOrEqualTo(1));
     });
   });

@@ -193,7 +193,8 @@ void main() {
       expect(results, [true, false, true, true]);
     });
 
-    test('IsolateVerifier never drops a valid event in a large batch', () async {
+    test('IsolateVerifier never drops a valid event in a large batch',
+        () async {
       final verifier = IsolateVerifier(maxBatch: 8);
       // More events than maxBatch so the buffer flushes mid-turn; all valid.
       final events = [for (var i = 0; i < 20; i++) signedEvent('e$i')];
@@ -389,7 +390,8 @@ void main() {
       );
       expect(wrap.kind, 1059);
 
-      final res = await gw.unwrapGiftWrap(wrap, [(sk: recipientSk, bitchat: true)]);
+      final res =
+          await gw.unwrapGiftWrap(wrap, [(sk: recipientSk, bitchat: true)]);
       expect(res, isNotNull);
       expect(res!.isBitchat, isTrue);
       expect(res.rumor['pubkey'], senderPub);
@@ -524,8 +526,8 @@ void main() {
       expect(result, isNotNull);
       expect(result!.isBitchat, isTrue);
       // The crypto layer recovers the raw bitchat1: envelope...
-      expect((result.rumor['content'] as String).startsWith('bitchat1:'),
-          isTrue);
+      expect(
+          (result.rumor['content'] as String).startsWith('bitchat1:'), isTrue);
       // ...and the BitchatPacket decoder yields the human-readable text + id.
       final decoded =
           bitchat.decodeBitchatPacket(result.rumor['content'] as String);
@@ -628,13 +630,18 @@ String _encodeBitchatPrivateMessage(String content, String messageId) {
   final noisePayload = <int>[0x01, ...tlv]; // 0x01 = PRIVATE_MESSAGE
 
   final parts = <int>[];
-  parts..add(0x01)..add(0x11)..add(0x07); // version, NOISE_ENCRYPTED, TTL
+  parts
+    ..add(0x01)
+    ..add(0x11)
+    ..add(0x07); // version, NOISE_ENCRYPTED, TTL
   final ts = DateTime.now().millisecondsSinceEpoch;
   for (var i = 7; i >= 0; i--) {
     parts.add((ts >> (i * 8)) & 0xFF);
   }
   parts.add(0x01); // flags: HAS_RECIPIENT
-  parts..add((noisePayload.length >> 8) & 0xFF)..add(noisePayload.length & 0xFF);
+  parts
+    ..add((noisePayload.length >> 8) & 0xFF)
+    ..add(noisePayload.length & 0xFF);
   for (var i = 0; i < 8; i++) {
     parts.add(0x11); // sender id (arbitrary 8 bytes)
   }
@@ -644,7 +651,8 @@ String _encodeBitchatPrivateMessage(String content, String messageId) {
   parts.addAll(noisePayload);
 
   const blocks = [256, 512, 1024, 2048];
-  final target = blocks.firstWhere((s) => s >= parts.length, orElse: () => 2048);
+  final target =
+      blocks.firstWhere((s) => s >= parts.length, orElse: () => 2048);
   while (parts.length < target) {
     parts.add(0xBE);
   }

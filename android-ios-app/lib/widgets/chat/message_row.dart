@@ -57,8 +57,18 @@ String formatTime(DateTime t, String timeFormat) {
 }
 
 const List<String> _shortMonths = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 /// The full "date, time" label shown when a message timestamp is tapped
@@ -110,8 +120,18 @@ String formatRelativeTime(DateTime t, {DateTime? now}) {
   final d = h ~/ 24;
   if (d < 7) return '${d}d ago';
   const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   final mo = months[t.month - 1];
   return t.year == ref.year ? '$mo ${t.day}' : '$mo ${t.day}, ${t.year}';
@@ -146,8 +166,7 @@ String encodeGroupInfoSystemMessage(GroupInfoPayload info) {
         'name': info.name,
         'count': info.count,
         'members': [
-          for (final m in info.members)
-            {'pk': m.pubkey, 'labels': m.labels},
+          for (final m in info.members) {'pk': m.pubkey, 'labels': m.labels},
         ],
       });
 }
@@ -451,8 +470,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (message.isPM && (message.nymMessageId?.isNotEmpty ?? false)) {
       return true;
     }
-    return RegExp(r'^[0-9a-f]{64}$', caseSensitive: false)
-        .hasMatch(message.id);
+    return RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(message.id);
   }
 
   /// Starts (once) a low-frequency timer that re-renders the in-bubble relative
@@ -482,8 +500,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // solid-ui swaps the translucent satoshi/supporter washes for the opaque
     // `body.solid-ui` plates (styles-themes-responsive.css:1714-1776).
     final solidUi = c.solidUi;
-    final styled = messageStyleDecoration(cos.styleId,
-        isLight: isLight, solidUi: solidUi);
+    final styled =
+        messageStyleDecoration(cos.styleId, isLight: isLight, solidUi: solidUi);
     if (styled != null) {
       return cos.supporter
           ? composeSupporterStyle(styled, cos.styleId!,
@@ -594,7 +612,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// .message-header` (styles-features.css:1478) is a DEAD selector (no JS ever
   /// emits `.message-header`; the author element is `.message-author`), so the
   /// author nym keeps the normal self/other color.
-  TextStyle _authorStyle(NymColors c, {required bool self, required double size}) {
+  TextStyle _authorStyle(NymColors c,
+      {required bool self, required double size}) {
     final genesis = hasGenesisFlair(_cosmetics);
     // `.message-author.cosmetic-redacted { color:#fff; opacity:0.8 }`
     // (styles-features.css:1419-1422) — the redacted privacy cosmetic dims the
@@ -752,8 +771,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                     onReact: widget.onReactionPicker == null
                         ? null
                         : () => widget.onReactionPicker!.call(message),
-                    onTranslate: () =>
-                        setState(() => _showTranslation = true),
+                    onTranslate: () => setState(() => _showTranslation = true),
                     // `body.columns-mode .msg-hover-buttons { flex-direction:
                     // column }` (styles-columns.css:80-82) — the pair stacks
                     // vertically to fit the 360px column.
@@ -923,9 +941,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final c = context.nym;
     final pk = member.pubkey;
     final nym = users[pk]?.nym;
-    final baseNym = (nym != null && nym.isNotEmpty)
-        ? stripPubkeySuffix(nym)
-        : 'nym';
+    final baseNym =
+        (nym != null && nym.isNotEmpty) ? stripPubkeySuffix(nym) : 'nym';
     final suffix = getPubkeySuffix(pk);
     final nymStyle = TextStyle(color: c.textDim, fontSize: size, height: 1.3);
     return Row(
@@ -1260,8 +1277,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           children: [
             // IRC author leads with an 18px inline avatar (`.avatar-message`,
             // hidden in bubble mode). 4px gap, then `<nym#suffix flair…>`.
-            NymAvatar(
-                seed: message.pubkey, size: 18, imageUrl: _authorPicture),
+            NymAvatar(seed: message.pubkey, size: 18, imageUrl: _authorPicture),
             const SizedBox(width: 4),
             Flexible(
               child: _authorLine(
@@ -1285,9 +1301,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // styles-features.css:966-990) and the content-scoped cosmetics. The
     // reactions row is a `.message` sibling (reactions.js:475), so it sits
     // OUTSIDE the plate.
-    Widget contentBody = _bodyContent(
-        context, _bitchatColor(c) ?? c.text, fontSize,
-        deco: deco);
+    Widget contentBody =
+        _bodyContent(context, _bitchatColor(c) ?? c.text, fontSize, deco: deco);
     // The style plate (`.message.style-X .message-content { background }` —
     // satoshi orange@.2 / light rgba(196,122,21,.1); eclipse rgba(18,14,28,.72)
     // and crt rgba(10,8,2,.82) in BOTH themes, :545-552 + :1289-1299 +
@@ -1306,8 +1321,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final styleWatermark = deco?.watermark;
     final CosmeticAura? contentWatermarkAura = styleWatermark != null
         ? null
-        : contentAuras.where((a) => a.watermark != null).fold<CosmeticAura?>(
-            null, (prev, a) => prev ?? a);
+        : contentAuras
+            .where((a) => a.watermark != null)
+            .fold<CosmeticAura?>(null, (prev, a) => prev ?? a);
     final contentWatermark = styleWatermark ?? contentWatermarkAura?.watermark;
     final contentEdgeWatermark = contentWatermarkAura?.edgeWatermark ?? false;
     // Content-scoped aura glows (frost 10px / rainbow 16px / hologram 18px)
@@ -1817,9 +1833,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           // .message-content { box-shadow: inset 0 0 0 1px var(--secondary) }`,
           // themes:1669/:1682 — higher specificity than both glass rules).
           mentionRing: mentioned
-              ? (c.solidUi
-                  ? c.secondary
-                  : c.secondaryA(c.isLight ? 0.2 : 0.25))
+              ? (c.solidUi ? c.secondary : c.secondaryA(c.isLight ? 0.2 : 0.25))
               : null,
           child: Padding(
             // Default bubble padding 8px 12px 6px (styles-features.css:3607).
@@ -1827,8 +1841,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             // `padding: 10px 15px` (specificity 0,3,0, styles-features.css:
             // 548-549) beats the chat-bubbles rule (0,2,1), so a satoshi
             // bubble is padded 10/15 in BOTH layouts.
-            padding: deco?.contentPadding ??
-                const EdgeInsets.fromLTRB(12, 8, 12, 6),
+            padding:
+                deco?.contentPadding ?? const EdgeInsets.fromLTRB(12, 8, 12, 6),
             // The 180px floor above lands on the DECORATED box, but the loose
             // Stack inside [_decorateBubble] would let the interior (and the
             // time's right-edge pin) collapse to the body's width. Re-assert
@@ -1992,8 +2006,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // `padding: 0 14px 0 6px` (the 32px avatar starts 6px from the edge), a
     // self group is `padding: 0 14px` (`group-self`, row-reversed, no avatar).
     final row = Row(
-      mainAxisAlignment:
-          self ? MainAxisAlignment.end : MainAxisAlignment.start,
+      mainAxisAlignment: self ? MainAxisAlignment.end : MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         if (!self) ...[
@@ -2015,7 +2028,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       ],
     );
     return Padding(
-      padding: EdgeInsets.fromLTRB(self ? 14 : 6, widget.grouped ? 2 : 6, 14, 0),
+      padding:
+          EdgeInsets.fromLTRB(self ? 14 : 6, widget.grouped ? 2 : 6, 14, 0),
       child: row,
     );
   }
@@ -2057,10 +2071,11 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // route through `CosmeticOverlayPainter` (via `hasOverlay`), so drawing the
     // border here too would double the ring (gold/neon/phoenix/cosmic/frost).
     final lastAura = auras.isNotEmpty ? auras.last : null;
-    final inset =
-        (lastAura != null && lastAura.insetColor != null && !lastAura.hasOverlay)
-            ? lastAura
-            : null;
+    final inset = (lastAura != null &&
+            lastAura.insetColor != null &&
+            !lastAura.hasOverlay)
+        ? lastAura
+        : null;
 
     // Watermark from the active style or a frost/cosmic aura — and whether that
     // watermark tiles edge-only (frost) rather than across the whole box. The
@@ -2073,14 +2088,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         ? null
         : auras
             .where((a) =>
-                a.watermark != null &&
-                (a.edgeWatermark || !_styleClassActive))
+                a.watermark != null && (a.edgeWatermark || !_styleClassActive))
             .fold<CosmeticAura?>(null, (prev, a) => prev ?? a);
     final watermark = styleWatermark ?? auraWatermark?.watermark;
     final edgeWatermark = auraWatermark?.edgeWatermark ?? false;
 
-    final overlays =
-        auras.where((a) => a.hasOverlay).toList();
+    final overlays = auras.where((a) => a.hasOverlay).toList();
     final overlayAura = overlays.isNotEmpty ? overlays.first : null;
 
     return DecoratedBox(
@@ -2154,8 +2167,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if ((message.geohash ?? '').isEmpty && (message.channel ?? '').isEmpty) {
       return false;
     }
-    return RegExp(r'^[0-9a-f]{64}$', caseSensitive: false)
-        .hasMatch(message.id);
+    return RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(message.id);
   }
 
   /// A right-aligned row of up to 3 overlapping 14px reader avatars + a `+N`
@@ -2169,49 +2181,56 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final overflow = entries.length - visible.length;
     final c = context.nym;
     final users = ref.watch(usersProvider);
-    return GestureDetector(
-      onLongPress: () {
-        // The PWA buzzes (nymHapticTap = 30ms vibrate) as the 500ms reader
-        // long-press fires (groups.js:2759-2763, 2806-2810). A real 30ms
-        // motor pulse reads as a solid tap — mediumImpact, not the barely
-        // perceptible lightImpact.
-        HapticFeedback.mediumImpact();
-        _showSeenBy(context);
-      },
-      child: Padding(
-        padding: const EdgeInsets.only(top: 3, right: 4),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          mainAxisSize: MainAxisSize.max,
-          children: [
-            for (var i = 0; i < visible.length; i++)
-              Transform.translate(
-                offset: Offset(i == 0 ? 0 : -5.0 * i, 0),
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: c.bg, width: 1.5),
-                  ),
-                  child: Opacity(
-                    opacity: 0.85,
-                    child: NymAvatar(
-                      seed: visible[i].key,
-                      size: 14,
-                      imageUrl: users[visible[i].key]?.profile?.picture,
+    // The `context` this method is handed belongs to the MESSAGE ROW, not to
+    // the avatar strip, so anchoring the modal to it opened the sheet against
+    // the whole row's rect — visibly detached from the avatars that were
+    // pressed. A Builder gives the strip its own context, whose render object
+    // is the Padding below, so the anchor is the avatars themselves.
+    return Builder(
+      builder: (avatarContext) => GestureDetector(
+        onLongPress: () {
+          // The PWA buzzes (nymHapticTap = 30ms vibrate) as the 500ms reader
+          // long-press fires (groups.js:2759-2763, 2806-2810). A real 30ms
+          // motor pulse reads as a solid tap — mediumImpact, not the barely
+          // perceptible lightImpact.
+          HapticFeedback.mediumImpact();
+          _showSeenBy(avatarContext);
+        },
+        child: Padding(
+          padding: const EdgeInsets.only(top: 3, right: 4),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisSize: MainAxisSize.max,
+            children: [
+              for (var i = 0; i < visible.length; i++)
+                Transform.translate(
+                  offset: Offset(i == 0 ? 0 : -5.0 * i, 0),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: c.bg, width: 1.5),
+                    ),
+                    child: Opacity(
+                      opacity: 0.85,
+                      child: NymAvatar(
+                        seed: visible[i].key,
+                        size: 14,
+                        imageUrl: users[visible[i].key]?.profile?.picture,
+                      ),
                     ),
                   ),
                 ),
-              ),
-            if (overflow > 0)
-              Padding(
-                padding: const EdgeInsets.only(left: 3),
-                child: Text(
-                  '+${abbreviateNumber(overflow)}',
-                  style: TextStyle(
-                      color: c.textDim, fontSize: 9, height: 14 / 9),
+              if (overflow > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 3),
+                  child: Text(
+                    '+${abbreviateNumber(overflow)}',
+                    style: TextStyle(
+                        color: c.textDim, fontSize: 9, height: 14 / 9),
+                  ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2235,7 +2254,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       context,
       anchorRect: _globalRectOfContext(context) ?? Rect.zero,
       emoji: '',
-      title: tr('Seen by {count}', {'count': abbreviateNumber(reactors.length)}),
+      title:
+          tr('Seen by {count}', {'count': abbreviateNumber(reactors.length)}),
       reactors: reactors,
       // "Click user row to open their context menu" (`_showReadersModalFromMap`,
       // groups.js:2861-2869): close the modal, then
@@ -2635,11 +2655,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final target = autoTranslateTargetFor(widget.settings);
     if (target.isEmpty) return;
     final raw = ref.watch(autoTranslateProvider.select((m) => m[message.id]));
-    final fresh = (raw != null &&
-            raw.target == target &&
-            raw.source == message.content)
-        ? raw
-        : null;
+    final fresh =
+        (raw != null && raw.target == target && raw.source == message.content)
+            ? raw
+            : null;
     _autoEntry = fresh;
     if (fresh == null) {
       // No (or stale) entry: kick the translation after this frame so we don't
@@ -2663,8 +2682,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final c = context.nym;
     final baseSize = settings.textSize.toDouble();
     final detected = entry.detected;
-    final sourceName =
-        (detected.isNotEmpty && detected != 'auto') ? languageName(detected) : '';
+    final sourceName = (detected.isNotEmpty && detected != 'auto')
+        ? languageName(detected)
+        : '';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -3010,8 +3030,8 @@ class _ReactionBadgeState extends State<_ReactionBadge> {
         _TightLongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<
             _TightLongPressGestureRecognizer>(
           () => _TightLongPressGestureRecognizer(debugOwner: this),
-          (rec) => rec
-            ..onLongPressStart = (_) => widget.onLongPress(_rect(context)),
+          (rec) =>
+              rec..onLongPressStart = (_) => widget.onLongPress(_rect(context)),
         ),
       },
       child: MouseRegion(
@@ -3389,14 +3409,14 @@ class _ScrollFlashOverlayState extends State<_ScrollFlashOverlay>
   // 100% → 0 (ease-out). A TweenSequence reproduces the in/hold/out timeline.
   late final Animation<double> _opacity = TweenSequence<double>([
     TweenSequenceItem(
-      tween: Tween(begin: 0.0, end: 1.0)
-          .chain(CurveTween(curve: Curves.easeOut)),
+      tween:
+          Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeOut)),
       weight: 8,
     ),
     TweenSequenceItem(tween: ConstantTween(1.0), weight: 37), // 8% → 45%
     TweenSequenceItem(
-      tween: Tween(begin: 1.0, end: 0.0)
-          .chain(CurveTween(curve: Curves.easeOut)),
+      tween:
+          Tween(begin: 1.0, end: 0.0).chain(CurveTween(curve: Curves.easeOut)),
       weight: 55, // 45% → 100%
     ),
   ]).animate(_controller);
@@ -3520,9 +3540,8 @@ class _HoverActionButtonState extends State<_HoverActionButton> {
     final restFill = c.isLight
         ? const Color(0xD9FFFFFF) // rgba(255,255,255,0.85)
         : const Color(0xCC141423); // rgba(20,20,35,0.8)
-    final restBorder = c.isLight
-        ? Colors.black.withValues(alpha: 0.08)
-        : c.glassBorder;
+    final restBorder =
+        c.isLight ? Colors.black.withValues(alpha: 0.08) : c.glassBorder;
     final btn = MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -3534,11 +3553,9 @@ class _HoverActionButtonState extends State<_HoverActionButton> {
           curve: NymMotion.curve,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color:
-                _hover ? Colors.white.withValues(alpha: 0.08) : restFill,
+            color: _hover ? Colors.white.withValues(alpha: 0.08) : restFill,
             borderRadius: NymRadius.rxs,
-            border: Border.all(
-                color: _hover ? c.primaryA(0.3) : restBorder),
+            border: Border.all(color: _hover ? c.primaryA(0.3) : restBorder),
           ),
           child: NymSvgIcon(widget.svg, size: 16, color: c.text),
         ),
@@ -3605,8 +3622,7 @@ class _TimestampTextState extends State<_TimestampText> {
     final rect = box.localToGlobal(Offset.zero) & box.size;
     final overlay = Overlay.of(context);
     final screen = MediaQuery.of(context).size;
-    final right =
-        (screen.width - rect.right).clamp(4.0, double.infinity);
+    final right = (screen.width - rect.right).clamp(4.0, double.infinity);
     final above = rect.top > 110;
     final entry = OverlayEntry(
       builder: (ctx) {
@@ -3630,8 +3646,8 @@ class _TimestampTextState extends State<_TimestampText> {
                   // `.reactors-modal { min-width:160; max-width:240 }`.
                   constraints:
                       const BoxConstraints(minWidth: 160, maxWidth: 240),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
                     color: c.bgSecondary,
                     borderRadius: NymRadius.rmd,
@@ -3654,8 +3670,7 @@ class _TimestampTextState extends State<_TimestampText> {
                                 color: Color(0x80000000),
                                 offset: Offset(0, 8),
                                 blurRadius: 32),
-                            BoxShadow(
-                                color: c.primaryA(0.1), blurRadius: 20),
+                            BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
                             const BoxShadow(
                                 color: Color(0x0DFFFFFF), spreadRadius: 1),
                           ],
@@ -3695,8 +3710,7 @@ class _TimestampTextState extends State<_TimestampText> {
           waitDuration: Duration.zero,
           preferBelow: false,
           verticalOffset: 14,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             color: c.isLight
                 ? const Color(0xEBFFFFFF) // rgba(255,255,255,0.92)
@@ -3717,8 +3731,8 @@ class _TimestampTextState extends State<_TimestampText> {
           ),
           // The ::after inherits `.message-time`'s text-dim (dark); light
           // pins `color: var(--text)`.
-          textStyle: TextStyle(
-              fontSize: 11, color: c.isLight ? c.text : c.textDim),
+          textStyle:
+              TextStyle(fontSize: 11, color: c.isLight ? c.text : c.textDim),
           child: AnimatedDefaultTextStyle(
             // `.clickable-timestamp { transition: color 120ms ease }`.
             duration: const Duration(milliseconds: 120),
@@ -3790,7 +3804,8 @@ class _FileOfferCardState extends State<FileOfferCard> {
   /// The PWA uses ONE generic file glyph and only re-tints the stroke per
   /// category (default → `--primary`), so this returns the colour alone.
   static Color _category(NymColors c, FileOffer o) {
-    final ext = o.name.contains('.') ? o.name.split('.').last.toLowerCase() : '';
+    final ext =
+        o.name.contains('.') ? o.name.split('.').last.toLowerCase() : '';
     final mime = o.type.toLowerCase();
     bool any(List<String> exts) => exts.contains(ext);
     if (any(['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma']) ||
@@ -3804,10 +3819,12 @@ class _FileOfferCardState extends State<FileOfferCard> {
     if (any(['zip', 'rar', '7z', 'tar', 'gz', 'bz2'])) {
       return c.warning; // `.file-offer-icon.archive`
     }
-    if (any(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf'])) {
+    if (any(
+        ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf'])) {
       return c.secondary; // `.file-offer-icon.document`
     }
-    return c.primary; // default `.file-offer-icon svg { stroke: var(--primary) }`
+    return c
+        .primary; // default `.file-offer-icon svg { stroke: var(--primary) }`
   }
 
   @override
@@ -4055,12 +4072,10 @@ class _FileOfferCardState extends State<FileOfferCard> {
   /// message (`updateTransferStatus`), defaulting to "Connecting...".
   String _progressText(P2PTransfer transfer) {
     if (transfer.status == P2PStatus.transferring) {
-      final elapsed = (DateTime.now().millisecondsSinceEpoch -
-              transfer.startTime) /
-          1000;
-      final speed = elapsed > 0
-          ? (transfer.bytesReceived / elapsed).round()
-          : 0;
+      final elapsed =
+          (DateTime.now().millisecondsSinceEpoch - transfer.startTime) / 1000;
+      final speed =
+          elapsed > 0 ? (transfer.bytesReceived / elapsed).round() : 0;
       return '${transfer.progress.toStringAsFixed(1)}% • '
           '${formatFileSize(speed)}/s';
     }
@@ -4115,13 +4130,11 @@ class _SeedingDotState extends State<_SeedingDot>
   // `@keyframes pulse { 0%,100% → 1; 50% → 0.5 }` with CSS `ease` per segment.
   late final Animation<double> _opacity = TweenSequence<double>([
     TweenSequenceItem(
-      tween:
-          Tween(begin: 1.0, end: 0.5).chain(CurveTween(curve: Curves.ease)),
+      tween: Tween(begin: 1.0, end: 0.5).chain(CurveTween(curve: Curves.ease)),
       weight: 50,
     ),
     TweenSequenceItem(
-      tween:
-          Tween(begin: 0.5, end: 1.0).chain(CurveTween(curve: Curves.ease)),
+      tween: Tween(begin: 0.5, end: 1.0).chain(CurveTween(curve: Curves.ease)),
       weight: 50,
     ),
   ]).animate(_ctrl);
@@ -4218,8 +4231,8 @@ class _StopBtn extends StatelessWidget {
           // `.file-offer-btn { border-radius: var(--radius-xs)=8 }` (:2110).
           borderRadius: const BorderRadius.all(Radius.circular(8)),
         ),
-        child: Text(tr('Stop'),
-            style: TextStyle(color: c.danger, fontSize: 10)),
+        child:
+            Text(tr('Stop'), style: TextStyle(color: c.danger, fontSize: 10)),
       ),
     );
   }
@@ -4427,8 +4440,8 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
     // does. The overlay (full group height) lets the avatar glide within the
     // group's bounds without disturbing the bubble column's layout.
     final last = entries.last.message;
-    final picture = ref.watch(
-        usersProvider.select((m) => m[first.pubkey]?.profile?.picture));
+    final picture = ref
+        .watch(usersProvider.select((m) => m[first.pubkey]?.profile?.picture));
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 0, 14, 0),
       child: Stack(
@@ -4594,8 +4607,7 @@ class _StickyGroupAvatarState extends State<_StickyGroupAvatar> {
       if (viewport is RenderBox && viewport.hasSize) {
         final trackTop =
             track.localToGlobal(Offset.zero, ancestor: viewport).dy;
-        final desired =
-            viewport.size.height - _stickyGap - _avatar - trackTop;
+        final desired = viewport.size.height - _stickyGap - _avatar - trackTop;
         return desired.clamp(0.0, maxTop);
       }
     }
@@ -4810,7 +4822,13 @@ class _SwipeToActState extends State<_SwipeToAct>
   /// abandons the gesture outright (messages.js:2202-2206): the row never
   /// moves, no indicator, no haptic.
   static const Set<String> _knownActions = {
-    'quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug',
+    'quote',
+    'translate',
+    'copy',
+    'react',
+    'zap',
+    'slap',
+    'hug',
   };
 
   // Created in initState (NOT a lazy `late final = …`): a row that is never
@@ -5292,8 +5310,8 @@ class _LocalMediaBody extends StatelessWidget {
               child: Text(
                 label,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    color: colors.text, fontWeight: FontWeight.w500),
+                style:
+                    TextStyle(color: colors.text, fontWeight: FontWeight.w500),
               ),
             ),
             const SizedBox(width: 8),

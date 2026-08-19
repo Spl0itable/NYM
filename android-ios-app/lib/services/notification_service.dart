@@ -8,7 +8,8 @@ class NotificationService {
   factory NotificationService() => _instance;
   NotificationService._internal();
 
-  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
   final _payloadStreamController = StreamController<String>.broadcast();
   String? _initialPayload;
   int _notificationIdCounter = 0;
@@ -26,13 +27,15 @@ class NotificationService {
     if (kIsWeb) {
       return;
     }
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
       requestSoundPermission: false,
       requestBadgePermission: false,
       requestAlertPermission: false,
     );
-    const settings = InitializationSettings(android: androidSettings, iOS: iosSettings);
+    const settings =
+        InitializationSettings(android: androidSettings, iOS: iosSettings);
     await _notifications.initialize(
       settings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
@@ -42,7 +45,8 @@ class NotificationService {
         }
       },
     );
-    final launchDetails = await _notifications.getNotificationAppLaunchDetails();
+    final launchDetails =
+        await _notifications.getNotificationAppLaunchDetails();
     if (launchDetails?.didNotificationLaunchApp ?? false) {
       _initialPayload = launchDetails?.notificationResponse?.payload;
     }
@@ -58,7 +62,7 @@ class NotificationService {
     }
     // Generate unique notification ID to prevent notifications from replacing each other
     final notificationId = _generateUniqueId();
-    
+
     const androidDetails = AndroidNotificationDetails(
       'nymchat_channel',
       'Nymchat Notifications',
@@ -73,12 +77,15 @@ class NotificationService {
       presentBadge: true,
       presentSound: true,
     );
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
-    
-    debugPrint('[NotificationService] Showing notification: id=$notificationId, title=$title, payload=$payload');
-    await _notifications.show(notificationId, title, body, details, payload: payload);
+    const details =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
+
+    debugPrint(
+        '[NotificationService] Showing notification: id=$notificationId, title=$title, payload=$payload');
+    await _notifications.show(notificationId, title, body, details,
+        payload: payload);
   }
-  
+
   int _generateUniqueId() {
     // Combine counter with random component to ensure uniqueness
     _notificationIdCounter = (_notificationIdCounter + 1) % 100000;

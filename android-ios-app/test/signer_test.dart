@@ -255,9 +255,9 @@ void main() {
       final tags = (result.rumor['tags'] as List)
           .map((t) => (t as List).map((e) => e as String).toList())
           .toList();
-      String? tag(String k) =>
-          tags.firstWhere((t) => t.isNotEmpty && t[0] == k,
-              orElse: () => const []).let((t) => t.length > 1 ? t[1] : null);
+      String? tag(String k) => tags
+          .firstWhere((t) => t.isNotEmpty && t[0] == k, orElse: () => const [])
+          .let((t) => t.length > 1 ? t[1] : null);
       expect(tag('status'), 'away');
       expect(tag('n'), 'alice');
       expect(tag('away'), 'brb');

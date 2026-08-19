@@ -11,7 +11,8 @@ import '../services/storage/key_value_store.dart';
 /// Provides the opened [KeyValueStore]. Overridden in `main()` with the
 /// concrete instance (SharedPreferences must be opened asynchronously).
 final keyValueStoreProvider = Provider<KeyValueStore>((ref) {
-  throw UnimplementedError('keyValueStoreProvider must be overridden in main()');
+  throw UnimplementedError(
+      'keyValueStoreProvider must be overridden in main()');
 });
 
 /// Holds the live [Settings] and persists each change back to the store using
@@ -197,7 +198,8 @@ class SettingsController extends StateNotifier<Settings> {
     if (cb != null) cb(mode);
   }
 
-  String get keypairMode => _kv.getString(StorageKeys.keypairMode) ?? 'persistent';
+  String get keypairMode =>
+      _kv.getString(StorageKeys.keypairMode) ?? 'persistent';
 
   void setPowDifficulty(int bits) {
     _kv.setInt(StorageKeys.powDifficulty, bits);

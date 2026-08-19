@@ -148,8 +148,7 @@ void main() {
     });
 
     test('content over 255 bytes is rejected (caller must chunk)', () {
-      final pkt = PrivateMessagePacket(
-          messageID: 'id', content: 'x' * 256);
+      final pkt = PrivateMessagePacket(messageID: 'id', content: 'x' * 256);
       expect(pkt.encode(), isNull);
     });
 

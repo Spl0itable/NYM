@@ -85,9 +85,8 @@ class WallpaperLayer extends ConsumerWidget {
       if (url == null || url.isEmpty) return const SizedBox.shrink();
       // Scrim mirrors users.js applyWallpaper: rgba(10,10,15,0.82) dark /
       // rgba(245,245,242,0.85) light layered over the image.
-      final scrim = c.isLight
-          ? const Color(0xD9F5F5F2)
-          : const Color(0xD10A0A0F);
+      final scrim =
+          c.isLight ? const Color(0xD9F5F5F2) : const Color(0xD10A0A0F);
       // The PWA only ever stores a remote upload URL; the Flutter upload flow
       // (settings `_WallpaperPicker`) persists a locally-picked file's absolute
       // path instead, so a value that isn't an http(s) URL is an on-device file.
@@ -184,8 +183,8 @@ class WallpaperPatternPainter extends CustomPainter {
       case 'dots':
         _paintDots(canvas, size);
       case 'circuit':
-        _tiled(canvas, size,
-            preview ? const Size(60, 60) : const Size(80, 80), _circuitTile);
+        _tiled(canvas, size, preview ? const Size(60, 60) : const Size(80, 80),
+            _circuitTile);
       case 'waves':
         _tiled(canvas, size,
             preview ? const Size(100, 20) : const Size(120, 24), _wavesTile);
@@ -199,8 +198,8 @@ class WallpaperPatternPainter extends CustomPainter {
         // Same 56×100 honeycomb tile in both variants.
         _tiled(canvas, size, const Size(56, 100), _hexagonsTile);
       case 'diamonds':
-        _tiled(canvas, size,
-            preview ? const Size(40, 40) : const Size(48, 48), _diamondsTile);
+        _tiled(canvas, size, preview ? const Size(40, 40) : const Size(48, 48),
+            _diamondsTile);
     }
   }
 
@@ -313,23 +312,31 @@ class WallpaperPatternPainter extends CustomPainter {
   void _circuitTile(Canvas canvas) {
     final a = _alpha;
     if (preview) {
-      _strokeShape(canvas,
-          Path()..addRect(const Rect.fromLTWH(10, 10, 40, 40)), a * 0.7, 0.5);
+      _strokeShape(canvas, Path()..addRect(const Rect.fromLTWH(10, 10, 40, 40)),
+          a * 0.7, 0.5);
       final pad = Paint()..color = _tint(a * 0.85);
       for (final c in const [
-        Offset(10, 10), Offset(50, 10), Offset(10, 50), Offset(50, 50),
+        Offset(10, 10),
+        Offset(50, 10),
+        Offset(10, 50),
+        Offset(50, 50),
       ]) {
         canvas.drawCircle(c, 2, pad);
       }
       final stubs = Path()
-        ..moveTo(30, 10)..lineTo(30, 25)
-        ..moveTo(10, 30)..lineTo(25, 30)
-        ..moveTo(30, 50)..lineTo(30, 35)
-        ..moveTo(50, 30)..lineTo(35, 30);
+        ..moveTo(30, 10)
+        ..lineTo(30, 25)
+        ..moveTo(10, 30)
+        ..lineTo(25, 30)
+        ..moveTo(30, 50)
+        ..lineTo(30, 35)
+        ..moveTo(50, 30)
+        ..lineTo(35, 30);
       _strokeShape(canvas, stubs, a * 0.6, 0.5);
       _strokeShape(
           canvas,
-          Path()..addOval(Rect.fromCircle(center: const Offset(30, 30), radius: 3)),
+          Path()
+            ..addOval(Rect.fromCircle(center: const Offset(30, 30), radius: 3)),
           a * 0.7,
           0.5);
       return;
@@ -338,19 +345,27 @@ class WallpaperPatternPainter extends CustomPainter {
         canvas, Path()..addRect(const Rect.fromLTWH(10, 10, 60, 60)), a, 0.5);
     final pad = Paint()..color = _tint(a);
     for (final c in const [
-      Offset(10, 10), Offset(70, 10), Offset(10, 70), Offset(70, 70),
+      Offset(10, 10),
+      Offset(70, 10),
+      Offset(10, 70),
+      Offset(70, 70),
     ]) {
       canvas.drawCircle(c, 2.5, pad);
     }
     final stubs = Path()
-      ..moveTo(40, 10)..lineTo(40, 30)
-      ..moveTo(10, 40)..lineTo(30, 40)
-      ..moveTo(40, 70)..lineTo(40, 50)
-      ..moveTo(70, 40)..lineTo(50, 40);
+      ..moveTo(40, 10)
+      ..lineTo(40, 30)
+      ..moveTo(10, 40)
+      ..lineTo(30, 40)
+      ..moveTo(40, 70)
+      ..lineTo(40, 50)
+      ..moveTo(70, 40)
+      ..lineTo(50, 40);
     _strokeShape(canvas, stubs, a * 0.85, 0.5);
     _strokeShape(
         canvas,
-        Path()..addOval(Rect.fromCircle(center: const Offset(40, 40), radius: 4)),
+        Path()
+          ..addOval(Rect.fromCircle(center: const Offset(40, 40), radius: 4)),
         a,
         0.5);
   }
@@ -379,16 +394,24 @@ class WallpaperPatternPainter extends CustomPainter {
       ..quadraticBezierTo(v[2], v[3], v[4], v[5])
       ..quadraticBezierTo(v[6], v[7], v[8], v[9]);
     if (preview) {
-      _strokeShape(canvas, line([20, 80, 35, 60, 50, 65, 65, 70, 80, 50]), a, 0.7);
-      _strokeShape(canvas, line([10, 60, 30, 40, 50, 45, 70, 50, 90, 30]), a * 0.8, 0.7);
-      _strokeShape(canvas, line([5, 40, 25, 20, 50, 25, 75, 30, 95, 10]), a * 0.6, 0.7);
-      _strokeShape(canvas, line([15, 95, 40, 85, 55, 88, 70, 91, 85, 75]), a * 0.7, 0.7);
+      _strokeShape(
+          canvas, line([20, 80, 35, 60, 50, 65, 65, 70, 80, 50]), a, 0.7);
+      _strokeShape(
+          canvas, line([10, 60, 30, 40, 50, 45, 70, 50, 90, 30]), a * 0.8, 0.7);
+      _strokeShape(
+          canvas, line([5, 40, 25, 20, 50, 25, 75, 30, 95, 10]), a * 0.6, 0.7);
+      _strokeShape(
+          canvas, line([15, 95, 40, 85, 55, 88, 70, 91, 85, 75]), a * 0.7, 0.7);
       return;
     }
-    _strokeShape(canvas, line([20, 100, 40, 75, 60, 80, 80, 85, 100, 60]), a, 0.7);
-    _strokeShape(canvas, line([10, 70, 35, 45, 60, 50, 85, 55, 110, 35]), a * 0.85, 0.7);
-    _strokeShape(canvas, line([5, 45, 30, 22, 55, 28, 80, 34, 105, 12]), a * 0.7, 0.7);
-    _strokeShape(canvas, line([15, 115, 45, 100, 65, 105, 85, 110, 105, 90]), a * 0.7, 0.7);
+    _strokeShape(
+        canvas, line([20, 100, 40, 75, 60, 80, 80, 85, 100, 60]), a, 0.7);
+    _strokeShape(
+        canvas, line([10, 70, 35, 45, 60, 50, 85, 55, 110, 35]), a * 0.85, 0.7);
+    _strokeShape(
+        canvas, line([5, 45, 30, 22, 55, 28, 80, 34, 105, 12]), a * 0.7, 0.7);
+    _strokeShape(canvas, line([15, 115, 45, 100, 65, 105, 85, 110, 105, 90]),
+        a * 0.7, 0.7);
   }
 
   // hexagons (56×100 in both variants): two interlocking honeycomb polylines;
@@ -406,8 +429,14 @@ class WallpaperPatternPainter extends CustomPainter {
     _strokeShape(
       canvas,
       poly(const [
-        Offset(28, 66), Offset(0, 50), Offset(0, 16), Offset(28, 0),
-        Offset(56, 16), Offset(56, 50), Offset(28, 66), Offset(28, 100),
+        Offset(28, 66),
+        Offset(0, 50),
+        Offset(0, 16),
+        Offset(28, 0),
+        Offset(56, 16),
+        Offset(56, 50),
+        Offset(28, 66),
+        Offset(28, 100),
       ]),
       a,
       0.5,
@@ -415,8 +444,14 @@ class WallpaperPatternPainter extends CustomPainter {
     _strokeShape(
       canvas,
       poly(const [
-        Offset(28, 0), Offset(28, 34), Offset(0, 50), Offset(0, 84),
-        Offset(28, 100), Offset(56, 84), Offset(56, 50), Offset(28, 34),
+        Offset(28, 0),
+        Offset(28, 34),
+        Offset(0, 50),
+        Offset(0, 84),
+        Offset(28, 100),
+        Offset(56, 84),
+        Offset(56, 50),
+        Offset(28, 34),
       ]),
       a * (preview ? 0.6 : 0.55),
       0.5,

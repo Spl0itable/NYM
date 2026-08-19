@@ -38,8 +38,8 @@ void main() {
       keyValueStoreProvider.overrideWithValue(kv),
       nostrControllerProvider
           .overrideWith((ref) => _IdentityController(ref, 'selfpk')),
-      usersProvider
-          .overrideWithValue({'pkOther': User(pubkey: 'pkOther', nym: 'alice')}),
+      usersProvider.overrideWithValue(
+          {'pkOther': User(pubkey: 'pkOther', nym: 'alice')}),
     ]);
     addTearDown(container.dispose);
 
@@ -79,7 +79,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final avatarBottom = tester.getRect(find.byType(NymAvatar).first).bottom;
-    final bubbleBottom = tester.getRect(find.byType(MessageContent).first).bottom;
+    final bubbleBottom =
+        tester.getRect(find.byType(MessageContent).first).bottom;
     final groupBottom = tester.getRect(find.byType(MessageGroup)).bottom;
 
     // The avatar bottom should sit near the bubble (within ~the bubble's own

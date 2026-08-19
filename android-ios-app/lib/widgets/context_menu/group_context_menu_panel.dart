@@ -224,8 +224,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           ),
           for (final pk in sorted)
             // In transfer mode the owner can't pick themselves.
-            if (!_transferMode || pk != self)
-              _memberRow(c, group, pk, self),
+            if (!_transferMode || pk != self) _memberRow(c, group, pk, self),
           const SizedBox(height: 8),
         ],
       ),
@@ -342,9 +341,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
 
   /// The banner-avatar ring/disc colour (`.has-banner .group-ctx-icon`):
   /// `rgba(20,20,35,0.95)` dark; `rgba(255,255,255,0.95)` light.
-  Color _bannerRing(NymColors c) => c.isLight
-      ? const Color(0xF2FFFFFF)
-      : const Color(0xF2141423);
+  Color _bannerRing(NymColors c) =>
+      c.isLight ? const Color(0xF2FFFFFF) : const Color(0xF2141423);
 
   /// The `.group-ctx-default-banner`: a 135° gradient from `--primary`@0.45 to
   /// `--secondary`@0.45.
@@ -534,6 +532,16 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         color: c.text,
         onTap: () => _toggleAllowInvites(group),
       ));
+      // Share history with new members (owner-only checkbox row, PWA
+      // `groupCtxToggleShareHistory`).
+      rows.add(_ActionRow(
+        svg: group.shareHistory
+            ? NymIcons.checkboxChecked
+            : NymIcons.checkboxUnchecked,
+        label: tr('Share history with new members'),
+        color: c.text,
+        onTap: () => _toggleShareHistory(group),
+      ));
     }
 
     // Add Members — owner, or a member when member-invites are allowed.
@@ -635,6 +643,13 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   Future<void> _toggleAllowInvites(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     await controller.setGroupAllowInvites(group.id, !group.allowMemberInvites);
+  }
+
+  /// Owner: flip "share history with new members" → `setGroupShareHistory`
+  /// (PWA `groupCtxToggleShareHistory`).
+  Future<void> _toggleShareHistory(Group group) async {
+    final controller = ref.read(nostrControllerProvider);
+    await controller.setGroupShareHistory(group.id, !group.shareHistory);
   }
 
   /// Owner: flip "allow joining via invite link" → `setGroupInviteEnabled`
@@ -782,7 +797,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       await controller.transferOwner(groupId, pubkey);
     }
   }
-
 }
 
 /// A `.context-menu-item` management row (icon + label + optional trailing).
@@ -825,7 +839,9 @@ class _ActionRowState extends State<_ActionRow> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: _hover
-                ? (widget.color == c.danger ? c.dangerHoverOverlay : c.hoverOverlay)
+                ? (widget.color == c.danger
+                    ? c.dangerHoverOverlay
+                    : c.hoverOverlay)
                 : null,
             borderRadius: const BorderRadius.all(Radius.circular(8)),
           ),
@@ -1120,8 +1136,8 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                                 for (final r in _picked)
                                   _RecipientChip(
                                     nym: r.nym,
-                                    onRemove: () => setState(() => _picked
-                                        .removeWhere(
+                                    onRemove: () => setState(() =>
+                                        _picked.removeWhere(
                                             (x) => x.pubkey == r.pubkey)),
                                   ),
                               ],
@@ -1132,8 +1148,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                             Expanded(
                               child: TextField(
                                 controller: _controller,
-                                style:
-                                    TextStyle(color: c.text, fontSize: 14),
+                                style: TextStyle(color: c.text, fontSize: 14),
                                 onSubmitted: (_) => _add(),
                                 decoration: InputDecoration(
                                   isDense: true,
@@ -1191,8 +1206,8 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                           ),
                           onPressed: _picked.isEmpty
                               ? null
-                              : () => Navigator.of(context).pop(
-                                  _picked.map((r) => r.pubkey).toList()),
+                              : () => Navigator.of(context)
+                                  .pop(_picked.map((r) => r.pubkey).toList()),
                           child: Text(tr('Add')),
                         ),
                       ],

@@ -21,12 +21,13 @@ void main() {
       expect(decoded.fileSize, 500);
     });
 
-    test('content over 64 KiB is chunked into multiple CONTENT TLVs and rejoined',
+    test(
+        'content over 64 KiB is chunked into multiple CONTENT TLVs and rejoined',
         () {
       final big = _bytes(150000, 1); // > 2 * 65535 → 3 CONTENT TLVs
-      final decoded = BitchatFilePacket.decode(
-          BitchatFilePacket(fileName: 'clip.mp4', mimeType: 'video/mp4', content: big)
-              .encode()!)!;
+      final decoded = BitchatFilePacket.decode(BitchatFilePacket(
+              fileName: 'clip.mp4', mimeType: 'video/mp4', content: big)
+          .encode()!)!;
       expect(decoded.content.length, 150000);
       expect(decoded.content, equals(big));
       expect(decoded.mimeType, 'video/mp4');

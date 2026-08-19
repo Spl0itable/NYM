@@ -297,8 +297,7 @@ class NymIcons {
       '<line x1="9" y1="10" x2="15" y2="10" stroke-linecap="round"/></svg>';
 
   /// `#ctxZap` ("Zap Bitcoin") — a filled lightning bolt.
-  static const String ctxZap =
-      '<svg viewBox="0 0 16 16" fill="currentColor">'
+  static const String ctxZap = '<svg viewBox="0 0 16 16" fill="currentColor">'
       '<path d="M 9 2 L 4 9 H 7 L 7 14 L 12 7 H 9 Z"/></svg>';
 
   /// `#ctxGiftCredits` ("Gift Nymbot Credits") — a wrapped gift box.
@@ -309,8 +308,7 @@ class NymIcons {
       '<path d="M 8 7 C 8 4 6 3 5 4 C 4 5 6 7 8 7 C 8 4 10 3 11 4 C 12 5 10 7 8 7 Z"/></svg>';
 
   /// `#ctxQuote` — two filled quotation marks.
-  static const String ctxQuote =
-      '<svg viewBox="0 0 16 16" fill="currentColor">'
+  static const String ctxQuote = '<svg viewBox="0 0 16 16" fill="currentColor">'
       '<path d="M 3 6 C 3 4.5 4 3 6 3 C 6 4.5 5 5 4 5.5 C 3.5 5.8 3 6.3 3 7 L 3 9 L 6 9 L 6 6 Z"/>'
       '<path d="M 9 6 C 9 4.5 10 3 12 3 C 12 4.5 11 5 10 5.5 C 9.5 5.8 9 6.3 9 7 L 9 9 L 12 9 L 12 6 Z"/></svg>';
 
@@ -541,8 +539,7 @@ class NymIcons {
       '<polyline points="9.5 19 9.9 16.3 12.5 16.7"/></svg>';
 
   /// `.call-chat-send` (index.html:925) — a filled paper-plane (Send).
-  static const String send =
-      '<svg viewBox="0 0 24 24" fill="currentColor">'
+  static const String send = '<svg viewBox="0 0 24 24" fill="currentColor">'
       '<path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>';
 
   // ===========================================================================

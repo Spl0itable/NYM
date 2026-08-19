@@ -102,8 +102,8 @@ class LanguageSelectScreen extends ConsumerWidget {
                   const SizedBox(height: 16),
                   Expanded(
                     child: LanguagePickerList(
-                      selectedCode: ref.watch(
-                          settingsProvider.select((s) => s.uiLanguage)),
+                      selectedCode: ref
+                          .watch(settingsProvider.select((s) => s.uiLanguage)),
                       onSelected: (code) {
                         applyUiLanguage(ref, code);
                         onComplete();

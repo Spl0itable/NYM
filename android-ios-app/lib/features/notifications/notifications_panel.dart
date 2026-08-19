@@ -47,8 +47,7 @@ Future<void> showNotificationsPanel(BuildContext context) {
   // regardless of insertion order (historical replay + remote sync merges can
   // leave the store out of order).
   final blocked = container.read(appStateProvider).blockedUsers;
-  final cutoff24h =
-      DateTime.now().millisecondsSinceEpoch - 24 * 60 * 60 * 1000;
+  final cutoff24h = DateTime.now().millisecondsSinceEpoch - 24 * 60 * 60 * 1000;
   final entries = [
     for (final e in all)
       if (e.ts > cutoff24h && !blocked.contains(e.senderPubkey ?? '')) e,
@@ -146,8 +145,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
   /// owns the store-side half (persist + seen-keys + badge + cross-device sync).
   void _markVisibleSeen() {
     if (!mounted) return;
-    final bodyBox =
-        _bodyKey.currentContext?.findRenderObject() as RenderBox?;
+    final bodyBox = _bodyKey.currentContext?.findRenderObject() as RenderBox?;
     if (bodyBox == null || !bodyBox.attached || !bodyBox.hasSize) return;
     final bodyRect = bodyBox.localToGlobal(Offset.zero) & bodyBox.size;
     final seen = <NotificationEntry>[];
@@ -215,9 +213,8 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
       case 'reaction':
       default:
         // These route to the sender's PM (the avatar pubkey).
-        final target = sender.isNotEmpty
-            ? sender
-            : (isPubkeyRoute ? route : '');
+        final target =
+            sender.isNotEmpty ? sender : (isPubkeyRoute ? route : '');
         if (target.isNotEmpty) controller.startPM(target);
         break;
     }
@@ -313,8 +310,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                             child: Text(
                               tr('No notifications in the last 24 hours'),
                               textAlign: TextAlign.center,
-                              style:
-                                  TextStyle(color: c.textDim, fontSize: 14),
+                              style: TextStyle(color: c.textDim, fontSize: 14),
                             ),
                           )
                         : ListView.builder(
@@ -389,8 +385,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
   void initState() {
     super.initState();
     final kv = ref.read(keyValueStoreProvider);
-    _mentionsOnly =
-        kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
+    _mentionsOnly = kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
     _friendsOnly = kv.getString(StorageKeys.notifyFriendsOnly) == 'true';
   }
 
@@ -492,8 +487,8 @@ class _ToggleRow extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Flexible(
-              child: Text(label,
-                  style: TextStyle(color: c.textDim, fontSize: 13)),
+              child:
+                  Text(label, style: TextStyle(color: c.textDim, fontSize: 13)),
             ),
           ],
         ),
@@ -572,8 +567,18 @@ class _NotificationRow extends ConsumerStatefulWidget {
   /// `Jun 23, 14:05` — `toLocaleString({month, day, hour, minute})`.
   String _formatTime(int ms) {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
     final d = DateTime.fromMillisecondsSinceEpoch(ms);
     final hh = d.hour.toString().padLeft(2, '0');
@@ -612,10 +617,8 @@ class _NotificationRow extends ConsumerStatefulWidget {
   /// the PWA modal body (notifications.js:546-547) so only the new message text
   /// shows — not the quoted context a reply carries.
   String _displayBody() {
-    final lines = entry.body
-        .split('\n')
-        .where((l) => !l.startsWith('>'))
-        .join(' ');
+    final lines =
+        entry.body.split('\n').where((l) => !l.startsWith('>')).join(' ');
     final collapsed = lines.replaceAll(RegExp(r'\s+'), ' ').trim();
     return collapsed.length > 200 ? collapsed.substring(0, 200) : collapsed;
   }
@@ -639,9 +642,7 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
     // sender pubkey was carried (older call entries).
     final sender = entry.senderPubkey ?? '';
     final route = entry.route ?? '';
-    final pubkey = _isPubkey(sender)
-        ? sender
-        : (_isPubkey(route) ? route : '');
+    final pubkey = _isPubkey(sender) ? sender : (_isPubkey(route) ? route : '');
     final hasPubkey = pubkey.isNotEmpty;
     final label = widget._contextLabel();
     // Real profile picture for the sender avatar (Rule 4).

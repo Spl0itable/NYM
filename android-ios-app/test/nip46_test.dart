@@ -86,8 +86,7 @@ void main() {
       const relay = 'wss://relay.nsec.app';
       const secret = 'deadbeefcafe0011';
 
-      final uri =
-          'bunker://$remotePub?relay=${Uri.encodeQueryComponent(relay)}'
+      final uri = 'bunker://$remotePub?relay=${Uri.encodeQueryComponent(relay)}'
           '&secret=$secret';
 
       final parsed = Nip46Service.parseConnectionUri(uri);
@@ -140,11 +139,9 @@ void main() {
 
         // The client should have REQ-subscribed then sent an EVENT (connect).
         expect(socket.sent.any((s) => s.startsWith('["REQ"')), isTrue);
-        final eventFrame =
-            socket.sent.firstWhere((s) => s.contains('"EVENT"'));
+        final eventFrame = socket.sent.firstWhere((s) => s.contains('"EVENT"'));
         final eventMsg = jsonDecode(eventFrame) as List;
-        final event =
-            NostrEvent.fromJson(eventMsg[1] as Map<String, dynamic>);
+        final event = NostrEvent.fromJson(eventMsg[1] as Map<String, dynamic>);
 
         // The event is a real signed kind-24133 to the signer.
         expect(event.kind, 24133);
@@ -226,8 +223,9 @@ void main() {
 
         // Answer the initial connect so we reach a usable signer.
         final connectEvent = _lastEvent(socket);
-        final connectId = jsonDecode(
-            nip44.decrypt(connectEvent.content, signerCk))['id'] as String;
+        final connectId =
+            jsonDecode(nip44.decrypt(connectEvent.content, signerCk))['id']
+                as String;
         _deliverResponse(
           socket: socket,
           signerPriv: signerPriv,
@@ -268,12 +266,10 @@ void main() {
 
         // Find both request ids.
         final events = _allEvents(socket)
-            .map((e) =>
-                jsonDecode(nip44.decrypt(e.content, signerCk))
-                    as Map<String, dynamic>)
+            .map((e) => jsonDecode(nip44.decrypt(e.content, signerCk))
+                as Map<String, dynamic>)
             .toList();
-        final encReq =
-            events.firstWhere((m) => m['method'] == 'nip44_encrypt');
+        final encReq = events.firstWhere((m) => m['method'] == 'nip44_encrypt');
         // Only respond to request A; leave B to time out. Use the *current*
         // sub id (the service re-subscribed persistently after login).
         _deliverResponse(
@@ -322,7 +318,7 @@ void main() {
         final subId = _subIdOf(socket);
 
         final connId = jsonDecode(
-            nip44.decrypt(_lastEvent(socket).content, signerCk))['id']
+                nip44.decrypt(_lastEvent(socket).content, signerCk))['id']
             as String;
         _deliverResponse(
           socket: socket,
@@ -334,7 +330,7 @@ void main() {
         );
         async.flushMicrotasks();
         final gpkId = jsonDecode(
-            nip44.decrypt(_lastEvent(socket).content, signerCk))['id']
+                nip44.decrypt(_lastEvent(socket).content, signerCk))['id']
             as String;
         _deliverResponse(
           socket: socket,
@@ -387,12 +383,14 @@ String _subIdOf(FakeSocket socket) {
 
 NostrEvent _lastEvent(FakeSocket socket) {
   final frame = socket.sent.lastWhere((s) => s.contains('"EVENT"'));
-  return NostrEvent.fromJson((jsonDecode(frame) as List)[1] as Map<String, dynamic>);
+  return NostrEvent.fromJson(
+      (jsonDecode(frame) as List)[1] as Map<String, dynamic>);
 }
 
 List<NostrEvent> _allEvents(FakeSocket socket) => socket.sent
     .where((s) => s.contains('"EVENT"'))
-    .map((s) => NostrEvent.fromJson((jsonDecode(s) as List)[1] as Map<String, dynamic>))
+    .map((s) =>
+        NostrEvent.fromJson((jsonDecode(s) as List)[1] as Map<String, dynamic>))
     .toList();
 
 void _deliverResponse({

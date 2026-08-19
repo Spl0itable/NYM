@@ -40,8 +40,8 @@ class TutorialTargets {
   static final Map<TutorialTarget, GlobalKey> _keys = {};
 
   /// The stable key the shell should attach to the widget for [target].
-  static GlobalKey keyFor(TutorialTarget target) =>
-      _keys.putIfAbsent(target, () => GlobalKey(debugLabel: 'tutorial_$target'));
+  static GlobalKey keyFor(TutorialTarget target) => _keys.putIfAbsent(
+      target, () => GlobalKey(debugLabel: 'tutorial_$target'));
 
   /// Drop all registered keys so the next shell mount allocates fresh ones.
   /// Called from `HomeShell.initState` — a single live shell never shares a
@@ -120,8 +120,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
   TutorialStep(
     title: 'Your Nym',
-    body:
-        'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin '
+    body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin '
         'lightning address for your Nym in this session. View the private key '
         '(nsec) of the Nym and save it if you would like to reuse this same Nym '
         'identity to login with it across devices. Long-pressing this area for '
@@ -134,8 +133,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
   TutorialStep(
     title: 'Connection',
-    body:
-        'The current relay connection status. Tap here to view network stats '
+    body: 'The current relay connection status. Tap here to view network stats '
         'such as the average latency, number of received events, and bandwidth '
         'usage.',
     target: TutorialTarget.statusIndicator,
@@ -143,8 +141,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
   TutorialStep(
     title: 'Main Menu',
-    body:
-        'Get flair addon packs to change the styling of your messages and '
+    body: 'Get flair addon packs to change the styling of your messages and '
         'nickname. Edit settings such as changing the app\'s theme, manage '
         'blocked users and keywords, sorting geohash channels by proximity, and '
         'much more. Logout to terminate the current session and start fresh '
@@ -154,8 +151,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
   TutorialStep(
     title: 'Channels',
-    body:
-        'Browse and switch geohash or non-geohash channels. Use the search '
+    body: 'Browse and switch geohash or non-geohash channels. Use the search '
         'feature to find and join geohash or non-geohash channels. Geohash is '
         'for location-based chat using geohash codes (e.g., #w1, #dr5r). These '
         'are bridged with Bitchat and can be sorted by proximity to your '
@@ -167,8 +163,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
   TutorialStep(
     title: 'Explore Geohash',
-    body:
-        'Tap the globe to explore geohash-only channels on a world map. Find '
+    body: 'Tap the globe to explore geohash-only channels on a world map. Find '
         'interesting channels to join based on location, see where other users '
         'are active, and view heatmap, day/night, and geohash grid layers '
         'showing where the most popular geohash channels are located around the '
@@ -178,8 +173,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
   TutorialStep(
     title: 'Private Messages',
-    body:
-        'Your end-to-end encrypted one-on-one and group chat messages live '
+    body: 'Your end-to-end encrypted one-on-one and group chat messages live '
         'here. Tap the + symbol to start a new PM or group chat. Long-press an '
         'existing PM or group chat to view options such as blocking the user, '
         'or to close the conversation if you want to hide it from the list.',
@@ -198,8 +192,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
   TutorialStep(
     title: 'Messages',
-    body:
-        'Channel messages appear here. Long-press a message or click on a '
+    body: 'Channel messages appear here. Long-press a message or click on a '
         'nym\'s nickname for quick actions such as to react with emoji, '
         'edit/delete your own message, zap a Bitcoin tip, start a PM, mention, '
         'block and much more from the context menu.',
@@ -370,7 +363,8 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
   void _remeasure() {
     if (!mounted) return;
     final step = kTutorialSteps[_index];
-    final rect = step.target == null ? null : TutorialTargets.rectOf(step.target!);
+    final rect =
+        step.target == null ? null : TutorialTargets.rectOf(step.target!);
     if (rect != _targetRect) setState(() => _targetRect = rect);
   }
 

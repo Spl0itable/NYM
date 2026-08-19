@@ -94,8 +94,8 @@ class IdentityAnnouncement {
       final length = data[offset + 1];
       offset += 2;
       if (offset + length > data.length) return null;
-      final value =
-          Uint8List.fromList(Uint8List.sublistView(data, offset, offset + length));
+      final value = Uint8List.fromList(
+          Uint8List.sublistView(data, offset, offset + length));
       offset += length;
       switch (type) {
         case _tlvNickname:
@@ -118,7 +118,9 @@ class IdentityAnnouncement {
       }
     }
 
-    if (nickname == null || noisePublicKey == null || signingPublicKey == null) {
+    if (nickname == null ||
+        noisePublicKey == null ||
+        signingPublicKey == null) {
       return null;
     }
     return IdentityAnnouncement(

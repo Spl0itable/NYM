@@ -59,9 +59,8 @@ class _BootGateState extends ConsumerState<BootGate> {
   bool _computeNeedsSetup() {
     final kv = ref.read(keyValueStoreProvider);
     final hasLogin = kv.getString(StorageKeys.nostrLoginMethod) != null;
-    final autoEphemeral =
-        kv.getString(StorageKeys.autoEphemeral) == 'true' ||
-            kv.getBool(StorageKeys.autoEphemeral, defaultValue: false);
+    final autoEphemeral = kv.getString(StorageKeys.autoEphemeral) == 'true' ||
+        kv.getBool(StorageKeys.autoEphemeral, defaultValue: false);
     return !hasLogin && !autoEphemeral;
   }
 
@@ -112,8 +111,7 @@ class _ShellWithTutorial extends ConsumerStatefulWidget {
   const _ShellWithTutorial();
 
   @override
-  ConsumerState<_ShellWithTutorial> createState() =>
-      _ShellWithTutorialState();
+  ConsumerState<_ShellWithTutorial> createState() => _ShellWithTutorialState();
 }
 
 class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {

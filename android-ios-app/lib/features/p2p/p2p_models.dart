@@ -303,8 +303,7 @@ List<String> fileOfferTag(FileOffer offer) =>
 
 /// Parses a file offer off a message's tags, binding seederPubkey to the actual
 /// sender (`parseFileOfferTag`, p2p.js:179). Returns null when absent/mismatched.
-FileOffer? parseFileOfferTag(
-    List<List<String>> tags, String senderPubkey) {
+FileOffer? parseFileOfferTag(List<List<String>> tags, String senderPubkey) {
   for (final t in tags) {
     if (t.isNotEmpty && t[0] == 'offer' && t.length > 1) {
       try {

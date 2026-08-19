@@ -171,8 +171,8 @@ class _QuickMenuLayout extends SingleChildLayoutDelegate {
 
   @override
   Offset getPositionForChild(Size size, Size childSize) {
-    final left = math.max(
-        10.0, math.min(anchor.dx, size.width - childSize.width - 10));
+    final left =
+        math.max(10.0, math.min(anchor.dx, size.width - childSize.width - 10));
     double top = anchor.dy;
     if (top + childSize.height > size.height - 10) {
       top = math.max(10.0, size.height - childSize.height - 10);
@@ -194,8 +194,8 @@ class _QuickMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    final transparency = ref
-        .watch(settingsProvider.select((s) => s.transparencyEnabled));
+    final transparency =
+        ref.watch(settingsProvider.select((s) => s.transparencyEnabled));
     // `transition: opacity 0.15s ease, transform 0.15s ease` — CSS `ease`
     // is cubic-bezier(0.25, 0.1, 0.25, 1) == [Curves.ease].
     final curve = CurvedAnimation(parent: animation, curve: Curves.ease);
@@ -262,8 +262,7 @@ class _QuickMenu extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                for (final a in items)
-                  _QuickMenuRow(item: a),
+                for (final a in items) _QuickMenuRow(item: a),
               ],
             ),
           ),

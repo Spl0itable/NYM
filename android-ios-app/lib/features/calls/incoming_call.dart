@@ -84,8 +84,8 @@ class IncomingCallModal extends ConsumerWidget {
                       blurRadius: 20,
                     ),
                     BoxShadow(
-                      color:
-                          Colors.white.withValues(alpha: 0.05), // 1px white ring
+                      color: Colors.white
+                          .withValues(alpha: 0.05), // 1px white ring
                       spreadRadius: 1,
                     ),
                   ],

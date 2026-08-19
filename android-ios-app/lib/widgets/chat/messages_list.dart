@@ -220,9 +220,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       final key = view.storageKey;
       if (key.startsWith('#') || key.startsWith('pm-')) {
         final rawCount = ref.read(appStateProvider).messages[key]?.length ?? 0;
-        MeshDiagnostics.instance.log(
-            'RENDER empty view=$key widgetStore=$rawCount visible=0 '
-            'rev=${ref.read(appStateProvider).displayRev}');
+        MeshDiagnostics.instance
+            .log('RENDER empty view=$key widgetStore=$rawCount visible=0 '
+                'rev=${ref.read(appStateProvider).displayRev}');
       }
       // PWA shows the shimmer skeleton FIRST while the conversation loads, then
       // settles an empty channel/PM into the "No recent messages" note after a
@@ -326,121 +326,123 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     return NotificationListener<ScrollUpdateNotification>(
       onNotification: _dismissKeyboardOnDrag,
       child: ColoredBox(
-      color: containerColor,
-      child: Column(
-        children: [
-          Expanded(
-            // A Stack so the scroll-to-bottom FAB (`.scroll-to-bottom-btn`) can
-            // float over the conversation, mirroring the PWA's always-present
-            // single-view jump-to-latest control (`styles-chat.css:9-43`).
-            // The LayoutBuilder captures the viewport height that
-            // [_onPositionsChanged] needs to turn the normalized item edges
-            // into the PWA's 150px distance-from-bottom gate.
-            child: LayoutBuilder(builder: (context, constraints) {
-              _viewportHeight = constraints.maxHeight;
-              return Stack(
-              children: [
-                Positioned.fill(
-                  child: ScrollablePositionedList.builder(
-                    itemScrollController: _itemScrollController,
-                    itemPositionsListener: _positionsListener,
-                    reverse: true,
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-                    // Channel views carry one extra unit ABOVE the oldest
-                    // message: the `.channel-history-limit` pill ("You've
-                    // reached the edge of this channel's history."), which the
-                    // PWA prepends once back-paging reaches the start of stored
-                    // history (`loadOlderChannelMessages`, messages.js:
-                    // 3175-3180). Here the whole stored history is rendered, so
-                    // the lazily-built top item IS that boundary — it only
-                    // appears once the user scrolls back to it. PM/group views
-                    // have no such notice (`loadOlderPMMessages` never adds
-                    // one).
-                    itemCount: units.length + (isChannel ? 1 : 0),
-                    itemBuilder: (context, revIndex) {
-                      if (revIndex == units.length) {
-                        return _ChannelHistoryEdgeNotice(
-                            textSize: settings.textSize.toDouble());
-                      }
-                      final forward = units.length - 1 - revIndex;
-                      final unit = units[forward];
-                      final Widget child;
-                      // A STABLE per-unit key on the sliver child (the widget
-                      // this builder returns, which `SliverChildBuilderDelegate`
-                      // reconciles by). Without it the keyless children are
-                      // matched by index, so appending a new unit shifts every
-                      // existing unit's reversed index by one and reuses each
-                      // slot's element for a NEIGHBORING unit — tearing down and
-                      // re-creating still-visible `MessageRow`s (their
-                      // `ValueKey(message.id)` is local and can't migrate across
-                      // parent slots). That recreation restarts each row's
-                      // `bubble-snap-in` from opacity 0 on every append, so in a
-                      // busy channel recent grouped bubbles never finish the
-                      // 240ms entrance and sit semi-transparent with no visible
-                      // background. Keying by the group's LEAD message id (stable
-                      // as messages append to the group) pins each unit's element
-                      // so the snap-in plays exactly once per bubble.
-                      final Key unitKey;
-                      if (unit is _PollUnit) {
-                        child = PollCard(poll: unit.poll, settings: settings);
-                        unitKey = ValueKey('poll_${unit.poll.id}');
-                      } else {
-                        final group = unit as _GroupUnit;
-                        child = MessageGroup(
-                          entries: group.entries,
-                          settings: settings,
-                          onReactionPicker: (msg) =>
-                              showReactionPicker(context, ref, msg),
-                        );
-                        unitKey = ValueKey('group_${group.entries.first.message.id}');
-                      }
-                      // `.messages-list { gap: 3px }` (styles-chat.css:1-7):
-                      // a 3px flex gap between EVERY adjacent pair of list
-                      // children (rows, group wrappers, pills, polls), on top
-                      // of each row's own padding/margins. Driven from the top
-                      // edge; the list's very first child (the oldest unit, or
-                      // the history notice above it) opens no gap.
-                      //
-                      // RepaintBoundary isolates each row into its own raster
-                      // layer: message rows paint expensively (shadows,
-                      // gradients, cosmetic CustomPaint overlays), and without a
-                      // boundary any repaint in the message area — a typing-dots
-                      // tick, a reaction burst, a relative-time refresh — forced
-                      // the whole visible list to re-rasterize. That full-layer
-                      // re-raster was a major driver of the pegged raster thread
-                      // behind the ANR.
-                      return RepaintBoundary(
-                        key: unitKey,
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                              top: (forward > 0 || isChannel) ? 3 : 0),
-                          child: child,
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                // `.scroll-to-bottom-btn`: 40×40 FAB, right:24, shown >150px from
-                // the bottom (`app.js:7120`, `styles-chat.css:9-43`). The PWA's
-                // `bottom:90` is measured from a container that spans BEHIND the
-                // input, so it lands just above the composer. Here the button
-                // lives in the messages Stack, which already ENDS at the composer
-                // top, so it only needs a small inset to sit just above it (16,
-                // same as the columns view) — `bottom:90` floated it ~90px too
-                // high.
-                if (_showScrollButton)
-                  Positioned(
-                    right: 24,
-                    bottom: 16,
-                    child: _ScrollToBottomButton(onTap: _scrollToBottom),
-                  ),
-              ],
-              );
-            }),
-          ),
-          const TypingIndicatorRow(),
-        ],
-      ),
+        color: containerColor,
+        child: Column(
+          children: [
+            Expanded(
+              // A Stack so the scroll-to-bottom FAB (`.scroll-to-bottom-btn`) can
+              // float over the conversation, mirroring the PWA's always-present
+              // single-view jump-to-latest control (`styles-chat.css:9-43`).
+              // The LayoutBuilder captures the viewport height that
+              // [_onPositionsChanged] needs to turn the normalized item edges
+              // into the PWA's 150px distance-from-bottom gate.
+              child: LayoutBuilder(builder: (context, constraints) {
+                _viewportHeight = constraints.maxHeight;
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ScrollablePositionedList.builder(
+                        itemScrollController: _itemScrollController,
+                        itemPositionsListener: _positionsListener,
+                        reverse: true,
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                        // Channel views carry one extra unit ABOVE the oldest
+                        // message: the `.channel-history-limit` pill ("You've
+                        // reached the edge of this channel's history."), which the
+                        // PWA prepends once back-paging reaches the start of stored
+                        // history (`loadOlderChannelMessages`, messages.js:
+                        // 3175-3180). Here the whole stored history is rendered, so
+                        // the lazily-built top item IS that boundary — it only
+                        // appears once the user scrolls back to it. PM/group views
+                        // have no such notice (`loadOlderPMMessages` never adds
+                        // one).
+                        itemCount: units.length + (isChannel ? 1 : 0),
+                        itemBuilder: (context, revIndex) {
+                          if (revIndex == units.length) {
+                            return _ChannelHistoryEdgeNotice(
+                                textSize: settings.textSize.toDouble());
+                          }
+                          final forward = units.length - 1 - revIndex;
+                          final unit = units[forward];
+                          final Widget child;
+                          // A STABLE per-unit key on the sliver child (the widget
+                          // this builder returns, which `SliverChildBuilderDelegate`
+                          // reconciles by). Without it the keyless children are
+                          // matched by index, so appending a new unit shifts every
+                          // existing unit's reversed index by one and reuses each
+                          // slot's element for a NEIGHBORING unit — tearing down and
+                          // re-creating still-visible `MessageRow`s (their
+                          // `ValueKey(message.id)` is local and can't migrate across
+                          // parent slots). That recreation restarts each row's
+                          // `bubble-snap-in` from opacity 0 on every append, so in a
+                          // busy channel recent grouped bubbles never finish the
+                          // 240ms entrance and sit semi-transparent with no visible
+                          // background. Keying by the group's LEAD message id (stable
+                          // as messages append to the group) pins each unit's element
+                          // so the snap-in plays exactly once per bubble.
+                          final Key unitKey;
+                          if (unit is _PollUnit) {
+                            child =
+                                PollCard(poll: unit.poll, settings: settings);
+                            unitKey = ValueKey('poll_${unit.poll.id}');
+                          } else {
+                            final group = unit as _GroupUnit;
+                            child = MessageGroup(
+                              entries: group.entries,
+                              settings: settings,
+                              onReactionPicker: (msg) =>
+                                  showReactionPicker(context, ref, msg),
+                            );
+                            unitKey = ValueKey(
+                                'group_${group.entries.first.message.id}');
+                          }
+                          // `.messages-list { gap: 3px }` (styles-chat.css:1-7):
+                          // a 3px flex gap between EVERY adjacent pair of list
+                          // children (rows, group wrappers, pills, polls), on top
+                          // of each row's own padding/margins. Driven from the top
+                          // edge; the list's very first child (the oldest unit, or
+                          // the history notice above it) opens no gap.
+                          //
+                          // RepaintBoundary isolates each row into its own raster
+                          // layer: message rows paint expensively (shadows,
+                          // gradients, cosmetic CustomPaint overlays), and without a
+                          // boundary any repaint in the message area — a typing-dots
+                          // tick, a reaction burst, a relative-time refresh — forced
+                          // the whole visible list to re-rasterize. That full-layer
+                          // re-raster was a major driver of the pegged raster thread
+                          // behind the ANR.
+                          return RepaintBoundary(
+                            key: unitKey,
+                            child: Padding(
+                              padding: EdgeInsets.only(
+                                  top: (forward > 0 || isChannel) ? 3 : 0),
+                              child: child,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    // `.scroll-to-bottom-btn`: 40×40 FAB, right:24, shown >150px from
+                    // the bottom (`app.js:7120`, `styles-chat.css:9-43`). The PWA's
+                    // `bottom:90` is measured from a container that spans BEHIND the
+                    // input, so it lands just above the composer. Here the button
+                    // lives in the messages Stack, which already ENDS at the composer
+                    // top, so it only needs a small inset to sit just above it (16,
+                    // same as the columns view) — `bottom:90` floated it ~90px too
+                    // high.
+                    if (_showScrollButton)
+                      Positioned(
+                        right: 24,
+                        bottom: 16,
+                        child: _ScrollToBottomButton(onTap: _scrollToBottom),
+                      ),
+                  ],
+                );
+              }),
+            ),
+            const TypingIndicatorRow(),
+          ],
+        ),
       ),
     );
   }
@@ -449,8 +451,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   /// on an active user drag while the keyboard is open (the PWA dismisses on
   /// scroll). Returns false so the scroll notification keeps bubbling.
   bool _dismissKeyboardOnDrag(ScrollUpdateNotification n) {
-    if (n.dragDetails != null &&
-        MediaQuery.of(context).viewInsets.bottom > 0) {
+    if (n.dragDetails != null && MediaQuery.of(context).viewInsets.bottom > 0) {
       FocusManager.instance.primaryFocus?.unfocus();
     }
     return false;
@@ -582,8 +583,7 @@ class _ChannelHistoryEdgeNotice extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.02),
-            border:
-                Border.all(color: Colors.white.withValues(alpha: 0.05)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
             borderRadius: const BorderRadius.all(Radius.circular(20)),
           ),
           child: Text(
@@ -682,9 +682,8 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
         : _hover
             ? (light ? c.primaryA(0.10) : c.primaryA(0.15))
             : (light ? const Color(0xD9FFFFFF) /* white @ 0.85 */ : c.glassBg);
-    final border = light
-        ? c.primaryA(0.20)
-        : (_hover ? c.primaryA(0.30) : c.glassBorder);
+    final border =
+        light ? c.primaryA(0.20) : (_hover ? c.primaryA(0.30) : c.glassBorder);
     // shadow-md (dark rest) → hover glow (dark); light `0 2px 12px black@0.15`.
     final shadow = light
         ? const BoxShadow(

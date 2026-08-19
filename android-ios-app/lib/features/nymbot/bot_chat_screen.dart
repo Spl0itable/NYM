@@ -26,7 +26,12 @@ import '../autocomplete/autocomplete_dropdown.dart';
 import '../autocomplete/autocomplete_queries.dart' show queryEmoji, EmojiResult;
 import '../autocomplete/autocomplete_triggers.dart';
 import '../commands/command_palette.dart'
-    show buildPaletteRows, commandItemRow, paletteCommands, CommandPalette, PaletteRow;
+    show
+        buildPaletteRows,
+        commandItemRow,
+        paletteCommands,
+        CommandPalette,
+        PaletteRow;
 import '../commands/command_registry.dart' show CommandSpec;
 import '../emoji/emoji_data.dart';
 import '../emoji/emoji_picker.dart';
@@ -322,61 +327,17 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     final current = ref.read(botChatControllerProvider).proModel;
     showModalBottomSheet<void>(
       context: context,
+      // Without this the sheet is capped at 9/16 of the screen, which the
+      // catalog outgrew.
+      isScrollControlled: true,
       backgroundColor: c.bgSecondary,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Row(
-                children: [
-                  Text(tr('Pro model'),
-                      style: TextStyle(
-                          color: c.textBright,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600)),
-                  const Spacer(),
-                  Text(tr('100 sats / credit'),
-                      style: TextStyle(color: c.textDim, fontSize: 11)),
-                ],
-              ),
-            ),
-            ListTile(
-              leading: Icon(Icons.auto_awesome, color: c.blue),
-              title: Text(tr('Standard (auto-routed)'),
-                  style: TextStyle(color: c.text)),
-              subtitle: Text(tr('Best model per task · 10 sats each'),
-                  style: TextStyle(color: c.textDim, fontSize: 11)),
-              trailing:
-                  current == null ? Icon(Icons.check, color: c.primary) : null,
-              onTap: () {
-                ref
-                    .read(botChatControllerProvider.notifier)
-                    .setModelDirect(null);
-                Navigator.pop(context);
-              },
-            ),
-            Divider(height: 1, color: c.border),
-            for (final m in kProModels)
-              ListTile(
-                leading: Icon(Icons.bolt, color: c.primary),
-                title: Text(m.label, style: TextStyle(color: c.text)),
-                // PWA `?model` list: the human price-range phrase, not the id.
-                subtitle: Text(m.priceLabel,
-                    style: TextStyle(color: c.textDim, fontSize: 11)),
-                trailing: current?.key == m.key
-                    ? Icon(Icons.check, color: c.primary)
-                    : null,
-                onTap: () {
-                  ref
-                      .read(botChatControllerProvider.notifier)
-                      .setModelDirect(m);
-                  Navigator.pop(context);
-                },
-              ),
-          ],
-        ),
+      builder: (_) => ProModelPickerSheet(
+        colors: c,
+        current: current,
+        onSelected: (m) {
+          ref.read(botChatControllerProvider.notifier).setModelDirect(m);
+          Navigator.pop(context);
+        },
       ),
     );
   }
@@ -1032,7 +993,8 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final next = text.replaceRange(start, caret, result.insertText);
     _controller.value = TextEditingValue(
       text: next,
-      selection: TextSelection.collapsed(offset: start + result.insertText.length),
+      selection:
+          TextSelection.collapsed(offset: start + result.insertText.length),
     );
     _onTextChanged();
     _focus.requestFocus();
@@ -1068,6 +1030,10 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
           text: _strippedQuoteText(content),
           fullText: content,
         );
+      case InsertTextAction() || ShareFilesAction():
+        // Share-sheet actions target real conversations, never the bot chat;
+        // ignore them here so the mailbox isn't mis-applied.
+        return;
     }
     _focus.requestFocus();
     setState(() {});
@@ -2051,7 +2017,8 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     if (_cmdRows.isNotEmpty) {
       return CommandPalette(
         rows: _cmdRows,
-        selectedIndex: _paletteIndex.clamp(0, (_paletteLength - 1).clamp(0, 1 << 30)),
+        selectedIndex:
+            _paletteIndex.clamp(0, (_paletteLength - 1).clamp(0, 1 << 30)),
         onSelect: _completeCommand,
       );
     }
@@ -2564,6 +2531,113 @@ class _BotTranslateLangRowState extends State<_BotTranslateLangRow> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Pro model picker sheet — premium surface
+// =============================================================================
+
+/// The `?model` picker body: a pinned header over a scrolling list of the Pro
+/// catalog plus the standard auto-routing row.
+///
+/// Split out of [_showModelPicker] so the layout can be pumped directly at a
+/// small surface size in tests. The row count tracks [kProModels], which grows
+/// as models are added, so "does it still fit" is not a safe assumption — the
+/// list scrolls and the sheet is capped below the screen height instead.
+class ProModelPickerSheet extends StatelessWidget {
+  const ProModelPickerSheet({
+    super.key,
+    required this.colors,
+    required this.current,
+    required this.onSelected,
+  });
+
+  final NymColors colors;
+
+  /// Currently pinned model, or null for standard auto-routing.
+  final ProModel? current;
+
+  /// Called with the chosen model, or null for standard auto-routing.
+  final ValueChanged<ProModel?> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return SafeArea(
+      child: ConstrainedBox(
+        // Leaves the sheet clear of the status bar even when the catalog is
+        // long enough to fill the screen.
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.85,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              // Both labels are translated and the sheet has to survive narrow
+              // screens and large text scales, so they share the width and
+              // ellipsize instead of a Spacer forcing them off the edge.
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(tr('Pro model'),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: c.textBright,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Text(tr('100 sats / credit'),
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.end,
+                        style: TextStyle(color: c.textDim, fontSize: 11)),
+                  ),
+                ],
+              ),
+            ),
+            // Only the models scroll; the header stays put.
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                children: [
+                  ListTile(
+                    leading: Icon(Icons.auto_awesome, color: c.blue),
+                    title: Text(tr('Standard (auto-routed)'),
+                        style: TextStyle(color: c.text)),
+                    subtitle: Text(tr('Best model per task · 10 sats each'),
+                        style: TextStyle(color: c.textDim, fontSize: 11)),
+                    trailing: current == null
+                        ? Icon(Icons.check, color: c.primary)
+                        : null,
+                    onTap: () => onSelected(null),
+                  ),
+                  Divider(height: 1, color: c.border),
+                  for (final m in kProModels)
+                    ListTile(
+                      leading: Icon(Icons.bolt, color: c.primary),
+                      title: Text(m.label, style: TextStyle(color: c.text)),
+                      // PWA `?model` list: the human price-range phrase, not
+                      // the id.
+                      subtitle: Text(m.priceLabel,
+                          style: TextStyle(color: c.textDim, fontSize: 11)),
+                      trailing: current?.key == m.key
+                          ? Icon(Icons.check, color: c.primary)
+                          : null,
+                      onTap: () => onSelected(m),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

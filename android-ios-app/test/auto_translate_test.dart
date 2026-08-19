@@ -46,7 +46,8 @@ TranslateService _uppercasingService() {
   final mock = MockClient((req) async {
     final text = (jsonDecode(req.body)['text'] ?? '').toString();
     return http.Response(
-      jsonEncode({'translatedText': text.toUpperCase(), 'detectedLanguage': 'es'}),
+      jsonEncode(
+          {'translatedText': text.toUpperCase(), 'detectedLanguage': 'es'}),
       200,
       headers: {'content-type': 'application/json'},
     );
@@ -97,8 +98,8 @@ void main() {
       final ch = _msg(); // not PM, not group ⇒ public channel
       expect(autoTranslateAppliesTo(ch, on), isTrue);
       expect(
-        autoTranslateAppliesTo(
-            ch, const Settings(autoTranslate: true, autoTranslateChannels: false)),
+        autoTranslateAppliesTo(ch,
+            const Settings(autoTranslate: true, autoTranslateChannels: false)),
         isFalse,
       );
     });
@@ -254,8 +255,7 @@ void main() {
     test('preserves URLs and :shortcode: emoji so media/links survive',
         () async {
       final n = AutoTranslateNotifier(service: _uppercasingService());
-      n.ensure(
-          _msg(content: 'look https://ex.com/a.png :party: hello'), 'en');
+      n.ensure(_msg(content: 'look https://ex.com/a.png :party: hello'), 'en');
       await Future<void>.delayed(const Duration(milliseconds: 60));
       final e = n.state['m1']!;
       expect(e.status, AutoTranslateStatus.ready);
@@ -283,7 +283,8 @@ void main() {
       expect(e.translated, contains('TYPE'));
     });
 
-    test('keeps a quote-reply line verbatim (renders as a quote, not a mention)',
+    test(
+        'keeps a quote-reply line verbatim (renders as a quote, not a mention)',
         () async {
       final n = AutoTranslateNotifier(service: _uppercasingService());
       // A quote reply: `> @author: quoted` header + the reply below.

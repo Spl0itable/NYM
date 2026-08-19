@@ -21,7 +21,9 @@ NostrEvent _echo(String d, String id, String content,
     );
 
 int _dupes(AppStateNotifier n, String key, String content) =>
-    (n.state.messages[key] ?? const []).where((m) => m.content == content).length;
+    (n.state.messages[key] ?? const [])
+        .where((m) => m.content == content)
+        .length;
 
 void main() {
   AppStateNotifier fresh() {

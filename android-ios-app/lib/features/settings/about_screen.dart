@@ -24,10 +24,45 @@ import 'settings_widgets.dart';
 /// public source repo so the links are real and tappable (gap report F14).
 const String _kStaticBase = 'https://github.com/Spl0itable/NYM/blob/main/';
 
-/// App version string shown in the About header (`#aboutVersion`). Matches the
-/// current PWA constant `NYMCHAT_VERSION` (app.js:4229). The native build can
-/// later override this from its own manifest; until then it tracks the PWA.
-const String kAboutVersion = 'v3.73.520';
+/// Bundled fallback for the About-header version, shown until the live version
+/// resolves (and if the fetch fails offline). Kept in sync with the main
+/// project's `NYMCHAT_VERSION` at release; the live value from
+/// [_kVersionUrl] supersedes it whenever reachable.
+const String kAboutVersion = 'v3.73.524';
+
+/// Live app version, published by the main project's build as a tiny
+/// `version.json` (`{"version":"vX.Y.Z"}`) derived from `NYMCHAT_VERSION`. The
+/// About header shows this so the native apps track the live main-project
+/// version instead of a hardcoded string. Fetched via native HTTP (no CORS),
+/// cached for the session in [_liveVersionCache].
+const String _kVersionUrl = 'https://web.nymchat.app/version.json';
+
+/// Session cache so re-opening About doesn't refetch. Null until first success.
+String? _liveVersionCache;
+
+/// Fetches the live main-project version, or null on any failure (caller keeps
+/// the bundled [kAboutVersion]). Result is cached for the session.
+Future<String?> _fetchLiveVersion() async {
+  if (_liveVersionCache != null) return _liveVersionCache;
+  try {
+    final res = await http
+        .get(Uri.parse(_kVersionUrl))
+        .timeout(const Duration(seconds: 6));
+    if (res.statusCode < 200 || res.statusCode >= 300) return null;
+    final doc = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));
+    if (doc is! Map) return null;
+    final v = doc['version'];
+    // Validate shape (vN.N.N-ish) so a stray HTML/error body can't land in the
+    // header.
+    if (v is String && RegExp(r'^v?[0-9][0-9A-Za-z.\-]{1,31}$').hasMatch(v)) {
+      _liveVersionCache = v;
+      return v;
+    }
+  } catch (_) {
+    // Offline / timeout / bad body — fall back to the bundled constant.
+  }
+  return null;
+}
 
 /// Warrant-canary source + pinned developer pubkey (canary-verify.js:5-6).
 const String _kCanaryUrl =
@@ -114,8 +149,9 @@ Future<_CanaryResult> _fetchCanary() async {
   final c = signed
       ? jsonDecode(doc['content'] as String) as Map<String, dynamic>
       : doc;
-  final updatedAt =
-      c['updatedAt'] is String ? DateTime.tryParse(c['updatedAt'] as String) : null;
+  final updatedAt = c['updatedAt'] is String
+      ? DateTime.tryParse(c['updatedAt'] as String)
+      : null;
   final dueBy = c['nextUpdateBy'] is String
       ? DateTime.tryParse(c['nextUpdateBy'] as String)
       : null;
@@ -130,9 +166,11 @@ Future<_CanaryResult> _fetchCanary() async {
     updatedAt: updatedAt,
     dueBy: dueBy,
     overdue: overdue,
-    btcBlockHeight:
-        btc is Map && btc['height'] is num ? (btc['height'] as num).toInt() : null,
-    btcBlockHash: btc is Map && btc['hash'] is String ? btc['hash'] as String : null,
+    btcBlockHeight: btc is Map && btc['height'] is num
+        ? (btc['height'] as num).toInt()
+        : null,
+    btcBlockHash:
+        btc is Map && btc['hash'] is String ? btc['hash'] as String : null,
     id: (doc['id'] ?? '') as String,
     pubkey: (doc['pubkey'] ?? '') as String,
   );
@@ -227,6 +265,9 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   _CanaryResult? _canary;
   bool _canaryFailed = false;
 
+  /// Live main-project version once fetched; falls back to [kAboutVersion].
+  String _version = _liveVersionCache ?? kAboutVersion;
+
   @override
   void initState() {
     super.initState();
@@ -238,6 +279,14 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     if (msg != null && msg.isNotEmpty) _messageController.text = msg;
     // The PWA kicks off `runCanaryCheck()` every time the About modal opens.
     _runCanaryCheck();
+    // Track the live main-project version; keeps the bundled fallback on error.
+    _loadLiveVersion();
+  }
+
+  Future<void> _loadLiveVersion() async {
+    final v = await _fetchLiveVersion();
+    if (!mounted || v == null || v == _version) return;
+    setState(() => _version = v);
   }
 
   Future<void> _runCanaryCheck() async {
@@ -267,120 +316,145 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500),
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                borderRadius: NymRadius.rxl,
-                border: Border.all(color: c.glassBorder),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    blurRadius: 40,
-                    offset: const Offset(0, 20),
-                  ),
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.9,
-                ),
-                child: Stack(
-                  children: [
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _header(c),
-                        Flexible(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _buildPanel(c),
-                            const SizedBox(height: 10),
-                            _canaryPanel(c),
-                            _description(c),
-                            _links(c),
-                            const SizedBox(height: 20),
-                            Container(height: 1, color: c.glassBorder),
-                            const SizedBox(height: 20),
-                            Text(
-                              tr('Contact the developer'),
-                              style: TextStyle(
-                                color: c.text,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              tr('Send feedback, a question, or a bug report. '
-                                  'Your message is delivered as an encrypted '
-                                  'private message to the Nymchat developer.'),
-                              style: TextStyle(
-                                  color: c.textDim, fontSize: 11, height: 1.4),
-                            ),
-                            const SizedBox(height: 16),
-                            FormGroup(
-                              label: tr('Topic'),
-                              child: FormSelect<String>(
-                                value: _topic,
-                                items: [
-                                  (
-                                    value: 'General feedback',
-                                    label: tr('General feedback')
-                                  ),
-                                  (value: 'Bug report', label: tr('Bug report')),
-                                  (
-                                    value: 'Feature request',
-                                    label: tr('Feature request')
-                                  ),
-                                  (value: 'Question', label: tr('Question')),
-                                  (
-                                    value: 'Spam false positive',
-                                    label: tr('Spam false positive')
-                                  ),
-                                ],
-                                onChanged: (v) => setState(() => _topic = v),
-                              ),
-                            ),
-                            FormGroup(
-                              label: tr('Message'),
-                              child: _messageBox(),
-                            ),
-                            // Contact status line (`#aboutContactStatus`, F12).
-                            if (_status != null)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text(
-                                  _status!,
-                                  style: TextStyle(
-                                    color: _statusOk ? c.secondary : c.danger,
-                                    fontSize: 12,
-                                    height: 1.4,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
+    // The soft keyboard reduces the visible area but not size.height, so the
+    // dialog must (a) shift up by the keyboard inset and (b) cap its height to
+    // the space left above the keyboard — otherwise the "Contact the developer"
+    // field at the bottom of the scroll body renders behind the keyboard.
+    final viewInsets = MediaQuery.of(context).viewInsets;
+    final visibleHeight =
+        MediaQuery.of(context).size.height - viewInsets.bottom;
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: viewInsets.bottom),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 500),
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: c.bgSecondary,
+                  borderRadius: NymRadius.rxl,
+                  border: Border.all(color: c.glassBorder),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 40,
+                      offset: const Offset(0, 20),
                     ),
-                        _actions(c),
-                      ],
-                    ),
-                    // `.modal-close`: 32×32 glass ✕ chip, absolute top-right
-                    // (14,14) over the card — not inline in the title row.
-                    ModalChrome.closeChip(
-                        c, () => Navigator.of(context).maybePop()),
                   ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    // Leave ~40px breathing room inside the visible area.
+                    maxHeight:
+                        (visibleHeight - 40).clamp(200.0, visibleHeight) * 0.98,
+                  ),
+                  child: Stack(
+                    children: [
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _header(c),
+                          Flexible(
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildPanel(c),
+                                  const SizedBox(height: 10),
+                                  _canaryPanel(c),
+                                  _description(c),
+                                  _links(c),
+                                  const SizedBox(height: 20),
+                                  Container(height: 1, color: c.glassBorder),
+                                  const SizedBox(height: 20),
+                                  Text(
+                                    tr('Contact the developer'),
+                                    style: TextStyle(
+                                      color: c.text,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    tr('Send feedback, a question, or a bug report. '
+                                        'Your message is delivered as an encrypted '
+                                        'private message to the Nymchat developer.'),
+                                    style: TextStyle(
+                                        color: c.textDim,
+                                        fontSize: 11,
+                                        height: 1.4),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  FormGroup(
+                                    label: tr('Topic'),
+                                    child: FormSelect<String>(
+                                      value: _topic,
+                                      items: [
+                                        (
+                                          value: 'General feedback',
+                                          label: tr('General feedback')
+                                        ),
+                                        (
+                                          value: 'Bug report',
+                                          label: tr('Bug report')
+                                        ),
+                                        (
+                                          value: 'Feature request',
+                                          label: tr('Feature request')
+                                        ),
+                                        (
+                                          value: 'Question',
+                                          label: tr('Question')
+                                        ),
+                                        (
+                                          value: 'Spam false positive',
+                                          label: tr('Spam false positive')
+                                        ),
+                                      ],
+                                      onChanged: (v) =>
+                                          setState(() => _topic = v),
+                                    ),
+                                  ),
+                                  FormGroup(
+                                    label: tr('Message'),
+                                    child: _messageBox(),
+                                  ),
+                                  // Contact status line (`#aboutContactStatus`, F12).
+                                  if (_status != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        _status!,
+                                        style: TextStyle(
+                                          color: _statusOk
+                                              ? c.secondary
+                                              : c.danger,
+                                          fontSize: 12,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          _actions(c),
+                        ],
+                      ),
+                      // `.modal-close`: 32×32 glass ✕ chip, absolute top-right
+                      // (14,14) over the card — not inline in the title row.
+                      ModalChrome.closeChip(
+                          c, () => Navigator.of(context).maybePop()),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -416,7 +490,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 3),
             child: Text(
-              kAboutVersion,
+              _version,
               style: TextStyle(
                 color: c.textDim,
                 fontSize: 12,
@@ -728,8 +802,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               child: Container(
                 height: 42,
                 alignment: Alignment.center,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 22),
+                padding: const EdgeInsets.symmetric(horizontal: 22),
                 decoration: BoxDecoration(
                   color: c.primaryA(0.10),
                   borderRadius: NymRadius.rsm,

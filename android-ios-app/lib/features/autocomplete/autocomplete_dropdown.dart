@@ -182,7 +182,9 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
         color: c.glassBg.a == 1.0
             ? c.glassBg
             : isKaomoji
-                ? (c.isLight ? const Color(0xEBFFFFFF) : const Color(0xE6141423))
+                ? (c.isLight
+                    ? const Color(0xEBFFFFFF)
+                    : const Color(0xE6141423))
                 : c.bgTertiary,
         border: Border.all(color: c.glassBorder),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
@@ -190,7 +192,8 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
         // 0 8px 32px rgba(0,0,0,0.12) (themes-responsive.css:1149-1153).
         boxShadow: [
           BoxShadow(
-            color: c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
+            color:
+                c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
             blurRadius: 32,
             offset: const Offset(0, 8),
           ),
@@ -245,7 +248,9 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   }
 
   Widget _selectable(NymColors c,
-      {required bool selected, required VoidCallback onTap, required Widget child}) {
+      {required bool selected,
+      required VoidCallback onTap,
+      required Widget child}) {
     return Material(
       // Key the selected row so `_scrollSelectedIntoView` can ensureVisible it.
       key: selected ? _selectedKey : null,
@@ -278,7 +283,11 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          NymAvatar(seed: m.pubkey, size: 18, imageUrl: m.avatarUrl, label: m.baseNym.isNotEmpty ? m.baseNym[0] : null),
+          NymAvatar(
+              seed: m.pubkey,
+              size: 18,
+              imageUrl: m.avatarUrl,
+              label: m.baseNym.isNotEmpty ? m.baseNym[0] : null),
           if (!hidden)
             Positioned(
               right: -1,

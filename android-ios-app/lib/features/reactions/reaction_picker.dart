@@ -90,7 +90,8 @@ void showReactionPicker(
         // Mobile: `top:50%;left:50%;transform:translate(-50%,-50%)`.
         return Center(child: card);
       }
-      return _AnchoredPicker(anchorRect: anchorRect, screen: screen, child: card);
+      return _AnchoredPicker(
+          anchorRect: anchorRect, screen: screen, child: card);
     },
   );
 }
@@ -121,15 +122,14 @@ class _AnchoredPicker extends StatelessWidget {
     final double? top = openBelow ? anchorRect.bottom + 10 : null;
     final double? bottom =
         openBelow ? null : (screen.height - anchorRect.top + 10);
-    final double? left =
-        rightAlign ? null : math.max(anchorRect.left, 10.0);
-    final double? right = rightAlign
-        ? math.min(screen.width - anchorRect.right, 10.0)
-        : null;
+    final double? left = rightAlign ? null : math.max(anchorRect.left, 10.0);
+    final double? right =
+        rightAlign ? math.min(screen.width - anchorRect.right, 10.0) : null;
 
     return Stack(
       children: [
-        Positioned(top: top, bottom: bottom, left: left, right: right, child: child),
+        Positioned(
+            top: top, bottom: bottom, left: left, right: right, child: child),
       ],
     );
   }

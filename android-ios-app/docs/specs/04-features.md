@@ -560,9 +560,34 @@ zapRequest?}` → `{pr, verify?, serverVerify, invoiceId}` → poll `check-invoi
 
 ### 11.3 Pro models (`?model <name>` / `?model off`)
 
-`claude-fable`(Fable 5, base 2cr), `claude-opus`(4.8), `claude-sonnet`(4.6), `claude-haiku`(4.5),
-`gpt-5`(GPT-5.1), `gpt-5-mini`, `codex`(GPT-5.1 Codex) — base 1 credit (Fable 2) + per-length scaling
-to a per-model max (max reserved, only actual charged). Selection passed as `proModel`.
+`claude-fable`(Fable 5, base 2cr), `claude-opus`(Opus 5), `claude-sonnet`(Sonnet 5),
+`claude-haiku`(4.5), `gpt-5`(GPT-5.6 Sol), `gpt-5-mini`(GPT-5.4 mini), `gemini-pro`(Gemini 3.1 Pro),
+`gemini-flash`(Gemini 3.6 Flash), `grok`(Grok 4.6), `kimi`(Kimi K3), `qwen`(Qwen 3.5),
+`minimax`(MiniMax M3) — base 1 credit (Fable 2) + per-length scaling to a per-model max (max
+reserved, only actual charged). Selection passed as `proModel`. Retired keys (`codex` and the
+version-suffixed Claude keys) are remapped by `kProModelAliases` so stored preferences survive.
+
+### 11.3a Media generation (`?image` / `?speak`)
+
+Private chat only — the free public bot never generates media. Parsed by the worker inside the
+`pm` action (so no new client action), generated with a Cloudflare-hosted model, uploaded to
+Blossom under the bot's own BUD-02 auth, and returned as a URL in the gift-wrapped reply.
+Charged per generation, not per output token: `?image` 5 standard credits, `?speak` 3 standard /
+1 Pro. Nothing is charged when generation or upload fails. Response carries
+`media: 'image' | 'speak'`.
+
+With a Pro model selected, `?image --model <name> <prompt>` (or `-m`) picks a frontier generator
+for 2-3 Pro credits: `nano-banana` (Nano Banana Pro, default), `nano-banana-2`, `imagen`, `flux`,
+`flux-pro`, `seedream`, `gpt-image`, `grok-image`, `recraft`. `?image models` lists them free.
+These route through AI Gateway on Cloudflare billing — no third-party provider keys. Request
+bodies are built per provider family (google / imagen / bfl / openai-images); responses are
+parsed by a shared shape-tolerant walker, and provider-hosted URLs are re-fetched and re-hosted
+on Blossom so they can't expire.
+
+**Vision input.** Image URLs in a message are passed to the model as real images when the
+selected model can see — all Claude, GPT, Gemini, Grok and Kimi Pro models; Qwen and MiniMax
+cannot. On standard routing only the `creative` and `translation` routes can. Max 4 images per
+message; falls back to text-only for models without vision.
 
 ### 11.4 Git integration (`?git`)
 

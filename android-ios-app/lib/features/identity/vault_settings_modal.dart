@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import '../../widgets/common/keyboard_inset_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
@@ -77,7 +78,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final vault = ref.watch(identityVaultProvider);
-    return Center(
+    return KeyboardInsetDialog(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
@@ -125,8 +126,8 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
                 c, tr('Close'), () => Navigator.of(context).pop()),
             const SizedBox(width: 10),
             // `.send-btn.danger` (NOT a solid fill).
-            ModalChrome.sendButton(c, tr('Turn off'),
-                _busy ? null : () => _disable(vault),
+            ModalChrome.sendButton(
+                c, tr('Turn off'), _busy ? null : () => _disable(vault),
                 danger: true),
           ],
         ),
@@ -183,8 +184,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
             style: TextStyle(color: c.text, fontSize: 14),
             decoration: _decoration(c, ''),
             items: [
-              DropdownMenuItem(
-                  value: 'password', child: Text(tr('Password'))),
+              DropdownMenuItem(value: 'password', child: Text(tr('Password'))),
               DropdownMenuItem(value: 'pin', child: Text(tr('PIN'))),
               if (_bioAvailable)
                 DropdownMenuItem(
@@ -343,8 +343,8 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       final ok = await vault.verifyPassword(entered);
       if (!mounted) return;
       if (!ok) {
-        setState(() =>
-            _error = tr('Re-authentication failed. Encryption was not turned off.'));
+        setState(() => _error =
+            tr('Re-authentication failed. Encryption was not turned off.'));
         return;
       }
       password = entered;

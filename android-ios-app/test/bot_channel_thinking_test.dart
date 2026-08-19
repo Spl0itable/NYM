@@ -43,7 +43,8 @@ void main() {
         reason: 'the clear must target the SAME key the thinking-set used');
   });
 
-  test('bot thinking strip clears when cleared via the message channel key', () {
+  test('bot thinking strip clears when cleared via the message channel key',
+      () {
     const geohash = 'u4pruyd';
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -69,7 +70,8 @@ void main() {
     final clearKey = EventMapper.channelKeyOf(_botGeoMsg(geohash))!;
     n.setTyping(storageKey: clearKey, pubkey: _botPk, typing: false);
 
-    expect(container.read(typingForCurrentViewProvider), isNot(contains(_botPk)),
+    expect(
+        container.read(typingForCurrentViewProvider), isNot(contains(_botPk)),
         reason: 'the thinking strip must clear the moment the reply lands, '
             'not hang until the 45s expiry');
   });
