@@ -638,7 +638,7 @@
 }
 
 .timestamp-popup-pow .pow-none {
-    color: var(--text-dim);
+    color: var(--primary);
 }
 
 .group-readers,

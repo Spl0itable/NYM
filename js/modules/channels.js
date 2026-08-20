@@ -162,8 +162,9 @@ Object.assign(NYM.prototype, {
             this._mergeD1Last(discovered && discovered.last);
             this._geohashD1Activity = target;
             this._mergeUnreadBuckets(known);
-            this._populateSidebarFromD1Activity();
+            const added = this._populateSidebarFromD1Activity();
             this._seedUnreadFromD1Activity();
+            this._fetchUnreadBucketsFor(added);
             if (this.geohashMap && typeof this.geohashMap.updatePoints === 'function') {
                 this.geohashMap.updatePoints();
             }
@@ -219,11 +220,15 @@ Object.assign(NYM.prototype, {
     // instead of a relay backfill, so without this the sidebar never learns
     // about active channels it hasn't joined.
     _populateSidebarFromD1Activity() {
-        if (!this.useRelayProxy) return;
+        if (!this.useRelayProxy) return [];
         // The explorer can plot thousands of channels, but the sidebar should
-        // only surface the most recently active discovered ones.
-        const SIDEBAR_DISCOVER_LIMIT = 30;
-        let added = false;
+        // only surface the most recently active discovered ones. Never fewer
+        // than the collapsed row budget, so every row on screen can carry a
+        // badge; expanding the list raises it.
+        const expanded = this.listExpansionStates && this.listExpansionStates.get('channelList');
+        const SIDEBAR_DISCOVER_LIMIT = Math.max(
+            this.COLLAPSED_LIST_VISIBLE, expanded ? 120 : 30);
+        const added = [];
         const candidates = [];
         const consider = (name, buckets) => {
             const nm = String(name).toLowerCase();
@@ -247,11 +252,29 @@ Object.assign(NYM.prototype, {
                 const c = candidates[i];
                 this.addChannelToList(c.nm, c.nm);
                 if (c.ts > 0) this.channelLastActivity.set(c.key, c.ts);
-                added = true;
+                added.push(c.nm);
             }
         });
-        if (added) this._persistUnreadCounts();
+        if (added.length) this._persistUnreadCounts();
         this._scheduleChannelSort();
+        return added;
+    },
+
+    // Discovery hands us raw activity, which includes spam the client hides, so
+    // it can't seed a badge. Pull the spam-aware buckets for rows we just added
+    // and seed them now instead of leaving them blank until the next sweep.
+    async _fetchUnreadBucketsFor(names) {
+        if (!Array.isArray(names) || names.length === 0) return;
+        if (typeof this._storageApiRequest !== 'function') return;
+        if (!this._d1UnreadBuckets) this._d1UnreadBuckets = new Map();
+        const missing = names.filter(n => n && !this._d1UnreadBuckets.has(n));
+        if (missing.length === 0) return;
+        try {
+            const data = await this._storageApiRequest('channel-activity', { channels: missing }, false);
+            if (!data) return;
+            this._mergeUnreadBuckets(data);
+            this._seedUnreadFromD1Activity();
+        } catch (_) { }
     },
 
     // Seed sidebar unread badges from the spam-aware per-channel activity so the
@@ -327,8 +350,9 @@ Object.assign(NYM.prototype, {
             this._namedChannelActivity = target;
             // Spam-aware activity feeds unread floors only.
             this._mergeUnreadBuckets(known);
-            this._populateSidebarFromD1Activity();
+            const added = this._populateSidebarFromD1Activity();
             this._seedUnreadFromD1Activity();
+            this._fetchUnreadBucketsFor(added);
         } catch (_) {
             this._namedActivityFetchedAt = 0;
         }
@@ -400,7 +424,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const city = data.address.city || data.address.town || data.address.village || data.address.county || '';
             const country = data.address.country || '';
 
-            locationInfo = [city, country].filter(x => x).join(', ') || 'Unknown location';
+            locationInfo = [city, country].filter(x => x).join(', ')
+                || this.getGeohashLocation(channel.geohash) || 'Unknown location';
 
             // Update the location info element
             const locationInfoItem = document.getElementById('locationInfoItem');
@@ -1139,9 +1164,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (raw) {
                 const obj = JSON.parse(raw);
                 for (const k in obj) {
-                    if (Object.prototype.hasOwnProperty.call(obj, k) && typeof obj[k] === 'string') {
-                        this._geohashPlaceCache.set(k, obj[k]);
-                    }
+                    if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+                    if (typeof obj[k] !== 'string') continue;
+                    // Drop negatives written by earlier builds so a row stuck on
+                    // "Unknown location" can resolve for real on this run.
+                    if (obj[k] === 'Unknown location') continue;
+                    this._geohashPlaceCache.set(k, obj[k]);
                 }
             }
         } catch (_) { /* corrupt or unavailable — start empty */ }
@@ -1171,6 +1199,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!key) return 'Unknown location';
         const cache = this._loadGeohashPlaceCache();
         if (cache.has(key)) return cache.get(key);
+        if (this._geoPlaceUnnamed && this._geoPlaceUnnamed.has(key)) {
+            return this.getGeohashLocation(geohash) || '';
+        }
 
         // Collapse concurrent callers for the same geohash (the header and its
         // sidebar row resolve the same place on channel switch).
@@ -1184,12 +1215,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const addr = (data && data.address) || {};
             const city = addr.city || addr.town || addr.village || addr.county || '';
             const country = addr.country || '';
-            return [city, country].filter(x => x).join(', ') || 'Unknown location';
+            return [city, country].filter(x => x).join(', ');
         })
             .then(place => {
+                this._geoPlaceInflight.delete(key);
+                // A geocode with no city/country is a NON-answer, not a place.
+                // Caching it permanently is what left a row reading "Unknown
+                // location" while the header, resolved on a luckier attempt,
+                // showed the real one. Fall back to the decoded coordinates and
+                // let a later attempt still find a name.
+                if (!place) {
+                    if (!this._geoPlaceUnnamed) this._geoPlaceUnnamed = new Set();
+                    this._geoPlaceUnnamed.add(key);
+                    return this.getGeohashLocation(geohash) || '';
+                }
                 cache.set(key, place);
                 this._saveGeohashPlaceCache();
-                this._geoPlaceInflight.delete(key);
                 return place;
             })
             .catch(err => {
@@ -1627,7 +1668,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     <span class="channel-name"${locationHint}>${displayName}<span class="channel-sub"></span></span>
     <div class="channel-badges">
         <span class="unread-badge nm-hidden">0</span>
-        ${key === 'nymchat' ? '' : '<button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Channel menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>'}
+        <button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Channel menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
     </div>
 `;
 
@@ -1780,6 +1821,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const currentState = this.listExpansionStates.get(listId) || false;
         const newState = !currentState;
         this.listExpansionStates.set(listId, newState);
+        // Rows revealed by expanding have no badge yet: re-run the D1 seed so
+        // they pick one up, and refresh the archive floors behind it.
+        if (newState && listId === 'channelList') {
+            if (typeof this._seedUnreadFromD1Activity === 'function') {
+                this._seedUnreadFromD1Activity();
+            }
+            this._geohashActivityFetchedAt = 0;
+            this._namedActivityFetchedAt = 0;
+            if (typeof this.fetchGeohashActivityFromD1 === 'function') {
+                this.fetchGeohashActivityFromD1().catch(() => { });
+            }
+            if (typeof this.fetchNamedChannelActivityFromD1 === 'function') {
+                this.fetchNamedChannelActivityFromD1().catch(() => { });
+            }
+        }
         // Re-mark for the new state: expanding clears every overflow mark,
         // collapsing re-applies them to whatever is currently visible.
         this._markListOverflow(listId);
@@ -2325,15 +2381,39 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    /// True when the stored count for [channel] still stands, i.e. nothing has
-    /// been read since it was computed. Counts with no stamp (written before
-    /// this existed, or by an older build) are treated as still valid so an
-    /// upgrade does not wipe every badge once.
+    /// Newest activity we know of for [channel], in seconds. channelLastActivity
+    /// is stored in ms; the cache is consulted too because activity may not have
+    /// loaded yet. Returns 0 when nothing is known.
+    _channelActivityTime(channel) {
+        let ts = 0;
+        const ms = (this.channelLastActivity && this.channelLastActivity.get(channel)) || 0;
+        if (ms > 0) ts = Math.floor(ms / 1000);
+        const isConv = channel.startsWith('pm-') || channel.startsWith('group-');
+        const store = isConv ? this.pmMessages : this.messages;
+        const cached = store && store.get(channel);
+        if (Array.isArray(cached)) {
+            for (const m of cached) {
+                if (m && (m.created_at || 0) > ts) ts = m.created_at;
+            }
+        }
+        return ts;
+    },
+
+    /// True when the stored count for [channel] still stands. Counts with no
+    /// stamp (written before this existed, or by an older build) are treated as
+    /// still valid so an upgrade does not wipe every badge once.
     _unreadCountStillValid(channel) {
         const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
         const basis = this._unreadBasisRead && this._unreadBasisRead.get(channel);
         if (basis === undefined) return true;
-        return lastRead <= basis;
+        if (lastRead <= basis) return true;
+        // The read mark moved past the stamp. That only means the channel was
+        // actually read when it reaches the newest activity we know of. A stamp
+        // taken before the read state finished loading would otherwise look
+        // stale for every channel at once and wipe the whole sidebar.
+        const activity = this._channelActivityTime(channel);
+        if (activity <= 0) return true;
+        return activity > lastRead;
     },
 
     recomputeAllUnreadCounts() {

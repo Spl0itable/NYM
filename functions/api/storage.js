@@ -43,6 +43,7 @@ import {
   secp256k1,
   schnorr,
   BOT_LIGHTNING_ADDRESS,
+  botLightningAddresses,
   CLIENT_CORS_HEADERS,
   isNymchatClient
 } from "./_shared.js";
@@ -130,9 +131,21 @@ function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
 }
 
-// Generate a BOLT11 invoice from the bot's Lightning address (LUD-21).
+// Generate a BOLT11 invoice from the bot's Lightning address (LUD-21)
 async function botGenerateInvoice(env, sats, zapRequest, comment) {
-  var lnAddr = (env.BOT_LIGHTNING_ADDRESS || BOT_LIGHTNING_ADDRESS).split("@");
+  var addresses = botLightningAddresses(env);
+  if (!addresses.length) return { error: "Bot Lightning address misconfigured.", status: 500 };
+  var lastError = null;
+  for (var ai = 0; ai < addresses.length; ai++) {
+    var attempt = await botInvoiceFromAddress(env, addresses[ai], sats, zapRequest, comment);
+    if (!attempt.error) return attempt;
+    lastError = attempt;
+  }
+  return lastError;
+}
+
+async function botInvoiceFromAddress(env, address, sats, zapRequest, comment) {
+  var lnAddr = String(address).split("@");
   if (lnAddr.length !== 2) return { error: "Bot Lightning address misconfigured.", status: 500 };
   var lnurlData;
   try {

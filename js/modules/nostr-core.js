@@ -369,8 +369,12 @@ Object.assign(NYM.prototype, {
 
 
         if (event.kind === 20000 || event.kind === 23333) {
-            // Validate PoW (NIP-13)
-            if (this.enablePow && !this.validatePow(event, this.powDifficulty)) {
+            // Validate PoW (NIP-13). Nymbot is exempt: it is a first-party
+            // identity that does not mine, so filtering it out would silently
+            // remove the bot's replies the moment a user turns the filter on.
+            if (this.enablePow &&
+                !this.isVerifiedBot(event.pubkey) &&
+                !this.validatePow(event, this.powDifficulty)) {
                 return;
             }
 

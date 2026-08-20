@@ -2648,6 +2648,26 @@ function nip44Decrypt(payload, conversationKey) {
 }
 
 var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
+// Backup wallet for every project-owned payment
+var BOT_LIGHTNING_ADDRESS_FALLBACK = "69420@cake.cash";
+
+// Ordered invoice candidates: primary first, backup second, env overrides
+// winning over the built-ins. Duplicates and malformed entries are dropped.
+function botLightningAddresses(env) {
+  var out = [];
+  var candidates = [
+    (env && env.BOT_LIGHTNING_ADDRESS) || BOT_LIGHTNING_ADDRESS,
+    (env && env.BOT_LIGHTNING_ADDRESS_FALLBACK) || BOT_LIGHTNING_ADDRESS_FALLBACK
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    var a = candidates[i];
+    if (typeof a !== "string") continue;
+    var parts = a.split("@");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) continue;
+    if (out.indexOf(a) === -1) out.push(a);
+  }
+  return out;
+}
 
 function authPayloadHashHex(text) {
   return bytesToHex(sha256(utf8ToBytes(String(text))));
@@ -2937,6 +2957,8 @@ export {
   secp256k1,
   schnorr,
   BOT_LIGHTNING_ADDRESS,
+  BOT_LIGHTNING_ADDRESS_FALLBACK,
+  botLightningAddresses,
   CLIENT_CORS_HEADERS,
   isNymchatClient
 };

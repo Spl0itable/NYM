@@ -92,6 +92,35 @@ Object.assign(NYM.prototype, {
     },
 
     // Fetch invoice from LNURL
+    PROJECT_LIGHTNING_ADDRESSES: ['69420@wallet.yakihonne.com', '69420@cake.cash'],
+
+    lightningAddressesForPubkey(pubkey) {
+        if (!pubkey) return [];
+        const own = [
+            this.verifiedBot && this.verifiedBot.pubkey,
+            this.verifiedDeveloper && this.verifiedDeveloper.pubkey
+        ];
+        return own.indexOf(pubkey) === -1 ? [] : this.PROJECT_LIGHTNING_ADDRESSES.slice();
+    },
+
+    /// Tries each address in turn, returning the first invoice produced. A
+    /// wallet can fail for reasons that have nothing to do with the payer —
+    /// host down, malformed LNURL, amount outside its min/maxSendable — so one
+    /// bad wallet should not fail the zap.
+    async fetchLightningInvoiceWithFallback(addresses, amountSats, comment) {
+        const list = (addresses || []).filter((a, i, arr) => a && arr.indexOf(a) === i);
+        let lastError = new Error('No lightning address available');
+        for (const address of list) {
+            try {
+                const invoice = await this.fetchLightningInvoice(address, amountSats, comment);
+                if (invoice && invoice.pr) return invoice;
+            } catch (err) {
+                lastError = err;
+            }
+        }
+        throw lastError;
+    },
+
     async fetchLightningInvoice(lnAddress, amountSats, comment) {
         try {
             if (!lnAddress || typeof lnAddress !== 'string') {
@@ -215,6 +244,13 @@ Object.assign(NYM.prototype, {
         // Serve from cache if available
         if (this.userLightningAddresses.has(pubkey)) {
             return this.userLightningAddresses.get(pubkey);
+        }
+
+        // Our own identities are known — never make the user wait on a relay.
+        const known = this.lightningAddressesForPubkey(pubkey);
+        if (known.length) {
+            this.userLightningAddresses.set(pubkey, known[0]);
+            return known[0];
         }
 
         try { this.requestUserProfile(pubkey); } catch (_) { }
@@ -890,8 +926,14 @@ Object.assign(NYM.prototype, {
 
         try {
             // Fetch the invoice
-            const invoice = await this.fetchLightningInvoice(
-                this.currentZapTarget.lnAddress,
+            // Resolved address first, then the project chain when the target is
+            // one of ours, so a failing primary wallet falls through instead of
+            // dropping the zap.
+            const invoice = await this.fetchLightningInvoiceWithFallback(
+                [
+                    this.currentZapTarget.lnAddress,
+                    ...this.lightningAddressesForPubkey(this.currentZapTarget.recipientPubkey)
+                ],
                 amount,
                 comment
             );

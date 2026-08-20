@@ -171,6 +171,16 @@ html.nym-needs-setup #setupModal {
     margin-bottom: 20px;
 }
 
+.form-group.setting-flash {
+    animation: settingFlash 1.6s ease-out;
+    border-radius: 8px;
+}
+
+@keyframes settingFlash {
+    0%, 60% { box-shadow: 0 0 0 3px var(--primary); }
+    100% { box-shadow: 0 0 0 3px transparent; }
+}
+
 .settings-search {
     position: sticky;
     top: 0;
