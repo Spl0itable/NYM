@@ -20,11 +20,32 @@
         // Shows the entry point only where the feature can run. Chromium exposes
         // Web Bluetooth; Safari and Firefox do not.
         async initMeshUI() {
-            const btn = document.getElementById('meshSidebarBtn');
-            if (!btn) return;
-            if (!(await this.meshUsable())) { btn.classList.add('nm-hidden'); return; }
-            btn.classList.remove('nm-hidden');
+            const row = document.getElementById('meshStatusRow');
+            if (!row) return;
+            if (!(await this.meshUsable())) { row.classList.add('nm-hidden'); return; }
+            row.classList.remove('nm-hidden');
             this._meshLog = [];
+            this._renderMeshStatusRow();
+        },
+
+        // The sidebar line under the relay indicator: state, peer count, and
+        // link count, mirroring the Flutter mesh status row.
+        _renderMeshStatusRow() {
+            const row = document.getElementById('meshStatusRow');
+            const label = document.getElementById('meshStatusLabel');
+            const links = document.getElementById('meshStatusLinks');
+            if (!row || !label) return;
+            const mesh = this._mesh;
+            const running = !!(mesh && mesh.running);
+            const peers = running ? mesh.peerList.length : 0;
+            label.textContent = !running
+                ? 'Mesh off'
+                : (peers === 0 ? 'Mesh · no peers' : `Mesh · ${peers} peer${peers === 1 ? '' : 's'}`);
+            row.classList.toggle('active', running);
+            if (links) {
+                const n = running ? mesh.linkCount : 0;
+                links.textContent = n > 0 ? `${n} link${n === 1 ? '' : 's'}` : '';
+            }
         },
 
         _meshService() {
@@ -41,8 +62,8 @@
                 onPublicMessage: (m) => this._onMeshPublicMessage(m),
                 onPrivateMessage: (m) => this._onMeshPrivateMessage(m),
                 onReceipt: () => { },
-                onPeersChanged: () => this._renderMeshPanel(),
-                onGhostChanged: () => this._renderMeshPanel(),
+                onPeersChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
+                onGhostChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
             });
             return this._mesh;
         },
@@ -53,12 +74,14 @@
             await mesh.start();
             this.addChannel(MESH_CHANNEL, MESH_CHANNEL);
             this._renderMeshPanel();
+            this._renderMeshStatusRow();
         },
 
         async stopMesh() {
             if (!this._mesh) return;
             await this._mesh.stop();
             this._renderMeshPanel();
+            this._renderMeshStatusRow();
         },
 
         async toggleMesh() {

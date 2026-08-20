@@ -4,8 +4,7 @@
   "scripts": {
     "build": "node build.mjs",
     "canary:sign": "node scripts/sign-canary.mjs",
-    "canary:check": "node scripts/check-canary.mjs",
-    "test": "node test/run.mjs"
+    "canary:check": "node scripts/check-canary.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.27.4",

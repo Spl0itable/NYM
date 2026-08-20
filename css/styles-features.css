@@ -5647,3 +5647,42 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+.mesh-status-row {
+    width: 100%;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    margin-top: 4px;
+    padding: 8px;
+    border-radius: var(--radius-xs);
+    color: var(--text-dim);
+    font-size: 11px;
+}
+
+.mesh-status-row:hover {
+    background: rgb(from var(--primary) r g b / 0.08);
+}
+
+.mesh-status-icon {
+    color: var(--text-dim);
+    flex: 0 0 auto;
+}
+
+.mesh-status-row.active .mesh-status-icon {
+    color: var(--primary);
+}
+
+.mesh-status-links {
+    font-size: 10px;
+    opacity: 0.7;
+}
+
+.mesh-status-links:empty {
+    display: none;
+}
