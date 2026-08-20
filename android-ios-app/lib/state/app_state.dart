@@ -1826,8 +1826,14 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // nostr-core.js). Public channel messages only — this runs on the channel
     // ingest path, so gift-wrapped PMs/groups, reactions and profiles never
     // reach it. Our own messages are mined to at least the configured value, so
-    // they always clear their own threshold.
-    if (appPowFilterBits > 0 && powBitsForId(e.id) < appPowFilterBits) return;
+    // they always clear their own threshold. Nymbot is exempt: it is a
+    // first-party identity that does not mine, so filtering it would silently
+    // remove the bot's replies the moment a user turns the filter on.
+    if (appPowFilterBits > 0 &&
+        !kVerifiedBotPubkeys.contains(e.pubkey) &&
+        powBitsForId(e.id) < appPowFilterBits) {
+      return;
+    }
     // An incoming edit (the published/echoed edit event carries
     // `['edit', originalId]`, buildChannelEditTags) rewrites the original in
     // place — it must NOT be appended as a new message (the user-reported

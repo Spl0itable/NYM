@@ -14,12 +14,12 @@
 // (`url_launcher`), so a broken/unsupported source is never a dead tile.
 
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
 import '../../i18n/i18n.dart';
+import '../../../core/utils/safe_url.dart';
 
 /// `--radius-sm` (`styles-core.css:87`).
 const double _kVideoRadius = 12;
@@ -125,9 +125,7 @@ class _VideoMessageState extends State<VideoMessage> {
   }
 
   Future<void> _openExternally() async {
-    final uri = Uri.tryParse(_activeUrl ?? widget.url);
-    if (uri == null) return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    await launchSafeUrl(_activeUrl ?? widget.url);
   }
 
   void _togglePlayback() {

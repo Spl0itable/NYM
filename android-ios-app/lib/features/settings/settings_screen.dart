@@ -50,10 +50,25 @@ import 'settings_widgets.dart';
 /// Each control's label text, option order and option labels are copied
 /// verbatim from `index.html`'s `#settingsModal` markup.
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({
+    super.key,
+    this.initialSearch,
+    this.focusLanding = false,
+  });
+
+  /// Pre-fills the settings search so the dialog opens already narrowed to one
+  /// setting, for callers that link straight to it from elsewhere in the UI.
+  final String? initialSearch;
+
+  /// Focuses the Default Landing Channel field once the dialog is on screen.
+  final bool focusLanding;
 
   /// Opens the settings dialog as a modal route.
-  static Future<void> open(BuildContext context) {
+  static Future<void> open(
+    BuildContext context, {
+    String? initialSearch,
+    bool focusLanding = false,
+  }) {
     // `.modal` overlay: glass default `rgba(0,0,0,0.7)` (styles-chat.css:1974);
     // `body.solid-ui .modal { rgba(0,0,0,0.75) }` and
     // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
@@ -68,7 +83,10 @@ class SettingsScreen extends ConsumerStatefulWidget {
           : isLight
               ? const Color(0x73000000) // black @ 0.45
               : const Color(0xBF000000), // black @ 0.75
-      builder: (_) => const SettingsScreen(),
+      builder: (_) => SettingsScreen(
+        initialSearch: initialSearch,
+        focusLanding: focusLanding,
+      ),
     );
   }
 
@@ -216,6 +234,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         }
       }
     } catch (_) {}
+    final seed = widget.initialSearch;
+    if (seed != null && seed.isNotEmpty) {
+      _search = seed;
+      _searchController.text = seed;
+    }
+    if (widget.focusLanding) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _landingFocus.requestFocus();
+      });
+    }
     _landingFocus.addListener(() {
       if (!_landingFocus.hasFocus && _landingOpen) {
         setState(() => _landingOpen = false);

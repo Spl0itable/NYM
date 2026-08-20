@@ -945,7 +945,64 @@ class ApiClient {
   }
 
   /// GET unfurl (OpenGraph preview).
-  Future<UnfurlResult> unfurl(String url) async {
+  /// Process-wide unfurl cache. A preview card refetches on every mount, so
+  /// re-entering a channel or scrolling a list would otherwise rebuild every
+  /// card from the network. Failures are cached briefly too, and concurrent
+  /// callers for one URL share a single request.
+  static final Map<String, ({DateTime at, UnfurlResult? data})> _unfurlCache =
+      {};
+  static final Map<String, Future<UnfurlResult>> _unfurlInflight = {};
+  static const Duration _unfurlTtl = Duration(days: 7);
+  static const Duration _unfurlMissTtl = Duration(hours: 1);
+  static const int _unfurlCacheMax = 200;
+
+  /// Synchronous cache peek, so a card that has already been unfurled paints
+  /// on its first frame instead of flashing empty.
+  UnfurlResult? unfurlCached(String url) {
+    final hit = _unfurlCache[url];
+    if (hit == null || hit.data == null) return null;
+    if (DateTime.now().difference(hit.at) > _unfurlTtl) return null;
+    return hit.data;
+  }
+
+  Future<UnfurlResult> unfurl(String url) {
+    final hit = _unfurlCache[url];
+    if (hit != null) {
+      final ttl = hit.data != null ? _unfurlTtl : _unfurlMissTtl;
+      if (DateTime.now().difference(hit.at) <= ttl) {
+        final data = hit.data;
+        if (data == null) {
+          return Future.error(ApiException('unfurl', 0, 'cached failure'));
+        }
+        return Future.value(data);
+      }
+      _unfurlCache.remove(url);
+    }
+    final pending = _unfurlInflight[url];
+    if (pending != null) return pending;
+    final f = _unfurlFetch(url).then((r) {
+      _putUnfurl(url, r);
+      return r;
+    }, onError: (Object e) {
+      _putUnfurl(url, null);
+      throw e;
+      // Block body on purpose: Map.remove returns this very future, and an
+      // arrow body would make whenComplete await it — a self-deadlock.
+    }).whenComplete(() {
+      _unfurlInflight.remove(url);
+    });
+    _unfurlInflight[url] = f;
+    return f;
+  }
+
+  void _putUnfurl(String url, UnfurlResult? data) {
+    _unfurlCache[url] = (at: DateTime.now(), data: data);
+    while (_unfurlCache.length > _unfurlCacheMax) {
+      _unfurlCache.remove(_unfurlCache.keys.first);
+    }
+  }
+
+  Future<UnfurlResult> _unfurlFetch(String url) async {
     final u = unfurlUrl(url);
     final res = await _client.get(Uri.parse(u), headers: _headers());
     _trackApiData('unfurl', sent: _bodyLen(u), recv: _bodyLen(res.bodyBytes));

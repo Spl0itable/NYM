@@ -11,7 +11,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
@@ -39,6 +38,7 @@ import 'link_preview.dart';
 import 'nym_format.dart';
 import 'audio_message.dart';
 import 'video_message.dart';
+import '../../../core/utils/safe_url.dart';
 
 /// Shared stateless [ApiClient] for media/emoji proxy URL construction. The
 /// builders are pure (no network), so a single instance is fine.
@@ -644,12 +644,7 @@ class _RichInline extends StatelessWidget {
 /// A tap recognizer that opens a URL via url_launcher.
 class _LinkTap extends TapGestureRecognizer {
   _LinkTap(String url) {
-    onTap = () {
-      final uri = Uri.tryParse(url);
-      if (uri != null) {
-        launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-    };
+    onTap = () => launchSafeUrl(url);
   }
 }
 
@@ -3050,9 +3045,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
   /// image URL to the platform (browser/downloader) — the same
   /// open-externally path the video fullscreen uses.
   Future<void> _download() async {
-    final uri = Uri.tryParse(widget.urls[_index]);
-    if (uri == null) return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    await launchSafeUrl(widget.urls[_index]);
   }
 
   @override

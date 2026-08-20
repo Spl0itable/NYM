@@ -36,6 +36,17 @@ const int kGeohashPlaceConcurrency = 4;
 
 const String kGeohashPlaceKey = 'nym_geohash_places';
 
+/// A geocode with no city/country is usually transient (rate limit, partial
+/// response) but is sometimes real — a mid-ocean cell has no name. So a miss is
+/// retried with backoff a few times and only then accepted. Caching the literal
+/// "Unknown location" is what left a row stuck on it across restarts.
+const Duration kGeohashPlaceRetryBase = Duration(seconds: 45);
+const Duration kGeohashPlaceRetryMax = Duration(minutes: 30);
+const int kGeohashPlaceMaxAttempts = 4;
+
+/// Written by earlier builds; dropped on load so those rows can resolve again.
+const String kGeohashPlacePoison = 'Unknown location';
+
 class GeohashPlaceCache {
   GeohashPlaceCache({required KeyValueStore kv, required ApiClient api})
       : _kv = kv,
@@ -48,6 +59,7 @@ class GeohashPlaceCache {
 
   final Map<String, String> _cache = {};
   final Map<String, Future<String>> _inflight = {};
+  final Map<String, ({DateTime at, int attempts})> _misses = {};
 
   int _active = 0;
   final List<Completer<void>> _waiters = [];
@@ -60,7 +72,9 @@ class GeohashPlaceCache {
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
         decoded.forEach((k, v) {
-          if (v is String && v.isNotEmpty) _cache['$k'] = v;
+          if (v is! String || v.isEmpty) return;
+          if (v == kGeohashPlacePoison) return;
+          _cache['$k'] = v;
         });
       }
     } catch (_) {
@@ -92,18 +106,57 @@ class GeohashPlaceCache {
   /// this returns something.
   String? cached(String geohash) => _cache[geohash.toLowerCase()];
 
+  /// When a missed [geohash] may be looked up again. `null` once the attempt
+  /// cap is reached, meaning the cell is accepted as having no name.
+  DateTime? retryAt(String geohash) {
+    final miss = _misses[geohash.toLowerCase()];
+    if (miss == null) return DateTime.fromMillisecondsSinceEpoch(0);
+    if (miss.attempts >= kGeohashPlaceMaxAttempts) return null;
+    var backoff = kGeohashPlaceRetryBase * pow3(miss.attempts - 1);
+    if (backoff > kGeohashPlaceRetryMax) backoff = kGeohashPlaceRetryMax;
+    return miss.at.add(backoff);
+  }
+
+  static int pow3(int n) {
+    var v = 1;
+    for (var i = 0; i < n; i++) {
+      v *= 3;
+    }
+    return v;
+  }
+
+  /// True when a lookup for [geohash] is worth making now.
+  bool shouldRetry(String geohash, {bool force = false}) {
+    final key = geohash.toLowerCase();
+    if (_cache.containsKey(key)) return false;
+    final at = retryAt(key);
+    if (at == null) return force;
+    return force || !DateTime.now().isBefore(at);
+  }
+
   /// Resolves [geohash] to "City, Country" under the concurrency bound.
-  Future<String> resolve(String geohash) {
+  /// Returns '' when the lookup missed; the caller keeps showing the decoded
+  /// coordinates and a later call retries.
+  Future<String> resolve(String geohash, {bool force = false}) {
     final key = geohash.toLowerCase();
     final hit = _cache[key];
     if (hit != null) return Future.value(hit);
     if (!isValidGeohash(key)) return Future.value('');
     final pending = _inflight[key];
     if (pending != null) return pending;
+    // force bypasses the timing gate but keeps the attempt history, so a
+    // genuinely unnamed cell doesn't reset its counter on every app resume.
+    if (!shouldRetry(key, force: force)) return Future.value('');
 
     final future = _run(key);
     _inflight[key] = future;
     return future;
+  }
+
+  void _noteMiss(String key) {
+    final prev = _misses[key];
+    _misses[key] =
+        (at: DateTime.now(), attempts: (prev?.attempts ?? 0) + 1);
   }
 
   Future<String> _run(String key) async {
@@ -125,13 +178,20 @@ class GeohashPlaceCache {
         s(addr['county']),
       ].firstWhere((x) => x.isNotEmpty, orElse: () => '');
       final country = s(addr['country']);
-      var place = [city, country].where((x) => x.isNotEmpty).join(', ');
-      if (place.isEmpty) place = 'Unknown location';
+      final place = [city, country].where((x) => x.isNotEmpty).join(', ');
+      if (place.isEmpty) {
+        // A non-answer, not a place. Recording it as one is what pinned a row
+        // to "Unknown location" permanently.
+        _noteMiss(key);
+        return '';
+      }
       _cache[key] = place;
+      _misses.remove(key);
       _scheduleSave();
       return place;
     } catch (_) {
-      // Report the miss without caching it, so it retries later.
+      // A hard failure earns a retry too, rather than nothing to trigger one.
+      _noteMiss(key);
       return '';
     } finally {
       _active--;

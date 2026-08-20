@@ -17,6 +17,7 @@ import '../core/theme/nym_colors.dart';
 import '../core/utils/nym_utils.dart';
 import '../features/calls/call_providers.dart';
 import '../features/commands/action_rate_limit.dart';
+import '../features/mesh/ghost_mode.dart';
 import '../features/mesh/mesh_controller.dart';
 import '../features/commands/command_handler.dart';
 import '../features/commands/command_registry.dart';
@@ -2305,6 +2306,14 @@ class NostrController {
   void _observeNymchatPubkey(String pubkey) {
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
     if (pubkey.isEmpty || pubkey == self) return;
+    // Our vouch list is PUBLISHED PUBLICLY under the real identity, so one of
+    // our own Ghost Mode keys landing in it would announce the link outright.
+    // Nothing signs Nostr events with a ghost key today, so this is not
+    // currently reachable — it is here so that if anything ever does, it fails
+    // closed instead of deanonymising the session.
+    if (_ref.read(ghostModeProvider).pubkeys.contains(pubkey.toLowerCase())) {
+      return;
+    }
     final notifier = _ref.read(appStateProvider.notifier);
     notifier.markNymchatPubkey(pubkey);
     final added = notifier.observeNymchatPubkey(pubkey);
@@ -4286,7 +4295,7 @@ class NostrController {
       // Build + send first so we know the shared id, then echo with it.
       final ek = _groups!.keysFor(group.id);
       final next = ek.rotateSelf();
-      _service!.setEphemeralKeys(_groups!.allEphemeralSecretKeys());
+      _applyEphemeralKeys();
       // A self-key rotation on send: persist the new key locally, re-REQ the
       // live ephemeral gift-wrap subscription so replies wrapped to the NEW
       // key arrive, and sync so our other devices can decrypt this message's
@@ -5857,7 +5866,7 @@ class NostrController {
       if (group == null) return false;
       final ek = _groups!.keysFor(group.id);
       final next = ek.rotateSelf();
-      _service!.setEphemeralKeys(_groups!.allEphemeralSecretKeys());
+      _applyEphemeralKeys();
       // A self-key rotation on send: persist the new key locally, re-REQ the
       // live ephemeral gift-wrap subscription so replies wrapped to the NEW
       // key arrive, and sync so our other devices can decrypt this message's
@@ -7217,7 +7226,7 @@ class NostrController {
               }
             }
           });
-          _service?.setEphemeralKeys(groups.allEphemeralSecretKeys());
+          _applyEphemeralKeys();
         }
       }
     } catch (_) {}
@@ -8542,7 +8551,7 @@ class NostrController {
           }
         }
       });
-      _service?.setEphemeralKeys(groups.allEphemeralSecretKeys());
+      _applyEphemeralKeys();
     }
 
     // 3) Group message history → message store.
@@ -8578,13 +8587,35 @@ class NostrController {
   /// the SAME unwrap path live wraps use.
   Subscription? _ephemeralSub;
 
+  /// Re-registers the ephemeral key set and re-opens its gift-wrap REQ. Called
+  /// by Ghost Mode after an identity rotation.
+  void refreshEphemeralSubscriptions() => _refreshEphemeralSubscriptions();
+
+  /// Every secret key a wrap addressed to us might be encrypted to: the group
+  /// ephemeral keys plus, in Ghost Mode, one per live epoch. Registering them
+  /// together is what lets a reply sent to an identity we have already rotated
+  /// away from still decrypt.
+  void _applyEphemeralKeys() {
+    final service = _service;
+    final groups = _groups;
+    if (service == null || groups == null) return;
+    service.setEphemeralKeys([
+      ...groups.allEphemeralSecretKeys(),
+      ..._ref.read(ghostModeProvider).secretKeys,
+    ]);
+  }
+
   void _refreshEphemeralSubscriptions() {
     final service = _service;
     final groups = _groups;
     if (service == null || groups == null) return;
+    _applyEphemeralKeys();
     _ephemeralSub?.close();
     _ephemeralSub = null;
-    final pks = groups.allEphemeralPubkeys();
+    final pks = [
+      ...groups.allEphemeralPubkeys(),
+      ..._ref.read(ghostModeProvider).pubkeys,
+    ];
     if (pks.isEmpty) return;
     // Filter split per relays.js:2711-2721: in PROXY/D1 mode the REQ is
     // real-time only (`limit: 1` — D1 supplies the group history via
@@ -9731,6 +9762,16 @@ class NostrController {
     unawaited(sync.pmDeposit([raw]));
   }
 
+  /// The pubkey a gift wrap is addressed to (its single `p` tag), or null.
+  static String? _wrapRecipient(Map<String, dynamic> raw) {
+    final tags = raw['tags'];
+    if (tags is! List) return null;
+    for (final t in tags) {
+      if (t is List && t.length >= 2 && t[0] == 'p') return '${t[1]}'.toLowerCase();
+    }
+    return null;
+  }
+
   void _archiveGiftWrap(GiftWrapUnwrapped u) {
     // Never re-upload a wrap that CAME from the archive (`pm-get` boot /
     // reconnect replay) — the PWA's `if (!fromD1)` gate at pms.js:1021.
@@ -9740,6 +9781,15 @@ class NostrController {
     if (!_ref.read(settingsProvider).cachePMs) return;
     final raw = u.rawWrap;
     if (raw == null) return;
+    // A wrap addressed to a Ghost Mode key must NEVER be archived. pm-put is
+    // authenticated as the real account, so uploading it would write
+    // `ghost pubkey -> this account` into the archive and hand the server the
+    // exact link Ghost Mode exists to break. Ghost conversations stay
+    // in-memory, which is the intended lifetime anyway.
+    final to = _wrapRecipient(raw);
+    if (to != null && _ref.read(ghostModeProvider).pubkeys.contains(to)) {
+      return;
+    }
     final self = _identity?.pubkey;
     if (self == null) return;
     // A wrap addressed to us → archive to our inbox. A wrap we sent to someone
@@ -9955,7 +10005,7 @@ class NostrController {
       }
       final ek = _groups!.keysFor(group.id);
       final next = ek.rotateSelf();
-      _service!.setEphemeralKeys(_groups!.allEphemeralSecretKeys());
+      _applyEphemeralKeys();
       // A self-key rotation on send: persist the new key locally, re-REQ the
       // live ephemeral gift-wrap subscription so replies wrapped to the NEW
       // key arrive, and sync so our other devices can decrypt this message's

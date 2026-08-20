@@ -2189,57 +2189,63 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final overflow = entries.length - visible.length;
     final c = context.nym;
     final users = ref.watch(usersProvider);
-    // The `context` this method is handed belongs to the MESSAGE ROW, not to
-    // the avatar strip, so anchoring the modal to it opened the sheet against
-    // the whole row's rect — visibly detached from the avatars that were
-    // pressed. A Builder gives the strip its own context, whose render object
-    // is the Padding below, so the anchor is the avatars themselves.
-    return Builder(
-      builder: (avatarContext) => GestureDetector(
-        onLongPress: () {
-          // The PWA buzzes (nymHapticTap = 30ms vibrate) as the 500ms reader
-          // long-press fires (groups.js:2759-2763, 2806-2810). A real 30ms
-          // motor pulse reads as a solid tap — mediumImpact, not the barely
-          // perceptible lightImpact.
-          HapticFeedback.mediumImpact();
-          _showSeenBy(avatarContext);
-        },
-        child: Padding(
-          padding: const EdgeInsets.only(top: 3, right: 4),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            mainAxisSize: MainAxisSize.max,
-            children: [
-              for (var i = 0; i < visible.length; i++)
-                Transform.translate(
-                  offset: Offset(i == 0 ? 0 : -5.0 * i, 0),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: c.bg, width: 1.5),
-                    ),
-                    child: Opacity(
-                      opacity: 0.85,
-                      child: NymAvatar(
-                        seed: visible[i].key,
-                        size: 14,
-                        imageUrl: users[visible[i].key]?.profile?.picture,
+    // The modal anchors to the render object of whatever context it is handed,
+    // so that context has to belong to the AVATARS and nothing more. The outer
+    // Row is MainAxisSize.max — it spans the full width to right-align — so
+    // wrapping it would anchor the sheet to a full-width box and open it
+    // visibly offset from the avatars that were pressed. The Builder therefore
+    // sits INSIDE that Row, around a MainAxisSize.min row of just the avatars.
+    return Padding(
+      padding: const EdgeInsets.only(top: 3, right: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Builder(
+            builder: (avatarContext) => GestureDetector(
+              onLongPress: () {
+                // The PWA buzzes (nymHapticTap = 30ms vibrate) as the 500ms
+                // reader long-press fires (groups.js:2759-2763, 2806-2810). A
+                // real 30ms motor pulse reads as a solid tap — mediumImpact,
+                // not the barely perceptible lightImpact.
+                HapticFeedback.mediumImpact();
+                _showSeenBy(avatarContext);
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < visible.length; i++)
+                    Transform.translate(
+                      offset: Offset(i == 0 ? 0 : -5.0 * i, 0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: c.bg, width: 1.5),
+                        ),
+                        child: Opacity(
+                          opacity: 0.85,
+                          child: NymAvatar(
+                            seed: visible[i].key,
+                            size: 14,
+                            imageUrl: users[visible[i].key]?.profile?.picture,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              if (overflow > 0)
-                Padding(
-                  padding: const EdgeInsets.only(left: 3),
-                  child: Text(
-                    '+${abbreviateNumber(overflow)}',
-                    style: TextStyle(
-                        color: c.textDim, fontSize: 9, height: 14 / 9),
-                  ),
-                ),
-            ],
+                  if (overflow > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 3),
+                      child: Text(
+                        '+${abbreviateNumber(overflow)}',
+                        style: TextStyle(
+                            color: c.textDim, fontSize: 9, height: 14 / 9),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -3642,7 +3648,7 @@ class _TimestampTextState extends State<_TimestampText> {
       value = Text(
         tr('None'),
         softWrap: false,
-        style: TextStyle(color: c.textDim, fontSize: 12),
+        style: TextStyle(color: c.primary, fontSize: 12),
       );
     } else {
       final bits = powBitsForId(widget.powEventId);

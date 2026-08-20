@@ -27,6 +27,9 @@ import '../../services/mesh/mesh_peer.dart';
 import '../../services/mesh/mesh_service.dart';
 import '../../services/mesh/noise/noise_crypto.dart';
 import '../../services/mesh/protocol/mesh_profile.dart';
+import '../../core/constants/storage_keys.dart';
+import '../../state/settings_provider.dart';
+import 'ghost_mode.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import 'mesh_controller.dart';
@@ -130,12 +133,57 @@ class MeshBridge {
   /// identities always go over the internet — so `#mesh` and every other channel
   /// reach the Nostr network when connected, and fall back to Bluetooth when not.
   bool shouldSendOverMesh(ChatView view) {
-    if (!_canSendToView(view)) return false;
-    if (view.kind == ViewKind.pm &&
-        _meshOnlyPmPubkeys.contains(view.id.toLowerCase())) {
-      return true;
+    if (view.kind == ViewKind.pm) {
+      final id = view.id.toLowerCase();
+      // Checked BEFORE reachability, unlike everything below. A pinned peer is
+      // one we met while ghosted, and they know us only as that ghost. If they
+      // are out of radio range the send has to fail, not fall through to Nostr
+      // — that path signs with the real key and would tell them the ghost was
+      // us. Failing closed costs a message; failing open costs the session.
+      if (_ghostPinnedPms.contains(id)) return true;
+      if (_canSendToView(view) && _meshOnlyPmPubkeys.contains(id)) return true;
     }
+    if (!_canSendToView(view)) return false;
     return !_online;
+  }
+
+  /// Peers whose conversation must never traverse Nostr (see
+  /// [shouldSendOverMesh]). Persisted: the pin has to outlive the ghost epoch
+  /// that created it, and the app restart after it.
+  final Set<String> _ghostPinnedPms = {};
+
+  bool isGhostPinned(String pubkey) =>
+      _ghostPinnedPms.contains(pubkey.toLowerCase());
+
+  /// True when [view] is pinned to the mesh but the peer is not in radio range,
+  /// so a send will sit unsent rather than go out over Nostr. Drives the
+  /// composer notice — without it the message just silently stalls.
+  bool isAwaitingMeshRange(ChatView view) {
+    if (view.kind != ViewKind.pm) return false;
+    if (!_ghostPinnedPms.contains(view.id.toLowerCase())) return false;
+    return peerIdForPubkey(view.id) == null;
+  }
+
+  void _loadGhostPins() {
+    _ghostPinnedPms.addAll(
+      _ref
+          .read(keyValueStoreProvider)
+          .getStringSet(StorageKeys.ghostPinnedPms)
+          .map((e) => e.toLowerCase()),
+    );
+  }
+
+  /// Pins [pubkey] to the mesh when the exchange happened under a ghost
+  /// identity. Called on both directions of a mesh DM.
+  void _pinIfGhosted(String pubkey) {
+    if (!_ref.read(ghostModeProvider).enabled) return;
+    if (!_ghostPinnedPms.add(pubkey.toLowerCase())) return;
+    // Stored as a JSON array, the same shape getStringSet reads back. Pubkeys
+    // are hex, so no escaping is needed.
+    _ref.read(keyValueStoreProvider).setString(
+          StorageKeys.ghostPinnedPms,
+          '[${_ghostPinnedPms.map((e) => '"$e"').join(',')}]',
+        );
   }
 
   // ---- Lifecycle -----------------------------------------------------------
@@ -143,6 +191,7 @@ class MeshBridge {
   ProviderSubscription<ChatView>? _viewSub;
 
   void start() {
+    _loadGhostPins();
     MeshService.debugLog = MeshDiagnostics.instance.log;
     _subs.add(_service.peersStream.listen(_onPeers));
     _subs.add(_service.onPublicMessage.listen(_onPublic));
@@ -342,6 +391,7 @@ class MeshBridge {
     } else {
       _meshOnlyPmPubkeys.add(pubkey);
     }
+    _pinIfGhosted(pubkey);
     if (_meshPmPubkeys.add(pubkey)) _refreshMarkers();
     final nym = _nymByPubkey[pubkey] ?? 'nym';
     if (nym.isNotEmpty && nym != 'nym') _app.upsertUserNym(pubkey, nym);
@@ -548,8 +598,11 @@ class MeshBridge {
       );
       // The echo stays; the round-trip is deduped in ingestMeshChannelMessage.
     } else if (view.kind == ViewKind.pm) {
+      _pinIfGhosted(view.id);
       final peerId = peerIdForPubkey(view.id);
       if (peerId == null) {
+        // Out of radio range. The echo stays local and nothing is published —
+        // for a pinned peer this is the fail-closed path, NOT a fallback.
         _app.sendLocal(content)?.viaMesh = true;
         return;
       }

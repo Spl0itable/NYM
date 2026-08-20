@@ -2020,6 +2020,10 @@ class _ComposerState extends ConsumerState<Composer> {
         isDense: true,
         // PWA `data-placeholder` teaches the `/` and `?` affordances (F9).
         hintText: tr('Message, / for commands, ? for Nymbot...'),
+        // Translated hints run longer than the English one and would wrap,
+        // growing the field to a second row and pushing the translate button
+        // down with it. Keep the placeholder on one line and ellipsize.
+        hintMaxLines: 1,
         hintStyle: TextStyle(
             // `div.message-input:empty::before` → white@0.4 (dark) /
             // black@0.4 (`body.light-mode …`, styles-themes-responsive.css:58).

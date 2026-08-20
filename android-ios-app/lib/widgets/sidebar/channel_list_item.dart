@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -174,8 +176,8 @@ class ChannelListItem extends ConsumerWidget {
                       _UnreadPill(count: unread),
                     ],
                     // Same menu the hold opens. Suppressed where there would
-                    // be no menu to open (#nymchat has no actions), so the
-                    // control never appears as a dead tap target.
+                    // be no menu to open, so the control never appears as a
+                    // dead tap target.
                     if (buildChannelMenuActions(context, ref, entry)
                         .isNotEmpty) ...[
                       const SizedBox(width: 2),
@@ -280,13 +282,32 @@ class _ChannelLocationLine extends ConsumerStatefulWidget {
       _ChannelLocationLineState();
 }
 
-class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine> {
+class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
+    with WidgetsBindingObserver {
   String? _place;
+  Timer? _retry;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _prime();
+  }
+
+  @override
+  void dispose() {
+    _retry?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back to the app is the natural moment to retry a name that
+    // failed earlier, including one the backoff has given up on.
+    if (state == AppLifecycleState.resumed && _place == null) {
+      _prime(force: true);
+    }
   }
 
   @override
@@ -294,11 +315,12 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine> {
     super.didUpdateWidget(old);
     if (old.geohash != widget.geohash) {
       _place = null;
+      _retry?.cancel();
       _prime();
     }
   }
 
-  void _prime() {
+  void _prime({bool force = false}) {
     final gh = widget.geohash;
     if (gh.isEmpty) return;
     final cache = ref.read(geohashPlaceCacheProvider);
@@ -307,9 +329,26 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine> {
       _place = hit;
       return;
     }
-    cache.resolve(gh).then((place) {
-      if (!mounted || place.isEmpty || widget.geohash != gh) return;
-      setState(() => _place = place);
+    cache.resolve(gh, force: force).then((place) {
+      if (!mounted || widget.geohash != gh) return;
+      if (place.isNotEmpty) {
+        setState(() => _place = place);
+        return;
+      }
+      // Missed. Nothing else re-triggers a lookup, so the row schedules its
+      // own retry — otherwise it keeps the coordinates until the sidebar
+      // happens to rebuild.
+      _scheduleRetry(cache, gh);
+    });
+  }
+
+  void _scheduleRetry(GeohashPlaceCache cache, String gh) {
+    _retry?.cancel();
+    final at = cache.retryAt(gh);
+    if (at == null) return; // accepted as having no name
+    final wait = at.difference(DateTime.now());
+    _retry = Timer(wait.isNegative ? const Duration(seconds: 1) : wait, () {
+      if (mounted && widget.geohash == gh && _place == null) _prime();
     });
   }
 

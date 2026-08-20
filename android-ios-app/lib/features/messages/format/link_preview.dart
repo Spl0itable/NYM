@@ -11,11 +11,11 @@
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
 import '../../../services/api/api_client.dart';
+import '../../../core/utils/safe_url.dart';
 
 /// Parsed link-preview content (mirrors `proxy.js` `extractOpenGraph` /
 /// ui-context.js `_renderLinkPreview`). Built from an [UnfurlResult].
@@ -92,6 +92,14 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
   @override
   void initState() {
     super.initState();
+    final cached = _api.unfurlCached(widget.url);
+    if (cached != null) {
+      final data = LinkPreviewData.fromUnfurl(cached);
+      if (data.hasContent) {
+        _data = data;
+        return;
+      }
+    }
     _load();
   }
 
@@ -137,12 +145,7 @@ class _Card extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: InkWell(
-        onTap: () {
-          final uri = Uri.tryParse(data.url);
-          if (uri != null) {
-            launchUrl(uri, mode: LaunchMode.externalApplication);
-          }
-        },
+        onTap: () => launchSafeUrl(data.url),
         borderRadius: NymRadius.rsm,
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: narrow ? double.infinity : 400),

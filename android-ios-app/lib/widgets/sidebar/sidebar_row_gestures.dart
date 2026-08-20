@@ -32,7 +32,7 @@ class SidebarRowGestures extends StatefulWidget {
   final VoidCallback onTap;
 
   /// Fired after the 500ms hold with the press-start global position. Returns
-  /// whether a menu actually opened: an EMPTY item list (`#nymchat`) reports
+  /// whether a menu actually opened: an EMPTY item list reports
   /// false so the following tap still opens the row — the PWA only sets its
   /// click-suppressing `fired` flag once `items.length > 0`
   /// (sidebar-sections.js:246-252).

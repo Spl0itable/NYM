@@ -118,7 +118,8 @@ void main() {
       expect(labels, isNot(contains('Leave channel')));
     });
 
-    testWidgets('#nymchat returns an empty menu (PWA parity)', (tester) async {
+    testWidgets('#nymchat offers only the landing-channel setting',
+        (tester) async {
       late BuildContext ctx;
       late WidgetRef ref;
       await _pumpProbe(tester, (c, r) {
@@ -131,8 +132,8 @@ void main() {
         ref,
         ChannelEntry(channel: kDefaultChannel),
       );
-      // sidebar-sections.js returns [] for the default channel — no menu.
-      expect(actions, isEmpty);
+      // The built-in home row can't be favorited, hidden or blocked.
+      expect(actions.map((a) => a.label), ['Default landing channel']);
     });
   });
 

@@ -61,6 +61,14 @@ class NoiseIdentity {
     return fromSeeds(staticPrivate: staticPriv, signingSeed: signingSeed);
   }
 
+  /// A throwaway identity held only in memory — never written to secure
+  /// storage. Ghost Mode uses one per epoch so the peerID and fingerprint it
+  /// advertises cannot be tied to the device's durable mesh identity.
+  static Future<NoiseIdentity> ephemeral() => fromSeeds(
+        staticPrivate: randomBytes(32),
+        signingSeed: randomBytes(32),
+      );
+
   /// Builds an identity from raw 32-byte seeds (used by [loadOrCreate] and
   /// tests). Derives all public keys and the peerID/fingerprint.
   static Future<NoiseIdentity> fromSeeds({

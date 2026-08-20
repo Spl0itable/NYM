@@ -10,10 +10,10 @@
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/nym_colors.dart';
 import '../../i18n/i18n.dart';
+import '../../../core/utils/safe_url.dart';
 
 /// `--radius-sm` (`styles-core.css:87`).
 const double _kAudioRadius = 12;
@@ -116,8 +116,7 @@ class _AudioMessageState extends State<AudioMessage> {
   }
 
   void _open() {
-    final uri = Uri.tryParse(widget.url);
-    if (uri != null) launchUrl(uri, mode: LaunchMode.externalApplication);
+    launchSafeUrl(widget.url);
   }
 
   static String _clock(Duration d) {

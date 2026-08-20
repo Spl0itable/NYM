@@ -14,6 +14,7 @@ import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import 'mesh_bridge.dart' show kMeshNearbyChannel;
+import 'ghost_mode_button.dart';
 import 'mesh_controller.dart';
 import 'mesh_diagnostics.dart';
 
@@ -510,6 +511,7 @@ class _StatusBar extends ConsumerWidget {
               child:
                   Text(tr('Enable'), style: TextStyle(color: colors.primary)),
             ),
+          GhostModeButton(colors: colors),
           Switch(
             value: enabled,
             activeColor: colors.primary,

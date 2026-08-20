@@ -12,6 +12,7 @@ import '../../services/mesh/mesh_events.dart';
 import '../../services/mesh/mesh_peer.dart';
 import '../../services/mesh/mesh_service.dart';
 import '../../services/mesh/noise/noise_identity.dart';
+import 'ghost_mode.dart';
 import '../../services/mesh/noise/nostr_link.dart';
 import '../../services/mesh/protocol/mesh_profile.dart';
 import '../../services/mesh/transport/ble_mesh_transport.dart';
@@ -136,6 +137,24 @@ class MeshController extends StateNotifier<MeshUiState> {
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
+  /// Tears the mesh down and brings it back up on the current identity. Ghost
+  /// Mode calls this on every rotation: MeshService binds its Noise manager to
+  /// one identity at construction, so a new identity means a new service.
+  Future<void>? _restartChain;
+
+  Future<void> restart() {
+    if (!state.enabled) return Future.value();
+    // Serialised: _stop and _start both bail out while _busy, so two overlapping
+    // restarts could tear the mesh down and then skip bringing it back up,
+    // leaving the radio silently off until the next toggle.
+    final prev = _restartChain ?? Future<void>.value();
+    return _restartChain = prev.then((_) async {
+      if (!state.enabled) return;
+      await _stop();
+      await _start();
+    }).catchError((_) {});
+  }
+
   Future<void> setEnabled(bool enabled) async {
     if (enabled == state.enabled && (!enabled || _service != null)) return;
     state = state.copyWith(enabled: enabled, clearError: true);
@@ -157,7 +176,14 @@ class MeshController extends StateNotifier<MeshUiState> {
         );
         return;
       }
-      final identity = await NoiseIdentity.loadOrCreate();
+      // A persisted Ghost Mode session must be re-armed BEFORE we choose an
+      // identity, or boot would announce the real one and only ghost a moment
+      // later — the one announce that would deanonymise the whole session.
+      await _ref.read(ghostModeProvider.notifier).ensureRestored();
+      final ghost = _ref.read(ghostModeProvider);
+      final identity = ghost.enabled && ghost.current != null
+          ? ghost.current!.meshIdentity
+          : await NoiseIdentity.loadOrCreate();
       _nostrLink = _computeNostrLink(identity);
       // Route low-level radio lifecycle (power state, scanning, advertising,
       // links) into the same on-screen mesh diagnostics panel the receive
@@ -274,6 +300,11 @@ class MeshController extends StateNotifier<MeshUiState> {
   final Set<String> _profileAsked = {};
 
   Future<MeshProfile?> _buildMyProfile(MeshProfileRequest request) async {
+    // An avatar or banner is a far stronger fingerprint than any of the keys
+    // Ghost Mode rotates — the same picture across two epochs relinks them
+    // instantly. Refuse outright rather than relying on the ghost pubkey
+    // happening to have no profile to look up.
+    if (_ref.read(ghostModeProvider).enabled) return null;
     final pubkey = _nostrPubkey?.call();
     (Uint8List, String?)? avatar;
     (Uint8List, String?)? banner;
@@ -419,12 +450,24 @@ final meshControllerProvider =
   final controller = MeshController(
     ref: ref,
     nickname: () {
+      final ghost = ref.read(ghostModeProvider);
+      if (ghost.enabled && ghost.current != null) return ghost.current!.nickname;
       final nym = ref.read(appStateProvider).selfNym;
       return nym.isNotEmpty ? nym : 'nym';
     },
-    nostrPubkey: () => ref.read(nostrControllerProvider).identity?.pubkey,
+    // Ghost Mode advertises a REAL nostrLink, just an ephemeral one: peers can
+    // still reach this device over Nostr, but the link resolves to a throwaway
+    // key rather than the user's npub.
+    nostrPubkey: () {
+      final ghost = ref.read(ghostModeProvider);
+      if (ghost.enabled && ghost.current != null) return ghost.current!.pubkey;
+      return ref.read(nostrControllerProvider).identity?.pubkey;
+    },
     signSchnorr: (messageHex) {
-      final priv = ref.read(nostrControllerProvider).identity?.privkey;
+      final ghost = ref.read(ghostModeProvider);
+      final priv = ghost.enabled && ghost.current != null
+          ? ghost.current!.privkey
+          : ref.read(nostrControllerProvider).identity?.privkey;
       return priv == null ? null : signId(messageHex, priv);
     },
     avatarUrlOf: (pubkey) =>

@@ -13,6 +13,7 @@ import '../../widgets/common/app_dialog.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
 import '../i18n/i18n.dart';
+import '../settings/settings_screen.dart';
 
 /// One entry in the channel `.quick-context-menu` (sidebar-sections.js
 /// `_buildSidebarMenuItems`).
@@ -33,8 +34,9 @@ class ChannelMenuAction {
 
 /// Builds the 500ms-hold action list for a channel row, mirroring the PWA's
 /// `_buildSidebarMenuItems` channel branch (sidebar-sections.js:167-200):
-/// Favorite/Unfavorite → Hide/Unhide → Block (danger). `#nymchat` (the default
-/// channel) returns an EMPTY menu (sidebar-sections.js:175).
+/// Favorite/Unfavorite → Hide/Unhide → Block (danger). `#nymchat` is the
+/// built-in home row — it can't be favorited, hidden or blocked, so its menu
+/// carries the one setting that governs it.
 List<ChannelMenuAction> buildChannelMenuActions(
   BuildContext context,
   WidgetRef ref,
@@ -47,7 +49,19 @@ List<ChannelMenuAction> buildChannelMenuActions(
   final isPinned = state.pinnedChannels.contains(key);
   final isHidden = state.hiddenChannels.contains(key);
 
-  if (isDefault) return const <ChannelMenuAction>[];
+  if (isDefault) {
+    return <ChannelMenuAction>[
+      ChannelMenuAction(
+        label: tr('Default landing channel'),
+        svg: NymIcons.sidebarHome,
+        onSelected: () => SettingsScreen.open(
+          context,
+          initialSearch: tr('Default Landing Channel'),
+          focusLanding: true,
+        ),
+      ),
+    ];
+  }
 
   return <ChannelMenuAction>[
     ChannelMenuAction(
@@ -105,8 +119,8 @@ List<ChannelMenuAction> buildChannelMenuActions(
 }
 
 /// Fires the row's 500ms-hold `.quick-context-menu`, reporting whether it
-/// actually opened. `#nymchat` builds an empty item list and the PWA only sets
-/// its click-suppressing `fired` flag when `items.length > 0`
+/// actually opened. An empty item list reports false and the PWA only sets its
+/// click-suppressing `fired` flag when `items.length > 0`
 /// (sidebar-sections.js:246-252) — so the caller lets the release-tap through
 /// when this returns false.
 bool maybeShowChannelContextMenu(

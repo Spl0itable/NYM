@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show Timer, unawaited;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -11,6 +11,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_share.dart';
 import '../../features/emoji/emoji_prefetch.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/mesh/mesh_controller.dart';
 import '../../features/notifications/notifications_panel.dart';
 import '../../features/nymbot/bot_chat_screen.dart' show BotChatScreen;
 import '../../features/channels/geohash_place_cache.dart';
@@ -180,6 +181,7 @@ class ChatPane extends ConsumerWidget {
           // `.input-container` — tutorial spotlight target. Stays mounted in
           // columns mode; sends to the focused column's conversation (the deck
           // re-points `currentViewProvider` on focus, mirroring `_cvFocusColumn`).
+          const _AwaitingMeshRangeNotice(),
           KeyedSubtree(
             key: TutorialTargets.keyFor(TutorialTarget.composer),
             child: Composer(compact: compact),
@@ -241,6 +243,9 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   // late response can't force a redundant rebuild after the view moved on.
   int _geocodeToken = 0;
 
+  /// Pending retry for a place name that missed.
+  Timer? _placeRetry;
+
   bool get _canBack => _index > 0;
   bool get _canForward => _index >= 0 && _index < _history.length - 1;
 
@@ -254,6 +259,12 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _maybeActivateBotHeader(ref.read(currentViewProvider));
     });
+  }
+
+  @override
+  void dispose() {
+    _placeRetry?.cancel();
+    super.dispose();
   }
 
   /// Columns mode keeps this shared header while the deck renders the bot
@@ -895,13 +906,30 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   /// a single request, including this header and its sidebar row), the >=1.1s
   /// spacing Nominatim requires, and persistence. All this adds is the rebuild
   /// and the failed-lookup fallback.
-  void _resolvePlaceName(String ghKey) {
+  void _resolvePlaceName(String ghKey, {bool force = false}) {
     if (!isValidGeohash(ghKey)) return;
     final cache = ref.read(geohashPlaceCacheProvider);
     if (cache.cached(ghKey) != null) return;
     final token = ++_geocodeToken;
-    cache.resolve(ghKey).then((place) {
-      if (place.isEmpty) _placeFailed.add(ghKey);
+    cache.resolve(ghKey, force: force).then((place) {
+      if (place.isEmpty) {
+        _placeFailed.add(ghKey);
+        // Nothing else re-triggers a lookup, so schedule the retry the cache's
+        // backoff allows — otherwise the header keeps the coordinates.
+        final at = cache.retryAt(ghKey);
+        if (at != null) {
+          final wait = at.difference(DateTime.now());
+          _placeRetry?.cancel();
+          _placeRetry = Timer(
+            wait.isNegative ? const Duration(seconds: 1) : wait,
+            () {
+              if (!mounted) return;
+              _placeFailed.remove(ghKey);
+              _resolvePlaceName(ghKey);
+            },
+          );
+        }
+      }
       if (!mounted || token != _geocodeToken) return;
       setState(() {});
     });
@@ -1680,5 +1708,54 @@ class _FriendBadge extends StatelessWidget {
     final color =
         context.nym.isLight ? const Color(0xFF0288D1) : const Color(0xFF4FC3F7);
     return NymSvgIcon(NymIcons.friendBadge, size: size, color: color);
+  }
+}
+
+
+/// Shown above the composer when the open conversation is pinned to the mesh by
+/// Ghost Mode and the peer is out of Bluetooth range.
+///
+/// Without it the send just stalls: the message is echoed locally and nothing
+/// is published, because publishing would route over Nostr under the real key
+/// and tell the peer that the ghost was us. That refusal is deliberate, so it
+/// has to be legible rather than look like a bug.
+class _AwaitingMeshRangeNotice extends ConsumerWidget {
+  const _AwaitingMeshRangeNotice();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Watch the mesh state, not just read the bridge: the notice has to clear
+    // itself the moment the peer comes back into range.
+    ref.watch(meshControllerProvider);
+    final view = ref.watch(currentViewProvider);
+    final bridge = ref.read(meshControllerProvider.notifier).bridge;
+    if (bridge == null || !bridge.isAwaitingMeshRange(view)) {
+      return const SizedBox.shrink();
+    }
+    final c = context.nym;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      color: c.bgSecondary,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(Icons.bluetooth_searching,
+                size: 15, color: c.textDim),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              tr('Waiting for Bluetooth range. This chat stays on Bluetooth '
+                  'because you met over Ghost Mode, so messages send when '
+                  'they are nearby.'),
+              style: TextStyle(color: c.textDim, fontSize: 12, height: 1.35),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

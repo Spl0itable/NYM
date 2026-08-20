@@ -984,12 +984,12 @@ class MeshService {
   /// the nickname instead. A cloaking mode has to suppress all three together
   /// or none of them.
   ///
-  /// That was evaluated and deliberately NOT built: suppressing the nostrLink
-  /// is what makes a mesh peer identifiable as a known npub, and losing that
-  /// costs more than the rotation gains. Revisit if bitchat ships §9 upstream,
-  /// at which point rotation becomes a compatible default rather than an
-  /// interop-breaking toggle — but it still needs the nostrLink and nickname
-  /// handled, not just the key.
+  /// That is exactly what Ghost Mode does (features/mesh/ghost_mode.dart): it
+  /// rotates the Noise static key, the signing key, the nickname and the
+  /// nostrLink TOGETHER, on an epoch. The nostrLink it advertises is real but
+  /// ephemeral, so peers can still reach the device while nothing resolves to
+  /// the user's npub. It stays opt-in because losing that link is a real cost,
+  /// not a free win.
   Future<void> _broadcastAnnounce() async {
     if (!_running) return;
     final announcement = IdentityAnnouncement(
