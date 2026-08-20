@@ -1,8 +1,4 @@
-// mesh-ui.js - wires the Bluetooth mesh into the app: the #mesh channel, mesh
-// private messages, and the mesh panel with its Ghost Mode toggle.
-//
-// The whole feature is hidden unless the browser can actually do it, so an
-// unsupported browser sees no dead controls.
+// mesh-ui.js - wires the Bluetooth mesh into the app
 
 (function () {
     const NYM = window.NYM;
@@ -118,8 +114,7 @@
             this._renderMeshPanel();
         },
 
-        // ---- inbound ---------------------------------------------------------
-
+        // inbound 
         _onMeshPublicMessage(m) {
             const channel = m.channel || MESH_CHANNEL;
             const seconds = Math.floor((m.timestampMs || Date.now()) / 1000);
@@ -234,8 +229,7 @@
             });
         },
 
-        // ---- panel -----------------------------------------------------------
-
+        //  panel 
         openMeshPanel() {
             const modal = document.getElementById('meshModal');
             if (!modal) return;
