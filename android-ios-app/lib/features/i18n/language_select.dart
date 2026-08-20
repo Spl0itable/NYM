@@ -31,9 +31,13 @@ final List<UiLanguageOption> kUiLanguageOptions = [
 ];
 
 /// The display name for a stored UI-language [code] (empty/`en` ⇒ English).
+/// Leads with the endonym so the row reads in the language it names, with the
+/// English name appended when it differs.
 String uiLanguageName(String code) {
   if (code.isEmpty || code == 'en') return 'English';
-  return languageName(code);
+  final subtitle = languageSubtitle(code);
+  final native = languageNative(code);
+  return subtitle.isEmpty ? native : '$native — $subtitle';
 }
 
 /// Applies [code] as the app UI language and kicks translation. NON-BLOCKING:
@@ -146,7 +150,7 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
     final items = q.isEmpty
         ? kUiLanguageOptions
         : kUiLanguageOptions
-            .where((o) => o.name.toLowerCase().contains(q))
+            .where((o) => languageSearchKey(o.code, o.name).contains(q))
             .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -188,7 +192,8 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
               final selected = o.code == widget.selectedCode ||
                   (o.code.isEmpty && widget.selectedCode == 'en');
               return _LanguageRow(
-                name: o.name,
+                name: o.code.isEmpty ? o.name : languageNative(o.code),
+                subtitle: o.code.isEmpty ? '' : languageSubtitle(o.code),
                 selected: selected,
                 onTap: () => widget.onSelected(o.code),
               );
@@ -203,11 +208,15 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
 class _LanguageRow extends StatelessWidget {
   const _LanguageRow({
     required this.name,
+    required this.subtitle,
     required this.selected,
     required this.onTap,
   });
 
   final String name;
+
+  /// The English name, shown under the endonym when it adds something.
+  final String subtitle;
   final bool selected;
   final VoidCallback onTap;
 
@@ -231,13 +240,27 @@ class _LanguageRow extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                name,
-                style: TextStyle(
-                  color: c.text,
-                  fontSize: 15,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      color: c.text,
+                      fontSize: 15,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        subtitle,
+                        style: TextStyle(color: c.textDim, fontSize: 12),
+                      ),
+                    ),
+                ],
               ),
             ),
             if (selected) Icon(Icons.check, size: 18, color: c.primary),

@@ -70,8 +70,9 @@ void main() {
     test('uiLanguageName resolves codes and defaults to English', () {
       expect(uiLanguageName(''), 'English');
       expect(uiLanguageName('en'), 'English');
-      expect(uiLanguageName('es'), 'Spanish');
-      expect(uiLanguageName('fr'), 'French');
+      // The row leads with the endonym and keeps the English name after it.
+      expect(uiLanguageName('es'), 'español — Spanish');
+      expect(uiLanguageName('fr'), 'français — French');
     });
   });
 

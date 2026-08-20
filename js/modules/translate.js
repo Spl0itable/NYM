@@ -75,6 +75,56 @@ const NYM_TRANSLATE_LANGUAGES = [
     { code: 'zu', name: 'Zulu' },
 ];
 
+// What speakers call their own language (CLDR endonyms via Intl.DisplayNames,
+// baked in so the list is identical on every platform). Only codes whose
+// endonym differs from the English name are listed; the rest fall back.
+const NYM_TRANSLATE_LANG_NATIVE = (() => {
+    const map = {
+    'sq': "shqip", 'am': "አማርኛ", 'ar': "العربية",
+    'hy': "հայերեն", 'as': "অসমীয়া", 'az': "azərbaycan",
+    'bm': "bamanakan", 'eu': "euskara", 'be': "беларуская",
+    'bn': "বাংলা", 'bho': "भोजपुरी", 'bs': "bosanski",
+    'bg': "български", 'ca': "català", 'ny': "Nyanja",
+    'zh': "中文", 'zh-TW': "中文（台灣）", 'hr': "hrvatski",
+    'cs': "čeština", 'da': "dansk", 'dv': "Divehi",
+    'doi': "डोगरी", 'nl': "Nederlands", 'et': "eesti",
+    'ee': "eʋegbe", 'fi': "suomi", 'fr': "français",
+    'fy': "Frysk", 'gl': "galego", 'ka': "ქართული",
+    'de': "Deutsch", 'el': "Ελληνικά", 'gu': "ગુજરાતી",
+    'haw': "ʻŌlelo Hawaiʻi", 'he': "עברית", 'hi': "हिन्दी",
+    'hu': "magyar", 'is': "íslenska", 'ilo': "Iloko",
+    'id': "Indonesia", 'ga': "Gaeilge", 'it': "italiano",
+    'ja': "日本語", 'jv': "Jawa", 'kn': "ಕನ್ನಡ",
+    'kk': "қазақ тілі", 'km': "ខ្មែរ", 'rw': "Ikinyarwanda",
+    'gom': "कोंकणी", 'ko': "한국어", 'ku': "kurdî (kurmancî)",
+    'ckb': "کوردیی ناوەندی", 'ky': "кыргызча", 'lo': "ລາວ",
+    'lv': "latviešu", 'ln': "lingála", 'lt': "lietuvių",
+    'lb': "Lëtzebuergesch", 'mk': "македонски", 'mai': "मैथिली",
+    'ms': "Melayu", 'ml': "മലയാളം", 'mt': "Malti",
+    'mi': "Māori", 'mr': "मराठी", 'mni-Mtei': "মৈতৈলোন্ (মীতৈ ময়েক)",
+    'mn': "монгол", 'my': "မြန်မာ", 'ne': "नेपाली",
+    'no': "norsk", 'or': "ଓଡ଼ିଆ", 'om': "Oromoo",
+    'ps': "پښتو", 'fa': "فارسی", 'pl': "polski",
+    'pt': "português", 'pa': "ਪੰਜਾਬੀ", 'qu': "Runasimi",
+    'ro': "română", 'ru': "русский", 'sa': "संस्कृत भाषा",
+    'gd': "Gàidhlig", 'nso': "Sesotho sa Leboa", 'sr': "српски",
+    'sn': "chiShona", 'sd': "سنڌي", 'si': "සිංහල",
+    'sk': "slovenčina", 'sl': "slovenščina", 'so': "Soomaali",
+    'es': "español", 'su': "Basa Sunda", 'sw': "Kiswahili",
+    'sv': "svenska", 'tg': "тоҷикӣ", 'ta': "தமிழ்",
+    'tt': "татар", 'te': "తెలుగు", 'th': "ไทย",
+    'ti': "ትግርኛ", 'tr': "Türkçe", 'tk': "türkmen dili",
+    'ak': "Akan", 'uk': "українська", 'ur': "اردو",
+    'ug': "ئۇيغۇرچە", 'uz': "o‘zbek", 'vi': "Tiếng Việt",
+    'cy': "Cymraeg", 'xh': "IsiXhosa", 'yi': "ייִדיש",
+    'yo': "Èdè Yorùbá", 'zu': "isiZulu",
+    };
+    map['zh-cn'] = map['zh'];
+    map['iw'] = map['he'];
+    map['jw'] = map['jv'];
+    return map;
+})();
+
 // Lookup from language code (case-insensitive) to display name.
 const NYM_TRANSLATE_LANG_NAMES = (() => {
     const map = {};
@@ -91,6 +141,43 @@ Object.assign(NYM.prototype, {
     _languageName(code) {
         if (!code) return '';
         return NYM_TRANSLATE_LANG_NAMES[String(code).toLowerCase()] || code;
+    },
+
+    // What a speaker of the language calls it, falling back to the English
+    // name. A picker labelled only in English is unusable to the very people
+    // looking for their own language in it.
+    _languageNative(code) {
+        if (!code) return '';
+        const key = String(code).toLowerCase();
+        return NYM_TRANSLATE_LANG_NATIVE[key] || NYM_TRANSLATE_LANG_NAMES[key] || code;
+    },
+
+    // The English name, but only when it adds something to the endonym.
+    _languageSubtitle(code) {
+        const native = this._languageNative(code);
+        const english = this._languageName(code);
+        return native === english ? '' : english;
+    },
+
+    // Everything a search over the language list should match.
+    _languageSearchKey(code, name) {
+        return `${name} ${this._languageNative(code)}`.toLowerCase();
+    },
+
+    // One-line label for a <select>, which cannot show a second line.
+    _languageOptionLabel(l) {
+        const sub = this._languageSubtitle(l.code);
+        return sub ? `${this._languageNative(l.code)} — ${sub}` : l.name;
+    },
+
+    // A button in one of the language-picker grids.
+    _languageOptionButton(l, currentCode) {
+        const selected = currentCode === l.code ? ' selected' : '';
+        const sub = this._languageSubtitle(l.code);
+        return `<button class="translate-lang-option nm-tr-6${selected}" data-lang="${l.code}" ` +
+            `data-name="${this.escapeHtml(this._languageSearchKey(l.code, l.name))}">` +
+            `${this.escapeHtml(this._languageNative(l.code))}` +
+            `${sub ? `<span class="translate-lang-sub">${this.escapeHtml(sub)}</span>` : ''}</button>`;
     },
 
     // Favorite languages are kept at the top of the translate input dropdown.
@@ -142,7 +229,7 @@ Object.assign(NYM.prototype, {
                     <p class="nm-tr-3">Choose the language you'd like messages translated into. This will be saved to your settings.</p>
                     <input type="text" class="translate-lang-search nm-tr-4" placeholder="Search languages...">
                     <div class="translate-lang-grid nm-tr-5">
-                        ${languages.map(l => `<button class="translate-lang-option nm-tr-6" data-lang="${l.code}" data-name="${l.name.toLowerCase()}">${l.name}</button>`).join('')}
+                        ${languages.map(l => this._languageOptionButton(l, '')).join('')}
                     </div>
                 </div>
             `;
@@ -504,7 +591,7 @@ Object.assign(NYM.prototype, {
             .slice()
             .sort((a, b) => a.name.localeCompare(b.name));
         select.innerHTML = `<option value="">Disabled</option>` +
-            sorted.map(l => `<option value="${l.code}">${this.escapeHtml(l.name)}</option>`).join('');
+            sorted.map(l => `<option value="${l.code}">${this.escapeHtml(this._languageOptionLabel(l))}</option>`).join('');
         select.value = current;
     },
 
@@ -516,12 +603,13 @@ Object.assign(NYM.prototype, {
         const favs = new Set(this._getTranslateFavorites());
         const q = filter.trim().toLowerCase();
         const langs = this._sortedTranslateLanguages()
-            .filter(l => !q || l.name.toLowerCase().includes(q));
+            .filter(l => !q || this._languageSearchKey(l.code, l.name).includes(q));
         const starSvg = (filled) => `<svg viewBox="0 0 24 24" width="14" height="14" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
         list.innerHTML = langs.map(l => {
             const fav = favs.has(l.code);
+            const sub = this._languageSubtitle(l.code);
             return `<div class="translate-dropdown-item" data-lang="${l.code}">
-                <span class="translate-dropdown-name">${this.escapeHtml(l.name)}</span>
+                <span class="translate-dropdown-name">${this.escapeHtml(this._languageNative(l.code))}${sub ? `<span class="translate-dropdown-sub">${this.escapeHtml(sub)}</span>` : ''}</span>
                 <button class="translate-dropdown-star${fav ? ' favorited' : ''}" data-fav-lang="${l.code}" title="${fav ? 'Unfavorite' : 'Favorite'}" aria-label="Favorite ${this.escapeHtml(l.name)}">${starSvg(fav)}</button>
             </div>`;
         }).join('') || `<div class="translate-dropdown-empty">No languages found</div>`;

@@ -638,7 +638,7 @@ Object.assign(NYM.prototype, {
                     <input type="text" class="translate-lang-search nm-tr-4" placeholder="Search languages...">
                     <div class="translate-lang-grid nm-tr-5">
                         <button class="translate-lang-option nm-tr-6${!current ? ' selected' : ''}" data-lang="" data-name="english default">English</button>
-                        ${languages.filter(l => l.code !== 'en').map(l => `<button class="translate-lang-option nm-tr-6${current === l.code ? ' selected' : ''}" data-lang="${l.code}" data-name="${l.name.toLowerCase()}">${this.escapeHtml(l.name)}</button>`).join('')}
+                        ${languages.filter(l => l.code !== 'en').map(l => this._languageOptionButton(l, current)).join('')}
                     </div>
                 </div>`;
 
@@ -705,7 +705,7 @@ Object.assign(NYM.prototype, {
             .filter(l => l.code !== 'en')
             .sort((a, b) => a.name.localeCompare(b.name));
         select.innerHTML = `<option value="">English (default)</option>` +
-            sorted.map(l => `<option value="${l.code}">${this.escapeHtml(l.name)}</option>`).join('');
+            sorted.map(l => `<option value="${l.code}">${this.escapeHtml(this._languageOptionLabel(l))}</option>`).join('');
         select.value = current || '';
     },
 

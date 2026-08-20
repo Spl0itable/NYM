@@ -2239,6 +2239,14 @@ div.message-input .custom-emoji {
     white-space: nowrap;
 }
 
+.translate-dropdown-sub {
+    display: block;
+    font-size: 0.78em;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .translate-dropdown-star {
     flex-shrink: 0;
     display: flex;
