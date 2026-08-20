@@ -152,7 +152,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.73.529";
+var NYMCHAT_VERSION = "3.73.530";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -2695,6 +2695,15 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Q: How do private messages and group chats work?",
   "A: PMs and group chats use Nostr's NIP-17 encryption standard (gift wraps over NIP-44 sealed rumors) for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2). Group chats use NIP-17 gift wraps with enhanced security: each message is individually encrypted using rotating ephemeral recipient keys so an observer can never correlate group membership or link messages to real identities. Groups have an owner (the creator) and optional moderators — see the group chat roles section for who can kick, ban, promote, or transfer ownership.",
   "",
+  "Q: What is the Bluetooth mesh / how do I chat with no internet?",
+  "A: Nymchat has an offline Bluetooth LE mesh. Nearby devices link directly and relay store-and-forward, so a message reaches peers beyond radio range by hopping through the devices in between — no internet, cell service, or infrastructure needed. It is wire-compatible with Bitchat, so both apps share one mesh, and each link is encrypted with a Noise XX handshake. Announcements carry a signed nostrLink so a mesh peer can be matched to its real Nostr profile. When you are online, sends take the internet route and fall back to Bluetooth automatically when it is unavailable. Available on Android, iOS, and in the web app on Chromium browsers (Chrome, Edge, Brave, Opera). A browser can only take the Bluetooth central role — it cannot advertise itself — so it joins as a leaf: you pick each nearby device once through the browser device chooser, and the phones you are linked to relay for you. The mesh controls are hidden entirely on browsers that cannot run it (Safari, Firefox).",
+  "",
+  "Q: What is Ghost Mode?",
+  "A: Ghost Mode is an opt-in anonymity mode for the Bluetooth mesh, off by default. While it is on, every identifier your device advertises — the Noise static key (which the peer ID and fingerprint derive from), the signing key, the Bluetooth name, the nickname, and the nostrLink — is replaced with a throwaway value, and all of them rotate together roughly every 15 minutes with random jitter. The nostrLink stays real but ephemeral, so peers can still reach you without anything resolving to your npub. Retired identities stay decryptable for up to 8 rotations so late replies still arrive, and a conversation started while ghosted is pinned to the mesh so replying to it later cannot leak your real key. Nothing is saved except the on/off flag, so a restart comes back ghosted under a brand new identity. Turn it on with the ghost icon on the mesh screen (mobile) or in the Mesh panel (web); a prompt explains it before it enables. It makes a device much harder to follow between places and sessions, but it is not full anonymity — the Bluetooth hardware address is controlled by the operating system, not the app, and timing and social patterns remain correlatable.",
+  "",
+  "Q: Can I make voice or video calls?",
+  "A: Yes. Nymchat supports 1:1 and group audio and video calls in private messages and group chats. Call signaling is exchanged over the same NIP-17 gift wraps as messages, and the media itself flows peer-to-peer over WebRTC, so no server sees the call.",
+  "",
   "Q: What is Lightning integration and how do zaps work?",
   "A: Nymchat integrates Lightning Network for instant Bitcoin micropayments called 'zaps.' You can tip messages you appreciate or send Bitcoin directly to users. To receive zaps, set a Lightning address in the 'Your Nym' section where you can also edit avatar and bio (format: user@domain.com). To send a zap, click a user's nym and select 'Zap Bitcoin' or use /zap @nym. Preset amounts: 100, 500, 1000, 5000 sats, or custom amount with optional comment. Zaps are displayed in real-time on messages.",
   "",
@@ -2854,6 +2863,37 @@ var NYMBOT_SYSTEM_PROMPT = [
   "MOD LOG: Each group keeps a local rolling log of the last 50 moderation actions (kick, ban, unban, promote, revoke, transfer, delete-message) for owner/mod reference.",
   "EVENT TAGS: Moderation rumors use a 'type' tag — group-invite, group-add-member, group-remove-member (with optional 'ban' marker), group-unban, group-promote-mod, group-revoke-mod, group-transfer-owner, group-delete-message, group-leave. Nymbot itself cannot be added to group chats.",
   "",
+  "=== BLUETOOTH MESH (offline messaging) ===",
+  "Nymchat carries public channels and private messages over a Bluetooth LE mesh when there is no internet. Devices link directly and relay store-and-forward, so a message hops through the devices between you and a peer out of radio range.",
+  "Wire-compatible with Bitchat: both apps share one mesh. Each peer link runs a Noise XX handshake (X25519 + ChaCha20-Poly1305 + SHA-256) for an encrypted session; packets are padded to fixed block sizes so an eavesdropper cannot read message length off the air, and oversized packets are fragmented and reassembled.",
+  "Identity on the mesh: a device advertises a peer ID derived from its Noise static key, plus a signed announcement carrying its nickname and keys. Nymchat adds a nostrLink — a signature by the Nostr key binding it to the mesh key — so a mesh peer can be matched to its real Nostr profile and cannot be spoofed.",
+  "Transport choice is automatic: online sends go over the internet, and fall back to Bluetooth when it is unavailable. A peer reachable only over the radio stays on the mesh either way.",
+  "Platforms: Android, iOS, and the web app on Chromium browsers (Chrome, Edge, Brave, Opera). A browser can only take the Bluetooth CENTRAL role — it cannot advertise itself — so it joins as a leaf node: the user picks each nearby device once through the browser own device chooser, it reconnects automatically afterwards, and the phones it is linked to relay for it. Two browsers cannot link to each other directly. On Safari and Firefox the mesh feature is hidden entirely because those browsers have no Web Bluetooth.",
+  "Where to find it: the mesh screen on mobile, and the Mesh button in the sidebar on the web (only shown when the browser supports it).",
+  "",
+  "=== GHOST MODE (mesh anonymity) ===",
+  "Opt-in, off by default, and only affects the Bluetooth mesh — it changes nothing about how internet messages work.",
+  "While on, every identifier an announcement carries is replaced with a throwaway value and all of them rotate TOGETHER on a jittered ~15 minute epoch: the Noise static key (so the peer ID and fingerprint change), the signing key, the advertised Bluetooth name, the nickname (shown as ghost#xxxx), and the nostrLink. Rotating only some of them would be pointless, since a tracker would just follow whichever one stayed put.",
+  "The nostrLink stays real but ephemeral, so peers can still reach the device — nothing in the announcement resolves to the user npub.",
+  "Retired identities stay decryptable for up to 8 rotations so a late reply still arrives. A conversation started while ghosted is pinned to the mesh, because replying to it over the internet would sign with the real key. Avatar and banner sharing is refused while active, since a repeated image relinks two epochs faster than any key.",
+  "Nothing is persisted except the on/off flag: a restart comes back ghosted under a BRAND NEW identity, never the previous one.",
+  "How to toggle: the ghost icon next to the mesh enable/disable control (mobile) or in the Mesh panel (web). A prompt explains what it does before it turns on; clicking it again turns it off and restores the normal identity.",
+  "Honest limits: it makes a device much harder to follow across places and sessions, but it is NOT full anonymity. The Bluetooth hardware address is controlled by the operating system rather than the app, and timing and social patterns remain correlatable.",
+  "",
+  "=== VOICE & VIDEO CALLS ===",
+  "1:1 and group audio/video calls are supported in private messages and group chats. Call signaling rides the same NIP-17 gift wraps as messages, and the media flows peer-to-peer over WebRTC, so no server carries the call.",
+  "",
+  "=== OTHER FEATURES ===",
+  "Login options: a NIP-07 browser extension (Alby, nos2x), a NIP-46 remote signer (Amber, nsecbunker), or pasting an nsec.",
+  "Non-geohash named channels use kind 23333 alongside the kind 20000 geohash channels; both appear in the sidebar and can be favorited to the top.",
+  "Group invite links: optional and off by default. The owner enables Allow joining via invite link from the group context menu, after which the link appears there. Reset Invite Link revokes every link shared so far.",
+  "Group history sharing: an owner-controlled option (off by default) that gives newly added members up to the last 50 messages. Forwarded messages are marked unverified because the original authors signatures cannot be re-checked.",
+  "Group key resync: a client returning after a long offline gap re-exchanges current ephemeral keys with each group, so missed rotations cannot leave members unable to decrypt.",
+  "Custom emoji: NIP-30 emoji packs are discovered and rendered.",
+  "Large file transfers use WebTorrent alongside the direct WebRTC data-channel path.",
+  "Warrant canary: a signed canary is published and verified in-app. Green means signed, current, and no secret request received; yellow means the canary was not refreshed by its due date or is no longer all-clear; red means the signature does not match the developer key or the canary is gone.",
+  "Reproducible builds: every deployed bundle is built deterministically and its hash is attested, so anyone can confirm the running code matches this repository.",
+  "",
   "=== THEMES & APPEARANCE (in Settings > Theme & Appearance) ===",
   "Themes: bitchat (Bitcoin orange, default), ghost (monochrome), matrix (green), cyber (magenta/cyan), amber (gold/orange), hacker (cyan/green).",
   "Color mode: auto (follows system), light, or dark. Each theme has light and dark variants.",
@@ -2986,7 +3026,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.73.529 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.73.530 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3016,7 +3056,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Do NOT claim Nymchat has integrations, plugins, bots, or capabilities beyond what is listed here.",
   "- NEVER associate or connect general words, slang, or pop culture terms with Nymchat features. For example, if someone asks 'what are baddies', answer with the general/slang meaning — do NOT invent a Nymchat feature called 'Baddies'.",
   "- When asked about channel conversations, NEVER claim you don't have access to messages or can't see what's being discussed. If channel messages are in your context, USE them. Read the actual content and summarize specifically.",
-  "- The ONLY nickname flair items are: crown, diamond, skull, star, lightning, heart, fawkes (mask), rocket, shield. The ONLY message styles are: satoshi, glitch, aurora, neon, ghost, matrix, fire, ice, rainbow. The ONLY special items are: supporter badge, gold aura, redacted. NEVER reference shop items not in this list.",
+  "- The ONLY shop items are the ones listed in the FLAIR & SHOP section above (18 nickname flair badges, 18 message styles, 9 special items including 3 legendary, 3 limited numbered editions, and 3 bundles). NEVER reference a shop item that is not in that section.",
   "",
   "=== WEB SEARCH ===",
   "You have access to live web search. When web search results are provided in your context, USE them to give accurate, up-to-date answers. Answer naturally using the data without mentioning 'search results' or 'according to my search'.",
@@ -3146,6 +3186,11 @@ function sanitizeBotResponse(text, keepThinking) {
 
 var MAX_CONVERSATION_HISTORY = 20;
 
+// Ceiling on the channel-context block handed to the model, in characters
+// (~4 chars/token). Trimmed newest-first so the most recent conversation
+// always survives.
+var BOT_CHANNEL_CONTEXT_MAX_CHARS = 24000;
+
 // Decode a geohash to its center lat/lng plus an approximate cell radius.
 // Returns null for invalid or non-geohash channels (custom channel names).
 function decodeGeohash(geohash) {
@@ -3222,7 +3267,9 @@ function buildChannelContext(channelMessages, activeUsers) {
   if (allUsers.length > 0) {
     var userLines = allUsers.slice(0, 50).map(function(u) {
       var line = u.nym || "nym";
-      if (u.pubkey) line += " (pubkey: " + u.pubkey + ")";
+      // The 4-hex suffix is what a nym is addressed by; the full 64-hex pubkey
+      // was ~3k chars of context the model has no use for.
+      if (u.pubkey) line += "#" + String(u.pubkey).slice(-4);
       if (u.flair) line += " [flair: " + u.flair + "]";
       if (u.style) line += " [style: " + u.style + "]";
       return line;
@@ -3271,11 +3318,22 @@ function buildChannelContext(channelMessages, activeUsers) {
       msgLines.push(prefix + author + ": " + text);
     }
     if (msgLines.length > 0) {
+      // Total budget, newest-first. Per-message generosity is fine on a normal
+      // channel, but 100 long messages is ~27k tokens of input on its own —
+      // enough to overrun the model's context on a busy one.
+      var budget = BOT_CHANNEL_CONTEXT_MAX_CHARS;
+      var kept = [];
+      for (var k = msgLines.length - 1; k >= 0; k--) {
+        var lineLen = msgLines[k].length + 1;
+        if (budget - lineLen < 0 && kept.length > 0) break;
+        budget -= lineLen;
+        kept.unshift(msgLines[k]);
+      }
       // Always label which channel(s) the messages are from
       var channelLabel = channelNames.length > 0
         ? "Recent messages from #" + channelNames.join(", #") + ":"
         : "Recent messages:";
-      parts.push(channelLabel + "\n" + msgLines.join("\n"));
+      parts.push(channelLabel + "\n" + kept.join("\n"));
     }
   }
   return parts.length > 0 ? parts.join("\n\n") : "";
@@ -3843,7 +3901,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.73.529")
+  // Prefix match (e.g. "3.61" matches "3.73.530")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3898,7 +3956,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.73.529", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.73.530", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

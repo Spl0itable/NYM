@@ -679,12 +679,76 @@ Object.assign(NYM.prototype, {
         if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
+    UNFURL_TTL_MS: 7 * 24 * 60 * 60 * 1000,
+    UNFURL_MISS_TTL_MS: 60 * 60 * 1000,
+    UNFURL_CACHE_MAX: 200,
+
+    // Restore the unfurl cache from disk so previews seen in an earlier session
+    // don't refetch on the next load.
+    _loadUnfurlCache() {
+        if (this._unfurlCacheLoaded) return;
+        this._unfurlCacheLoaded = true;
+        if (!this._unfurlCache) this._unfurlCache = new Map();
+        try {
+            const raw = localStorage.getItem('nym_unfurl_cache');
+            if (!raw) return;
+            const now = Date.now();
+            for (const [url, entry] of Object.entries(JSON.parse(raw) || {})) {
+                if (!entry || typeof entry.at !== 'number') continue;
+                const ttl = entry.data ? this.UNFURL_TTL_MS : this.UNFURL_MISS_TTL_MS;
+                if (now - entry.at > ttl) continue;
+                this._unfurlCache.set(url, entry);
+            }
+        } catch (_) { }
+    },
+
+    _saveUnfurlCache() {
+        if (this._unfurlSaveTimer) return;
+        this._unfurlSaveTimer = setTimeout(() => {
+            this._unfurlSaveTimer = null;
+            try {
+                const out = {};
+                for (const [url, entry] of this._unfurlCache) {
+                    if (entry && entry.data) out[url] = entry;
+                }
+                localStorage.setItem('nym_unfurl_cache', JSON.stringify(out));
+            } catch (_) { }
+        }, 2000);
+    },
+
+    _cacheUnfurl(url, data) {
+        this._unfurlCache.set(url, { at: Date.now(), data: data || null });
+        while (this._unfurlCache.size > this.UNFURL_CACHE_MAX) {
+            this._unfurlCache.delete(this._unfurlCache.keys().next().value);
+        }
+        this._saveUnfurlCache();
+        return data || null;
+    },
+
     // Unfurl a URL and return Open Graph metadata.
     // Uses CF proxy when available; falls back to direct fetch (may be blocked by CORS).
-    async unfurlUrl(url) {
-        // Check cache first
-        if (this._unfurlCache.has(url)) return this._unfurlCache.get(url);
+    // Results (including misses) are cached and persisted; concurrent callers for
+    // the same URL share one request.
+    unfurlUrl(url) {
+        this._loadUnfurlCache();
+        const hit = this._unfurlCache.get(url);
+        if (hit) {
+            const ttl = hit.data ? this.UNFURL_TTL_MS : this.UNFURL_MISS_TTL_MS;
+            if (Date.now() - hit.at <= ttl) return Promise.resolve(hit.data);
+            this._unfurlCache.delete(url);
+        }
+        if (!this._unfurlInflight) this._unfurlInflight = new Map();
+        const pending = this._unfurlInflight.get(url);
+        if (pending) return pending;
+        const p = this._unfurlFetch(url)
+            .then(data => this._cacheUnfurl(url, data))
+            .catch(() => this._cacheUnfurl(url, null))
+            .finally(() => this._unfurlInflight.delete(url));
+        this._unfurlInflight.set(url, p);
+        return p;
+    },
 
+    async _unfurlFetch(url) {
         try {
             let data;
             const base = this._getProxyBaseUrl();
@@ -720,14 +784,6 @@ Object.assign(NYM.prototype, {
                 data = this._extractOpenGraph(html, url);
             }
             if (!data || data.error) return null;
-
-            // Cache result
-            this._unfurlCache.set(url, data);
-            // Trim cache to max 200 entries
-            if (this._unfurlCache.size > 200) {
-                const first = this._unfurlCache.keys().next().value;
-                this._unfurlCache.delete(first);
-            }
             return data;
         } catch {
             return null;
@@ -748,19 +804,18 @@ Object.assign(NYM.prototype, {
         const title = get('title') || (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
         const description = get('description')
             || (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) || [])[1] || '';
-        let image = get('image') || '';
-        if (image && !image.startsWith('http')) {
-            try { image = new URL(image, pageUrl).href; } catch { image = ''; }
-        }
-        let favicon = '';
+        // The page controls these, so resolve then re-check the scheme.
+        const resolveHttp = (raw) => {
+            if (!raw) return '';
+            try {
+                const u = new URL(raw, pageUrl);
+                return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : '';
+            } catch { return ''; }
+        };
+        const image = resolveHttp(get('image'));
         const favMatch = html.match(/<link[^>]+rel=["'](?:icon|shortcut icon)["'][^>]+href=["']([^"']+)["']/i)
             || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:icon|shortcut icon)["']/i);
-        if (favMatch) {
-            favicon = favMatch[1];
-            if (!favicon.startsWith('http')) {
-                try { favicon = new URL(favicon, pageUrl).href; } catch { favicon = ''; }
-            }
-        }
+        const favicon = favMatch ? resolveHttp(favMatch[1]) : '';
         const decode = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
         return {
             url: pageUrl,
@@ -777,12 +832,16 @@ Object.assign(NYM.prototype, {
     _renderLinkPreview(meta) {
         if (!meta || (!meta.title && !meta.description)) return '';
 
-        const imageHtml = meta.image
-            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.image))}" class="link-preview-image" decoding="async" loading="lazy" data-error-action="errorHideElement">`
+        // The unfurled page controls these, and a cached entry may predate the
+        // extractor's scheme check, so re-guard here.
+        const imageSrc = this.safeUrl(meta.image);
+        const imageHtml = imageSrc
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(imageSrc))}" class="link-preview-image" decoding="async" loading="lazy" data-error-action="errorHideElement">`
             : '';
 
-        const faviconHtml = meta.favicon
-            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(meta.favicon))}" class="link-preview-favicon" decoding="async" loading="lazy" data-error-action="errorHideElement">`
+        const faviconSrc = this.safeUrl(meta.favicon);
+        const faviconHtml = faviconSrc
+            ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(faviconSrc))}" class="link-preview-favicon" decoding="async" loading="lazy" data-error-action="errorHideElement">`
             : '';
 
         const siteNameHtml = meta.siteName
@@ -792,7 +851,10 @@ Object.assign(NYM.prototype, {
         let host = '';
         try { host = new URL(meta.url).hostname; } catch { }
 
-        return `<a href="${this.escapeHtml(meta.url)}" target="_blank" rel="noopener" class="link-preview" data-action="stopPropagation">
+        const safeHref = this.escapeHtml(this.safeUrl(meta.url));
+        if (!safeHref) return '';
+
+        return `<a href="${safeHref}" target="_blank" rel="noopener" class="link-preview" data-action="stopPropagation">
             ${imageHtml}
             <div class="link-preview-text">
                 ${siteNameHtml || `<span class="link-preview-site">${this.escapeHtml(host)}</span>`}
@@ -802,31 +864,48 @@ Object.assign(NYM.prototype, {
         </a>`;
     },
 
-    // After a message is rendered, find URLs in it and attach link previews
-    async _attachLinkPreviews(messageEl) {
+    // After a message is rendered, find URLs in it and attach link previews.
+    // Re-entering a channel rebuilds the row, so this runs again on the same
+    // message: it is idempotent, deduplicates repeated hrefs, and paints
+    // straight from the cache when warm so a seen preview doesn't flash.
+    _attachLinkPreviews(messageEl) {
+        if (messageEl.dataset.previewsAttached === '1') return;
         const links = messageEl.querySelectorAll('.message-content a[href^="http"]');
         if (links.length === 0) return;
+        const container = messageEl.querySelector('.message-content');
+        if (!container) return;
+        messageEl.dataset.previewsAttached = '1';
 
-        // Unfurl all links in the message
-        const linksToUnfurl = Array.from(links);
-        for (const link of linksToUnfurl) {
+        const seen = new Set();
+        const hrefs = [];
+        for (const link of links) {
             const href = link.getAttribute('href');
+            if (!href || seen.has(href)) continue;
             // Skip media URLs (already embedded as inline images/videos)
             if (/\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$/i.test(href)) continue;
+            seen.add(href);
+            hrefs.push(href);
+        }
+        if (hrefs.length === 0) return;
 
-            const meta = await this.unfurlUrl(href);
-            if (meta && (meta.title || meta.description)) {
-                const previewHtml = this._renderLinkPreview(meta);
-                if (previewHtml) {
-                    const container = messageEl.querySelector('.message-content');
-                    if (container) {
-                        const previewEl = document.createElement('div');
-                        previewEl.className = 'link-preview-container';
-                        previewEl.innerHTML = previewHtml;
-                        container.appendChild(previewEl);
-                    }
-                }
+        const paint = (meta) => {
+            if (!meta || (!meta.title && !meta.description)) return;
+            const html = this._renderLinkPreview(meta);
+            if (!html || !container.isConnected) return;
+            const el = document.createElement('div');
+            el.className = 'link-preview-container';
+            el.innerHTML = html;
+            container.appendChild(el);
+        };
+
+        this._loadUnfurlCache();
+        for (const href of hrefs) {
+            const hit = this._unfurlCache.get(href);
+            if (hit && Date.now() - hit.at <= (hit.data ? this.UNFURL_TTL_MS : this.UNFURL_MISS_TTL_MS)) {
+                paint(hit.data);
+                continue;
             }
+            this.unfurlUrl(href).then(paint).catch(() => { });
         }
     },
 

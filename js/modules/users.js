@@ -2068,6 +2068,14 @@ Object.assign(NYM.prototype, {
         return String(text).replace(/[&<>"']/g, m => map[m]);
     },
 
+    // Scheme guard for anything that becomes an href or an external open.
+    safeUrl(url) {
+        const F = window.NymFormat;
+        if (F && typeof F.safeUrl === 'function') return F.safeUrl(url);
+        if (typeof url !== 'string') return '';
+        return /^https?:\/\//i.test(url.replace(/[\u0000-\u0020]/g, '')) ? url : '';
+    },
+
     _safePubkey(pk) {
         if (typeof pk !== 'string') return '';
         return /^[0-9a-f]{64}$/i.test(pk) ? pk.toLowerCase() : '';

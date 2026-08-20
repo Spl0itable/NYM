@@ -446,6 +446,10 @@
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     <span class="btn-label">Settings</span>
                 </button>
+                <button class="icon-btn nm-hidden" id="meshSidebarBtn" data-action="openMeshPanel" title="Bluetooth mesh">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 7 10 10-5 5V2l5 5L7 17"></path></svg>
+                    <span class="btn-label">Mesh</span>
+                </button>
                 <button class="icon-btn" data-action="showAboutAndCloseSidebar" title="About">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                     <span class="btn-label">About</span>
@@ -1035,6 +1039,18 @@
     </div>
 
     <!-- Relay Stats Modal -->
+    <div class="modal" id="meshModal">
+        <div class="modal-content mesh-content">
+            <button class="modal-close" data-action="closeModal" data-modal-id="meshModal">&#x2715;</button>
+            <div class="modal-header">Bluetooth Mesh</div>
+            <div class="modal-body">
+                <div id="meshPanelBody"></div>
+                <div class="mesh-section-title">Radio log</div>
+                <pre class="mesh-log" id="meshLogBody"></pre>
+            </div>
+        </div>
+    </div>
+
     <div class="modal" id="relayStatsModal">
         <div class="modal-content relay-stats-content">
             <button class="modal-close" data-action="closeModal" data-modal-id="relayStatsModal">&#x2715;</button>
@@ -2359,10 +2375,15 @@
     <script defer src="js/modules/channels.js"></script>
     <script defer src="js/modules/syntax-highlight.js"></script>
     <script defer src="js/modules/message-format.js"></script>
+    <script defer src="js/modules/mesh/mesh-protocol.js"></script>
+    <script defer src="js/modules/mesh/mesh-crypto.js"></script>
+    <script defer src="js/modules/mesh/mesh-transport.js"></script>
+    <script defer src="js/modules/mesh/mesh-service.js"></script>
     <script defer src="js/modules/messages.js"></script>
     <script defer src="js/modules/pms.js"></script>
     <script defer src="js/modules/groups.js"></script>
     <script defer src="js/modules/ui-context.js"></script>
+    <script defer src="js/modules/mesh/mesh-ui.js"></script>
     <script defer src="js/modules/init.js"></script>
     <script defer src="js/modules/emoji.js"></script>
     <script defer src="js/modules/reactions.js"></script>

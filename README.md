@@ -58,11 +58,15 @@ The web app is served as static files plus a set of Cloudflare Pages Functions u
 - **Image and Video Sharing**: Upload and share images or video.
 - **Peer-to-Peer File Sharing**: Send files directly over WebRTC data channels, with WebTorrent for larger transfers.
 
-### Bluetooth Mesh (Android and iOS)
+### Bluetooth Mesh (Android, iOS, and Chromium browsers)
 - **Offline Messaging**: A Bluetooth LE mesh carries public channels and private messages with no internet, cell service, or infrastructure. Nearby devices link directly and relay store-and-forward, so a message reaches peers beyond radio range by hopping through the devices between.
 - **Bitchat Bridged**: Wire-compatible with Bitchat, so both apps share one mesh. Noise XX handshakes give per-peer encrypted sessions; announces carry a `nostrLink` so a mesh peer can be matched to its real Nostr identity.
 - **Automatic Transport**: Online sends take the internet route and fall back to Bluetooth when it is unavailable. Peers reachable only over the radio stay on the mesh either way.
 - **Ghost Mode**: An opt-in "anonymity mode" for the mesh. Every identifier an announce carries — the Noise static key (which the peer ID and fingerprint derive from), the Ed25519 signing key, the advertised Bluetooth name, the nickname, and the `nostrLink` — is replaced with a throwaway value and rotated together on a jittered ~15 minute epoch. The `nostrLink` stays real but ephemeral, so peers can still reach the device without anything resolving to the user's npub. Avatar and banner sharing is refused while active, since a repeated image relinks two epochs faster than any key. Retired identities stay decryptable for up to 8 rotations so late replies still arrive, and a conversation started while ghosted is pinned to the mesh for good.
+
+- **Web Bluetooth**: The PWA joins the same mesh from a laptop or desktop on a Chromium browser (Chrome, Edge, Opera, Brave). The wire format is identical to the mobile apps and Bitchat — the same packets, Noise XX sessions, padding, fragmentation and Ghost Mode. The mesh controls are hidden entirely on browsers that cannot run it (Safari, Firefox).
+
+> A browser can only take the Bluetooth central role: it cannot advertise itself, so it joins as a leaf rather than a full peer. You pick each nearby device once through the browser's own device chooser, after which it reconnects on its own; the phones you are linked to relay for you. Two browsers cannot link to each other directly.
 
 > Ghost Mode makes a device much harder to follow across places and sessions. It is not fully anonymous: the Bluetooth hardware address is controlled by the operating system rather than the app, and timing and social patterns remain correlatable.
 

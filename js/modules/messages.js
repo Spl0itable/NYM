@@ -2350,7 +2350,9 @@ Object.assign(NYM.prototype, {
 
         if (!content && !this.pendingQuote) return;
 
-        if (!this.connected) {
+        const meshOnly = typeof this.meshShouldCarry === 'function' &&
+            this.meshShouldCarry(this.currentGeohash || this.currentChannel);
+        if (!this.connected && !meshOnly) {
             this.displaySystemMessage('Not connected to relay. Please wait...');
             return;
         }
@@ -2412,8 +2414,13 @@ Object.assign(NYM.prototype, {
                 // Send 1:1 PM
                 await this.sendPM(content, this.currentPM);
             } else if (this.currentGeohash) {
-                // Send to geohash channel (kind 20000)
-                await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData);
+                // The Bluetooth mesh carries #mesh always, and any channel when
+                // the internet route is down.
+                if (meshOnly) {
+                    await this._sendChannelOverMesh(content, this.currentGeohash);
+                } else {
+                    await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData);
+                }
                 // Check for bot commands (? prefix or @Nymbot mention)
                 // Use rawInput for trigger detection since quote prepend may hide the prefix
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);

@@ -11,6 +11,12 @@
         return String(text).replace(/[&<>"']/g, m => ESC[m]);
     }
 
+    function safeUrl(url) {
+        if (typeof url !== 'string') return '';
+        const trimmed = url.replace(/[\u0000-\u0020\u00a0\u1680\u2000-\u200d\u2028\u2029\u202f\u205f\u3000\ufeff]/g, '');
+        return /^https?:\/\//i.test(trimmed) ? url : '';
+    }
+
     function proxied(url, base) {
         if (!base) return url;
         return `${base}?url=${encodeURIComponent(url)}`;
@@ -234,7 +240,10 @@
 
         formatted = formatted.replace(
             /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
-            '<a href="$1" target="_blank" rel="noopener">$1</a>'
+            (match, url) => {
+                const safe = safeUrl(url);
+                return safe ? `<a href="${safe}" target="_blank" rel="noopener">${url}</a>` : match;
+            }
         );
 
         formatted = formatted.replace(
@@ -441,5 +450,5 @@
         return out;
     }
 
-    G.NymFormat = { format, formatWithQuotes, extractQuoteAuthors, extractMentions };
+    G.NymFormat = { format, formatWithQuotes, extractQuoteAuthors, extractMentions, safeUrl };
 })();

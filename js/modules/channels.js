@@ -1150,6 +1150,74 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     /// Nominatim's documented rate limit, plus a little headroom. Applies to
     /// the direct-to-Nominatim fallback, where this browser is the API client.
     _GEO_PLACE_MIN_INTERVAL_MS: 1100,
+    _GEO_PLACE_RETRY_BASE_MS: 45 * 1000,
+    _GEO_PLACE_RETRY_MAX_MS: 30 * 60 * 1000,
+    _GEO_PLACE_MAX_ATTEMPTS: 4,
+
+    // When a miss may be retried again.
+    _geoPlaceRetryAt(key) {
+        const miss = this._geoPlaceMisses && this._geoPlaceMisses.get(key);
+        if (!miss) return 0;
+        if (miss.attempts >= this._GEO_PLACE_MAX_ATTEMPTS) return Infinity;
+        const backoff = Math.min(
+            this._GEO_PLACE_RETRY_MAX_MS,
+            this._GEO_PLACE_RETRY_BASE_MS * Math.pow(3, miss.attempts - 1));
+        return miss.at + backoff;
+    },
+
+    _geoPlaceNoteMiss(key) {
+        if (!this._geoPlaceMisses) this._geoPlaceMisses = new Map();
+        const prev = this._geoPlaceMisses.get(key);
+        this._geoPlaceMisses.set(key, { at: Date.now(), attempts: (prev ? prev.attempts : 0) + 1 });
+        if (!this._geoPlacePending) this._geoPlacePending = new Set();
+        this._geoPlacePending.add(key);
+        this._scheduleGeoPlaceSweep();
+    },
+
+    // Re-resolves rows still showing a fallback and repaints them in place.
+    // Without this nothing ever re-triggers a lookup, so a row that lost the
+    // race once kept its coordinates until the sidebar happened to rebuild.
+    _scheduleGeoPlaceSweep() {
+        if (this._geoPlaceSweepTimer || !this._geoPlacePending || this._geoPlacePending.size === 0) return;
+        this._geoPlaceSweepTimer = setTimeout(() => {
+            this._geoPlaceSweepTimer = null;
+            this.refreshUnresolvedPlaces();
+            this._scheduleGeoPlaceSweep();
+        }, this._GEO_PLACE_RETRY_BASE_MS);
+    },
+
+    refreshUnresolvedPlaces(force) {
+        const pending = this._geoPlacePending;
+        if (!pending || pending.size === 0) return;
+        const cache = this._loadGeohashPlaceCache();
+        const now = Date.now();
+        for (const key of [...pending]) {
+            if (cache.has(key)) { pending.delete(key); continue; }
+            const retryAt = this._geoPlaceRetryAt(key);
+            if (retryAt === Infinity) {
+                // Give up only on the automatic sweep; an explicit retry (the
+                // user reopening the app) still gets one more chance.
+                if (!force) { pending.delete(key); continue; }
+                this._geoPlaceMisses.delete(key);
+            } else if (now < retryAt && !force) {
+                continue;
+            }
+            this._resolveGeohashPlaceName(key)
+                .then(place => { if (place) this._paintPlaceEverywhere(key, place); })
+                .catch(() => { });
+        }
+    },
+
+    // Updates every surface showing this geohash: its sidebar row and, when it
+    // is the open channel, the header.
+    _paintPlaceEverywhere(key, place) {
+        document.querySelectorAll(`.channel-item[data-geohash="${CSS.escape(key)}"] .channel-sub`)
+            .forEach(el => this._fillLocationParts(el, place));
+        if (String(this.currentGeohash || '').toLowerCase() === key) {
+            const link = document.querySelector('.channel-location-link');
+            if (link) this._fillLocationParts(link, place);
+        }
+    },
     /// Lookups allowed in flight at once when going through our proxy, which
     /// edge-caches for a day and is itself Nominatim's client. Keeps a sidebar
     /// full of geohashes resolving in a couple of round trips instead of one
@@ -1199,7 +1267,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!key) return 'Unknown location';
         const cache = this._loadGeohashPlaceCache();
         if (cache.has(key)) return cache.get(key);
-        if (this._geoPlaceUnnamed && this._geoPlaceUnnamed.has(key)) {
+        // A recorded miss short-circuits only while its backoff is unexpired.
+        if (Date.now() < this._geoPlaceRetryAt(key)) {
             return this.getGeohashLocation(geohash) || '';
         }
 
@@ -1225,16 +1294,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // showed the real one. Fall back to the decoded coordinates and
                 // let a later attempt still find a name.
                 if (!place) {
-                    if (!this._geoPlaceUnnamed) this._geoPlaceUnnamed = new Set();
-                    this._geoPlaceUnnamed.add(key);
+                    this._geoPlaceNoteMiss(key);
                     return this.getGeohashLocation(geohash) || '';
                 }
                 cache.set(key, place);
                 this._saveGeohashPlaceCache();
+                if (this._geoPlaceMisses) this._geoPlaceMisses.delete(key);
+                if (this._geoPlacePending) this._geoPlacePending.delete(key);
                 return place;
             })
             .catch(err => {
                 this._geoPlaceInflight.delete(key);
+                // A hard failure is a miss too, so it earns a retry instead of
+                // leaving the row with nothing to trigger another attempt.
+                this._geoPlaceNoteMiss(key);
                 throw err;
             });
         this._geoPlaceInflight.set(key, p);

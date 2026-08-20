@@ -5485,3 +5485,165 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
 .group-avatar-wrap.group-img-fallback { justify-content: center; }
 .group-avatar-wrap.group-img-fallback svg { width: 22px; height: 22px; }
 .group-header-custom-wrap.group-img-fallback svg { width: 18px; height: 18px; vertical-align: middle; }
+
+.mesh-content {
+    max-width: 520px;
+}
+
+.mesh-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 0 14px;
+}
+
+.mesh-status-dot,
+.mesh-link-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex: 0 0 auto;
+}
+
+.mesh-status-dot.on,
+.mesh-link-dot.up {
+    background: var(--primary);
+    box-shadow: 0 0 8px rgb(from var(--primary) r g b / 0.6);
+}
+
+.mesh-status-dot.off,
+.mesh-link-dot.down {
+    background: var(--danger);
+}
+
+.mesh-status-text {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.mesh-self {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.mesh-toggle,
+.mesh-add,
+.mesh-forget {
+    background: rgb(from var(--primary) r g b / 0.1);
+    border: 1px solid rgb(from var(--primary) r g b / 0.3);
+    color: var(--text);
+    border-radius: var(--radius-xs);
+    padding: 5px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.mesh-toggle {
+    margin-left: auto;
+}
+
+.mesh-forget {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text-dim);
+    margin-left: auto;
+}
+
+.mesh-toggle:hover,
+.mesh-add:hover,
+.mesh-forget:hover {
+    background: rgb(from var(--primary) r g b / 0.18);
+}
+
+.mesh-ghost {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    line-height: 0;
+    cursor: pointer;
+    color: var(--text-dim);
+}
+
+.mesh-ghost.on {
+    color: var(--primary);
+}
+
+.mesh-ghost:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.mesh-note {
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0 0 14px;
+}
+
+.mesh-section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    margin-top: 4px;
+    margin-bottom: 8px;
+}
+
+.mesh-section-title .mesh-add {
+    margin-left: auto;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.mesh-peer,
+.mesh-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
+    border-bottom: 1px solid rgb(from var(--border) r g b / 0.5);
+}
+
+.mesh-peer-name,
+.mesh-link-name {
+    color: var(--text);
+    font-size: 13px;
+}
+
+.mesh-peer-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+}
+
+.mesh-empty {
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 6px 0 10px;
+}
+
+.mesh-log {
+    max-height: 160px;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    padding: 10px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

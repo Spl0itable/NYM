@@ -731,24 +731,14 @@ function extractOpenGraph(html, pageUrl) {
   const siteName = get('site_name') || '';
   const type = get('type') || '';
 
-  // Resolve relative image URLs
-  let resolvedImage = image;
-  if (image && !image.startsWith('http')) {
-    try {
-      resolvedImage = new URL(image, pageUrl).href;
-    } catch { resolvedImage = ''; }
-  }
+  // Resolve relative image URLs. The page controls these strings, so the
+  // result is re-checked: only http(s) survives, never javascript:/data:.
+  const resolvedImage = resolveHttpUrl(image, pageUrl);
 
   // Extract favicon
-  let favicon = '';
   const faviconMatch = html.match(/<link[^>]+rel=["'](?:icon|shortcut icon)["'][^>]+href=["']([^"']+)["']/i)
     || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:icon|shortcut icon)["']/i);
-  if (faviconMatch) {
-    favicon = faviconMatch[1];
-    if (!favicon.startsWith('http')) {
-      try { favicon = new URL(favicon, pageUrl).href; } catch { favicon = ''; }
-    }
-  }
+  const favicon = faviconMatch ? resolveHttpUrl(faviconMatch[1], pageUrl) : '';
 
   return {
     url: pageUrl,
@@ -759,6 +749,16 @@ function extractOpenGraph(html, pageUrl) {
     type,
     favicon,
   };
+}
+
+// Resolve a page-supplied URL against the page and keep it only if it is
+// http(s). Anything else is dropped rather than handed to a client.
+function resolveHttpUrl(raw, pageUrl) {
+  if (!raw) return '';
+  try {
+    const u = new URL(raw, pageUrl);
+    return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : '';
+  } catch { return ''; }
 }
 
 function decodeEntities(str) {

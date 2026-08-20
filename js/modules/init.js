@@ -76,6 +76,15 @@ Object.assign(NYM.prototype, {
             this.loadHiddenChannels();
             this.loadWallpaper();
             if (typeof this._hydrateUnreadCounts === 'function') this._hydrateUnreadCounts();
+            if (typeof this.initMeshUI === 'function') this.initMeshUI();
+            // Coming back to the app is the natural moment to retry a place
+            // name that failed earlier, including ones the sweep gave up on.
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' &&
+                    typeof this.refreshUnresolvedPlaces === 'function') {
+                    this.refreshUnresolvedPlaces(true);
+                }
+            });
             applyMessageLayout(this.settings.chatLayout);
 
             // Column view: paint placeholder columns now so the strip isn't blank

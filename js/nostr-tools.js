@@ -6341,6 +6341,7 @@ var NostrTools = (() => {
     // Expose internal crypto for Bitchat compatibility
     nostr_tools_exports._secp256k1 = secp256k1;
     nostr_tools_exports._xchacha20poly1305 = xchacha20poly1305;
+    nostr_tools_exports._chacha20poly1305 = chacha20poly1305;
     nostr_tools_exports._sha256 = sha2562;
     nostr_tools_exports._hkdfExtract = extract;
     nostr_tools_exports._hkdfExpand = expand;
