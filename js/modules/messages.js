@@ -807,8 +807,13 @@ Object.assign(NYM.prototype, {
             } else {
                 formattedContent = this.formatMessageWithQuotes(message.content);
             }
-            if (message.thinking && (message.isBot || this.isVerifiedBot(message.pubkey))) {
-                formattedContent = this._renderBotThinkingHtml(message.thinking) + formattedContent;
+            if (message.isBot || this.isVerifiedBot(message.pubkey)) {
+                // Nymbot answers with canonical command names; show them in the
+                // vocabulary this client actually accepts.
+                formattedContent = this.localizeCommandTokensIn(formattedContent);
+                if (message.thinking) {
+                    formattedContent = this._renderBotThinkingHtml(message.thinking) + formattedContent;
+                }
             }
 
             const baseNym = this.parseNymFromDisplay(message.author);
@@ -1541,10 +1546,11 @@ Object.assign(NYM.prototype, {
             || document.getElementById('messagesContainer');
         const messageEl = document.createElement('div');
         messageEl.className = type === 'action' ? 'action-message' : 'system-message';
+        const shown = this.localizeCommandTokensIn(content);
         if (html) {
-            messageEl.innerHTML = content;
+            messageEl.innerHTML = shown;
         } else {
-            messageEl.textContent = content;
+            messageEl.textContent = shown;
         }
         container.appendChild(messageEl);
 

@@ -395,6 +395,7 @@ Object.assign(NYM.prototype, {
 
         document.documentElement.setAttribute('lang', lang);
         this._i18nLoadCache(lang);
+        this.cmdI18nEnsure();
         // Start the observer first so any UI rendered while we translate (e.g.
         // the tutorial) is captured and prioritized.
         this._i18nStartObserver();

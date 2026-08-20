@@ -152,7 +152,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.73.531";
+var NYMCHAT_VERSION = "3.73.532";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -2090,6 +2090,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var message = sanitizeInput(currentUnwrapped.rumor.content || "");
     if (!message) return json({ error: "Empty message" }, 400);
+    // A command typed in the user's language arrives with the canonical token
+    // the client resolved it to, so the parsers below stay English-only.
+    message = canonicalizeBotText(message, body && body.cmdAlias);
 
     // Reconstruct prior turns (in order) from the remaining fetched wraps.
     var history = [];
@@ -2307,6 +2310,61 @@ var NYMCHAT_IOS_APP = "https://testflight.apple.com/join/k8FS8Mm3";
 var NYMCHAT_ANDROID_APP = "https://play.google.com/store/apps/details?id=com.nym.bar";
 var COMMAND_PREFIX = "?";
 
+// Commands whose output must not be machine-translated: explicit translation
+// tasks, math/unit results, games whose answers are checked against an English
+// token, and the AI handlers that already reply in the user's own language.
+var BOT_LOCALIZE_SKIP = ["translate", "wordplay", "guess", "trivia", "riddle",
+  "math", "units", "ask", "summarize", "define"];
+
+var BOT_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single";
+
+// Translate a bot reply into the caller's UI language, shielding anything that
+// must survive verbatim: fenced and inline code, URLs, nyms, game tokens, and
+// the /? command names (the client renders those in its own vocabulary).
+async function localizeBotText(text, lang) {
+  var src = String(text || "");
+  if (!src.trim() || !lang || lang === "en") return src;
+  var tokens = [];
+  var shielded = src.replace(
+    /```[\s\S]*?```|`[^`\n]*`|https?:\/\/\S+|\[gc:[A-Za-z0-9+/=]+\]|@[^\s#]+#[a-f0-9]{4}|(?:^|(?<=[\s(<`*_]))[/?][a-z0-9]{2,}\b/gi,
+    function (m) { tokens.push(m); return "PLH" + (tokens.length - 1) + "PLH"; });
+  var out;
+  try {
+    var params = new URLSearchParams({
+      client: "gtx", sl: "auto", tl: lang, dt: "t", q: shielded.slice(0, 5000)
+    });
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, 8000);
+    var resp = await fetch(BOT_TRANSLATE_URL + "?" + params, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return src;
+    var data = await resp.json();
+    if (!Array.isArray(data[0])) return src;
+    out = data[0].map(function (seg) { return seg[0] || ""; }).join("");
+  } catch (e) {
+    return src;
+  }
+  if (!out || !out.trim()) return src;
+  // Google can space out or case-shift the sentinels; match them loosely.
+  return out.replace(/PLH\s*(\d+)\s*PLH/gi, function (m, i) {
+    return tokens[+i] != null ? tokens[+i] : "";
+  });
+}
+
+// Normalize a leading command the user typed in their own language back to the
+// canonical English token, so server-side text parsers keep one vocabulary.
+function canonicalizeBotText(text, alias) {
+  if (!alias || !alias.typed || !alias.canonical) return text;
+  var typed = String(alias.typed);
+  var canonical = String(alias.canonical);
+  if (!/^[/?][a-z0-9_-]{1,32}$/i.test(canonical)) return text;
+  var body = String(text || "");
+  var lead = body.match(/^\s*/)[0];
+  var rest = body.slice(lead.length);
+  if (rest.slice(0, typed.length).toLowerCase() !== typed.toLowerCase()) return body;
+  return lead + canonical + rest.slice(typed.length);
+}
+
 
 // HTTP POST handler
 async function onRequest(context) {
@@ -2378,7 +2436,7 @@ async function onRequest(context) {
   }
 
 
-  const { command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers } = body;
+  const { command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers, lang } = body;
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
@@ -2491,6 +2549,13 @@ async function onRequest(context) {
     response = "Sorry, something went wrong processing that command.";
   }
 
+  // Speak the caller's UI language. Handlers that already match the user's own
+  // wording, and games whose answers are graded server-side, are left alone.
+  var replyLang = typeof lang === "string" ? lang.trim().toLowerCase().slice(0, 12) : "";
+  if (replyLang && replyLang !== "en" && !BOT_LOCALIZE_SKIP.includes(command.toLowerCase())) {
+    response = await localizeBotText(response, replyLang);
+  }
+
   // Append a zap prompt to select commands (excludes game commands that expect reply-guesses)
   // Always append for ?ask queries that used web search; 50% chance for other eligible commands
   var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "news", "btc", "bitcoin", "price"];
@@ -2508,7 +2573,9 @@ async function onRequest(context) {
     // Check both user input and bot response — the response is more reliable since
     // it may contain accented chars even when the input used only plain ASCII
     var userInputText = args || "";
-    if ((isLikelyNonEnglish(userInputText) || isLikelyNonEnglish(response)) && context.env.AI) {
+    if (replyLang && replyLang !== "en") {
+      zapPrompt = await localizeBotText(zapPrompt, replyLang);
+    } else if ((isLikelyNonEnglish(userInputText) || isLikelyNonEnglish(response)) && context.env.AI) {
       var translateRef = isLikelyNonEnglish(response) ? response.slice(0, 200) : userInputText;
       zapPrompt = await translateZapPrompt(zapPrompt, translateRef, context.env.AI);
     }
@@ -2980,6 +3047,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Reactions: click or long-press a message > React (10 default emoji).",
   "Mentions: type @ to open the mentions modal with user suggestions.",
   "Translations: click a message's nickname or long-press message > Translate. Set your target language in Settings > Translation.",
+  "App language: Settings > Language translates the whole interface into any of 130+ languages. When a non-English language is picked, the / and ? commands are localized too — the app lists them under their translated names (e.g. /unirse for /join, ?chiste for ?joke) and accepts both the translated and the original English name. Nymbot also replies in that language. Command names are translated per-device, so what one user types in their language never changes what anyone else sees.",
   "Replies: double click a message on desktop or swipe right to left on a message > Quote to send a quoted reply.",
   "Polls: /poll to create a poll (channel only).",
   "P2P file sharing via WebRTC for direct transfers.",
@@ -3026,7 +3094,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Games & Fun: ?trivia [category] — AI-generated trivia (general, history, science, crypto, nostr), ?joke — AI-generated joke, ?riddle — AI-generated riddle, ?wordplay [mode] — AI word game (wordle, anagram, scramble), ?flip — Coin flip, ?8ball — Magic 8-ball, ?pick <options> — Random pick.",
   "Utility: ?math <expr> — Calculate, ?units <value> <from> to <to> — Convert units, ?time — UTC time, ?btc — Current Bitcoin price.",
   "Channel Activity: ?who — Active nyms in channel, ?summarize — AI summary of channel discussion, ?top — Top channels by activity, ?last [N] — Recent messages, ?seen <nym> — Where was someone last seen.",
-  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.73.531 for a specific version).",
+  "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.73.532 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
   "",
@@ -3901,7 +3969,7 @@ function findRelease(releases, query) {
     var t = (releases[i].tag || "").toLowerCase().replace(/^v/, "");
     if (t === normalized) return releases[i];
   }
-  // Prefix match (e.g. "3.61" matches "3.73.531")
+  // Prefix match (e.g. "3.61" matches "3.73.532")
   for (var j = 0; j < releases.length; j++) {
     var tt = (releases[j].tag || "").toLowerCase().replace(/^v/, "");
     if (tt.indexOf(normalized) === 0) return releases[j];
@@ -3956,7 +4024,7 @@ function needsChangelogContext(question) {
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.73.531", "v3.61", "version 3.60.300"
+  // Specific version reference like "3.73.532", "v3.61", "version 3.60.300"
   if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }

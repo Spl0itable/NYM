@@ -2685,7 +2685,9 @@ Object.assign(NYM.prototype, {
 
     // Process a message the user sent to Nymbot in a private chat
     async _handleBotPM(content, wrapId) {
-        const trimmed = (content || '').trim();
+        // A leading command typed in the user's language is folded back to its
+        // canonical English form before any of the ?command matching below.
+        const trimmed = this.canonicalizeCommandInput((content || '').trim());
         this._markBotPMReceipts('delivered');
         if (/^\?(help|commands)\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
@@ -2746,6 +2748,8 @@ Object.assign(NYM.prototype, {
             // Send only the current message's wrap ID; the worker maintains the
             // ordered thread server-side. fresh (!) tells it to skip history.
             const reqExtra = { eventId: wrapId, fresh: isFresh };
+            const cmdAlias = this.commandAliasHint(content);
+            if (cmdAlias) reqExtra.cmdAlias = cmdAlias;
             if (proModel) {
                 reqExtra.proModel = proModel.key;
                 const git = this._getGitConfig();

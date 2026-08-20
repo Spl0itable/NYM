@@ -35,9 +35,11 @@ Object.assign(NYM.prototype, {
         const prefix = '?';
         if (!content.startsWith(prefix)) return;
         const parts = content.slice(prefix.length).trim().split(/\s+/);
-        const command = parts[0];
+        let command = parts[0];
         const args = parts.slice(1).join(' ');
         if (!command) return;
+        const canonical = this.resolveCommandToken(prefix + command);
+        if (canonical) command = canonical.slice(prefix.length);
         // Build conversation context from quote chain for ?ask and ?guess commands
         let conversation = [];
         if (quoteContext && ['ask', 'guess'].includes(command.toLowerCase())) {
@@ -196,7 +198,7 @@ Object.assign(NYM.prototype, {
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers })
+                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers, lang: (this.getUiLanguage && this.getUiLanguage()) || '' })
             });
             if (!resp.ok) { this._setBotChannelThinking(false); return; }
             const data = await resp.json();
@@ -342,6 +344,7 @@ Object.assign(NYM.prototype, {
             ['Animals',   ['(=^･ω･^=)', 'ʕ•ᴥ•ʔ', '(•ㅅ•)', '/ᐠ｡ꞈ｡ᐟ\\', '>°)))彡']],
             ['Misc',      ['(☞ﾟヮﾟ)☞', 'ᕦ(ò_óˇ)ᕤ', '(⌐■_■)', '(◔_◔)', '~(˘▽˘~)']],
         ];
+        this.cmdI18nEnsure();
     },
 
     // Filter commands map for display surfaces. Hides aliasOf entries so each
@@ -351,8 +354,9 @@ Object.assign(NYM.prototype, {
     },
 
     _formatCommandDisplay(cmd, info) {
-        if (!info || !info.aliases || info.aliases.length === 0) return cmd;
-        return `${cmd}, ${info.aliases.join(', ')}`;
+        const shown = this.localizeCommandToken(cmd);
+        if (!info || !info.aliases || info.aliases.length === 0) return shown;
+        return `${shown}, ${info.aliases.join(', ')}`;
     },
 
     // Group visible command entries by category, preserving category order.
@@ -368,6 +372,7 @@ Object.assign(NYM.prototype, {
         const needle = input.toLowerCase();
         const matchingCommands = this._visibleCommandEntries().filter(([cmd, info]) => {
             if (cmd.startsWith(needle)) return true;
+            if (this.localizeCommandToken(cmd).startsWith(needle)) return true;
             if (Array.isArray(info.aliases) && info.aliases.some(a => a.startsWith(needle))) return true;
             return false;
         });
@@ -379,7 +384,7 @@ Object.assign(NYM.prototype, {
                     const selected = firstAssigned ? '' : ' selected';
                     firstAssigned = true;
                     return `
-                <div class="command-item${selected}" data-command="${cmd}">
+                <div class="command-item${selected}" data-command="${this.localizeCommandToken(cmd)}">
                     <span class="command-name">${this._formatCommandDisplay(cmd, info)}</span>
                     <span class="command-desc">${info.desc}</span>
                 </div>`;
@@ -441,24 +446,28 @@ Object.assign(NYM.prototype, {
         // public-channel bot commands aren't wired there, so don't list them.
         const inBotPM = this.inPMMode && this.currentPM && this.isVerifiedBot(this.currentPM);
         const available = inBotPM ? this.botPMCommands : this.botCommands;
+        const needle = input.toLowerCase();
         let matchingCommands = Object.entries(available)
-            .filter(([cmd]) => cmd.startsWith(input.toLowerCase()));
+            .filter(([cmd]) => cmd.startsWith(needle) || this.localizeCommandToken(cmd).startsWith(needle));
         // Once a multi-step command plus a space is typed (e.g. "?git "),
         // surface its subcommands so users don't have to memorize them.
         if (inBotPM && matchingCommands.length === 0) {
-            const m = /^(\?\w+)\s+(.*)$/.exec(input.toLowerCase());
-            const ctx = m && this._botPMSubcommands(m[1], m[2]);
+            const m = /^(\?\S+)\s+(.*)$/.exec(input.toLowerCase());
+            const ctx = m && this._botPMSubcommands(this.resolveCommandToken(m[1]) || m[1], m[2]);
             if (ctx) {
+                // Completions append to what the user actually typed, so a
+                // localized command name survives the selection.
+                const base = m[1] + ctx.base.slice(ctx.base.indexOf(' '));
                 matchingCommands = ctx.entries
                     .filter(([sub]) => sub.startsWith(ctx.remainder))
-                    .map(([sub, desc]) => [`${ctx.base}${sub}`, { desc }]);
+                    .map(([sub, desc]) => [`${base}${sub}`, { desc }]);
             }
         }
 
         if (matchingCommands.length > 0) {
             palette.innerHTML = matchingCommands.map(([cmd, info], index) => `
-                <div class="command-item ${index === 0 ? 'selected' : ''}" data-command="${cmd}">
-                    <span class="command-name">${cmd}</span>
+                <div class="command-item ${index === 0 ? 'selected' : ''}" data-command="${this.localizeCommandToken(cmd)}">
+                    <span class="command-name">${this.localizeCommandToken(cmd)}</span>
                     <span class="command-desc">${info.desc}</span>
                 </div>
             `).join('');
@@ -509,7 +518,7 @@ Object.assign(NYM.prototype, {
 
     handleCommand(command) {
         const parts = command.split(' ');
-        const cmd = parts[0].toLowerCase();
+        const cmd = this.resolveCommandToken(parts[0]) || parts[0].toLowerCase();
         const args = parts.slice(1).join(' ');
 
         const commandInfo = this.commands[cmd];
