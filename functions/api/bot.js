@@ -3056,7 +3056,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "=== DMs & GROUP CHATS ===",
   "Start a DM: /pm @nym, or click a user > Send PM.",
   "DMs are end-to-end encrypted with NIP-44 + NIP-17 gift wraps (kind 1059 wrapping a kind 13 seal around a kind 14 rumor).",
-  "Group chats: /group @user1 @user2 [GroupName] — creates an encrypted group.",
+  "Group chats: /group @user1 @user2 [GroupName] — creates an encrypted group. There's also a + button in the private messages sidebar section, which lets you easily create a group chat. You can also click a user's nickname and there is a button there to start a group chat with that user.",
   "Group chats use NIP-17 gift wraps with rotating ephemeral recipient keys for enhanced privacy: timing-attack resistance (every message uses one-time pubkeys so observers can't infer group membership) and post-compromise recovery (next message advertises a fresh ephemeral key via the ephemeral_pk tag).",
   "Group commands: /addmember @nym (any member) adds someone, /groupinfo lists current members, /leave drops you from the group.",
   "Owner-only moderation: /addmod @nym (promote moderator), /removemod @nym (revoke moderator), /transferowner @nym (hand the group over), /unban @nym (clear from banlist).",
