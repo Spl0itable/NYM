@@ -11,6 +11,8 @@
 // Wiring into the message pipeline is intentionally left to the caller; this
 // only exposes the API + a Riverpod provider.
 
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -70,6 +72,8 @@ class NotifyContext {
     this.payload,
     this.eventId,
     this.timestampMs,
+    this.conversationKey,
+    this.kind = NotificationKind.message,
   });
 
   final String? senderPubkey;
@@ -93,6 +97,15 @@ class NotifyContext {
   /// Drives the backlog age gate plus the no-eventId dedup/seen fallbacks.
   /// Null/zero falls back to "now", exactly like the PWA (notifications.js:22).
   final int? timestampMs;
+
+  /// The conversation this belongs to (PM peer, group id, channel key). Lets
+  /// the OS notification replace the previous one for the same conversation
+  /// instead of stacking one per message, and lets it be cleared when the
+  /// conversation is read.
+  final String? conversationKey;
+
+  /// Which Android channel / alert weight to post under.
+  final NotificationKind kind;
 }
 
 /// The conversation surface an inbound message belongs to, for notification
@@ -294,14 +307,20 @@ class NotificationsService {
     }
     if (_isReplayedOrSeen(title: title, body: body, context: context)) return;
 
-    if (soundIsAudible(settings.sound)) {
-      await playSound(settings.sound);
-    }
+    // The OS notification goes FIRST and the in-app tone follows without being
+    // waited on. Backgrounded — which is when a notification matters most — the
+    // audio session may not be grantable, and awaiting a tone that never starts
+    // would delay (or lose) the notification behind it.
     await _local.showNotification(
       title: title,
       body: body,
       payload: context.payload,
+      conversationKey: context.conversationKey,
+      kind: context.kind,
     );
+    if (soundIsAudible(settings.sound)) {
+      unawaited(playSound(settings.sound));
+    }
   }
 
   /// The PWA `showNotification` replay guards (notifications.js:22-69), in the

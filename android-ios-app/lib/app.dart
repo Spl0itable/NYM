@@ -10,13 +10,16 @@ import 'features/commands/command_i18n.dart';
 import 'features/i18n/i18n.dart';
 import 'features/i18n/localization_service.dart';
 import 'features/mesh/mesh_controller.dart';
+import 'features/notifications/notification_route_target.dart';
+import 'features/notifications/notification_routing.dart';
 import 'features/onboarding/boot_gate.dart';
 import 'features/share/share_intake.dart';
-import 'services/firebase_messaging_service.dart';
 import 'services/notification_service.dart';
 import 'services/platform/background_connectivity.dart';
+import 'services/platform/background_refresh.dart';
 import 'services/platform/deep_link_target.dart';
 import 'services/platform/deep_links.dart';
+import 'state/app_state.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
 
@@ -42,6 +45,12 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   final BackgroundConnectivityService _backgroundConnectivity =
       BackgroundConnectivityService();
 
+  /// iOS-only catch-up: with no push provider, a `BGAppRefresh` window is the
+  /// only chance a suspended app gets to notice what arrived and notify about
+  /// it. No-op on Android, where the foreground service keeps the socket open
+  /// and events arrive live.
+  final BackgroundRefreshService _backgroundRefresh = BackgroundRefreshService();
+
   /// Lets sign-out clear any dialogs/modals pushed above the boot gate. The
   /// remount (keyed [BootGate]) replaces the gate's content, but pushed routes
   /// live on the navigator above `home` and must be popped explicitly.
@@ -59,48 +68,86 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     WidgetsBinding.instance.addPostFrameCallback((_) => _initPlatform());
   }
 
-  /// Boots deep links + push wiring. Each piece guards itself so a missing
-  /// platform channel (tests, web, de-Googled builds) no-ops gracefully — the
-  /// whole body is wrapped so a missing plugin never breaks app startup.
+  /// Boots deep links, notifications and the share sheet.
+  ///
+  /// Every step is guarded INDIVIDUALLY. They used to share one try/catch, so a
+  /// throw from the deep-link plugin (the first step) skipped notification
+  /// setup entirely and the app ran with no notifications and no way to notice.
   Future<void> _initPlatform() async {
     if (!mounted) return;
-    try {
-      final controller = ref.read(nostrControllerProvider);
-      final target = NostrControllerDeepLinkTarget(controller);
+    final controller = ref.read(nostrControllerProvider);
 
-      // 1) Deep links: cold-start + streamed `app_links` URLs.
-      final deepLinks = DeepLinkService(target);
+    // 1) Deep links: cold-start + streamed `app_links` URLs.
+    DeepLinkService? deepLinks;
+    try {
+      deepLinks = DeepLinkService(NostrControllerDeepLinkTarget(controller));
       _deepLinks = deepLinks;
       await deepLinks.start();
+    } catch (e) {
+      debugPrint('[Platform] deep links skipped: $e');
+    }
 
-      // 2) Local notifications + a notification-tap → deep-link route. A tapped
-      //    push carries a Nymchat URL payload; route it through the same
-      //    dispatcher so it lands on the right channel/PM/group.
+    // 2) Local notifications. This is the whole notification pipeline: events
+    //    this device decrypted itself are posted by the OS, with no push
+    //    provider in between. A tap carries either a notification-route payload
+    //    (PM / group / channel) or a Nymchat URL.
+    try {
       final notifications = NotificationService();
       await notifications.initialize();
-      _payloadSub = notifications.payloadStream.listen(deepLinks.handleUrl);
+      _payloadSub = notifications.payloadStream.listen(_openNotification);
       final initialPayload = notifications.takeInitialPayload();
       if (initialPayload != null && initialPayload.isNotEmpty) {
-        deepLinks.handleUrl(initialPayload);
+        _openNotification(initialPayload);
       }
-
-      // 3) FCM push: integrates the existing wrapper. No-ops gracefully when
-      //    Firebase isn't available in this build.
-      await FirebaseMessagingService().initialize(
-        onDeepLink: deepLinks.handleUrl,
-        showLocalNotification: notifications.showNotification,
+      // Ask the OS for the permission the notifications need. Android 13+ and
+      // iOS both post NOTHING without a runtime grant, and neither the manifest
+      // entry nor the in-app toggle implies one — without this call every
+      // notification the app raised was silently dropped by the system.
+      // `ensurePermission` re-prompts nobody: a user who already answered gets
+      // the standing answer back.
+      if (ref.read(settingsProvider).notificationsEnabled) {
+        unawaited(notifications.ensurePermission());
+      }
+      // iOS background catch-up. Registered whether or not notifications are on
+      // right now, so switching them on later needs no relaunch; the catch-up
+      // itself re-checks the setting before doing anything.
+      _backgroundRefresh.start(
+        () => ref.read(nostrControllerProvider).runBackgroundCatchUp(),
       );
+    } catch (e) {
+      debugPrint('[Platform] notifications skipped: $e');
+    }
 
-      // 4) OS share sheet: text/URLs/media shared into the app open a
-      //    destination picker (channel / PM / group). Self-guards on
-      //    unsupported platforms.
+    // 3) OS share sheet: text/URLs/media shared into the app open a
+    //    destination picker (channel / PM / group). Self-guards on
+    //    unsupported platforms.
+    try {
       final shareIntake = ShareIntake(ref: ref, navKey: _navKey);
       _shareIntake = shareIntake;
       await shareIntake.start();
-    } catch (e, st) {
-      // Platform plugins are absent in widget tests and on unsupported
-      // platforms; never let that crash the app.
-      debugPrint('[Platform] init skipped: $e\n$st');
+    } catch (e) {
+      debugPrint('[Platform] share intake skipped: $e');
+    }
+  }
+
+  /// Handles a tapped notification: a notification-route payload opens the
+  /// conversation it came from, anything else is tried as a deep link.
+  void _openNotification(String payload) {
+    try {
+      final target = decodeNotificationPayload(payload);
+      if (target != null) {
+        openNotificationRoute(
+          target,
+          AppNotificationRouteTarget(
+            controller: ref.read(nostrControllerProvider),
+            appState: ref.read(appStateProvider.notifier),
+          ),
+        );
+        return;
+      }
+      _deepLinks?.handleUrl(payload);
+    } catch (e) {
+      debugPrint('[Platform] notification tap ignored: $e');
     }
   }
 
@@ -158,6 +205,16 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       unawaited(_backgroundConnectivity.start(mesh: mesh));
     } else {
       unawaited(_backgroundConnectivity.stop());
+    }
+    // Ask iOS for a catch-up window while we are away. Requested on the way
+    // out because a task request is only useful once the app is suspended, and
+    // re-requested after each window fires (the native side does that).
+    var notificationsOn = false;
+    try {
+      notificationsOn = ref.read(settingsProvider).notificationsEnabled;
+    } catch (_) {}
+    if (notificationsOn && state != AppLifecycleState.detached) {
+      unawaited(_backgroundRefresh.schedule());
     }
     try {
       ref
@@ -224,6 +281,15 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       settingsProvider.select((s) => s.backgroundConnectivity),
       (_, next) {
         if (!next) unawaited(_backgroundConnectivity.stop());
+      },
+    );
+    // Notifications off: stop asking iOS for catch-up windows there is nothing
+    // to do in. Turning them back on re-requests one at the next background
+    // transition, and asks the OS for permission from the panel toggle.
+    ref.listen<bool>(
+      settingsProvider.select((s) => s.notificationsEnabled),
+      (_, next) {
+        if (!next) unawaited(_backgroundRefresh.cancel());
       },
     );
     // Sign-out bumps the boot generation (nostr_controller `signOut`). Pop any

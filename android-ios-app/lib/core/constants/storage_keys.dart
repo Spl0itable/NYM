@@ -48,6 +48,12 @@ class StorageKeys {
   static const wallpaperCustomUrl = 'nym_wallpaper_custom_url';
   static const lowDataMode = 'nym_low_data_mode';
 
+  /// When the last iOS background catch-up ran (unix seconds). Everything the
+  /// next one pulls that is NEWER than this may raise a notification; anything
+  /// older is backlog the user has already had a chance to see. Absent on a
+  /// device that has never run one, which deliberately alerts for nothing.
+  static const backgroundCatchUpTs = 'nym_background_catchup_ts';
+
   /// Keep the Nostr relay sockets and the Bluetooth mesh radio running while
   /// the app is backgrounded (Android: a foreground service with a persistent
   /// notification; iOS: the declared background modes plus a background-task

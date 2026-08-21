@@ -11,18 +11,25 @@
 // Rendered as a centered `.modal` (showDialog) with shared modal chrome: 22px
 // UPPERCASE primary header + bottom rule, 32px circular glass close chip.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart' show openAppSettings;
 
 import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../services/notification_service.dart';
+import '../../services/platform/background_connectivity.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../calls/call_nym.dart';
 import '../i18n/i18n.dart';
+import 'notification_route_target.dart';
+import 'notification_routing.dart';
 import '../messages/format/message_content.dart';
 
 /// Opens the notifications history as a centered modal (the PWA renders it as a
@@ -183,41 +190,19 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
   /// (notifications.js:559-585: pm → `openUserPM`, group → `openGroup`, reaction/
   /// mention → the reactor's/author's PM, call → PM or group).
   void _openEntry(NotificationEntry entry) {
-    final controller = ref.read(nostrControllerProvider);
-    final appState = ref.read(appStateProvider.notifier);
-    final route = entry.route ?? '';
-    final sender = entry.senderPubkey ?? '';
-    final isPubkeyRoute = _isPubkey(route);
-    switch (entry.type) {
-      case 'group':
-        if (route.isNotEmpty) appState.switchView(ChatView.group(route));
-        break;
-      case 'channel':
-      case 'geohash':
-        // A channel/geohash mention switches to that channel (the route is the
-        // bare channel name; switchChannel auto-detects geohash).
-        if (route.isNotEmpty) controller.switchChannel(route);
-        break;
-      case 'call':
-        // Call routes carry a group id (group call) or a pubkey (1:1 call).
-        if (isPubkeyRoute) {
-          controller.startPM(route);
-        } else if (route.isNotEmpty) {
-          appState.switchView(ChatView.group(route));
-        } else if (sender.isNotEmpty) {
-          controller.startPM(sender);
-        }
-        break;
-      case 'pm':
-      case 'mention':
-      case 'reaction':
-      default:
-        // These route to the sender's PM (the avatar pubkey).
-        final target =
-            sender.isNotEmpty ? sender : (isPubkeyRoute ? route : '');
-        if (target.isNotEmpty) controller.startPM(target);
-        break;
-    }
+    // Same routing an OS notification tap takes (`openNotificationRoute`), so a
+    // bell row and its notification always land in the same conversation.
+    openNotificationRoute(
+      NotificationRoute(
+        type: entry.type,
+        route: entry.route ?? '',
+        senderPubkey: entry.senderPubkey ?? '',
+      ),
+      AppNotificationRouteTarget(
+        controller: ref.read(nostrControllerProvider),
+        appState: ref.read(appStateProvider.notifier),
+      ),
+    );
     Navigator.of(context).maybePop();
   }
 
@@ -381,12 +366,34 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
   late bool _mentionsOnly;
   late bool _friendsOnly;
 
+  /// What the OS says about posting notifications. The in-app toggle is only
+  /// half the story: Android 13+ and iOS both drop everything we post until the
+  /// system grant is in place, and a user who declined once (or switched it off
+  /// in system settings) has no way to tell from inside the app that their
+  /// notifications are going nowhere. Null until the first check resolves.
+  NotificationPermission? _osPermission;
+
   @override
   void initState() {
     super.initState();
     final kv = ref.read(keyValueStoreProvider);
     _mentionsOnly = kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
     _friendsOnly = kv.getString(StorageKeys.notifyFriendsOnly) == 'true';
+    _refreshOsPermission();
+  }
+
+  Future<void> _refreshOsPermission() async {
+    final status = await NotificationService().permissionStatus();
+    if (!mounted) return;
+    setState(() => _osPermission = status);
+  }
+
+  /// Turning notifications ON also asks the OS, since that is the grant that
+  /// actually decides whether anything is displayed.
+  Future<void> _requestOsPermission() async {
+    final status = await NotificationService().ensurePermission();
+    if (!mounted) return;
+    setState(() => _osPermission = status);
   }
 
   @override
@@ -420,6 +427,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
                   .read(settingsProvider.notifier)
                   .update((s) => s.copyWith(notificationsEnabled: v));
               kv.setString(StorageKeys.notificationsEnabled, '$v');
+              if (v) unawaited(_requestOsPermission());
             },
           ),
           // `.nm-h-80` — indented sub-options (margin-top 6, margin-left 20).
@@ -432,6 +440,31 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
               kv.setString(StorageKeys.groupNotifyMentionsOnly, '$v');
             },
           ),
+          // Two ways enabled notifications still never appear, both invisible
+          // from inside the app until now: the OS refusing to post them, and
+          // the app being frozen while backgrounded (nothing is listening, so
+          // there is nothing to post).
+          if (enabled && _osPermission == NotificationPermission.denied)
+            _NotifyNotice(
+              text: tr('Your system settings are blocking Nymchat '
+                  'notifications, so none will appear.'),
+              actionLabel: tr('Open settings'),
+              onAction: () async {
+                await openAppSettings();
+                // Coming back from system settings, re-read the grant so the
+                // notice clears itself once it has been allowed.
+                await _refreshOsPermission();
+              },
+            )
+          else if (enabled &&
+              !ref.watch(settingsProvider
+                  .select((s) => s.backgroundConnectivity)) &&
+              BackgroundConnectivityService.isSupported)
+            _NotifyNotice(
+              text: tr('Notifications only arrive while Nymchat is running. '
+                  'Turn on "Stay Connected in Background" in Settings → Data '
+                  '& Backup to get them when it is closed.'),
+            ),
           _ToggleRow(
             label: tr('Only notify for messages from friends'),
             value: _friendsOnly,
@@ -856,6 +889,55 @@ class _CloseChipState extends State<_CloseChip> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Shown when notifications are ON in the app but something outside it stops
+/// them arriving — the state where everything looks configured and nothing ever
+/// appears. [actionLabel]/[onAction] add an inline fix when there is one.
+class _NotifyNotice extends StatelessWidget {
+  const _NotifyNotice({
+    required this.text,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final String text;
+  final String? actionLabel;
+  final Future<void> Function()? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 20),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(fontSize: 12, color: c.warning),
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => onAction!(),
+              child: Text(
+                actionLabel!,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: c.primary,
+                  decoration: TextDecoration.underline,
+                  decorationColor: c.primary,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

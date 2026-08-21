@@ -92,12 +92,21 @@
 	<array>
 		<!-- Keep WebRTC audio alive when the app is backgrounded during a call -->
 		<string>audio</string>
+		<!-- BGAppRefresh windows: with no push provider, this is how a suspended
+		     app gets to pull what arrived and raise notifications for it -->
+		<string>fetch</string>
 		<!-- VoIP socket for incoming-call signalling -->
 		<string>voip</string>
 		<!-- Wake on FCM/APNs pushes (real push lands when Firebase config is added) -->
 		<string>remote-notification</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+	</array>
+	<!-- Identifiers BGTaskScheduler may run; must match AppDelegate's
+	     refreshTaskIdentifier or registration throws at launch. -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>app.nymchat.refresh</string>
 	</array>
 	<!-- App ships no proprietary/non-exempt encryption beyond standard TLS,
 	     so no annual self-classification export filing is required. -->

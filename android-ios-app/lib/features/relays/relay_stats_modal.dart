@@ -35,6 +35,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../services/relay/relay_stats.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../services/platform/background_connectivity.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../i18n/i18n.dart';
@@ -104,6 +105,8 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     final connected =
         ref.watch(appStateProvider.select((s) => s.connectedRelays));
     final lowData = ref.watch(settingsProvider.select((s) => s.lowDataMode));
+    final backgroundConnectivity =
+        ref.watch(settingsProvider.select((s) => s.backgroundConnectivity));
 
     // Live relay traffic counters — typed getter on the controller, null before
     // boot. Already a fresh snapshot (the controller getter merges the pool's
@@ -203,8 +206,31 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                               expandedRow: _expandedRow,
                               onToggleRow: _toggleRow,
                             ),
+                            // Connectivity switches live where their effect is
+                            // visible: this modal is where a user comes when
+                            // messages are not arriving, so the background
+                            // keep-alive belongs here as much as in Settings.
+                            if (BackgroundConnectivityService.isSupported) ...[
+                              const SizedBox(height: 14),
+                              _TogglePanel(
+                                title: tr('Stay connected in background'),
+                                hint: tr('Keep relay connections and the '
+                                    'Bluetooth mesh running while Nymchat is in '
+                                    'the background, so messages and '
+                                    'notifications arrive without opening it. '
+                                    'Uses more battery.'),
+                                enabled: backgroundConnectivity,
+                                onToggle: (v) => ref
+                                    .read(settingsProvider.notifier)
+                                    .setBackgroundConnectivity(v),
+                              ),
+                            ],
                             const SizedBox(height: 14),
-                            _LowDataPanel(
+                            _TogglePanel(
+                              title: tr('Using too much data?'),
+                              hint: tr('Enable Low Data Mode to limit relay '
+                                  'connections to a small core set and load geo '
+                                  'relays only when entering channels.'),
                               enabled: lowData,
                               onToggle: (v) => ref
                                   .read(settingsProvider.notifier)
@@ -1020,8 +1046,17 @@ class _KindRow extends StatelessWidget {
 // Low-Data-Mode panel (.relay-stats-low-data) + nym-switch toggle
 // =============================================================================
 
-class _LowDataPanel extends StatelessWidget {
-  const _LowDataPanel({required this.enabled, required this.onToggle});
+/// One titled toggle row in the modal's footer (`.relay-stats-low-data`), used
+/// for the connectivity switches that belong next to the traffic they affect.
+class _TogglePanel extends StatelessWidget {
+  const _TogglePanel({
+    required this.title,
+    required this.hint,
+    required this.enabled,
+    required this.onToggle,
+  });
+  final String title;
+  final String hint;
   final bool enabled;
   final ValueChanged<bool> onToggle;
 
@@ -1050,7 +1085,7 @@ class _LowDataPanel extends StatelessWidget {
               children: [
                 // .relay-stats-low-data-title: 13, w600, textBright.
                 Text(
-                  tr('Using too much data?'),
+                  title,
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
@@ -1060,8 +1095,7 @@ class _LowDataPanel extends StatelessWidget {
                 const SizedBox(height: 2),
                 // .relay-stats-low-data-hint: 11, textDim, line-height 1.4.
                 Text(
-                  tr('Enable Low Data Mode to limit relay connections to a small '
-                      'core set and load geo relays only when entering channels.'),
+                  hint,
                   style: TextStyle(
                     fontSize: 11,
                     color: c.textDim,
