@@ -853,12 +853,15 @@ class NostrController {
   /// Restores the D1 archive for every channel in [keys] with bounded
   /// concurrency ([_kChannelBackfillConcurrency] at a time) via
   /// [_backfillChannelArchive] (which dedups concurrent calls per channel and
-  /// time-bounds each fetch). NON-forced: the PWA's reconnect/boot mass
-  /// restore honors the per-channel 60s freshness window
+  /// time-bounds each fetch). [force] defaults to NON-forced: the PWA's
+  /// reconnect/boot mass restore honors the per-channel 60s freshness window
   /// (`channelRestoreManyFromD1` without force, channels.js:1127) — only an
-  /// explicit view open forces. Best-effort; empty/blank keys are skipped.
+  /// explicit view open, or a background catch-up (which runs rarely and must
+  /// not be skipped by that window), forces. Best-effort; empty/blank keys are
+  /// skipped.
   Future<void> _backfillChannelArchivesFor(
     Iterable<String> keys, {
+    bool force = false,
     void Function(NostrEvent event)? onRestored,
   }) async {
     final list = <String>{
@@ -870,7 +873,7 @@ class NostrController {
     Future<void> worker() async {
       while (next < list.length) {
         await _backfillChannelArchive(list[next++],
-            force: false, onRestored: onRestored);
+            force: force, onRestored: onRestored);
       }
     }
 
@@ -1752,29 +1755,20 @@ class NostrController {
   bool _isHistorical(int createdAtSec) =>
       DateTime.now().millisecondsSinceEpoch - createdAtSec * 1000 > 10000;
 
-  /// Whether an event at [tsMs] must be recorded SILENTLY — bell history only,
-  /// no sound or popup.
-  ///
-  /// Normally that means anything but a live arrival: [historical] provenance,
-  /// or older than [liveWindowMs] (10s for channel/reaction/zap events, 30s for
-  /// messages, matching each PWA path).
-  ///
-  /// During a background catch-up ([runBackgroundCatchUp]) the watermark decides
-  /// instead. Everything a catch-up pulls is older than any live window — that
-  /// is what "the app was suspended" means — so the live rule would silence the
-  /// entire point of the wake-up.
+  /// Whether an event at [tsMs] must be recorded SILENTLY — see
+  /// [silentForAlert], which holds the rule so it can be tested on its own.
   bool _silentForAlert(
     int tsMs, {
     bool historical = false,
     int liveWindowMs = 10000,
-  }) {
-    final cutoff = _catchUpAlertCutoffMs;
-    if (cutoff != null) {
-      return !catchUpShouldAlert(messageTsMs: tsMs, cutoffMs: cutoff);
-    }
-    if (historical) return true;
-    return DateTime.now().millisecondsSinceEpoch - tsMs > liveWindowMs;
-  }
+  }) =>
+      silentForAlert(
+        tsMs: tsMs,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+        catchUpCutoffMs: _catchUpAlertCutoffMs,
+        historical: historical,
+        liveWindowMs: liveWindowMs,
+      );
 
   bool get _notificationsEnabled =>
       _ref.read(settingsProvider).notificationsEnabled;
@@ -1833,7 +1827,6 @@ class NostrController {
       friendsOnly: _notifyFriendsOnly,
     );
     if (!record) return;
-    final alert = !_isHistorical(e.createdAt);
     // PWA footer context label for a channel source is `in #<geohash>`
     // (notifications.js, derived from `channelInfo`). `channelKeyOf` already
     // returns the `#`-prefixed key (geohash `g` tag / named `d` tag), so reuse
@@ -1857,7 +1850,14 @@ class NostrController {
       eventId: e.id,
       tsMs: e.createdAt * 1000,
       contextLabel: key != null ? tr('in {key}', {'key': key}) : null,
-      silent: !alert || _silentForAlert(e.createdAt * 1000),
+      // `_silentForAlert` IS the live-arrival rule (10s here, as the PWA's
+      // channel path has it) — and the catch-up watermark when one is running.
+      // Keeping the old `!_isHistorical(...)` term alongside it re-imposed the
+      // 10s rule unconditionally, so every mention a background catch-up
+      // recovered was silent by construction: minutes old, hence "historical",
+      // hence no alert. PMs were unaffected because their rule was replaced
+      // rather than OR-ed, which is why they notified and mentions did not.
+      silent: _silentForAlert(e.createdAt * 1000),
     );
   }
 
@@ -3232,9 +3232,12 @@ class NostrController {
         // loud sound/popup path. The PWA also flags `_isGiftWrapBacklog()`;
         // gift-wrap backlog replays carry the rumor's REAL created_at, so the
         // 30s age term covers them here.
-        final inviteAgeMs =
-            DateTime.now().millisecondsSinceEpoch - inviteTs * 1000;
-        final isHistorical = inviteTs <= 0 || inviteAgeMs > 30000;
+        // Same rule as every other notification, so a catch-up that recovers
+        // an invite can actually surface it (the inline age test here would
+        // have called everything a catch-up pulls "historical", exactly as the
+        // channel-mention path did).
+        final isHistorical = inviteTs <= 0 ||
+            _silentForAlert(inviteTs * 1000, liveWindowMs: 30000);
         _dispatchNotification(
           title: tr('Group invite: {name}',
               {'name': name.isNotEmpty ? name : tr('group')}),
@@ -3475,9 +3478,9 @@ class NostrController {
     // returns — so the analyzer promotes them to non-null here for the
     // `required String` notification params.
 
-    // Historical (>10s) → record to history only, no toast (PWA `isHistorical`).
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final silent = (nowSec - ts) > 10;
+    // Historical (>10s) → record to history only, no toast (PWA `isHistorical`),
+    // or the catch-up watermark when a background window is running.
+    final silent = _silentForAlert(ts * 1000);
 
     _dispatchNotification(
       title: title,
@@ -8155,19 +8158,34 @@ class NostrController {
       storedWatermarkMs: storedSec > 0 ? storedSec * 1000 : 0,
       nowMs: nowMs,
     );
+    // A catch-up runs while the app is NOT on screen, by definition. Saying so
+    // explicitly matters on a cold background launch, where iOS starts the
+    // process for the window and no lifecycle event has fired: `
+    // _appInForeground` would still hold its optimistic startup default, and
+    // `_isActiveView` would then suppress every notification for whatever
+    // conversation the app restored into — the most recently used one, i.e.
+    // the likeliest to have new messages.
+    _appInForeground = false;
     final deadline = DateTime.now().add(budget);
 
     /// Runs one stage inside what remains of the budget. A stage that cannot
     /// get [needs] is skipped rather than started and cut off mid-fetch —
     /// there is no partial credit, and the next window will reach it.
+    ///
+    /// [cap] bounds how much of the budget a stage may take even when more is
+    /// left, so a slow first stage cannot eat the window and starve the ones
+    /// behind it — the failure mode that leaves mentions permanently
+    /// unnotified on a device whose PM archive is large.
     Future<void> stage(
       Future<void> Function() work, {
       required Duration needs,
+      Duration? cap,
     }) async {
       final left = deadline.difference(DateTime.now());
       if (left < needs) return;
+      final slice = (cap != null && cap < left) ? cap : left;
       try {
-        await work().timeout(left);
+        await work().timeout(slice);
       } catch (_) {
         // Out of budget or a failed fetch — whatever landed has already been
         // ingested and notified; the rest waits for the next window.
@@ -8181,14 +8199,16 @@ class NostrController {
           _backfillGroupArchive(),
         ]),
         needs: const Duration(seconds: 2),
+        cap: budget * 0.6,
       );
       await stage(
         _catchUpChannelMentions,
-        needs: const Duration(seconds: 5),
+        needs: const Duration(seconds: 4),
+        cap: budget * 0.3,
       );
       await stage(
         _catchUpProfileZaps,
-        needs: const Duration(seconds: 3),
+        needs: const Duration(seconds: 2),
       );
     } finally {
       _catchUpAlertCutoffMs = null;
@@ -8219,6 +8239,10 @@ class NostrController {
     if (joined.isEmpty) return;
     await _backfillChannelArchivesFor(
       joined,
+      // Forced: the non-forced path honours `channelGet`'s 60s freshness
+      // window, and a catch-up that lands shortly after the app was last open
+      // would silently fetch nothing at all.
+      force: true,
       onRestored: (ev) {
         if (ev.kind != EventKind.geoChannel &&
             ev.kind != EventKind.namedChannel) {

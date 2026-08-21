@@ -59,4 +59,55 @@ void main() {
           true);
     });
   });
+
+  group('silentForAlert', () {
+    test('outside a catch-up, only a live arrival alerts', () {
+      // Channel/reaction/zap window (10s) and the message window (30s).
+      expect(silentForAlert(tsMs: now - 5000, nowMs: now), false);
+      expect(silentForAlert(tsMs: now - 20000, nowMs: now), true);
+      expect(
+        silentForAlert(tsMs: now - 20000, nowMs: now, liveWindowMs: 30000),
+        false,
+      );
+      // Backlog provenance is silent whatever its clock says.
+      expect(silentForAlert(tsMs: now, nowMs: now, historical: true), true);
+    });
+
+    // The regression: a catch-up pulls events that are minutes old BY
+    // DEFINITION, so the live rule must not also apply. Keeping both silenced
+    // every mention a background window recovered, while PMs — whose rule had
+    // been replaced rather than added to — notified normally.
+    test('during a catch-up the watermark alone decides', () {
+      final cutoff = now - 2 * hour;
+      // Five minutes old: far outside every live window, and still alerts.
+      expect(
+        silentForAlert(
+          tsMs: now - 5 * 60 * 1000,
+          nowMs: now,
+          catchUpCutoffMs: cutoff,
+        ),
+        false,
+      );
+      // Older than the last catch-up: silent, as before.
+      expect(
+        silentForAlert(
+          tsMs: now - 3 * hour,
+          nowMs: now,
+          catchUpCutoffMs: cutoff,
+        ),
+        true,
+      );
+      // Backlog provenance does not override the watermark either — an
+      // archive replay is how a catch-up receives everything it receives.
+      expect(
+        silentForAlert(
+          tsMs: now - 5 * 60 * 1000,
+          nowMs: now,
+          catchUpCutoffMs: cutoff,
+          historical: true,
+        ),
+        false,
+      );
+    });
+  });
 }

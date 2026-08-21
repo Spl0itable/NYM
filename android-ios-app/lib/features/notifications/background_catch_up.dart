@@ -36,3 +36,29 @@ int catchUpCutoffMs({
 /// [cutoffMs] from [catchUpCutoffMs].
 bool catchUpShouldAlert({required int messageTsMs, required int cutoffMs}) =>
     messageTsMs > cutoffMs;
+
+/// Whether an event must be recorded SILENTLY — bell history only, no sound or
+/// popup. The single rule behind every notification kind.
+///
+/// Outside a catch-up: silent unless the event is a live arrival — [historical]
+/// provenance, or older than [liveWindowMs] (10s for channel/reaction/zap
+/// events, 30s for messages, matching each PWA path).
+///
+/// During a catch-up ([catchUpCutoffMs] non-null): the watermark decides
+/// instead, because everything a catch-up pulls is older than any live window —
+/// that is what "the app was suspended" means. Applying the live rule ON TOP of
+/// the watermark silences the entire catch-up, which is exactly the bug that
+/// made background channel mentions never notify while PMs did.
+bool silentForAlert({
+  required int tsMs,
+  required int nowMs,
+  int? catchUpCutoffMs,
+  bool historical = false,
+  int liveWindowMs = 10000,
+}) {
+  if (catchUpCutoffMs != null) {
+    return !catchUpShouldAlert(messageTsMs: tsMs, cutoffMs: catchUpCutoffMs);
+  }
+  if (historical) return true;
+  return nowMs - tsMs > liveWindowMs;
+}

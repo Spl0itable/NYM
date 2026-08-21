@@ -101,10 +101,36 @@ void main() {
       });
     }
 
-    test('background modes cover calls + push', () {
-      for (final mode in ['audio', 'voip', 'remote-notification']) {
+    test('background modes cover call audio, mesh and the catch-up window', () {
+      // `audio` keeps WebRTC call audio alive; the two bluetooth modes let
+      // CoreBluetooth wake the app for mesh traffic; `fetch` is the
+      // BGAppRefresh window the notification catch-up runs in.
+      for (final mode in [
+        'audio',
+        'fetch',
+        'bluetooth-central',
+        'bluetooth-peripheral',
+      ]) {
         expect(plist, contains('<string>$mode</string>'));
       }
+    });
+
+    test('declares no push background modes', () {
+      // The app registers no APNs or PushKit token — no FCM, no
+      // `registerForRemoteNotifications` — so notifications never transit a
+      // push provider. Declaring modes it does not use would misstate that in
+      // the one place a reviewer or auditor looks first.
+      for (final mode in ['voip', 'remote-notification']) {
+        expect(plist, isNot(contains('<string>$mode</string>')),
+            reason: '$mode implies a push registration this app does not make');
+      }
+    });
+
+    test('permits the background-refresh task identifier', () {
+      // BGTaskScheduler.register throws at launch if the identifier it
+      // registers is not listed here, so these two must stay in step.
+      expect(plist, contains('BGTaskSchedulerPermittedIdentifiers'));
+      expect(plist, contains('<string>app.nymchat.refresh</string>'));
     });
 
     test('queries lightning + https schemes', () {

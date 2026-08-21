@@ -90,15 +90,14 @@
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
-		<!-- Keep WebRTC audio alive when the app is backgrounded during a call -->
+		<!-- Keep WebRTC audio alive when the app is backgrounded during a call.
+		     Call SIGNALLING rides Nostr, not PushKit, so no `voip` mode: the app
+		     registers no APNs/PushKit token at all, and declaring modes it does
+		     not use both misstates the app's behaviour and invites rejection. -->
 		<string>audio</string>
 		<!-- BGAppRefresh windows: with no push provider, this is how a suspended
 		     app gets to pull what arrived and raise notifications for it -->
 		<string>fetch</string>
-		<!-- VoIP socket for incoming-call signalling -->
-		<string>voip</string>
-		<!-- Wake on FCM/APNs pushes (real push lands when Firebase config is added) -->
-		<string>remote-notification</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
 	</array>
