@@ -7,6 +7,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../state/settings_provider.dart';
 import '../translate/translate_languages.dart';
+import '../commands/command_i18n.dart';
 import 'app_strings_catalog.dart';
 import 'i18n.dart';
 import 'localization_service.dart';
@@ -58,6 +59,9 @@ void applyUiLanguage(WidgetRef ref, String code) {
   final svc = LocalizationService.instance;
   svc.setLanguage(code);
   if (!svc.isActive) return; // English: nothing to translate.
+  // Command names are what the user types, so they translate ahead of the
+  // bulk catalog rather than behind it.
+  svc.prime(commandSourcePhrases());
   svc.sweep(kAppStringsCatalog);
 }
 

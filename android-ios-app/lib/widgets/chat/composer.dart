@@ -22,6 +22,7 @@ import '../../features/autocomplete/autocomplete_queries.dart';
 import '../../features/autocomplete/autocomplete_triggers.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/commands/command_handler.dart';
+import '../../features/commands/command_i18n.dart';
 import '../../features/commands/command_palette.dart';
 import '../../features/commands/command_registry.dart';
 import '../../features/emoji/custom_emoji.dart';
@@ -802,10 +803,14 @@ class _ComposerState extends ConsumerState<Composer> {
       // filtered by `cmd.startsWith(input)`.
       _botRows = botPM
           ? [
-              for (final c in filterBotPMCommands(trigger.query))
-                BotPaletteCommand(command: c.name, desc: c.desc),
+              for (final c
+                  in filterBotPMCommands(canonicalizeCommandInput(trigger.query)))
+                BotPaletteCommand(
+                  command: localizeCommandTokensIn(c.name),
+                  desc: c.desc,
+                ),
             ]
-          : buildBotPaletteRows(trigger.query);
+          : buildLocalizedBotPaletteRows(trigger.query);
       _paletteRows = const [];
       _acView = null;
     } else if (trigger.kind != TriggerKind.none) {
@@ -982,10 +987,12 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   void _completeCommand(CommandSpec spec) {
-    // selectCommand inserts `"<command> "` then hides the palette.
+    // selectCommand inserts `"<command> "` then hides the palette. The name is
+    // inserted in the user's language; the dispatcher resolves it back.
+    final name = localizedCommandToken(spec.name);
     _controller.value = TextEditingValue(
-      text: '${spec.name} ',
-      selection: TextSelection.collapsed(offset: spec.name.length + 1),
+      text: '$name ',
+      selection: TextSelection.collapsed(offset: name.length + 1),
     );
     _hideOverlay();
     _focus.requestFocus();
@@ -2160,7 +2167,7 @@ class _ComposerState extends ConsumerState<Composer> {
         ? sortedTranslateLanguagesWithFavorites(_translateFavorites)
         : _translateLangOrder;
     final langs = order
-        .where((e) => q.isEmpty || e.value.toLowerCase().contains(q))
+        .where((e) => q.isEmpty || languageSearchKey(e.key, e.value).contains(q))
         .toList();
     return Stack(
       children: [
@@ -2272,7 +2279,8 @@ class _ComposerState extends ConsumerState<Composer> {
                               itemBuilder: (_, i) {
                                 final e = langs[i];
                                 return _TranslateLangRow(
-                                  name: e.value,
+                                  name: languageNative(e.key),
+                                  subtitle: languageSubtitle(e.key),
                                   favorited: favSet.contains(e.key),
                                   onTap: () => _translateDraft(e.key),
                                   onToggleFavorite: () =>
@@ -3257,12 +3265,16 @@ class _TranslateInputButtonState extends State<_TranslateInputButton>
 class _TranslateLangRow extends StatefulWidget {
   const _TranslateLangRow({
     required this.name,
+    required this.subtitle,
     required this.favorited,
     required this.onTap,
     required this.onToggleFavorite,
   });
 
   final String name;
+
+  /// The English name, under the endonym, when it adds something.
+  final String subtitle;
   final bool favorited;
   final VoidCallback onTap;
   final VoidCallback onToggleFavorite;
@@ -3300,13 +3312,25 @@ class _TranslateLangRowState extends State<_TranslateLangRow> {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  widget.name,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: _hover ? c.textBright : c.text,
-                    fontSize: 13,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      widget.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _hover ? c.textBright : c.text,
+                        fontSize: 13,
+                      ),
+                    ),
+                    if (widget.subtitle.isNotEmpty)
+                      Text(
+                        widget.subtitle,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: c.textDim, fontSize: 10),
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(width: 8),

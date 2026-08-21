@@ -179,9 +179,12 @@ class LocalizationService {
     if (!isActive) return _subst(source, args);
     final hit = _cache[source];
     if (hit != null) return _subst(hit, args);
-    if (!_requested.contains(source)) {
+    if (!_requested.contains(source) && !_failed.contains(source)) {
       // A string actually being rendered jumps to the top lane (promoting it
-      // out of the prime/sweep lanes if it was queued there).
+      // out of the prime/sweep lanes if it was queued there). A source parked
+      // in [_failed] is skipped: the repaint that follows its failure re-reads
+      // it, and re-queueing here would keep the top lane permanently busy and
+      // starve the sweep. Its delayed retry round owns it instead.
       _sweepPending.remove(source);
       _primePending.remove(source);
       _pending.add(source);

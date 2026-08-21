@@ -13,6 +13,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../models/user.dart';
 import '../i18n/i18n.dart';
 import 'action_rate_limit.dart';
+import 'command_i18n.dart';
 import 'command_registry.dart';
 import 'help_output.dart';
 
@@ -189,7 +190,9 @@ class CommandDispatcher {
   /// Routes [line] (a `/cmd args` string). Returns true if it was a command
   /// (known or not) and therefore should NOT be published as a message.
   bool handle(String line) {
-    final parsed = parseCommand(line);
+    // A command typed in the user's language resolves to its canonical token
+    // before dispatch; English names keep working unchanged.
+    final parsed = parseCommand(canonicalizeCommandInput(line));
     final spec = parsed.spec;
     if (spec == null) {
       engine.systemMessage(tr('Unknown command: {cmd}', {'cmd': parsed.token}));

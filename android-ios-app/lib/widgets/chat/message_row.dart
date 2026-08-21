@@ -11,6 +11,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/commands/command_i18n.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/messages/flood_tracker.dart';
 import '../../features/messages/format/message_content.dart';
@@ -2775,9 +2776,15 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final blur = _shouldBlurImages();
     // When this message is auto-translated (and the user isn't peeking at the
     // original), the translated text REPLACES the message body in place.
-    final displayContent = (_autoEntry?.isReady == true && !_showOriginal)
+    var displayContent = (_autoEntry?.isReady == true && !_showOriginal)
         ? _autoEntry!.translated
         : message.content;
+    // Nymbot answers with canonical command names; show them in the vocabulary
+    // this device actually accepts.
+    if (message.isBot ||
+        ref.read(nostrControllerProvider).isVerifiedBot(message.pubkey)) {
+      displayContent = localizeCommandTokensIn(displayContent);
+    }
     final body = MessageContent(
       content: displayContent,
       // fire/ice paint a brighter glyph in the bubble than IRC (`#ff6600`/

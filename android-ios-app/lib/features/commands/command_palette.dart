@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
+import 'command_i18n.dart';
 import 'command_registry.dart';
 
 /// A flat, navigable palette row (either a category header or a command).
@@ -34,6 +35,7 @@ List<PaletteRow> buildPaletteRows(String input) {
   final needle = input.toLowerCase();
   final matching = visibleCommands().where((spec) {
     if (spec.name.startsWith(needle)) return true;
+    if (localizedCommandToken(spec.name).startsWith(needle)) return true;
     return spec.aliases.any((a) => a.startsWith(needle));
   }).toList();
 
@@ -150,7 +152,7 @@ class _CommandPaletteState extends State<CommandPalette> {
     // row chrome (also used by the `?` bot palette) renders the rest.
     return commandItemRow(
       c,
-      name: formatCommandDisplay(spec),
+      name: localizedCommandDisplay(spec),
       desc: spec.desc,
       selected: selected,
       rowKey: selected ? _selectedKey : null,

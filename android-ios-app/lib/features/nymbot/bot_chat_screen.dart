@@ -25,6 +25,7 @@ import '../../widgets/nym_icons.dart';
 import '../autocomplete/autocomplete_dropdown.dart';
 import '../autocomplete/autocomplete_queries.dart' show queryEmoji, EmojiResult;
 import '../autocomplete/autocomplete_triggers.dart';
+import '../commands/command_i18n.dart';
 import '../commands/command_palette.dart'
     show
         buildPaletteRows,
@@ -929,7 +930,10 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         nextCmd = buildPaletteRows(_trigger.query);
         break;
       case TriggerKind.botCommand:
-        nextBot = filterBotPMCommands(text);
+        nextBot = [
+          for (final c in filterBotPMCommands(canonicalizeCommandInput(text)))
+            BotPMCommand(name: localizeCommandTokensIn(c.name), desc: c.desc),
+        ];
         break;
       case TriggerKind.emoji:
         final results = queryEmoji(
@@ -975,9 +979,10 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
 
   /// Completes a `/` slash command (inserts `"<command> "`).
   void _completeCommand(CommandSpec spec) {
+    final name = localizedCommandToken(spec.name);
     _controller.value = TextEditingValue(
-      text: '${spec.name} ',
-      selection: TextSelection.collapsed(offset: spec.name.length + 1),
+      text: '$name ',
+      selection: TextSelection.collapsed(offset: name.length + 1),
     );
     _onTextChanged();
     _focus.requestFocus();

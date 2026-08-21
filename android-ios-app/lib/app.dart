@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme/nym_theme.dart';
 import 'features/i18n/app_strings_catalog.dart';
+import 'features/commands/command_i18n.dart';
 import 'features/i18n/i18n.dart';
 import 'features/i18n/localization_service.dart';
 import 'features/mesh/mesh_controller.dart';
@@ -149,6 +150,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       // session (or newly added by an app update). Deferred so it doesn't
       // compete with boot; cheap when everything is already cached.
       if (LocalizationService.instance.isActive) {
+        LocalizationService.instance.prime(commandSourcePhrases());
         Future<void>.delayed(const Duration(seconds: 3), () {
           if (mounted) LocalizationService.instance.sweep(kAppStringsCatalog);
         });

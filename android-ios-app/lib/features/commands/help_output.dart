@@ -24,6 +24,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
+import 'command_i18n.dart';
 import 'command_registry.dart';
 
 /// One `/help` category section: the verbatim header label plus its commands
@@ -68,7 +69,7 @@ List<String> get kHelpFooterLines => [
 
 /// One `.help-cmd` line: `"/name, /alias — desc"` (commands.js:526).
 String helpCommandLine(CommandSpec spec) =>
-    '${formatCommandDisplay(spec)} — ${spec.desc}';
+    '${localizedCommandDisplay(spec)} — ${spec.desc}';
 
 /// The full `/help` output as plain text for the system-message sink: title,
 /// blank line, each category header followed by its command lines, then the
@@ -159,7 +160,7 @@ class HelpOutputBlock extends StatelessWidget {
                   style: base.copyWith(height: 1.4),
                   children: [
                     TextSpan(
-                      text: formatCommandDisplay(spec),
+                      text: localizedCommandDisplay(spec),
                       style: TextStyle(
                         color: c.primary,
                         fontWeight: FontWeight.w600,

@@ -187,6 +187,7 @@ class NymbotService {
     String? proModel,
     bool fresh = false,
     GitConfig? git,
+    Map<String, String>? cmdAlias,
   }) async {
     final res = await _botRequest(
       'pm',
@@ -195,6 +196,8 @@ class NymbotService {
         'fresh': fresh,
         if (proModel != null) 'proModel': proModel,
         if (git != null) 'git': git.toWire(),
+        // Lets the worker read a command the user typed in their own language.
+        if (cmdAlias != null) 'cmdAlias': cmdAlias,
       },
       pubkey: pubkey,
       auth: auth,

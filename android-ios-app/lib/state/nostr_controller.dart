@@ -20,11 +20,13 @@ import '../features/commands/action_rate_limit.dart';
 import '../features/mesh/ghost_mode.dart';
 import '../features/mesh/mesh_controller.dart';
 import '../features/commands/command_handler.dart';
+import '../features/commands/command_i18n.dart';
 import '../features/commands/command_registry.dart';
 import '../features/emoji/custom_emoji.dart';
 import '../features/groups/group_logic.dart';
 import '../features/groups/group_manager.dart';
 import '../features/i18n/i18n.dart';
+import '../features/i18n/localization_service.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/notifications/notifications_service.dart';
 import '../features/shop/shop_controller.dart';
@@ -318,7 +320,7 @@ class NostrController {
   void _emitSystemMessage(String text) {
     final sink = _systemMessageSink;
     if (sink != null) {
-      sink(text);
+      sink(localizeCommandTokensIn(text));
     } else {
       debugPrint('[system] $text');
     }
@@ -4217,7 +4219,7 @@ class NostrController {
       // encrypted, published, shown as bubbles, or stored — `?git` can carry a
       // GitHub access token that must never reach the relays.
       if (isVerifiedBot(view.id)) {
-        if (botPMCommandRe.hasMatch(trimmed)) {
+        if (botPMCommandRe.hasMatch(canonicalizeCommandInput(trimmed))) {
           unawaited(_ref
               .read(botChatControllerProvider.notifier)
               .handleBotPMCommand(trimmed));
@@ -10205,8 +10207,9 @@ class NostrController {
   bool shouldRouteToBot(String text) {
     final state = _ref.read(appStateProvider);
     if (state.view.kind != ViewKind.channel) return false;
-    if (isBotCommand(text) || isNymbotMention(text)) return true;
-    final body = _quoteBody(text);
+    final canonical = canonicalizeCommandInput(text);
+    if (isBotCommand(canonical) || isNymbotMention(text)) return true;
+    final body = canonicalizeCommandInput(_quoteBody(text));
     if (body != text.trim() && (isBotCommand(body) || isNymbotMention(body))) {
       return true;
     }
@@ -10281,7 +10284,11 @@ class NostrController {
     // Command detection runs on the non-quoted body (the PWA uses `rawInput`;
     // a quote prepend would hide the `?` prefix).
     final body = _quoteBody(rawText);
-    var content = body.isNotEmpty ? body : rawText.trim();
+    // A `?` command typed in the user's language is folded back to its
+    // canonical English token before parsing; the published message keeps the
+    // words the user actually wrote.
+    var content =
+        canonicalizeCommandInput(body.isNotEmpty ? body : rawText.trim());
 
     // @Nymbot mention → ?ask <question> (commands.js:14-26). A bare @Nymbot
     // with a quote uses the quoted text as the question (commands.js:19-25).
@@ -10372,6 +10379,7 @@ class NostrController {
         'publishedContent': rawText,
         'channelMessages': channelMessages,
         'activeUsers': activeUsers,
+        'lang': LocalizationService.instance.language,
       });
       final event = data['event'];
       if (event is Map) {

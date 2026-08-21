@@ -32,6 +32,7 @@ import '../../widgets/context_menu/interaction_hooks.dart'
 import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
 import '../shop/shop_controller.dart' show shopControllerProvider;
+import '../commands/command_i18n.dart';
 import 'bot_commands.dart';
 import 'nymbot_models.dart';
 import 'nymbot_service.dart';
@@ -569,7 +570,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       // never re-bill (the PWA gates its reply flow on the live send path).
       if (m.isHistorical || nowMs - m.timestamp > 15000) continue;
       final content = m.content;
-      if (botPMCommandRe.hasMatch(content)) {
+      if (botPMCommandRe.hasMatch(canonicalizeCommandInput(content))) {
         // Control commands never render as bubbles (PWA intercepts them before
         // publish); pull the echo back out, then run the command.
         _app.removeMessage(m.id);
@@ -691,7 +692,9 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// Executes a `?` control command typed in the bot PM. On-device only — never
   /// published, never billed (pms.js:2393-2445).
   Future<void> handleBotPMCommand(String content) async {
-    final trimmed = content.trim();
+    // A command typed in the user's language is folded back to its canonical
+    // English token before any of the ?command matching below.
+    final trimmed = canonicalizeCommandInput(content.trim());
     _markBotPMReceipts('delivered');
     _markBotPMReceipts('read');
     if (RegExp(r'^\?(help|commands)\b', caseSensitive: false)
@@ -955,6 +958,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         // Repo mode rides only on Pro replies with a connected repo
         // (pms.js:2455-2466).
         git: (pro != null && git != null && git.hasRepo) ? git : null,
+        cmdAlias: commandAliasHint(m.content),
       );
       if (!mounted) return;
       _setBotTyping(false);
