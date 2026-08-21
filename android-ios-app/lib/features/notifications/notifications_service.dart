@@ -108,6 +108,24 @@ class NotifyContext {
   final NotificationKind kind;
 }
 
+/// The text a notification should SHOW for a message.
+///
+/// A quote reply carries the quoted message first (`> @author: …`), so the raw
+/// content would open the notification with the recipient's own words and push
+/// the actual reply out of the preview. Dropping the quoted lines shows what
+/// was said back, which is the part being notified about.
+///
+/// A message that is ONLY a quote (no reply text) keeps its content rather
+/// than notifying with an empty body.
+String notificationBodyFor(String content) {
+  final body = content
+      .split('\n')
+      .where((l) => !l.trimLeft().startsWith('>'))
+      .join('\n')
+      .trim();
+  return body.isEmpty ? content.trim() : body;
+}
+
 /// The conversation surface an inbound message belongs to, for notification
 /// gating (channel = public geohash/named; pm; group).
 enum NotifyKind { channel, pm, group }

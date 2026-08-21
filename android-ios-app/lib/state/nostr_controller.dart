@@ -30,6 +30,7 @@ import '../features/i18n/localization_service.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/notifications/background_catch_up.dart';
 import '../features/notifications/notification_routing.dart';
+import '../features/notifications/self_reference.dart';
 import '../features/notifications/notifications_service.dart';
 import '../services/notification_service.dart' show NotificationService;
 import '../features/shop/shop_controller.dart';
@@ -1728,26 +1729,22 @@ class NostrController {
   /// True when [content] @-mentions the self nym (messages.js `isMentioned`):
   /// matches `@<nym>` optionally followed by our `#suffix`, ignoring blockquoted
   /// (`>`-prefixed) lines so a quoted mention doesn't notify.
-  bool _mentionsSelf(String content) {
+  /// Whether [content] refers to us — an @-mention outside any quote, or a
+  /// quote reply TO one of our own messages.
+  ///
+  /// Both count as being addressed, and both must, because they are the two
+  /// ways the UI offers to reply to someone: type their name, or hit reply and
+  /// quote them. Only the first used to notify — a quote reply's sole
+  /// reference to its recipient sits inside a `> @nym: …` line, which the
+  /// mention scan deliberately skips.
+  bool _refersToSelf(String content) {
     final identity = _identity;
     if (identity == null || content.isEmpty) return false;
-    final cleanNym = stripPubkeySuffix(identity.nym);
-    if (cleanNym.isEmpty) return false;
+    final nym = stripPubkeySuffix(identity.nym);
+    if (nym.isEmpty) return false;
     final suffix = getPubkeySuffix(identity.pubkey);
-    // Strip blockquoted lines (mentions inside quotes don't count).
-    final scrubbed = content
-        .split('\n')
-        .where((l) => !l.trimLeft().startsWith('>'))
-        .join('\n');
-    final esc = RegExp.escape(cleanNym);
-    final sfx = RegExp.escape(suffix);
-    // `@nym` followed by `#suffix` OR a boundary that isn't a *different*
-    // #abcd suffix (mirrors `_getMentionPattern`'s tail).
-    final tail = sfx.isNotEmpty
-        ? '(?:#$sfx\\b|(?!#[0-9a-f]{4})(?:\\b|\$))'
-        : '(?!#[0-9a-f]{4})(?:\\b|\$)';
-    final pattern = RegExp('@$esc$tail', caseSensitive: false);
-    return pattern.hasMatch(scrubbed);
+    return mentionsSelf(content: content, nym: nym, suffix: suffix) ||
+        quotesSelf(content: content, nym: nym, suffix: suffix);
   }
 
   /// Whether a message at [createdAtSec] is historical (replayed backlog):
@@ -1806,7 +1803,7 @@ class NostrController {
     final appState = _ref.read(appStateProvider);
     final isBlocked = appState.blockedUsers.contains(e.pubkey);
     final key = EventMapper.channelKeyOf(e);
-    final mention = _mentionsSelf(e.content);
+    final mention = _refersToSelf(e.content);
     final isActive = key != null && _isActiveView(key);
     // Record gate (history) vs alert gate (sound/popup). A historical channel
     // mention is still added to history silently (nostr-core.js:546-555:
@@ -1841,7 +1838,8 @@ class NostrController {
         key != null ? (key.startsWith('#') ? key.substring(1) : key) : '';
     _dispatchNotification(
       title: _nymDisplayFor(e.pubkey),
-      body: e.content,
+      // Quote replies lead with the quoted message; show the reply itself.
+      body: notificationBodyFor(e.content),
       senderPubkey: e.pubkey,
       isFriend: appState.isFriend(e.pubkey),
       isMention: mention,
@@ -1871,7 +1869,7 @@ class NostrController {
   /// qualify unless mentions-only is on and the message isn't a mention.
   void _maybeNotifyMessage(Message m, {required bool isGroup}) {
     final appState = _ref.read(appStateProvider);
-    final mention = _mentionsSelf(m.content);
+    final mention = _refersToSelf(m.content);
     final key = m.conversationKey ??
         (isGroup
             ? GroupLogic.groupStorageKey(m.groupId ?? '')
@@ -1912,7 +1910,7 @@ class NostrController {
       // is carried as the `in <GroupName>` context label below (mirrors the PWA
       // modal pulling `groupName` from the context, not rendering the raw title).
       title: m.author,
-      body: m.content,
+      body: notificationBodyFor(m.content),
       senderPubkey: m.pubkey,
       isFriend: appState.isFriend(m.pubkey),
       isMention: mention,

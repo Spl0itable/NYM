@@ -127,6 +127,26 @@ void main() {
     expect(n['conversationKey'], 'pm:$peer');
   });
 
+  test('a quote reply shows the reply, not the quoted message', () async {
+    // The raw content leads with the recipient's own words; a notification that
+    // previewed those would say nothing about what was actually replied.
+    expect(
+      notificationBodyFor('> @luxas#ab12: my original message\n\nnice one'),
+      'nice one',
+    );
+    expect(
+      notificationBodyFor('> @luxas: a\n> b\n\nagreed, and more'),
+      'agreed, and more',
+    );
+    // A bare quote with no reply text keeps its content rather than going out
+    // with an empty body.
+    expect(
+      notificationBodyFor('> @luxas#ab12: just this'),
+      '> @luxas#ab12: just this',
+    );
+    expect(notificationBodyFor('plain message'), 'plain message');
+  });
+
   test('notifications disabled in-app posts nothing', () async {
     await boot(prefs: {StorageKeys.notificationsEnabled: 'false'});
     await svc.notify(
