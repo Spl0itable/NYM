@@ -160,6 +160,24 @@ void main() {
     expect(local.posted, isEmpty);
   });
 
+  test('a blocked sender posts nothing', () async {
+    // The controller returns before reaching here, but the service gates on
+    // the flag too — and that check spent its whole life reading a value
+    // nobody passed.
+    await boot();
+    await svc.notify(
+      title: 'blocked person',
+      body: 'let me in',
+      context: NotifyContext(
+        senderPubkey: peer,
+        eventId: 'blocked-1',
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        isBlocked: true,
+      ),
+    );
+    expect(local.posted, isEmpty);
+  });
+
   test('a message older than the alert window posts nothing', () async {
     await boot();
     await svc.notify(

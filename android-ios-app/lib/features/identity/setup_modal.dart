@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/constants/site_links.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/bech32_codec.dart';
 import '../../core/theme/nym_colors.dart';
@@ -735,7 +736,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
               decoration: TextDecoration.underline,
               decorationColor: c.secondary,
             ),
-            recognizer: _linkTap('https://web.nymchat.app/static/tos.html'),
+            recognizer: _linkTap(kTermsUrl),
           ),
           TextSpan(text: tr(' and ')),
           TextSpan(
@@ -745,7 +746,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
               decoration: TextDecoration.underline,
               decorationColor: c.secondary,
             ),
-            recognizer: _linkTap('https://web.nymchat.app/static/pp.html'),
+            recognizer: _linkTap(kPrivacyUrl),
           ),
           const TextSpan(text: '.'),
         ],

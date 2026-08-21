@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/constants/site_links.dart';
 import '../../core/crypto/keys.dart' show hexToBytes;
 import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../core/theme/nym_colors.dart';
@@ -18,11 +19,6 @@ import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
 import 'settings_widgets.dart';
-
-/// Absolute base for the PWA's relative `static/*.html` legal pages. The PWA
-/// serves them from its own origin; on native we point at the same files in the
-/// public source repo so the links are real and tappable (gap report F14).
-const String _kStaticBase = 'https://github.com/Spl0itable/NYM/blob/main/';
 
 /// Bundled fallback for the About-header version, shown until the live version
 /// resolves (and if the fetch fails offline). Kept in sync with the main
@@ -543,8 +539,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               spacing: 12,
               runSpacing: 4,
               children: [
-                _link(c, tr('source'), 'https://github.com/Spl0itable/NYM',
-                    size: 11),
+                _link(c, tr('source'), kGithubUrl, size: 11),
               ],
             ),
           ),
@@ -758,10 +753,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       spacing: 14,
       runSpacing: 6,
       children: [
-        _link(c, 'GitHub', 'https://github.com/Spl0itable/NYM'),
-        _link(c, tr('Terms of Service'), 'static/tos.html'),
-        _link(c, tr('Privacy Policy'), 'static/pp.html'),
-        _link(c, 'DMCA', 'static/dmca.html'),
+        _link(c, tr('Docs'), kDocsUrl),
+        _link(c, 'GitHub', kGithubUrl),
+        _link(c, tr('Terms of Service'), kTermsUrl),
+        _link(c, tr('Privacy Policy'), kPrivacyUrl),
+        _link(c, 'DMCA', kDmcaUrl),
       ],
     );
   }
@@ -849,11 +845,11 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     );
   }
 
-  /// Opens [url] externally (F14). Relative `static/*` legal pages are resolved
-  /// against the source-repo base.
+  /// Opens [url] externally (F14). Every link is absolute now that the public
+  /// pages live on the apex domain (`site_links.dart`), so there is nothing
+  /// left to resolve against a base.
   Future<void> _openLink(String url) async {
-    final abs = url.startsWith('http') ? url : '$_kStaticBase$url';
-    final uri = Uri.tryParse(abs);
+    final uri = Uri.tryParse(url);
     if (uri == null) return;
     try {
       await launchUrl(uri, mode: LaunchMode.externalApplication);

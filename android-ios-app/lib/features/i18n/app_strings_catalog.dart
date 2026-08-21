@@ -304,6 +304,7 @@ const List<String> kAppStringsCatalog = <String>[
   'Disconnect',
   'Disconnecting from Nymchat...',
   'Distance',
+  'Docs',
   'Don\'t ask again',
   'Done',
   'Dots',

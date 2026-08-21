@@ -1979,6 +1979,26 @@ class NostrController {
     // precede the loud path: a fresh Nymbot PM reply landing while another
     // conversation is active would otherwise raise sound + popup.
     if (isVerifiedBot(senderPubkey)) return;
+    // A blocked user reaches neither the bell nor the phone, and this is the
+    // ONE place that has to be true — every caller checked for itself before,
+    // which held for the Nostr paths and did not for the Bluetooth-mesh ones
+    // (`mesh_bridge` had no block check at all, so a blocked peer's mesh PM
+    // still buzzed). Gating centrally makes it a property of dispatch rather
+    // than of each caller remembering.
+    final blockState = _ref.read(appStateProvider);
+    final isBlocked =
+        senderPubkey.isNotEmpty && blockState.blockedUsers.contains(senderPubkey);
+    if (isBlocked) return;
+    // Blocked KEYWORDS hide a message from the UI (`AppState.shouldHide`), so
+    // notifying about one means buzzing about something the user cannot then
+    // read. Matched against the body plus the sender's nym, exactly like the
+    // render-time filter.
+    if (blockState.hasBlockedKeyword(
+      body,
+      senderPubkey.isEmpty ? null : _nymDisplayFor(senderPubkey),
+    )) {
+      return;
+    }
     // Friends-only gates BOTH halves at the entry points (notifications.js:12
     // and :124): with the preference ON, a non-friend's notification neither
     // alerts nor enters the bell history (the message/channel callers pre-gate
@@ -2007,6 +2027,11 @@ class NostrController {
               isFriend: isFriend,
               isMention: isMention,
               isGroup: isGroup,
+              // The service gates on this too. It was never passed, so that
+              // check could only ever read false — a backstop that backstopped
+              // nothing. The central gate above already returned; this keeps
+              // the second line real.
+              isBlocked: isBlocked,
               // Tapping the notification opens the conversation it came from.
               // This was previously null, so a tapped notification opened the
               // app on whatever view it had last and left the user to find the
