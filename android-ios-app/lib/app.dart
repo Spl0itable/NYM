@@ -14,6 +14,7 @@ import 'features/onboarding/boot_gate.dart';
 import 'features/share/share_intake.dart';
 import 'services/firebase_messaging_service.dart';
 import 'services/notification_service.dart';
+import 'services/platform/background_connectivity.dart';
 import 'services/platform/deep_link_target.dart';
 import 'services/platform/deep_links.dart';
 import 'state/nostr_controller.dart';
@@ -33,6 +34,13 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   DeepLinkService? _deepLinks;
   StreamSubscription<String>? _payloadSub;
   ShareIntake? _shareIntake;
+
+  /// OS-level keep-alive for the "Stay Connected in Background" setting. Only
+  /// runs while the app is actually backgrounded WITH the setting on; it is
+  /// released on every resume so a foregrounded app never carries the
+  /// notification (Android) or an open background task (iOS).
+  final BackgroundConnectivityService _backgroundConnectivity =
+      BackgroundConnectivityService();
 
   /// Lets sign-out clear any dialogs/modals pushed above the boot gate. The
   /// remount (keyed [BootGate]) replaces the gate's content, but pushed routes
@@ -102,6 +110,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     _payloadSub?.cancel();
     _deepLinks?.dispose();
     _shareIntake?.dispose();
+    unawaited(_backgroundConnectivity.stop());
     super.dispose();
   }
 
@@ -114,16 +123,47 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     // active channel on `visibilitychange`). Guarded so a missing controller in
     // tests/headless never throws.
     if (state == AppLifecycleState.resumed) {
+      // Foreground again: the OS keep-alive has nothing left to protect, and
+      // holding it would leave the Android notification up while the user is
+      // looking at the app.
+      unawaited(_backgroundConnectivity.stop());
       try {
         ref.read(nostrControllerProvider).onAppResumed();
       } catch (_) {}
-    } else {
-      // Backgrounded / hidden / inactive: pause the geo-relay keep-alive so it
-      // doesn't fire reconnects off-screen (the PWA's `document.hidden` skip).
-      try {
-        ref.read(nostrControllerProvider).onAppPaused();
-      } catch (_) {}
+      return;
     }
+
+    // Backgrounded / hidden / inactive. With "Stay Connected in Background" on
+    // we ask the OS to keep the relay sockets and the mesh radio running and
+    // leave the geo-relay keep-alive pinging; otherwise we pause it so it
+    // doesn't fire reconnects off-screen (the PWA's `document.hidden` skip).
+    var keepAlive = false;
+    try {
+      keepAlive = ref.read(settingsProvider).backgroundConnectivity;
+    } catch (_) {
+      // No settings store (tests) — behave as before: pause everything.
+    }
+    // Started at the FIRST sign of leaving (`inactive`), not once we are fully
+    // `paused`: Android 12+ refuses to start a foreground service from the
+    // background, and by `onStop` the app can already count as background. A
+    // transient `inactive` (a permission dialog, the app switcher) that returns
+    // to `resumed` releases it again immediately, so the cost of starting early
+    // is at worst a brief notification. `detached` is teardown: release it
+    // there, or the notification would outlive the process that justifies it.
+    if (keepAlive && state != AppLifecycleState.detached) {
+      var mesh = false;
+      try {
+        mesh = ref.read(settingsProvider).meshEnabled;
+      } catch (_) {}
+      unawaited(_backgroundConnectivity.start(mesh: mesh));
+    } else {
+      unawaited(_backgroundConnectivity.stop());
+    }
+    try {
+      ref
+          .read(nostrControllerProvider)
+          .onAppPaused(keepConnectionsAlive: keepAlive);
+    } catch (_) {}
   }
 
   void _syncBrightness() {
@@ -177,6 +217,15 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     ref.listen<String>(settingsProvider.select((s) => s.uiLanguage), (_, next) {
       LocalizationService.instance.setLanguage(next);
     });
+    // Turning "Stay Connected in Background" off — here or on another device,
+    // whose change arrives through the settings sync — releases the keep-alive
+    // immediately rather than at the next resume.
+    ref.listen<bool>(
+      settingsProvider.select((s) => s.backgroundConnectivity),
+      (_, next) {
+        if (!next) unawaited(_backgroundConnectivity.stop());
+      },
+    );
     // Sign-out bumps the boot generation (nostr_controller `signOut`). Pop any
     // dialogs/modals stacked above the gate so the freshly-keyed BootGate below
     // (re-running the setup-needed check) is what the user lands on.

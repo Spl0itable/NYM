@@ -451,11 +451,31 @@ class SettingsController extends StateNotifier<Settings> {
     _syncedChanged();
   }
 
-  void setSwipeReactEmoji(String emoji) {
+  /// Commits a Quick-React emoji pick. Alongside the emoji itself this stamps
+  /// [StorageKeys.swipeReactEmojiTs] with "now", which is what makes the pick
+  /// defensible: the stamp rides the cross-device publish, so a settings blob
+  /// written BEFORE this moment (an older build's ❤️ default, or a device that
+  /// never picked one) is recognised as stale on the way back in and rejected
+  /// instead of silently reverting the choice on the next launch.
+  ///
+  /// [remoteTs] carries the stamp of an INBOUND pick being applied from another
+  /// device, so this device stores the originating time rather than the time it
+  /// happened to receive it — otherwise every apply would look like a newer
+  /// local pick and the two devices would fight.
+  void setSwipeReactEmoji(String emoji, {int? remoteTs}) {
     _kv.setString(StorageKeys.swipeReactEmoji, emoji);
+    _kv.setInt(
+      StorageKeys.swipeReactEmojiTs,
+      remoteTs ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    );
     state = state.copyWith(swipeReactEmoji: emoji);
     _syncedChanged();
   }
+
+  /// Unix seconds of this device's last Quick-React emoji pick, or 0 when the
+  /// user has never chosen one (so any incoming value may apply).
+  int get swipeReactEmojiTs =>
+      _kv.getInt(StorageKeys.swipeReactEmojiTs, defaultValue: 0);
 
   // --- Data & Backup --------------------------------------------------------
 
@@ -469,6 +489,16 @@ class SettingsController extends StateNotifier<Settings> {
     _kv.setBool(StorageKeys.lowDataMode, v);
     state = state.copyWith(lowDataMode: v);
     onLowDataModeChanged?.call(v);
+    _syncedChanged();
+  }
+
+  /// "Stay Connected in Background": keep the relay sockets and the Bluetooth
+  /// mesh running while the app is backgrounded. The platform keep-alive is
+  /// driven off the resulting state change by the app shell (`NymchatApp`
+  /// watches this field), so a remote/synced change reaches it too.
+  void setBackgroundConnectivity(bool v) {
+    _kv.setBool(StorageKeys.backgroundConnectivity, v);
+    state = state.copyWith(backgroundConnectivity: v);
     _syncedChanged();
   }
 

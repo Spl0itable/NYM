@@ -2769,7 +2769,7 @@ class NostrController {
     // Full settings payload through the same apply path as cross-device sync
     // (the PWA routes it through `applyNostrSettings`), then republish our own
     // sync (`saveSyncedSettings`).
-    _applySyncedSettings(transfer.settings);
+    _applySyncedSettings(transfer.settings, userAcceptedTransfer: true);
     final lightning = transfer.settings['lightningAddress'];
     if (lightning is String && lightning.isNotEmpty && identity != null) {
       _ref.read(keyValueStoreProvider).setString(
@@ -7992,8 +7992,23 @@ class NostrController {
   /// fire reconnect attempts while off-screen (the PWA's `document.hidden`
   /// skip in `startGeoRelayKeepAlive`, relays.js:144). [onAppResumed] re-runs
   /// `_onViewOpened`, which restarts it when a geohash channel is still active.
-  void onAppPaused() {
-    _service?.stopGeoRelayKeepAlive();
+  ///
+  /// With [keepConnectionsAlive] (the "Stay Connected in Background" setting)
+  /// the keep-alive stays running instead: the whole point of that setting is
+  /// that the relay sockets survive the background transition, and a socket
+  /// nobody pings is the first thing the network drops.
+  ///
+  /// Either way a settings publish still sitting on its 5s debounce is flushed
+  /// now — backgrounding is the last moment we are sure to get, and the process
+  /// may not be alive when the timer would have fired.
+  void onAppPaused({bool keepConnectionsAlive = false}) {
+    if (!keepConnectionsAlive) {
+      _service?.stopGeoRelayKeepAlive();
+    }
+    // Only when something is actually queued: this also runs on the transient
+    // `inactive` state (a permission dialog, the app switcher), and an
+    // unconditional flush would re-encode every section for nothing.
+    if (_settingsSyncTimer != null) flushSettingsSyncNow();
   }
 
   /// Per-channel in-flight backfill (channels.js `_channelD1FetchedAt`). The
@@ -8797,7 +8812,15 @@ class NostrController {
   /// Applies a decoded synced-settings payload (PWA field names) into the
   /// [SettingsController] via its typed setters. Unknown / device-local keys are
   /// ignored. Wrapped so a single bad field can't abort the merge.
-  void _applySyncedSettings(Map<String, dynamic> p) {
+  ///
+  /// [userAcceptedTransfer] marks the one payload that is not a cross-device
+  /// echo but a deliberate "give me their settings" action, so the fields that
+  /// otherwise defend a local choice against a stale blob (the Quick React
+  /// emoji) apply unconditionally.
+  void _applySyncedSettings(
+    Map<String, dynamic> p, {
+    bool userAcceptedTransfer = false,
+  }) {
     final c = _ref.read(settingsProvider.notifier);
     void str(String key, void Function(String) set) {
       final v = p[key];
@@ -8945,14 +8968,45 @@ class NostrController {
         c.setSwipeThreshold(swipeThreshold.toInt());
       } catch (_) {}
     }
+    // Quick React emoji: last-writer-wins against THIS device's own pick.
+    //
+    // The apply below is otherwise unconditional and runs on every boot, so a
+    // settings blob that predates the pick — an older build's ❤️ default, or
+    // another device that never chose one — used to overwrite the choice each
+    // launch, which is exactly what "the emoji keeps reverting" looked like.
+    // The publish carries the moment of the pick (`swipeReactEmojiTs`), so an
+    // older value can be recognised and refused; when we refuse one we
+    // re-publish ours so the stale blob is healed rather than re-fought on the
+    // next launch.
     final swipeEmoji = p['swipeReactEmoji'];
-    if (swipeEmoji is String && isValidSwipeReactEmoji(swipeEmoji)) {
-      try {
-        c.setSwipeReactEmoji(swipeEmoji);
-      } catch (_) {}
+    if (swipeEmoji is String) {
+      final rawEmojiTs = p['swipeReactEmojiTs'];
+      final remoteEmojiTs = rawEmojiTs is num ? rawEmojiTs.toInt() : 0;
+      // An accepted transfer is the user asking for the sender's choice, so it
+      // applies as if picked here and now.
+      if (userAcceptedTransfer
+          ? isValidSwipeReactEmoji(swipeEmoji)
+          : shouldApplySyncedSwipeReactEmoji(
+              value: swipeEmoji,
+              remoteTs: remoteEmojiTs,
+              localTs: c.swipeReactEmojiTs,
+            )) {
+        try {
+          c.setSwipeReactEmoji(
+            swipeEmoji,
+            remoteTs: userAcceptedTransfer ? null : remoteEmojiTs,
+          );
+        } catch (_) {}
+      } else if (isValidSwipeReactEmoji(swipeEmoji) &&
+          swipeEmoji != _ref.read(settingsProvider).swipeReactEmoji) {
+        // Stale blob still carrying the pre-pick value: republish ours so it is
+        // healed instead of being re-fought at every launch.
+        syncSettings();
+      }
     }
     boolean('sortByProximity', c.setSortByProximity);
     boolean('lowDataMode', c.setLowDataMode);
+    boolean('backgroundConnectivity', c.setBackgroundConnectivity);
     boolean('cachePMs', c.setCachePMs);
     // Favorite custom emoji packs / default emoji categories replace the local
     // lists so an unfavorite on one device propagates (applyNostrSettings,
@@ -9464,6 +9518,28 @@ class NostrController {
     _settingsSyncTimer = Timer(const Duration(seconds: 5), () {
       unawaited(_flushSettingsSync(sync));
     });
+  }
+
+  /// Publishes the pending synced settings IMMEDIATELY, skipping the 5s
+  /// debounce, under the same gates as [syncSettings]. For a change the user
+  /// makes and then walks away from — picking a Quick React emoji and closing
+  /// the app, or backgrounding mid-debounce — the timer would otherwise never
+  /// fire and the choice would never reach D1, leaving the previous blob to be
+  /// re-applied over it on the next launch.
+  void flushSettingsSyncNow() {
+    final sync = _storageSync;
+    if (sync == null) return;
+    if (!_settingsHydrated) {
+      _settingsSavePending = true;
+      return;
+    }
+    if (_identity?.loginMethod == null) {
+      final mode = _ref.read(settingsProvider.notifier).keypairMode;
+      if (mode == 'random' || mode == 'hardcore') return;
+    }
+    _settingsSyncTimer?.cancel();
+    _settingsSyncTimer = null;
+    unawaited(_flushSettingsSync(sync));
   }
 
   Future<void> _flushSettingsSync(StorageSync sync) async {

@@ -33,6 +33,7 @@ class Settings {
     this.chatViewMode = 'single',
     this.columnsWallpaper = false,
     this.lowDataMode = false,
+    this.backgroundConnectivity = false,
     this.meshEnabled = true,
     this.textSize = 15,
     this.transparencyEnabled = false,
@@ -76,6 +77,12 @@ class Settings {
   final String chatViewMode; // 'single' | 'columns'
   final bool columnsWallpaper;
   final bool lowDataMode;
+
+  /// When true, the app asks the OS to keep the Nostr relay sockets and the
+  /// Bluetooth mesh radio alive while it is backgrounded, instead of letting
+  /// every connection drop the moment the user leaves the app. Persisted as
+  /// [StorageKeys.backgroundConnectivity]; costs battery, so it is opt-in.
+  final bool backgroundConnectivity;
 
   /// When true, the Bluetooth mesh transport (bitchat-compatible offline mesh)
   /// is active alongside the Nostr relays. Persisted as [StorageKeys.meshEnabled].
@@ -163,6 +170,7 @@ class Settings {
     String? chatViewMode,
     bool? columnsWallpaper,
     bool? lowDataMode,
+    bool? backgroundConnectivity,
     bool? meshEnabled,
     int? textSize,
     bool? transparencyEnabled,
@@ -208,6 +216,8 @@ class Settings {
       chatViewMode: chatViewMode ?? this.chatViewMode,
       columnsWallpaper: columnsWallpaper ?? this.columnsWallpaper,
       lowDataMode: lowDataMode ?? this.lowDataMode,
+      backgroundConnectivity:
+          backgroundConnectivity ?? this.backgroundConnectivity,
       meshEnabled: meshEnabled ?? this.meshEnabled,
       textSize: textSize ?? this.textSize,
       transparencyEnabled: transparencyEnabled ?? this.transparencyEnabled,
@@ -310,6 +320,8 @@ class Settings {
       columnsWallpaper:
           kv.getBool(StorageKeys.columnsWallpaper, defaultValue: false),
       lowDataMode: kv.getBool(StorageKeys.lowDataMode, defaultValue: false),
+      backgroundConnectivity: kv.getBool(StorageKeys.backgroundConnectivity,
+          defaultValue: false),
       // Mesh runs by default; the radio only actually starts once Bluetooth
       // permission is granted. Users who explicitly turn it off keep it off.
       meshEnabled: kv.getBool(StorageKeys.meshEnabled, defaultValue: true),
@@ -369,4 +381,25 @@ bool isValidSwipeReactEmoji(String value) {
   if (value.isEmpty) return false;
   if (_swipeReactShortcodeRe.hasMatch(value)) return true;
   return value.length <= 16 && !_swipeReactTextishRe.hasMatch(value);
+}
+
+/// Whether a swipe-react emoji arriving from the settings sync may replace the
+/// one this device holds.
+///
+/// The settings apply is otherwise unconditional and runs on every boot, so
+/// without this a blob written BEFORE the user's pick — an older build's ❤️
+/// default, or another device that never chose one — overwrote the choice at
+/// every launch: the "quick react keeps reverting" bug.
+///
+/// [remoteTs] is the published `swipeReactEmojiTs` (0 when the payload predates
+/// the stamp) and [localTs] is [StorageKeys.swipeReactEmojiTs] — 0 on a device
+/// whose user never picked one, which is why anything still applies there.
+/// Equal stamps apply so a device's own echo is a harmless no-op re-set.
+bool shouldApplySyncedSwipeReactEmoji({
+  required String value,
+  required int remoteTs,
+  required int localTs,
+}) {
+  if (!isValidSwipeReactEmoji(value)) return false;
+  return remoteTs >= localTs;
 }

@@ -188,11 +188,28 @@ void main() {
 
       ctrl.setSwipeReactEmoji('🔥');
       expect(reload().swipeReactEmoji, '🔥');
+      // The pick is stamped, so a settings blob published before this moment
+      // is recognisable as stale on the way back in instead of reverting it.
+      expect(ctrl.swipeReactEmojiTs, greaterThan(0));
+
+      // An inbound pick from another device keeps ITS stamp — stamping the
+      // receive time instead would make every apply look like a newer local
+      // pick and leave two devices fighting over the emoji.
+      ctrl.setSwipeReactEmoji(':blobcat_hug:', remoteTs: 1750000000);
+      expect(reload().swipeReactEmoji, ':blobcat_hug:');
+      expect(ctrl.swipeReactEmojiTs, 1750000000);
     });
 
     test('data setters', () {
       ctrl.setLowDataMode(true);
       expect(reload().lowDataMode, true);
+
+      // Off by default: keeping the radios up in the background costs battery.
+      expect(const Settings().backgroundConnectivity, false);
+      ctrl.setBackgroundConnectivity(true);
+      expect(reload().backgroundConnectivity, true);
+      ctrl.setBackgroundConnectivity(false);
+      expect(reload().backgroundConnectivity, false);
     });
   });
 

@@ -151,6 +151,118 @@ void main() {
       expect(chosenDefault['messaging']!['swipeReactEmoji'], '❤️');
     });
 
+    // The pick's timestamp is what lets the receiving side tell a fresh choice
+    // from a blob written before it. Without it, the boot apply (unconditional
+    // by design) put the older value straight back over the pick.
+    test('a picked swipeReactEmoji publishes the moment it was picked',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = KeyValueStore(await SharedPreferences.getInstance());
+
+      // Never picked: neither the emoji nor a stamp is published.
+      final untouched =
+          StorageSync.buildSectionPayloads(const Settings(), kv: kv);
+      expect(untouched['messaging']!.containsKey('swipeReactEmojiTs'), false);
+
+      await kv.setString(StorageKeys.swipeReactEmoji, '🔥');
+      await kv.setInt(StorageKeys.swipeReactEmojiTs, 1750000000);
+      final picked = StorageSync.buildSectionPayloads(
+        const Settings(swipeReactEmoji: '🔥'),
+        kv: kv,
+      );
+      expect(picked['messaging']!['swipeReactEmoji'], '🔥');
+      expect(picked['messaging']!['swipeReactEmojiTs'], 1750000000);
+    });
+
+    test('an inbound swipeReactEmoji cannot overwrite a newer local pick', () {
+      // Device never picked one (local stamp 0): anything applies, including a
+      // legacy blob that carries no stamp at all.
+      expect(
+        shouldApplySyncedSwipeReactEmoji(value: '🔥', remoteTs: 0, localTs: 0),
+        true,
+      );
+      // The pre-fix bug: a blob written before the local pick must be refused.
+      expect(
+        shouldApplySyncedSwipeReactEmoji(
+            value: '❤️', remoteTs: 0, localTs: 1750000000),
+        false,
+      );
+      expect(
+        shouldApplySyncedSwipeReactEmoji(
+            value: '❤️', remoteTs: 1749000000, localTs: 1750000000),
+        false,
+      );
+      // A genuinely newer pick from another device still wins.
+      expect(
+        shouldApplySyncedSwipeReactEmoji(
+            value: ':blobcat_hug:', remoteTs: 1750000001, localTs: 1750000000),
+        true,
+      );
+      // Our own echo (same stamp) applies as a harmless no-op re-set.
+      expect(
+        shouldApplySyncedSwipeReactEmoji(
+            value: '🔥', remoteTs: 1750000000, localTs: 1750000000),
+        true,
+      );
+      // An invalid value is refused whatever its stamp claims.
+      expect(
+        shouldApplySyncedSwipeReactEmoji(
+            value: 'just text', remoteTs: 9999999999, localTs: 0),
+        false,
+      );
+    });
+
+    // An oversized messaging section used to be skipped whole, which stranded
+    // every messaging SETTING (swipe actions, notification prefs, the Quick
+    // React emoji) on the device that had a big GIF/call/emoji cache.
+    test('the messaging trimmer sheds caches and never the settings', () {
+      final p = <String, dynamic>{
+        'v': 2,
+        'swipeReactEmoji': '🔥',
+        'swipeReactEmojiTs': 1750000000,
+        'gesturesEnabled': true,
+        'favoriteGifs': [
+          {'url': 'https://example.invalid/a.gif', 'title': 'a'}
+        ],
+        'recentEmojis': ['🔥', '❤️'],
+        'seenCalls': {
+          'call-1': {'t': 1, 's': 'answered'}
+        },
+        'emojiPackFavorites': ['pack'],
+        'emojiCategoryFavorites': ['smileys'],
+      };
+
+      // Least-harmful cache first, one per round, until nothing is left to shed.
+      expect(StorageSync.trimMessagingSection(p), true);
+      expect(p.containsKey('favoriteGifs'), false);
+      expect(StorageSync.trimMessagingSection(p), true);
+      expect(p.containsKey('recentEmojis'), false);
+      expect(StorageSync.trimMessagingSection(p), true);
+      expect(p.containsKey('seenCalls'), false);
+      expect(StorageSync.trimMessagingSection(p), true);
+      expect(StorageSync.trimMessagingSection(p), true);
+      expect(StorageSync.trimMessagingSection(p), false);
+
+      // The settings themselves survive every round — they are what the
+      // section exists to carry.
+      expect(p['swipeReactEmoji'], '🔥');
+      expect(p['swipeReactEmojiTs'], 1750000000);
+      expect(p['gesturesEnabled'], true);
+      expect(p['v'], 2);
+    });
+
+    test('backgroundConnectivity rides the data section', () {
+      final sections = StorageSync.buildSectionPayloads(
+        const Settings(backgroundConnectivity: true),
+      );
+      expect(sections['data']!['backgroundConnectivity'], true);
+      expect(
+        StorageSync.buildSectionPayloads(const Settings())['data']![
+            'backgroundConnectivity'],
+        false,
+      );
+    });
+
     test('isValidSwipeReactEmoji accepts shortcodes and ZWJ sequences', () {
       // Custom emoji from the picker — every one of these is longer than the
       // old 8-character cap.

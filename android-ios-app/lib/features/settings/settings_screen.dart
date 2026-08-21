@@ -21,6 +21,7 @@ import '../../models/channel.dart';
 import '../../models/settings.dart';
 import '../notifications/notifications_service.dart';
 import '../../services/location/geolocation.dart';
+import '../../services/platform/background_connectivity.dart';
 import '../../services/storage/secure_store.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -705,6 +706,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ctrl.setSwipeThreshold(d.swipeThreshold);
     ctrl.setSwipeReactEmoji(d.swipeReactEmoji);
     ctrl.setLowDataMode(d.lowDataMode);
+    ctrl.setBackgroundConnectivity(d.backgroundConnectivity);
 
     // KV-only Save-gated controls (not Settings fields). Skip keypair when
     // locked to 'persistent' by a logged-in Nostr identity (the select is
@@ -948,6 +950,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               // state AND a synced publish, so the pick can't be reverted by a
               // later boot/cross-device settings apply. Keep the draft in step.
               ctrl.setSwipeReactEmoji(emoji);
+              // Publish NOW rather than on the 5s debounce. A user who picks an
+              // emoji and immediately leaves the app never gets that timer, so
+              // the choice would sit only on this device — and the next launch
+              // would apply the older published blob straight over it.
+              ref.read(nostrControllerProvider).flushSettingsSyncNow();
               _mutate((d) => d.copyWith(swipeReactEmoji: emoji));
               ref.read(recentEmojisProvider.notifier).record(emoji);
             },
@@ -2506,6 +2513,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   List<_GroupSpec> _data(Settings s, SettingsController ctrl) {
     final transfers = ref.watch(pendingUserSettingsTransfersProvider);
     return [
+      // Keep-alive first: it is the one setting here that changes what the app
+      // does while the user is NOT looking at it, and the platforms that can
+      // honor it are the only ones it is offered on.
+      if (BackgroundConnectivityService.isSupported)
+        _GroupSpec(
+          text: tr('Stay Connected in Background Disabled Enabled Keeps relay '
+              'connections and the Bluetooth mesh running while the app is in '
+              'the background, so messages arrive without reopening it. Uses '
+              'more battery. Android shows a permanent notification while it '
+              'is on; iOS limits how long connections can be held.'),
+          child: FormGroup(
+            label: tr('Stay Connected in Background'),
+            hint: tr('Keeps relay connections and the Bluetooth mesh running '
+                'while the app is in the background, so messages arrive '
+                'without reopening it. Uses more battery. Android shows a '
+                'permanent notification while it is on; iOS limits how long '
+                'connections can be held.'),
+            // Save-gated like its Data & Backup siblings (09-M1): the platform
+            // keep-alive is started from the app shell when the setting's
+            // committed value flips, not from this dropdown.
+            child: FormSelect<bool>(
+              value: s.backgroundConnectivity,
+              items: [
+                (value: false, label: tr('Disabled')),
+                (value: true, label: tr('Enabled')),
+              ],
+              onChanged: (v) =>
+                  _mutate((d) => d.copyWith(backgroundConnectivity: v)),
+            ),
+          ),
+        ),
       _GroupSpec(
         text: tr('Low Data Mode Disabled Enabled Reduces bandwidth by '
             'connecting to only 5 default relays and loading geo relays '

@@ -152,6 +152,7 @@ class StorageSync {
       'swipeRightAction',
       'swipeThreshold',
       'swipeReactEmoji',
+      'swipeReactEmojiTs',
       'notificationsEnabled',
       'groupNotifyMentionsOnly',
       'notifyFriendsOnly',
@@ -171,6 +172,7 @@ class StorageSync {
     ],
     'data': [
       'lowDataMode',
+      'backgroundConnectivity',
       'cachePMs',
       'tutorialSeen',
       'botPmWelcomed',
@@ -285,6 +287,7 @@ class StorageSync {
       // `nym_hide_non_pinned === 'true'` (settings.js:126) — typed on native.
       'hideNonPinned': s.hideNonPinned,
       'lowDataMode': s.lowDataMode,
+      'backgroundConnectivity': s.backgroundConnectivity,
       'cachePMs': s.cachePMs,
     };
 
@@ -344,8 +347,14 @@ class StorageSync {
       // Only publish a swipe-react emoji the user actually picked. `Settings`
       // defaults the field to ❤️, so a device that never chose one would
       // otherwise broadcast that default over the pick made on another device.
+      // A real pick rides with the moment it was made, so the receiving side
+      // can tell a fresh choice from a blob that predates it (see
+      // `SettingsController.setSwipeReactEmoji`).
       if ((kv.getString(StorageKeys.swipeReactEmoji) ?? '').isEmpty) {
         flat.remove('swipeReactEmoji');
+      } else {
+        flat['swipeReactEmojiTs'] =
+            kv.getInt(StorageKeys.swipeReactEmojiTs, defaultValue: 0);
       }
       flat['groupNotifyMentionsOnly'] =
           kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
@@ -544,9 +553,11 @@ class StorageSync {
       final ok = await _publishCategoryWrap(
         Map<String, dynamic>.of(entry.value),
         sectionCategory(entry.key),
-        trim: entry.key == 'channels'
-            ? _channelsTrimmer(channelActivity ?? const {})
-            : null,
+        trim: switch (entry.key) {
+          'channels' => _channelsTrimmer(channelActivity ?? const {}),
+          'messaging' => trimMessagingSection,
+          _ => null,
+        },
       );
       if (ok) sent.add(entry.key);
     }
@@ -758,6 +769,40 @@ class StorageSync {
       }
       return false;
     };
+  }
+
+  /// Sheds the messaging section's bulk collections when the payload is too
+  /// large to publish, so the section still goes out instead of being skipped
+  /// whole. Public for tests.
+  ///
+  /// Without this, one user with a big favorite-GIF list or a long call log
+  /// silently loses EVERY messaging setting cross-device — swipe actions,
+  /// notification prefs, and the Quick React emoji among them, which then keeps
+  /// reverting to whatever the last publishable blob happened to hold. The
+  /// scalars are a few hundred bytes; the collections below are the only things
+  /// that can push the section over the wrap limit, and each is a convenience
+  /// cache that regenerates from use.
+  ///
+  /// Order is by increasing harm: favorite GIFs (re-favoritable), the recent-
+  /// emoji MRU (rebuilds as you type), the seen-call log (only affects
+  /// re-ringing a call already handled elsewhere), then the emoji favorites.
+  static bool trimMessagingSection(Map<String, dynamic> p) {
+    for (final key in const [
+      'favoriteGifs',
+      'recentEmojis',
+      'seenCalls',
+      'emojiPackFavorites',
+      'emojiCategoryFavorites',
+    ]) {
+      final v = p[key];
+      final isEmpty = (v is List && v.isEmpty) ||
+          (v is Map && v.isEmpty) ||
+          v == null;
+      if (isEmpty) continue;
+      p.remove(key);
+      return true;
+    }
+    return false;
   }
 
   /// Drops the oldest ~10% of the synced bell history

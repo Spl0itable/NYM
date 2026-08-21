@@ -47,6 +47,12 @@ class StorageKeys {
   static const wallpaperType = 'nym_wallpaper_type';
   static const wallpaperCustomUrl = 'nym_wallpaper_custom_url';
   static const lowDataMode = 'nym_low_data_mode';
+
+  /// Keep the Nostr relay sockets and the Bluetooth mesh radio running while
+  /// the app is backgrounded (Android: a foreground service with a persistent
+  /// notification; iOS: the declared background modes plus a background-task
+  /// window). Off by default — it costs battery.
+  static const backgroundConnectivity = 'nym_background_connectivity';
   static const meshEnabled = 'nym_mesh_enabled';
 
   /// Ghost Mode on/off. Device-local on purpose: it is not part of the synced
@@ -77,6 +83,12 @@ class StorageKeys {
   static const swipeRightAction = 'nym_swipe_right_action';
   static const swipeThreshold = 'nym_swipe_threshold';
   static const swipeReactEmoji = 'nym_swipe_react_emoji';
+
+  /// Unix seconds of the LAST local pick of [swipeReactEmoji]. Published
+  /// alongside the emoji so a settings blob written before the pick (an older
+  /// build's ❤️ default, or another device that never chose one) can be
+  /// recognised as stale and rejected instead of clobbering the choice.
+  static const swipeReactEmojiTs = 'nym_swipe_react_emoji_ts';
   static const translateLanguage = 'nym_translate_language';
   static const translateFavorites = 'nym_translate_favorites';
 

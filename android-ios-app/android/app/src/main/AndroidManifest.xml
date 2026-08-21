@@ -34,6 +34,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
+    <!-- "Stay Connected in Background": relay sockets (dataSync) and the BLE
+         mesh radio (connectedDevice) keep running while the app is off-screen.
+         Only used while that opt-in setting is on. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
 
     <!-- Notifications (local + future FCM). POST_NOTIFICATIONS needed on API 33+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -135,6 +140,13 @@
                 <data android:mimeType="video/*"/>
             </intent-filter>
         </activity>
+        <!-- "Stay Connected in Background" keep-alive. Not exported: only the
+             app itself starts or stops it. -->
+        <service
+            android:name=".NymBackgroundService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="dataSync|connectedDevice"/>
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
