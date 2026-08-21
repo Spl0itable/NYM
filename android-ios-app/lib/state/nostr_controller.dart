@@ -11,6 +11,7 @@ import '../core/crypto/keys.dart' as keys;
 import '../core/crypto/pow.dart' as pow;
 import '../core/crypto/schnorr.dart' as schnorr;
 import '../core/constants/event_kinds.dart';
+import '../features/channels/channel_share.dart';
 import '../core/constants/relays.dart';
 import '../core/constants/storage_keys.dart';
 import '../core/theme/nym_colors.dart';
@@ -4643,7 +4644,7 @@ class NostrController {
   void cmdShare() {
     final state = _ref.read(appStateProvider);
     if (state.view.kind != ViewKind.channel) return;
-    _emitSystemMessage('https://app.nym.bar/#${state.view.id}');
+    _emitSystemMessage(buildChannelShareUrl(state.view.id));
   }
 
   /// `/quit` — disconnect (cmdQuit). Stops the service; full reload is the

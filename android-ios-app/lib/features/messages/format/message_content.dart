@@ -139,7 +139,7 @@ class MessageContent extends ConsumerWidget {
     // `_attachLinkPreviews`), skipping inline-media URLs (already embedded).
     final previewUrls = _collectPreviewUrls(blocks);
 
-    // Tapping a `#ref` / `app.nym.bar/#…` link switches the active channel
+    // Tapping a `#ref` / `<share host>/#…` link switches the active channel
     // (`channelLink` / `channelReference` data-actions).
     void onChannelRef(String name, bool isGeohash) {
       final controller = ref.read(nostrControllerProvider);
@@ -438,7 +438,7 @@ class _RichInline extends StatelessWidget {
   /// Render glyphs in a monospace family (CRT).
   final bool monospace;
 
-  /// Switches the active channel when a `#ref` / `app.nym.bar/#…` link is tapped.
+  /// Switches the active channel when a `#ref` / `<share host>/#…` link is tapped.
   final void Function(String name, bool isGeohash)? onChannelRef;
 
   /// Opens the mentioned user's context menu when a `.nm-mention` chip is tapped.
@@ -738,7 +738,7 @@ class _ChannelRefTap extends TapGestureRecognizer {
   }
 }
 
-/// Taps an `app.nym.bar/#…` channel link → switch to the referenced channel.
+/// Taps a `<share host>/#…` channel link → switch to the referenced channel.
 /// [ref] is `g:<geohash>` or `c:<name>` (the PWA `data-channel-ref`).
 class _ChannelLinkTap extends TapGestureRecognizer {
   _ChannelLinkTap(String ref, void Function(String name, bool isGeohash) cb) {

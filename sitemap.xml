@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One URL, because the app is one page: everything else it shows is rendered
+     into it at runtime. The site's real sitemap, covering the marketing page,
+     the knowledge base and the legal documents in every published language, is
+     at https://nymchat.app/sitemap.xml. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://web.nymchat.app/</loc>
+    <changefreq>weekly</changefreq>
+  </url>
+</urlset>

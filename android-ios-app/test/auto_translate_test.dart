@@ -124,14 +124,23 @@ void main() {
       );
     });
 
-    test('always applies to the Nymbot welcome, even with the toggle off', () {
+    test('never applies to the Nymbot welcome — that is app copy', () {
+      // The welcome localizes through the UI-string cache
+      // (`localizeBotWelcome`), which needs no network once cached and follows
+      // a later language change. Machine-translating it here as well would
+      // race a second, differently-worded result into the same bubble.
       const off = Settings(autoTranslate: false);
-      expect(autoTranslateAppliesTo(_msg(id: 'nymbot-welcome'), off), isTrue);
-      expect(
-        autoTranslateAppliesTo(_msg(id: 'nymbot-welcome-1700000000'), off),
-        isTrue,
-      );
-      // …but never your own message or a system row.
+      const on = Settings(autoTranslate: true, translateLanguage: 'es');
+      for (final settings in [off, on]) {
+        expect(autoTranslateAppliesTo(_msg(id: 'nymbot-welcome'), settings),
+            isFalse);
+        expect(
+          autoTranslateAppliesTo(
+              _msg(id: 'nymbot-welcome-1700000000'), settings),
+          isFalse,
+        );
+      }
+      // Your own message and system rows stay excluded for their own reasons.
       expect(
         autoTranslateAppliesTo(_msg(id: 'nymbot-welcome', isOwn: true), off),
         isFalse,

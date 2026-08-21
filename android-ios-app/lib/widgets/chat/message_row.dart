@@ -2779,6 +2779,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     var displayContent = (_autoEntry?.isReady == true && !_showOriginal)
         ? _autoEntry!.translated
         : message.content;
+    // Nymbot's welcome is app copy, not something a peer wrote, so it renders
+    // through the UI-string cache like every other string the app authors —
+    // translated in the language chosen at signup, cached across launches, and
+    // following a later language change. The stored message keeps the English
+    // source, so nothing is frozen into the conversation.
+    displayContent = localizeBotWelcome(message.id, displayContent);
     // Nymbot answers with canonical command names; show them in the vocabulary
     // this device actually accepts.
     if (message.isBot ||

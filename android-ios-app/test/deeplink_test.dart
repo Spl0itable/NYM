@@ -30,27 +30,27 @@ class _FakeTarget implements DeepLinkTarget {
 void main() {
   group('parseNymLink', () {
     test('plain named channel → channel', () {
-      final link = parseNymLink('https://app.nymchat.app/#bitcoin');
+      final link = parseNymLink('https://web.nymchat.app/#bitcoin');
       expect(link, isNotNull);
       expect(link!.kind, NymLinkKind.channel);
       expect(link.channel, 'bitcoin');
     });
 
     test('lowercases a named channel', () {
-      final link = parseNymLink('https://app.nymchat.app/#Bitcoin');
+      final link = parseNymLink('https://web.nymchat.app/#Bitcoin');
       expect(link!.kind, NymLinkKind.channel);
       expect(link.channel, 'bitcoin');
     });
 
     test('geohash fragment → geohash', () {
-      final link = parseNymLink('https://app.nymchat.app/#9q8y');
+      final link = parseNymLink('https://web.nymchat.app/#9q8y');
       expect(link, isNotNull);
       expect(link!.kind, NymLinkKind.geohash);
       expect(link.channel, '9q8y');
     });
 
     test('#g:<id> → channelRef (g)', () {
-      final link = parseNymLink('https://app.nymchat.app/#g:9q8y');
+      final link = parseNymLink('https://web.nymchat.app/#g:9q8y');
       expect(link, isNotNull);
       expect(link!.kind, NymLinkKind.channelRef);
       expect(link.refPrefix, 'g');
@@ -58,7 +58,7 @@ void main() {
     });
 
     test('#c:<id> → channelRef (c)', () {
-      final link = parseNymLink('https://app.nymchat.app/#c:foo');
+      final link = parseNymLink('https://web.nymchat.app/#c:foo');
       expect(link, isNotNull);
       expect(link!.kind, NymLinkKind.channelRef);
       expect(link.refPrefix, 'c');
@@ -69,7 +69,7 @@ void main() {
       // The PWA emits `e:<hex event id>`; the id is sanitized like a channel
       // name (letters + digits only), so a hex id survives.
       final link =
-          parseNymLink('https://app.nym.bar/#e:deadbeef0123456789abcdef');
+          parseNymLink('https://web.nymchat.app/#e:deadbeef0123456789abcdef');
       expect(link, isNotNull);
       expect(link!.kind, NymLinkKind.channelRef);
       expect(link.refPrefix, 'e');
@@ -78,7 +78,7 @@ void main() {
 
     test('#gjoin=<token> → groupInvite with parsed payload', () {
       final link =
-          parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken');
+          parseNymLink('https://web.nymchat.app/#gjoin=$kValidInviteToken');
       expect(link, isNotNull);
       expect(link!.kind, NymLinkKind.groupInvite);
       expect(link.inviteToken, kValidInviteToken);
@@ -91,7 +91,7 @@ void main() {
 
     test('invite token is not lowercased (case-sensitive base64url)', () {
       final link =
-          parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken');
+          parseNymLink('https://web.nymchat.app/#gjoin=$kValidInviteToken');
       expect(link!.inviteToken, kValidInviteToken); // preserves mixed case
     });
 
@@ -101,7 +101,7 @@ void main() {
     });
 
     test('nym URL without a fragment → null', () {
-      expect(parseNymLink('https://app.nymchat.app/'), isNull);
+      expect(parseNymLink('https://web.nymchat.app/'), isNull);
     });
 
     test('garbage / empty input → null', () {
@@ -111,7 +111,7 @@ void main() {
 
     test('a fragment with invalid channel chars → null', () {
       // sanitizeChannelName REJECTS (not strips) non letter/digit chars.
-      expect(parseNymLink('https://app.nymchat.app/#a b'), isNull);
+      expect(parseNymLink('https://web.nymchat.app/#a b'), isNull);
     });
   });
 
@@ -124,7 +124,7 @@ void main() {
 
     test('accepts a full #gjoin= input', () {
       final t =
-          parseGroupInvite('https://app.nymchat.app/#gjoin=$kValidInviteToken');
+          parseGroupInvite('https://web.nymchat.app/#gjoin=$kValidInviteToken');
       expect(t, isNotNull);
       expect(t!.epoch, 7);
     });
@@ -162,7 +162,7 @@ void main() {
     test('group invite → joinGroupViaInvite', () {
       final t = _FakeTarget();
       final link =
-          parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken')!;
+          parseNymLink('https://web.nymchat.app/#gjoin=$kValidInviteToken')!;
       final ok = dispatchNymLink(link, t);
       expect(ok, isTrue);
       expect(t.invites.single.groupId, 'a' * 64);
@@ -180,16 +180,16 @@ void main() {
 
     test('end-to-end: each parsed type maps to the right call', () {
       final cases = <String, void Function(_FakeTarget)>{
-        'https://app.nymchat.app/#bitcoin': (t) {
+        'https://web.nymchat.app/#bitcoin': (t) {
           expect(t.channelSwitches.single.channel, 'bitcoin');
         },
-        'https://app.nymchat.app/#9q8y': (t) {
+        'https://web.nymchat.app/#9q8y': (t) {
           expect(t.channelSwitches.single.geohash, '9q8y');
         },
-        'https://app.nymchat.app/#c:foo': (t) {
+        'https://web.nymchat.app/#c:foo': (t) {
           expect(t.channelSwitches.single.channel, 'foo');
         },
-        'https://app.nymchat.app/#gjoin=$kValidInviteToken': (t) {
+        'https://web.nymchat.app/#gjoin=$kValidInviteToken': (t) {
           expect(t.invites, hasLength(1));
         },
       };
@@ -221,10 +221,10 @@ void main() {
         return true;
       });
       await svc.routeMessage(
-        {'link': 'https://app.nymchat.app/#bitcoin'},
+        {'link': 'https://web.nymchat.app/#bitcoin'},
         opened: true,
       );
-      expect(routed, 'https://app.nymchat.app/#bitcoin');
+      expect(routed, 'https://web.nymchat.app/#bitcoin');
     });
 
     test('routeMessage (foreground) surfaces a local notification with payload',
@@ -245,10 +245,10 @@ void main() {
       await svc.routeMessage({
         'title': 'New message',
         'body': 'hi',
-        'link': 'https://app.nymchat.app/#bitcoin',
+        'link': 'https://web.nymchat.app/#bitcoin',
       });
       expect(seenTitle, 'New message');
-      expect(seenPayload, 'https://app.nymchat.app/#bitcoin');
+      expect(seenPayload, 'https://web.nymchat.app/#bitcoin');
     });
   });
 }

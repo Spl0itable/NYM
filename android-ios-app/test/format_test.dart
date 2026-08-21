@@ -287,8 +287,8 @@ void main() {
       expect(link.first.url, 'https://example.com');
     });
 
-    test('app.nym.bar channel link -> ChannelLinkChip', () {
-      final inlines = paraInlines('join https://app.nym.bar/#g:9q8y now');
+    test('web.nymchat.app channel link -> ChannelLinkChip', () {
+      final inlines = paraInlines('join https://web.nymchat.app/#g:9q8y now');
       final chip = inlines.whereType<ChannelLinkChip>();
       expect(chip, hasLength(1));
       expect(chip.first.ref, 'g:9q8y');

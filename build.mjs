@@ -130,6 +130,10 @@ async function run() {
   // robots.txt verbatim.
   await emit('robots.txt', await fs.readFile(path.join(root, 'robots.txt')));
 
+  // sitemap.xml verbatim — one URL, because the app is one page. The site's
+  // real sitemap is on the apex domain.
+  await emit('sitemap.xml', await fs.readFile(path.join(root, 'sitemap.xml')));
+
   // _redirects verbatim — the retired /static/*.html pages point at their
   // replacements on the apex domain, which app builds already in users' hands
   // still link to.

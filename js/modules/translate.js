@@ -702,8 +702,37 @@ Object.assign(NYM.prototype, {
         return s.autoTranslateChannels !== false;
     },
 
+    // Nymbot's first-contact PM is written in English and stored that way, but a
+    // user who picked a language in the signup modal has not asked for an
+    // English welcome. It is translated on render into the APP language — not
+    // the translate-language, which is a separate setting and off by default —
+    // the same way the premium chat's welcome bubble already is, with the same
+    // "Show original" toggle.
+    _isBotWelcomePM(message) {
+        return !!(message && message.isBot && typeof message.id === 'string'
+            && message.id.startsWith('nymbot-welcome-'));
+    },
+
+    _maybeTranslateBotWelcomePM(messageEl, message) {
+        try {
+            if (!this._isBotWelcomePM(message) || !messageEl) return;
+            if (typeof this.translateBotWelcomeBubble !== 'function') return;
+            const contentEl = messageEl.querySelector('.message-content');
+            if (!contentEl) return;
+            // The rendered body, without the timestamp the bubble tucks inside it.
+            const clone = contentEl.cloneNode(true);
+            clone.querySelectorAll('.bubble-time-inner').forEach((n) => n.remove());
+            const html = clone.innerHTML.trim();
+            if (html) this.translateBotWelcomeBubble(messageEl, html);
+        } catch (_) { }
+    },
+
     _maybeAutoTranslate(messageEl, message) {
         try {
+            // Runs regardless of the auto-translate settings below: this one
+            // follows the app language the user chose, not a translation
+            // preference they may never have opened.
+            this._maybeTranslateBotWelcomePM(messageEl, message);
             if (!this._autoTranslateAppliesTo(message)) return;
             if (!messageEl || messageEl.classList.contains('system-message')) return;
             // During a bulk/historical render (e.g. opening a conversation) don't
@@ -1008,9 +1037,13 @@ Object.assign(NYM.prototype, {
     },
 
     async _renderBotWelcomeTranslation(el, originalHtml, lang) {
-        const cache = this._botWelcomeI18n || (this._botWelcomeI18n = {});
-        if (cache[lang] == null) cache[lang] = await this._translateBotHtml(originalHtml, lang);
-        const translated = cache[lang];
+        // Keyed by source as well as language: two different welcomes go through
+        // here — the premium chat's, and the first-contact PM's — and a
+        // language-only key would serve one of them the other's translation.
+        const cache = this._botWelcomeI18n || (this._botWelcomeI18n = new Map());
+        const key = lang + '\u0000' + originalHtml;
+        if (!cache.has(key)) cache.set(key, await this._translateBotHtml(originalHtml, lang));
+        const translated = cache.get(key);
         if (!translated || translated.trim() === originalHtml.trim()) return;
         if (!el.isConnected || el._autoTr) return;
         const contentEl = el.querySelector('.message-content');

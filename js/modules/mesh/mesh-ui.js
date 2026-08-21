@@ -1,9 +1,13 @@
 // mesh-ui.js - wires the Bluetooth mesh into the app
 
+// The IIFE is for the module-local constants below; `NYM` is the same lexical
+// global every other module extends. It is deliberately NOT read off `window`:
+// `class NYM` in app.js creates a global lexical binding, never a property of
+// the window object, so `window.NYM` is always undefined and a guard on it
+// silently skipped this whole file — leaving the mesh entry point hidden and
+// every method here uninstalled. app.js is loaded ahead of this script, so the
+// binding is initialised by the time this runs.
 (function () {
-    const NYM = window.NYM;
-    if (!NYM) return;
-
     const MESH_CHANNEL = 'mesh';
 
     Object.assign(NYM.prototype, {

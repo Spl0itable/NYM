@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../i18n/i18n.dart';
 
 import '../../models/message.dart';
 import '../../models/settings.dart';
@@ -311,11 +312,12 @@ String autoTranslateTargetFor(Settings settings) {
 bool autoTranslateAppliesTo(Message message, Settings settings) {
   if (message.isOwn) return false;
   if (message.isSystemRow) return false;
-  // The Nymbot welcome always localizes to the user's chosen language — even
-  // when the general auto-translate toggle is off — so a brand-new user is
-  // greeted in the language they picked. (Callers still require a target
-  // language via [autoTranslateTargetFor], so English users see the original.)
-  if (message.id.startsWith(kNymbotWelcomeIdPrefix)) return true;
+  // Nymbot's welcome is NOT machine-translated here. It is app copy, so it
+  // goes through the UI-string cache instead ([localizeBotWelcome]) — which
+  // needs no network once cached, survives a reinstall's first offline launch,
+  // and re-renders in the new language if the user switches. Translating it
+  // here as well would race that with a second, differently-worded result.
+  if (message.id.startsWith(kNymbotWelcomeIdPrefix)) return false;
   if (!settings.autoTranslate) return false;
   if (message.isGroup) return settings.autoTranslateGroups;
   if (message.isPM) return settings.autoTranslatePMs;
@@ -323,7 +325,22 @@ bool autoTranslateAppliesTo(Message message, Settings settings) {
   return settings.autoTranslateChannels;
 }
 
-/// Message-id prefix of Nymbot's welcome messages (the transient premium
+/// Message-id prefix of Nymbot's welcome messages: the transient premium
 /// welcome `nymbot-welcome` and the persisted first-contact PM
-/// `nymbot-welcome-<ts>`), which always auto-translate to the chosen language.
+/// `nymbot-welcome-<ts>`.
 const String kNymbotWelcomeIdPrefix = 'nymbot-welcome';
+
+/// Renders Nymbot's welcome copy in the language chosen at signup.
+///
+/// The greeting is the first thing a new user reads, and it was shown in
+/// English however carefully they had just picked their language. It is app
+/// copy rather than user content, so [tr] localizes it from the same cache the
+/// rest of the UI uses: no per-message network round trip, correct offline once
+/// cached, and it follows a later language change instead of being frozen into
+/// the stored message. Anything else is returned untouched.
+///
+/// Until the translation lands, `tr` returns the English source and the
+/// repaint that follows swaps it — which is why the copy is primed the moment
+/// the language is chosen (`primeBotWelcomeCopy`).
+String localizeBotWelcome(String messageId, String content) =>
+    messageId.startsWith(kNymbotWelcomeIdPrefix) ? tr(content) : content;

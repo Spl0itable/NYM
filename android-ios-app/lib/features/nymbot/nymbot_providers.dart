@@ -29,6 +29,7 @@ import '../../state/nostr_controller.dart' show nostrControllerProvider;
 import '../../state/settings_provider.dart';
 import '../../widgets/context_menu/interaction_hooks.dart'
     show giftCreditsRequestProvider;
+import '../i18n/localization_service.dart';
 import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
 import '../shop/shop_controller.dart' show shopControllerProvider;
@@ -1779,6 +1780,27 @@ final botCommandsProvider = Provider<List<BotCommand>>((_) => kBotCommands);
 final proModelsProvider = Provider<List<ProModel>>((_) => kProModels);
 
 // =============================================================================
+/// The welcome copy, as the localizer needs to see it.
+///
+/// These are app copy, not user content, so they localize through the same
+/// UI-string cache as every other string (`tr`) rather than through the
+/// message auto-translator: the cache persists across launches, works offline
+/// once filled, and follows a later language change instead of being frozen
+/// into a stored message. [primeBotWelcomeCopy] warms them the moment a
+/// language is chosen, so the greeting is usually translated before it is
+/// first shown.
+List<String> botWelcomeSourceStrings() => const [
+      botWelcomeText,
+      botFirstContactText,
+    ];
+
+/// Pre-translates the welcome copy into the active language. Called when the
+/// language is picked at signup — the greeting arrives seconds later, and
+/// waiting for it to render before translating it would show English first.
+void primeBotWelcomeCopy() {
+  LocalizationService.instance.prime(botWelcomeSourceStrings());
+}
+
 // Welcome copy (pms.js `_botWelcomeHtml` :1706-1729 / `_botFirstContactText`
 // :1822-1838) — verbatim, with the HTML `<strong>`/`<code>` markers as the
 // markdown the shared formatter renders.

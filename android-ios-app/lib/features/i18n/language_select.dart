@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../nymbot/nymbot_providers.dart' show primeBotWelcomeCopy;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -62,6 +63,9 @@ void applyUiLanguage(WidgetRef ref, String code) {
   // Command names are what the user types, so they translate ahead of the
   // bulk catalog rather than behind it.
   svc.prime(commandSourcePhrases());
+  // Nymbot greets a brand-new user seconds after this, so its welcome copy is
+  // primed here rather than translated on first paint.
+  primeBotWelcomeCopy();
   svc.sweep(kAppStringsCatalog);
 }
 

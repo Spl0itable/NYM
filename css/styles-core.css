@@ -166,3 +166,18 @@ body::after {
     z-index: 0;
     transform: translateZ(0);
 }
+
+/* Text that exists for a screen reader and a crawler but is not painted.
+   Clipped rather than positioned off-screen: parking it to one side breaks in
+   RTL, where that direction is scrollable and the page grows to fit. */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}

@@ -8,8 +8,8 @@
         content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: ws:; worker-src 'self' blob:; child-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
-    <title>Nymchat</title>
-    <meta name="description" content="Ephemeral pseudonymous chat messaging. Bridged with Bitchat geohash channels.">
+    <title>Nymchat — open the app</title>
+    <meta name="description" content="Open the Nymchat client: pseudonymous, end-to-end encrypted chat over Nostr, with no account and no registration. Runs in the browser.">
     <link rel="manifest"
         href="data:application/json;base64,eyJuYW1lIjoiTnltY2hhdCIsInNob3J0X25hbWUiOiJOeW1jaGF0Iiwic3RhcnRfdXJsIjoiaHR0cHM6Ly93ZWIubnltY2hhdC5hcHAiLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsInRoZW1lX2NvbG9yIjoiIzAwMDAwMCIsImJhY2tncm91bmRfY29sb3IiOiIjMDAwMDAwIiwiaWNvbnMiOlt7InNyYyI6Imh0dHBzOi8vbnltY2hhdC5hcHAvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiMTkyeDE5MiIsInR5cGUiOiJpbWFnZS9wbmcifSx7InNyYyI6Imh0dHBzOi8vbnltY2hhdC5hcHAvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19">
     <link rel="icon" type="image/x-icon" href="https://nymchat.app/images/favicon.ico">
@@ -18,14 +18,42 @@
     <link rel="apple-touch-icon" sizes="192x192" href="https://nymchat.app/images/android-chrome-192x192.png">
 
     <!-- Open Graph Meta Tags -->
-    <meta property="og:title" content="Pseudonymously Chat with Nymchat">
-    <meta property="og:description"
-        content="Ephemeral pseudonymous chat messaging over Nostr. Bridged with Bitchat geohash channels.">
+    <meta property="og:title" content="Nymchat — open the app">
+    <meta property="og:description" content="Open the Nymchat client: pseudonymous, end-to-end encrypted chat over Nostr, with no account and no registration. Runs in the browser.">
     <meta property="og:image" content="https://nymchat.app/images/NYM-banner.png">
-    <meta property="og:url" content="https://app.nymchat.app">
+    <meta property="og:image:width" content="1024">
+    <meta property="og:image:height" content="1024">
+    <meta property="og:image:alt" content="The Nymchat app icon: a wordmark drawn in green ASCII characters.">
+    <meta property="og:url" content="https://web.nymchat.app/">
     <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymchat">
+    <!-- A square image; `summary` shows it whole, where `summary_large_image`
+         would crop it to a ribbon. -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Nymchat — open the app">
+    <meta name="twitter:description" content="Open the Nymchat client: pseudonymous, end-to-end encrypted chat over Nostr, with no account and no registration. Runs in the browser.">
+    <meta name="twitter:image" content="https://nymchat.app/images/NYM-banner.png">
+    <meta name="twitter:image:alt" content="The Nymchat app icon: a wordmark drawn in green ASCII characters.">
     <link rel="icon" href="https://nymchat.app/images/NYM-favicon.png" type="image/png">
-    <link rel="canonical" href="https://app.nymchat.app/">
+    <link rel="canonical" href="https://web.nymchat.app/">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Nymchat",
+      "alternateName": "NYM",
+      "applicationCategory": "CommunicationApplication",
+      "browserRequirements": "Requires JavaScript and a modern browser",
+      "operatingSystem": "Any",
+      "url": "https://web.nymchat.app/",
+      "description": "Open the Nymchat client: pseudonymous, end-to-end encrypted chat over Nostr, with no account and no registration. Runs in the browser.",
+      "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "publisher": { "@type": "Organization", "name": "21 Million LLC", "url": "https://nostrservices.com" },
+      "sameAs": ["https://nymchat.app/", "https://github.com/Spl0itable/NYM"]
+    }
+    </script>
     <meta name="theme-color" content="#000000">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -407,7 +435,8 @@
     <div class="container">
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <pre class="logo-ascii nm-pointer" data-action="openNostrLogin" title="Login with Nostr">
+                <h1 class="visually-hidden">Nymchat — pseudonymous chat over Nostr</h1>
+                <pre class="logo-ascii nm-pointer" role="img" aria-label="Nymchat — log in with Nostr" data-action="openNostrLogin" title="Login with Nostr">
                                             ##\                  ##\     
                                             ## |                 ## |    
 #######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
@@ -1224,7 +1253,7 @@
         <div class="modal-content setup-modal-content">
             <button class="modal-close nm-hidden" id="setupCloseBtn" data-action="closeModal" data-modal-id="setupModal">&#x2715;</button>
             <div class="modal-header setup-modal-header">
-                <pre class="logo-ascii setup-logo nm-pointer" data-action="openNostrLogin" title="Login with Nostr">
+                <pre class="logo-ascii setup-logo nm-pointer" role="img" aria-label="Nymchat — log in with Nostr" data-action="openNostrLogin" title="Login with Nostr">
                                             ##\                  ##\
                                             ## |                 ## |
 #######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\
