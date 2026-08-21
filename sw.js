@@ -101,9 +101,8 @@ self.addEventListener('fetch', (e) => {
         return;
     }
 
-    // Hashed assets are immutable; /static/ pages refresh with each SW
-    // version since the cache name rotates per build.
-    if (ASSET_RE.test(url.pathname) || url.pathname.startsWith('/static/')) {
+    // Hashed assets are immutable, and the cache name rotates per build.
+    if (ASSET_RE.test(url.pathname)) {
         e.respondWith((async () => {
             const cached = await caches.match(req);
             if (cached) return cached;

@@ -1,0 +1,7 @@
+# The legal pages moved to the apex domain; /static/ is gone. App builds
+# already in users' hands still link to these exact paths, and those links
+# outlive the move — so each one redirects to its replacement.
+/static/tos.html https://nymchat.app/terms/ 301
+/static/pp.html https://nymchat.app/privacy/ 301
+/static/dmca.html https://nymchat.app/dmca/ 301
+/static/contact.html https://nymchat.app/contact/ 301

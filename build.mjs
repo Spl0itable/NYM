@@ -127,17 +127,13 @@ async function run() {
   await emit('index.html', indexOut);
   manifestFiles['/index.html'] = sha256b64(Buffer.from(indexOut));
 
-  for (const file of await walk(path.join(root, 'static'))) {
-    const rel = toPosix(path.relative(root, file));
-    if (file.endsWith('.html')) {
-      const out = await minifyHtml(rewriteHtml(await fs.readFile(file, 'utf8')), htmlMinifyOptions);
-      await emit(rel, out);
-      manifestFiles['/' + rel] = sha256b64(Buffer.from(out));
-    } else await emit(rel, await fs.readFile(file));
-  }
-
   // robots.txt verbatim.
   await emit('robots.txt', await fs.readFile(path.join(root, 'robots.txt')));
+
+  // _redirects verbatim — the retired /static/*.html pages point at their
+  // replacements on the apex domain, which app builds already in users' hands
+  // still link to.
+  await emit('_redirects', await fs.readFile(path.join(root, '_redirects')));
 
   // Vulnerability-disclosure pointer (RFC 9116) verbatim.
   await emit('.well-known/security.txt', await fs.readFile(path.join(root, '.well-known', 'security.txt')));
@@ -210,8 +206,6 @@ async function run() {
   Cache-Control: public, max-age=31536000, immutable
 /data/*
   Cache-Control: public, max-age=31536000, immutable
-/static/*
-  Cache-Control: public, max-age=86400
 /index.html
   Cache-Control: no-cache
 /
