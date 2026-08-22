@@ -13,9 +13,9 @@
 
 ```
 
-# Nymchat
+# Nymchat - Geohash Mesh Chat
 
-A feature-rich, ephemeral chat client built on the [Nostr](https://github.com/nostr-protocol/nostr) protocol, bridged with [Bitchat](https://bitchat.free) for pseudonymous, temporary messaging. Learn more in the [knowledge base](https://nymchat.app/docs/).
+A feature-rich, ephemeral geohash and bluetooth mesh chat client built on the [Nostr](https://github.com/nostr-protocol/nostr) protocol and bridged with [Bitchat](https://bitchat.free) for pseudonymous, temporary messaging. Learn more in the [knowledge base](https://nymchat.app/docs/).
 
 ## Overview
 
