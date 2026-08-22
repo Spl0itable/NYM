@@ -93,20 +93,14 @@ Object.assign(NYM.prototype, {
         this.updateSidebarAvatar();
     },
 
-    // NSEC decode method
+    // Decode a private key from either accepted form — an `nsec1…` or a bare
+    // 64-char hex key — to the raw 32 bytes the signer wants.
     decodeNsec(nsec) {
-        try {
-            // Use nostr-tools nip19 decode
-            if (window.NostrTools && window.NostrTools.nip19) {
-                const decoded = window.NostrTools.nip19.decode(nsec);
-                if (decoded.type === 'nsec') {
-                    return decoded.data;
-                }
-            }
-            throw new Error('Invalid nsec format');
-        } catch (error) {
-            throw new Error('Failed to decode nsec: ' + error.message);
-        }
+        const hex = this.normalizePrivkeyInput(nsec);
+        if (!hex) throw new Error('Failed to decode nsec: expected an nsec1… or a 64-character hex private key');
+        const bytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+        return bytes;
     },
 
     loadBlockedKeywords() {
@@ -293,6 +287,103 @@ Object.assign(NYM.prototype, {
         if (typeof pubkey !== 'string' || pubkey.length < 4) return '????';
         const tail = pubkey.slice(-4);
         return /^[0-9a-f]{4}$/i.test(tail) ? tail : '????';
+    },
+
+    // npub / hex public keys 
+    // Either a 64-char hex pubkey or an npub/nprofile, normalised to lowercase
+    // hex. Returns null when the input is neither.
+    normalizePubkeyInput(value) {
+        const raw = String(value == null ? '' : value)
+            .trim()
+            .replace(/^nostr:/i, '')
+            .replace(/^@/, '');
+        if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase();
+        if (!/^(npub|nprofile)1/i.test(raw)) return null;
+        const nip19 = window.NostrTools && window.NostrTools.nip19;
+        if (!nip19) return null;
+        try {
+            const decoded = nip19.decode(raw);
+            if (decoded.type === 'npub') return String(decoded.data).toLowerCase();
+            if (decoded.type === 'nprofile' && decoded.data && decoded.data.pubkey) {
+                return String(decoded.data.pubkey).toLowerCase();
+            }
+        } catch (_) { }
+        return null;
+    },
+
+    // True when `value` is a public key in either accepted form.
+    isPubkeyInput(value) {
+        return this.normalizePubkeyInput(value) !== null;
+    },
+
+    // The npub form of a hex pubkey, or '' if it can't be encoded.
+    npubFromPubkey(pubkey) {
+        if (!/^[0-9a-f]{64}$/i.test(pubkey || '')) return '';
+        const nip19 = window.NostrTools && window.NostrTools.nip19;
+        if (!nip19) return '';
+        try { return nip19.npubEncode(String(pubkey).toLowerCase()); } catch (_) { return ''; }
+    },
+
+    // 'npub' (default) or 'hex'. Persisted so the choice survives reloads, and
+    // toggled from the user context menu.
+    getPubkeyDisplayFormat() {
+        try {
+            return localStorage.getItem('nym_pubkey_format') === 'hex' ? 'hex' : 'npub';
+        } catch (_) { return 'npub'; }
+    },
+
+    setPubkeyDisplayFormat(format) {
+        const value = format === 'hex' ? 'hex' : 'npub';
+        try { localStorage.setItem('nym_pubkey_format', value); } catch (_) { }
+        return value;
+    },
+
+    togglePubkeyDisplayFormat() {
+        return this.setPubkeyDisplayFormat(
+            this.getPubkeyDisplayFormat() === 'npub' ? 'hex' : 'npub');
+    },
+
+    // A full public key rendered in the user's chosen format. Falls back to hex
+    // when nostr-tools hasn't loaded or the key isn't encodable.
+    formatPubkeyForDisplay(pubkey, format) {
+        const hex = String(pubkey == null ? '' : pubkey);
+        const want = format || this.getPubkeyDisplayFormat();
+        if (want !== 'npub') return hex;
+        return this.npubFromPubkey(hex) || hex;
+    },
+
+    // nsec / hex private keys 
+    // The canonical `nsec1…` for a private key given in either form. Used when
+    // persisting a login so what we store (and later reveal to the user) is
+    // always the nsec, whichever form they pasted.
+    nsecFromPrivkeyInput(value) {
+        const hex = this.normalizePrivkeyInput(value);
+        if (!hex) return '';
+        const nip19 = window.NostrTools && window.NostrTools.nip19;
+        if (!nip19) return '';
+        const bytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+        try { return nip19.nsecEncode(bytes); } catch (_) { return ''; }
+    },
+
+    // Either an nsec or a 64-char hex private key, normalised to lowercase hex.
+    // Returns null when the input is neither.
+    normalizePrivkeyInput(value) {
+        const raw = String(value == null ? '' : value).trim().replace(/^nostr:/i, '');
+        if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase();
+        if (!/^nsec1/i.test(raw)) return null;
+        const nip19 = window.NostrTools && window.NostrTools.nip19;
+        if (!nip19) return null;
+        try {
+            const decoded = nip19.decode(raw);
+            if (decoded.type === 'nsec') {
+                const data = decoded.data;
+                // nip19 hands back the 32 raw bytes; the app works in hex.
+                if (typeof data === 'string') return data.toLowerCase();
+                return Array.from(data).map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+        } catch (_) { }
+        return null;
     },
 
     parseNymFromDisplay(displayNym) {
@@ -1001,6 +1092,9 @@ Object.assign(NYM.prototype, {
 
         try {
             progress.classList.add('active');
+            // Show local thumbnails immediately, before a single byte is up, so
+            // the user can verify what they picked (rich-compose.js).
+            if (typeof this.setComposerUploadPreviews === 'function') this.setComposerUploadPreviews(files);
 
             for (let i = 0; i < total; i++) {
                 if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -1018,6 +1112,10 @@ Object.assign(NYM.prototype, {
 
                 const { url, server } = await this._uploadWithFallback(file, hashHex, signal);
                 uploaded.push({ url, hashHex, server, file });
+                // Retire this file's "uploading" placeholder and hand its local
+                // object URL to the hosted URL, so the thumbnail never flickers
+                // and we don't re-download what we just uploaded.
+                if (typeof this.resolveComposerUploadPreview === 'function') this.resolveComposerUploadPreview(url, file);
             }
 
             progressFill.style.width = '100%';
@@ -1025,7 +1123,12 @@ Object.assign(NYM.prototype, {
             const input = document.getElementById('messageInput');
             const appendedUrls = uploaded.map(u => u.url).join(' ');
             if (input) {
-                input.value = (input.value || '') + appendedUrls + ' ';
+                // Separate from whatever the user already typed — without this a
+                // draft ending mid-word would glue itself onto the first URL and
+                // neither the formatter nor the attachment strip would see it.
+                const existing = input.value || '';
+                const sep = existing && !/\s$/.test(existing) ? ' ' : '';
+                input.value = existing + sep + appendedUrls + ' ';
                 input.focus();
                 if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
             }
@@ -1057,6 +1160,10 @@ Object.assign(NYM.prototype, {
             }
         } finally {
             if (this._uploadAbort === abortCtrl) this._uploadAbort = null;
+            if (typeof this.clearComposerUploadPreviews === 'function') {
+                this.clearComposerUploadPreviews();
+                this.updateComposerMediaPreviews();
+            }
             setTimeout(() => {
                 progress.classList.remove('active');
             }, 500);
@@ -1067,6 +1174,10 @@ Object.assign(NYM.prototype, {
     cancelUpload() {
         if (this._uploadAbort) {
             try { this._uploadAbort.abort(); } catch (_) { }
+        }
+        if (typeof this.clearComposerUploadPreviews === 'function') {
+            this.clearComposerUploadPreviews();
+            this.updateComposerMediaPreviews();
         }
         const progress = document.getElementById('uploadProgress');
         if (progress) progress.classList.remove('active');
@@ -1931,10 +2042,9 @@ Object.assign(NYM.prototype, {
     },
 
     async toggleFriend(target) {
-        let targetPubkey;
-        if (/^[0-9a-f]{64}$/i.test(target)) {
-            targetPubkey = target.toLowerCase();
-        } else {
+        // A public key in either accepted form — npub or hex — otherwise a nym.
+        let targetPubkey = this.normalizePubkeyInput(target);
+        if (!targetPubkey) {
             targetPubkey = await this.findUserPubkey(target);
             if (!targetPubkey) return;
         }
@@ -2088,6 +2198,11 @@ Object.assign(NYM.prototype, {
     },
 
     async findUserPubkey(input) {
+        // A public key in either form resolves as itself — no caller can
+        // regress by forgetting to normalise before the nym search.
+        const asPubkey = this.normalizePubkeyInput(input);
+        if (asPubkey) return asPubkey;
+
         const cleanInput = input.replace(/^@/, '');
         const hashIndex = cleanInput.indexOf('#');
         let searchNym = cleanInput;

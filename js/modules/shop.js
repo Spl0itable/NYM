@@ -1625,9 +1625,9 @@ ${bundleCodes || (code ? `
             <span class="nm-shop-20">${item.price} sats</span>
         </div>
         <p class="nm-shop-21">
-            Enter the recipient's hex pubkey (64 characters). You pay for the item and it lands directly in their inventory.
+            Enter the recipient's public key — an npub or a 64-character hex pubkey. You pay for the item and it lands directly in their inventory.
         </p>
-        <input type="text" id="giftPubkeyInput" placeholder="Recipient hex pubkey (64 chars)"
+        <input type="text" id="giftPubkeyInput" placeholder="Recipient npub or hex pubkey"
             class="nm-shop-22" />
         <p id="giftError" class="nm-shop-23 nm-hidden"></p>
     </div>
@@ -1645,9 +1645,11 @@ ${bundleCodes || (code ? `
         const errorEl = document.getElementById('giftError');
         if (!input || !errorEl) return;
 
-        const recipientPubkey = input.value.trim().toLowerCase();
-        if (!/^[0-9a-f]{64}$/.test(recipientPubkey)) {
-            errorEl.textContent = 'Invalid pubkey. Must be 64 hex characters.';
+        // A public key in either accepted form — npub or hex
+        // (`normalizePubkeyInput`, users.js).
+        const recipientPubkey = this.normalizePubkeyInput(input.value);
+        if (!recipientPubkey) {
+            errorEl.textContent = 'Invalid public key. Paste an npub or a 64-character hex pubkey.';
             errorEl.style.display = 'block';
             return;
         }
@@ -1706,9 +1708,9 @@ ${bundleCodes || (code ? `
             <strong>${item.name}</strong>
         </div>
         <p class="nm-shop-21">
-            Enter the recipient's hex pubkey (64 characters). The item will be revoked from your inventory and assigned to theirs.
+            Enter the recipient's public key — an npub or a 64-character hex pubkey. The item will be revoked from your inventory and assigned to theirs.
         </p>
-        <input type="text" id="transferPubkeyInput" placeholder="Recipient hex pubkey (64 chars)"
+        <input type="text" id="transferPubkeyInput" placeholder="Recipient npub or hex pubkey"
             class="nm-shop-22" />
         <p id="transferError" class="nm-shop-23 nm-hidden"></p>
     </div>
@@ -1726,9 +1728,11 @@ ${bundleCodes || (code ? `
         const errorEl = document.getElementById('transferError');
         if (!input || !errorEl) return;
 
-        const recipientPubkey = input.value.trim().toLowerCase();
-        if (!/^[0-9a-f]{64}$/.test(recipientPubkey)) {
-            errorEl.textContent = 'Invalid pubkey. Must be 64 hex characters.';
+        // A public key in either accepted form — npub or hex
+        // (`normalizePubkeyInput`, users.js).
+        const recipientPubkey = this.normalizePubkeyInput(input.value);
+        if (!recipientPubkey) {
+            errorEl.textContent = 'Invalid public key. Paste an npub or a 64-character hex pubkey.';
             errorEl.style.display = 'block';
             return;
         }
@@ -1774,11 +1778,13 @@ ${bundleCodes || (code ? `
         const errorEl = document.getElementById('settingsTransferError');
         if (!input || !errorEl) return;
 
-        const recipientPubkey = input.value.trim().toLowerCase();
+        // A public key in either accepted form — npub or hex
+        // (`normalizePubkeyInput`, users.js).
+        const recipientPubkey = this.normalizePubkeyInput(input.value);
         errorEl.style.display = 'none';
 
-        if (!/^[0-9a-f]{64}$/.test(recipientPubkey)) {
-            errorEl.textContent = 'Invalid pubkey. Must be 64 hex characters.';
+        if (!recipientPubkey) {
+            errorEl.textContent = 'Invalid public key. Paste an npub or a 64-character hex pubkey.';
             errorEl.style.display = 'block';
             return;
         }

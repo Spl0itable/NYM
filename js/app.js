@@ -2584,21 +2584,30 @@ function editNick() {
     suffixEl.textContent = `#${suffix}`;
     suffixEl.title = 'Click to view full pubkey';
 
-    // Click handler to toggle full pubkey slide-out
+    // Click handler to toggle the full public key slide-out. The key is shown
+    // in whichever format the user picked (npub by default) and both Copy and
+    // the format switch follow that choice — see the npub/hex notes in users.js.
     suffixEl.onclick = (e) => {
         e.stopPropagation();
         const slideout = document.getElementById('pubkeySlideout');
         if (!slideout) return;
-        const valueEl = document.getElementById('pubkeySlideoutValue');
         const copyBtn = document.getElementById('pubkeySlideoutCopy');
-        if (valueEl) valueEl.textContent = nym.pubkey;
+        const formatBtn = document.getElementById('pubkeySlideoutFormat');
+        nym._refreshPubkeySlideoutFormat();
         if (copyBtn) {
             copyBtn.textContent = 'Copy';
             copyBtn.onclick = (ev) => {
                 ev.stopPropagation();
-                navigator.clipboard.writeText(nym.pubkey);
+                navigator.clipboard.writeText(nym.formatPubkeyForDisplay(nym.pubkey));
                 copyBtn.textContent = 'Copied!';
                 setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+            };
+        }
+        if (formatBtn) {
+            formatBtn.onclick = (ev) => {
+                ev.stopPropagation();
+                nym.togglePubkeyDisplayFormat();
+                nym._refreshPubkeySlideoutFormat();
             };
         }
         slideout.classList.toggle('open');
@@ -2747,7 +2756,7 @@ async function changeNick() {
             localStorage.setItem('nym_auto_ephemeral_nick', baseNick);
             // For reserved (developer) nicks, also save the verified nsec for auto-login
             if (cmdResult && cmdResult.nsec) {
-                nymSecretSet('nym_dev_nsec', cmdResult.nsec);
+                nymSecretSet('nym_dev_nsec', nym.nsecFromPrivkeyInput(cmdResult.nsec) || cmdResult.nsec);
             }
         }
         // If cmdNick was cancelled (e.g. reserved nick) but bio/lightning changed,
@@ -4341,7 +4350,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.73.532';
+const NYMCHAT_VERSION = 'v3.73.533';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -4913,7 +4922,8 @@ async function initializeNym() {
             if (nym.isReservedNick(nymInput)) {
                 const nsecVal = document.getElementById('devNsecInput').value.trim();
                 if (nsecVal) {
-                    nymSecretSet('nym_dev_nsec', nsecVal);
+                    // Canonicalise: the field accepts a hex private key too.
+                    nymSecretSet('nym_dev_nsec', nym.nsecFromPrivkeyInput(nsecVal) || nsecVal);
                 }
             }
         }
@@ -5194,18 +5204,21 @@ async function nostrLoginWithNsec() {
     }
     let secretKey, pubkey;
     try {
+        // Accepts either form — `nsec1…` or a bare 64-char hex private key.
         secretKey = nym.decodeNsec(nsecInput);
         pubkey = window.NostrTools.getPublicKey(secretKey);
     } catch (err) {
-        errorEl.textContent = 'Invalid nsec key. Please check and try again.';
+        errorEl.textContent = 'Invalid private key. Paste an nsec1… or a 64-character hex key.';
         errorEl.style.display = 'block';
         return;
     }
 
-    // Store login state (nsec stored so we can sign events and sync settings)
+    // Store login state (nsec stored so we can sign events and sync settings).
+    // Always the canonical nsec, whichever form was pasted — it's what the
+    // reveal/copy UI in Settings hands back to the user.
     localStorage.setItem('nym_nostr_login_method', 'nsec');
     localStorage.setItem('nym_nostr_login_pubkey', pubkey);
-    nymSecretSet('nym_nostr_login_nsec', nsecInput);
+    nymSecretSet('nym_nostr_login_nsec', nym.nsecFromPrivkeyInput(nsecInput) || nsecInput);
     try {
         const npub = window.NostrTools.nip19.npubEncode(pubkey);
         localStorage.setItem('nym_nostr_login_npub', npub);

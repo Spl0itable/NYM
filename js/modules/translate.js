@@ -1102,7 +1102,11 @@ Object.assign(NYM.prototype, {
         if (!btn || !input) return;
         const hasText = input.value.trim().length > 0;
         btn.style.display = hasText ? 'flex' : 'none';
-        input.style.paddingRight = hasText ? '38px' : '';
+        // The translate button now shares an inline action row with the
+        // formatting toggle, so the input's right padding tracks however many of
+        // those buttons are currently visible (rich-compose.js).
+        if (typeof this.syncComposerInlineActions === 'function') this.syncComposerInlineActions();
+        else input.style.paddingRight = hasText ? '38px' : '';
         // Hide dropdown when button hides
         if (!hasText) {
             const dropdown = document.getElementById('translateInputDropdown');

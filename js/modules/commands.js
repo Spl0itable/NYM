@@ -748,11 +748,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const targetInput = args.trim().replace(/^@/, '');
+        // Accept a public key in either form — hex or npub — before falling
+        // back to a nym lookup (`normalizePubkeyInput`, users.js).
+        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
         let targetPubkey = null;
         let matchedNym = null;
 
-        // Check if input is a pubkey (64 hex characters)
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
             targetPubkey = targetInput.toLowerCase();
 
@@ -1009,12 +1010,10 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Check if input is already a pubkey (64 hex characters)
-        let targetPubkey;
-        if (/^[0-9a-f]{64}$/i.test(target)) {
-            targetPubkey = target.toLowerCase();
-        } else {
-            // User blocking - use findUserPubkey for nym lookup
+        // A public key in either form (hex or npub) resolves directly;
+        // anything else is a nym to look up.
+        let targetPubkey = this.normalizePubkeyInput(target);
+        if (!targetPubkey) {
             targetPubkey = await this.findUserPubkey(target);
             if (!targetPubkey) return;
         }
@@ -1128,11 +1127,11 @@ Object.assign(NYM.prototype, {
         }
         if (!this._checkActionCommandRateLimit()) return;
 
-        const targetInput = args.trim().replace(/^@/, '');
+        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
         let targetNym = '';
         let targetPubkey = null;
 
-        // Check if input is a pubkey (64 hex characters)
+        // A public key in either form (hex or npub); otherwise a nym lookup.
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
             targetPubkey = targetInput.toLowerCase();
             const user = this.users.get(targetPubkey);
@@ -1207,11 +1206,11 @@ Object.assign(NYM.prototype, {
         }
         if (!this._checkActionCommandRateLimit()) return;
 
-        const targetInput = args.trim().replace(/^@/, '');
+        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
         let targetNym = '';
         let targetPubkey = null;
 
-        // Check if input is a pubkey (64 hex characters)
+        // A public key in either form (hex or npub); otherwise a nym lookup.
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
             targetPubkey = targetInput.toLowerCase();
             const user = this.users.get(targetPubkey);

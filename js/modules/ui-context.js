@@ -214,11 +214,15 @@ Object.assign(NYM.prototype, {
             this.closeContextMenu();
         });
 
+        // Copies whichever form is currently on screen, so what the user sees
+        // is what lands on their clipboard.
         document.getElementById('ctxCopyPubkey').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.pubkey) {
+                const format = this.getPubkeyDisplayFormat();
+                const value = this.formatPubkeyForDisplay(this.contextMenuData.pubkey, format);
                 try {
-                    await navigator.clipboard.writeText(this.contextMenuData.pubkey);
-                    this.displaySystemMessage(`Copied pubkey to clipboard`);
+                    await navigator.clipboard.writeText(value);
+                    this.displaySystemMessage(`Copied ${format === 'npub' ? 'npub' : 'hex pubkey'} to clipboard`);
                 } catch (err) {
                     this.displaySystemMessage('Failed to copy pubkey');
                 }
@@ -227,6 +231,18 @@ Object.assign(NYM.prototype, {
             }
             this.closeContextMenu();
         });
+
+        // npub ⇄ hex. Both are the same identity; bitchat speaks hex over the
+        // mesh, so the raw form has to stay one click away. The menu stays open
+        // so the switch can be seen taking effect.
+        const togglePubkeyFormat = () => {
+            this.togglePubkeyDisplayFormat();
+            this._renderContextMenuPubkey(this.contextMenuData && this.contextMenuData.pubkey);
+            this._refreshPubkeySlideoutFormat();
+        };
+        document.getElementById('ctxTogglePubkeyFormat').addEventListener('click', togglePubkeyFormat);
+        const ctxFullPubkeyEl = document.getElementById('ctxFullPubkey');
+        if (ctxFullPubkeyEl) ctxFullPubkeyEl.addEventListener('click', togglePubkeyFormat);
 
         document.getElementById('ctxCopyMessage').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.content) {
@@ -430,17 +446,9 @@ Object.assign(NYM.prototype, {
             ctxAvatarNym.innerHTML = nymHtml;
         }
 
-        // Populate the full pubkey block
-        const ctxFullPubkey = document.getElementById('ctxFullPubkey');
-        if (ctxFullPubkey) {
-            if (pubkey) {
-                ctxFullPubkey.textContent = pubkey;
-                ctxFullPubkey.style.display = '';
-            } else {
-                ctxFullPubkey.textContent = '';
-                ctxFullPubkey.style.display = 'none';
-            }
-        }
+        // Populate the full public key block in the user's chosen format
+        // (npub by default — see the npub/hex notes in users.js).
+        this._renderContextMenuPubkey(pubkey);
 
         // Populate status row (online / away / offline)
         const ctxStatusRow = document.getElementById('ctxStatusRow');
@@ -1820,6 +1828,13 @@ Object.assign(NYM.prototype, {
         if (container) container.classList.toggle('composer-popout', expand);
         textarea.style.height = '';
         this._refreshComposerOffsets();
+        // Every path that mutates the draft (typing, send, edit, upload, quote)
+        // ends up here, so it's the one hook the attachment strip and the
+        // formatting preview need (rich-compose.js).
+        if (textarea.id === 'messageInput') {
+            if (typeof this.updateComposerMediaPreviews === 'function') this.updateComposerMediaPreviews();
+            if (typeof this.updateFormatPreview === 'function') this.updateFormatPreview();
+        }
     },
 
     _refreshComposerOffsets() {
@@ -1832,11 +1847,50 @@ Object.assign(NYM.prototype, {
         const expanded = !!(container && container.classList.contains('composer-popout'));
         const overhang = expanded ? Math.max(0, input.offsetHeight - base) : 0;
         wrapper.style.setProperty('--popout-overhang', overhang + 'px');
+        // The formatting toolbar / preview / attachment strip stack (rich-compose.js)
+        // sits between the field and the quote/edit chips, so everything anchored
+        // at `bottom:100%` above it has to clear its height.
+        const panels = document.getElementById('composerPanels');
+        const panelsH = (panels && panels.offsetHeight > 0) ? panels.offsetHeight + 8 : 0;
+        wrapper.style.setProperty('--composer-panels-h', panelsH + 'px');
         const ep = document.getElementById('editPreview');
         const qp = document.getElementById('quotePreview');
         const preview = (ep && ep.offsetHeight > 0) ? ep : ((qp && qp.offsetHeight > 0) ? qp : null);
         const previewH = preview ? preview.offsetHeight : 0;
-        wrapper.style.setProperty('--ac-offset', (overhang + (previewH ? previewH + 8 : 0)) + 'px');
+        wrapper.style.setProperty('--ac-offset', (overhang + panelsH + (previewH ? previewH + 8 : 0)) + 'px');
+    },
+
+    // Paint the context menu's full-key row plus the labels on its two buttons
+    // for the currently selected format.
+    _renderContextMenuPubkey(pubkey) {
+        const el = document.getElementById('ctxFullPubkey');
+        const copyLabel = document.getElementById('ctxCopyPubkeyLabel');
+        const toggle = document.getElementById('ctxTogglePubkeyFormat');
+        const toggleLabel = document.getElementById('ctxTogglePubkeyFormatLabel');
+        const isNpub = this.getPubkeyDisplayFormat() === 'npub';
+        if (copyLabel) copyLabel.textContent = isNpub ? 'Copy npub' : 'Copy hex pubkey';
+        if (toggleLabel) toggleLabel.textContent = isNpub ? 'Show hex' : 'Show npub';
+        if (toggle) toggle.style.display = pubkey ? '' : 'none';
+        if (!el) return;
+        if (!pubkey) {
+            el.textContent = '';
+            el.style.display = 'none';
+            return;
+        }
+        el.textContent = this.formatPubkeyForDisplay(pubkey);
+        el.style.display = '';
+    },
+
+    // Keep the nick-edit modal's slide-out in step when the format is switched
+    // from the context menu (and vice versa) — one preference, one truth.
+    _refreshPubkeySlideoutFormat() {
+        const value = document.getElementById('pubkeySlideoutValue');
+        const label = document.getElementById('pubkeySlideoutLabel');
+        const formatBtn = document.getElementById('pubkeySlideoutFormat');
+        const isNpub = this.getPubkeyDisplayFormat() === 'npub';
+        if (label) label.textContent = isNpub ? 'Full Public Key (npub)' : 'Full Public Key (hex)';
+        if (formatBtn) formatBtn.textContent = isNpub ? 'Show hex' : 'Show npub';
+        if (value && this.pubkey) value.textContent = this.formatPubkeyForDisplay(this.pubkey);
     },
 
     _emojiTokenForImg(img) {

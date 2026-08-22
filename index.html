@@ -106,13 +106,22 @@
                 data-action="expandImageFromSrcStop">
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
             <div class="ctx-status-row" id="ctxStatusRow"></div>
-            <div class="ctx-full-pubkey" id="ctxFullPubkey" title="Full pubkey"></div>
-            <div class="context-menu-copy-pubkey" id="ctxCopyPubkey">
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico4">
-                    <rect x="5" y="5" width="8" height="9" rx="1" />
-                    <path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" />
-                </svg>
-                Copy Pubkey
+            <div class="ctx-full-pubkey" id="ctxFullPubkey" title="Click to switch between npub and hex"></div>
+            <div class="ctx-pubkey-actions">
+                <div class="context-menu-copy-pubkey" id="ctxCopyPubkey">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico4">
+                        <rect x="5" y="5" width="8" height="9" rx="1" />
+                        <path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" />
+                    </svg>
+                    <span id="ctxCopyPubkeyLabel">Copy npub</span>
+                </div>
+                <div class="context-menu-copy-pubkey" id="ctxTogglePubkeyFormat" title="Switch between npub and hex">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico4">
+                        <path d="M 2 6 L 12 6 M 9.5 3.5 L 12 6 L 9.5 8.5" stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M 14 10 L 4 10 M 6.5 7.5 L 4 10 L 6.5 12.5" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <span id="ctxTogglePubkeyFormatLabel">Show hex</span>
+                </div>
             </div>
         </div>
 
@@ -332,7 +341,7 @@
                     <div class="pm-recipient-box" id="pmRecipientBox" data-action="focusPmRecipient">
                         <div class="pm-recipient-chips" id="pmRecipientChips"></div>
                         <input type="text" class="pm-recipient-input" id="pmRecipientInput"
-                            placeholder="Search nym or paste pubkey..."
+                            placeholder="Search nym or paste npub / hex pubkey..."
                             data-on-input="onNewPMRecipientInput"
                             data-on-keydown="onNewPMRecipientKeydown"
                             autocomplete="off">
@@ -799,14 +808,28 @@
                             </svg>
                         </button>
                     </div>
+                    <div class="composer-panels" id="composerPanels">
+                        <div class="media-preview-strip nm-hidden" id="mediaPreviewStrip" data-sig=""></div>
+                        <div class="format-preview nm-hidden" id="formatPreview"></div>
+                        <div class="format-toolbar nm-hidden" id="formatToolbar" role="toolbar" aria-label="Message formatting"></div>
+                    </div>
                     <div class="message-input-row">
                         <div class="message-input input-disabled" id="messageInput" role="textbox" aria-multiline="true"
                             contenteditable="false" data-placeholder="Message, / for commands, ? for Nymbot..."></div>
-                        <button class="translate-input-btn nm-hidden" id="translateInputBtn" title="Translate text">
-                            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
-                            </svg>
-                        </button>
+                        <div class="input-inline-actions" id="inputInlineActions">
+                            <button class="format-input-btn" id="formatInputBtn" title="Formatting" aria-label="Formatting" aria-pressed="false">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="4 7 4 4 20 4 20 7"></polyline>
+                                    <line x1="9" y1="20" x2="15" y2="20"></line>
+                                    <line x1="12" y1="4" x2="12" y2="20"></line>
+                                </svg>
+                            </button>
+                            <button class="translate-input-btn nm-hidden" id="translateInputBtn" title="Translate text">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                                    <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
+                                </svg>
+                            </button>
+                        </div>
                         <div class="translate-input-dropdown" id="translateInputDropdown">
                         </div>
                     </div>
@@ -1056,7 +1079,7 @@
                 <div class="form-group">
                     <label class="form-label">"Luxas" is reserved for the Nymchat developer.</label>
                     <div class="form-hint nm-h-19">Paste your nsec to verify your identity:</div>
-                    <input type="password" class="form-input" id="devNsecInput" placeholder="nsec1..."
+                    <input type="password" class="form-input" id="devNsecInput" placeholder="nsec1... or hex private key"
                         autocomplete="off">
                     <div id="devNsecError" class="nm-hidden nm-h-20">Invalid nsec -
                         does not match the developer pubkey.</div>
@@ -1157,10 +1180,13 @@
                     <div class="input-char-count" id="newNickCharCount">0/20</div>
                     <div class="form-hint">Your ephemeral pseudonym nickname for this session. Click the # and four characters to the right to reveal this Nym's full pubkey.</div>
                     <div class="pubkey-slideout" id="pubkeySlideout">
-                        <div class="pubkey-slideout-label">Full Hex Pubkey</div>
+                        <div class="pubkey-slideout-label" id="pubkeySlideoutLabel">Full Public Key (npub)</div>
                         <div class="form-hint">This is the current Nym's full pubkey. A "pubkey" aka "public key" is a part of a keypair in cryptography. A keypair is two connected codes: your public key (like a username that identifies you to everyone) and your private key (like a password that only you should know and use to prove you're really you). You use this pubkey for others to find you on Nymchat and you use other people's pubkeys to find them.</div>
                         <div class="pubkey-slideout-value" id="pubkeySlideoutValue"></div>
-                        <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutCopy">Copy</button>
+                        <div class="pubkey-slideout-buttons">
+                            <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutCopy">Copy</button>
+                            <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutFormat">Show hex</button>
+                        </div>
                     </div>
                 </div>
                 <div class="form-group">
@@ -1396,7 +1422,7 @@
                     <!-- Paste nsec Option -->
                     <div class="form-group nm-h-3">
                         <label class="form-label">Paste your nsec</label>
-                        <input type="password" class="form-input" id="nostrLoginNsecInput" placeholder="nsec1..." autocomplete="off">
+                        <input type="password" class="form-input" id="nostrLoginNsecInput" placeholder="nsec1... or 64-char hex private key" autocomplete="off">
                         <div id="nostrLoginError" class="nm-hidden nm-h-20"></div>
                         <div class="form-hint">Your private key stays local and is never sent to any server</div>
                     </div>
@@ -2088,7 +2114,7 @@
                         <label class="form-label">Transfer Settings to Another User</label>
                         <div class="nm-h-68">
                             <input type="text" class="form-input nm-flex1" id="settingsTransferPubkeyInput"
-                                placeholder="Recipient hex pubkey (64 chars)">
+                                placeholder="Recipient npub or hex pubkey">
                             <button class="icon-btn nm-h-69" data-action="executeSettingsTransfer">Send</button>
                         </div>
                         <div id="settingsTransferError" class="nm-hidden nm-h-70"></div>
@@ -2427,6 +2453,7 @@
     <script defer src="js/modules/p2p.js"></script>
     <script defer src="js/modules/calls.js"></script>
     <script defer src="js/modules/translate.js"></script>
+    <script defer src="js/modules/rich-compose.js"></script>
     <script defer src="js/modules/i18n.js"></script>
     <script defer src="js/modules/sidebar-sections.js"></script>
     <script defer src="js/modules/columns.js"></script>

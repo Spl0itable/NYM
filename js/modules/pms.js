@@ -1950,15 +1950,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Usage: ?transfer @nym#xxxx or ?transfer <npub/hex pubkey> — moves your entire Nymbot credit balance to another pubkey. Append "confirm" to execute (e.g. ?transfer @friend#a1b2 confirm).');
             return;
         }
-        let targetPubkey = null;
-        if (/^[0-9a-f]{64}$/i.test(targetArg)) {
-            targetPubkey = targetArg.toLowerCase();
-        } else if (/^npub1/i.test(targetArg) && window.NostrTools && window.NostrTools.nip19) {
-            try {
-                const decoded = window.NostrTools.nip19.decode(targetArg);
-                if (decoded && decoded.type === 'npub') targetPubkey = String(decoded.data).toLowerCase();
-            } catch (e) { }
-        }
+        let targetPubkey = this.normalizePubkeyInput(targetArg);
         if (!targetPubkey) targetPubkey = this.resolvePubkeyFromNym(targetArg);
         if (!targetPubkey) {
             this.displaySystemMessage(`Could not resolve "${targetArg}". Try ?transfer with a full nym (e.g. ?transfer @friend#a1b2 confirm), an npub, or a 64-char hex pubkey.`);
@@ -3559,9 +3551,10 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const targetInput = args.trim().replace(/^@/, '');
+        // A public key in either form — hex or npub (`normalizePubkeyInput`,
+        // users.js) — otherwise a nym to look up.
+        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
 
-        // Check if input is a pubkey (64 hex characters)
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
             const targetPubkey = targetInput.toLowerCase();
 
@@ -3881,9 +3874,10 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Direct pubkey paste
-        if (/^[0-9a-f]{64}$/i.test(query)) {
-            const pk = query;
+        // Direct public key paste, hex or npub
+        const pastedPubkey = this.normalizePubkeyInput(query);
+        if (pastedPubkey) {
+            const pk = pastedPubkey;
             if (!this._newPMRecipients.some(r => r.pubkey === pk) && pk !== this.pubkey) {
                 const renderPubkeySuggestion = () => {
                     const nym = this.stripPubkeySuffix(this.getNymFromPubkey(pk));

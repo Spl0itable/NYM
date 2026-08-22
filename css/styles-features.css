@@ -2673,6 +2673,14 @@ body:not(.chat-bubbles) .message.supporter-style {
     opacity: 0.8;
 }
 
+.ctx-pubkey-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
 .context-menu-copy-pubkey {
     font-size: 11px;
     color: var(--text-dim);
@@ -2697,7 +2705,8 @@ body:not(.chat-bubbles) .message.supporter-style {
     border-radius: 6px;
     word-break: break-all;
     overflow-wrap: anywhere;
-    user-select: all;
+    user-select: text;
+    cursor: pointer;
     -webkit-user-select: all;
     text-align: center;
 }

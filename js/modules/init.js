@@ -57,6 +57,9 @@ Object.assign(NYM.prototype, {
             this.setupContextMenu();
             this.setupMobileGestures();
             this.setupTranslateInput();
+            this.setupFormatToolbar();
+            this.setupComposerMediaPreviews();
+            this.syncComposerInlineActions();
             this.populateTranslateLanguageSelect();
             this.populateUiLanguageSelect();
             this.setupUiLanguage();

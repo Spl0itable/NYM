@@ -2087,9 +2087,10 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Resolve a nym or nym#suffix or pubkey string to a pubkey
+    // Resolve a nym, nym#suffix, hex pubkey or npub to a hex pubkey.
     resolvePubkeyFromNym(nymInput) {
-        if (/^[0-9a-f]{64}$/i.test(nymInput)) return nymInput.toLowerCase();
+        const asPubkey = this.normalizePubkeyInput(nymInput);
+        if (asPubkey) return asPubkey;
         const hashIndex = nymInput.indexOf('#');
         let searchNym = nymInput;
         let searchSuffix = null;
@@ -3875,9 +3876,9 @@ Object.assign(NYM.prototype, {
             if (part.startsWith('@')) {
                 // @nym or @nym#suffix
                 memberNyms.push(part.slice(1));
-            } else if (/^[0-9a-f]{64}$/i.test(part)) {
-                // raw pubkey
-                memberNyms.push(part);
+            } else if (this.isPubkeyInput(part)) {
+                // raw public key, hex or npub
+                memberNyms.push(this.normalizePubkeyInput(part));
             } else if (part.includes('#') && !part.startsWith('#')) {
                 // nym#suffix disambiguation without @ (e.g. anon_pulse#35b5)
                 memberNyms.push(part);

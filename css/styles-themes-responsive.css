@@ -1304,7 +1304,20 @@ body.light-mode .input-container {
     border-top-color: rgba(0, 0, 0, 0.08);
 }
 
-body.light-mode .translate-input-btn:hover {
+body.light-mode .translate-input-btn:hover,
+body.light-mode .format-input-btn:hover,
+body.light-mode .format-tool:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .format-toolbar,
+body.light-mode .format-preview,
+body.light-mode .media-preview-strip {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+body.light-mode .media-preview-item {
     background: rgba(0, 0, 0, 0.06);
 }
 
