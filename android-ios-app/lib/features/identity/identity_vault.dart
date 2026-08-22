@@ -156,6 +156,97 @@ class IdentityVault {
     // `enableVault` sets `this._vaultKey = key`), so later [secretSet] writes
     // stay encrypted.
     _sessionKey = key;
+    await _escrowBackgroundKey(key);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Background-wake escrow
+  // ---------------------------------------------------------------------------
+  //
+  // iOS can relaunch the app in the background for a `BGAppRefresh` window. That
+  // process comes up locked, and a locked process boots nothing — no relays, no
+  // catch-up — so the window is wasted and the user sees no notifications until
+  // they next open the app by hand.
+  //
+  // To let a background wake proceed without a human, the derived vault key is
+  // escrowed in the platform keystore. Three properties make that tolerable:
+  //
+  //  * It goes through the SAME [SecureStore] as the identity secrets, so it
+  //    inherits `kSecAttrAccessibleAfterFirstUnlock` — unreadable until the
+  //    device has been unlocked once since boot — and, more importantly, a panic
+  //    wipe clears it: [PanicWipe] calls `SecureStore.wipeAll()`, which deletes
+  //    every Keychain item under the app's service, this one included. Storing
+  //    it anywhere else (a separate store, its own service or access group)
+  //    would put it OUTSIDE that sweep, which is exactly why it doesn't.
+  //  * It is only ever consumed by a background wake. A foreground launch still
+  //    prompts for the password/PIN/biometric, so the vault keeps meaning what
+  //    it means to the person using the app.
+  //  * It is cleared whenever the vault stops existing — disable, reset, and
+  //    any wipe.
+  //
+  // The honest trade: while this is present, the identity secret is protected by
+  // the device passcode rather than the vault factor. That is the cost of
+  // catching up in the background at all; [clearBackgroundKey] is the escape
+  // hatch if a deployment would rather not pay it.
+  static const String _bgKeyName = 'nym_vault_bg_key';
+
+  Future<void> _escrowBackgroundKey(SecretKey key) async {
+    try {
+      final bytes = await key.extractBytes();
+      await _secure.set(_bgKeyName, base64.encode(bytes));
+    } catch (_) {
+      // A keystore that refuses the write costs background catch-up, nothing
+      // more — never fail an unlock over it.
+    }
+  }
+
+  /// Drop the escrow, so background wakes go back to doing nothing until the
+  /// next foreground unlock.
+  Future<void> clearBackgroundKey() async {
+    try {
+      await _secure.remove(_bgKeyName);
+    } catch (_) {}
+  }
+
+  /// Unlock using the escrowed key instead of a user factor, for a background
+  /// wake. Returns the decrypted secrets, or null when there is no escrow (or
+  /// it no longer decrypts — a stale key from a changed factor).
+  ///
+  /// Deliberately NOT wired to any UI: a person unlocking the app goes through
+  /// [unlock] and their real factor.
+  Future<Map<String, String>?> unlockForBackgroundWake() async {
+    if (!isEnabled) return null;
+    final stored = await _secure.get(_bgKeyName);
+    if (stored == null || stored.isEmpty) return null;
+    final SecretKey key;
+    try {
+      key = SecretKey(base64.decode(stored));
+    } catch (_) {
+      return null;
+    }
+    // Prove the key still matches the vault before trusting it — the factor may
+    // have been changed since the escrow was written.
+    final check = _kv.getString(StorageKeys.vaultCheck);
+    if (check != null && check.startsWith('enc:v1:')) {
+      try {
+        if (await _decrypt(key, check) != _checkPlaintext) return null;
+      } catch (_) {
+        await clearBackgroundKey();
+        return null;
+      }
+    }
+    _sessionKey = key;
+    final out = <String, String>{};
+    for (final name in vaultKeys) {
+      final blob = await _secure.get(name);
+      if (blob == null) continue;
+      try {
+        out[name] = blob.startsWith('enc:v1:') ? await _decrypt(key, blob) : blob;
+      } catch (_) {
+        return null;
+      }
+    }
+    return out;
   }
 
   /// Verify [password] against the stored check token without unlocking.
@@ -199,6 +290,7 @@ class IdentityVault {
     // key-vault.js `unlockVault`) so [secretSet] keeps encrypting post-boot
     // secret writes.
     _sessionKey = key;
+    await _escrowBackgroundKey(key);
     final out = <String, String>{};
     for (final name in vaultKeys) {
       final blob = await _secure.get(name);
@@ -226,6 +318,7 @@ class IdentityVault {
       }
     }
     _sessionKey = null; // Secrets are plaintext again (key-vault.js:307).
+    await clearBackgroundKey();
     await _clearMeta();
   }
 
@@ -233,6 +326,7 @@ class IdentityVault {
   /// escape hatch). Mirrors `resetVault`.
   Future<void> reset() async {
     _sessionKey = null;
+    await clearBackgroundKey();
     for (final name in vaultKeys) {
       await _secure.remove(name);
     }

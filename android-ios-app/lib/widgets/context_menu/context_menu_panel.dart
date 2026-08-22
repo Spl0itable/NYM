@@ -5,7 +5,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/crypto/key_format.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -493,35 +495,13 @@ class ContextMenuPanel extends ConsumerWidget {
             ),
           ],
           const SizedBox(height: 6),
-          // Full pubkey block — tap-to-select-all mono text (`.ctx-full-pubkey`,
-          // user-select:all).
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              color: c.insetFill,
-              border: Border.all(color: c.insetBorder),
-              borderRadius: const BorderRadius.all(Radius.circular(6)),
-            ),
-            child: SelectableText(
-              target.pubkey,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: c.textDim,
-                fontSize: 11,
-                fontFamily: 'monospace',
-                height: 1.35,
-              ),
-            ),
-          ),
-          // Copy Pubkey — confirm + close (F12); hover tint (`.context-menu-copy-pubkey`).
-          _CopyPubkeyRow(
-            onTap: () async {
-              await Clipboard.setData(ClipboardData(text: target.pubkey));
-              // System-message confirmation (displaySystemMessage) + close.
-              onCopied();
-              onClose();
-            },
+          // Full public key block — shown as npub by default with a one-tap
+          // switch to hex, since bitchat speaks hex only over the mesh
+          // (`.ctx-full-pubkey` + `.ctx-pubkey-actions`, ui-context.js).
+          _PubkeyBlock(
+            pubkey: target.pubkey,
+            onCopied: onCopied,
+            onClose: onClose,
           ),
         ],
       ),
@@ -894,9 +874,115 @@ class ContextMenuPanel extends ConsumerWidget {
 
 /// `.context-menu-copy-pubkey`: 3×8 padding, radius 6, hover `rgba(255,255,255,
 /// 0.08)` bg + primary text; copy glyph + label. Confirms + closes on tap (F12).
+/// The context menu's full public key, plus Copy and an npub⇄hex switch.
+///
+/// The chosen format is a single app-wide preference (`nym_pubkey_format`,
+/// shared with the PWA), so flipping it here also flips the nick-edit modal's
+/// slide-out. Copy always yields whatever is on screen.
+class _PubkeyBlock extends StatefulWidget {
+  const _PubkeyBlock({
+    required this.pubkey,
+    required this.onCopied,
+    required this.onClose,
+  });
+
+  final String pubkey;
+  final VoidCallback onCopied;
+  final VoidCallback onClose;
+
+  @override
+  State<_PubkeyBlock> createState() => _PubkeyBlockState();
+}
+
+class _PubkeyBlockState extends State<_PubkeyBlock> {
+  PubkeyFormat _format = PubkeyFormat.npub;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      if (!mounted) return;
+      final stored = readPubkeyFormat(prefs);
+      if (stored != _format) setState(() => _format = stored);
+    });
+  }
+
+  Future<void> _toggle() async {
+    final next =
+        _format == PubkeyFormat.npub ? PubkeyFormat.hex : PubkeyFormat.npub;
+    setState(() => _format = next);
+    final prefs = await SharedPreferences.getInstance();
+    await writePubkeyFormat(prefs, next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final isNpub = _format == PubkeyFormat.npub;
+    final shown = formatPubkeyForDisplay(widget.pubkey, _format);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: _toggle,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: c.insetFill,
+              border: Border.all(color: c.insetBorder),
+              borderRadius: const BorderRadius.all(Radius.circular(6)),
+            ),
+            child: SelectableText(
+              shown,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: c.textDim,
+                fontSize: 11,
+                fontFamily: 'monospace',
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Copy — confirm + close (F12); hover tint
+            // (`.context-menu-copy-pubkey`).
+            _CopyPubkeyRow(
+              icon: Icons.copy,
+              label: isNpub ? tr('Copy npub') : tr('Copy hex pubkey'),
+              onTap: () async {
+                await Clipboard.setData(ClipboardData(text: shown));
+                // System-message confirmation (displaySystemMessage) + close.
+                widget.onCopied();
+                widget.onClose();
+              },
+            ),
+            const SizedBox(width: 4),
+            _CopyPubkeyRow(
+              icon: Icons.swap_horiz,
+              label: isNpub ? tr('Show hex') : tr('Show npub'),
+              onTap: _toggle,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 class _CopyPubkeyRow extends StatefulWidget {
-  const _CopyPubkeyRow({required this.onTap});
+  const _CopyPubkeyRow({
+    required this.onTap,
+    required this.icon,
+    required this.label,
+  });
   final Future<void> Function() onTap;
+  final IconData icon;
+  final String label;
 
   @override
   State<_CopyPubkeyRow> createState() => _CopyPubkeyRowState();
@@ -925,9 +1011,9 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.copy, size: 12, color: color),
+              Icon(widget.icon, size: 12, color: color),
               const SizedBox(width: 2),
-              Text(tr('Copy Pubkey'),
+              Text(widget.label,
                   style: TextStyle(color: color, fontSize: 11)),
             ],
           ),

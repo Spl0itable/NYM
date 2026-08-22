@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../../core/constants/storage_keys.dart';
 import '../../models/channel.dart';
 import '../../services/storage/key_value_store.dart';
@@ -168,13 +169,13 @@ String normalizeIndicatorScope(String? value,
   return fallback;
 }
 
-/// Validates a settings-transfer recipient pubkey, mirroring shop.js:1767:
-/// must be exactly 64 hex chars, and not the user's own pubkey. Returns the
-/// matching PWA error string, or null when valid.
+/// Validates a settings-transfer recipient public key, mirroring
+/// `executeSettingsTransfer` (shop.js): an npub or a 64-char hex key, and not
+/// the user's own. Returns the matching PWA error string, or null when valid.
 String? validateTransferPubkey(String input, {required String selfPubkey}) {
-  final pk = input.trim().toLowerCase();
-  if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(pk)) {
-    return tr('Invalid pubkey. Must be 64 hex characters.');
+  final pk = normalizePubkeyInput(input);
+  if (pk == null) {
+    return tr('Invalid public key. Paste an npub or a 64-character hex pubkey.');
   }
   if (selfPubkey.isNotEmpty && pk == selfPubkey.toLowerCase()) {
     return tr('Cannot transfer settings to yourself.');

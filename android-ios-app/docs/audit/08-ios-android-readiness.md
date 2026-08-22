@@ -42,7 +42,7 @@ Status legend: present = already correct; **ADDED** = added in this audit; FIXED
 | Save media to gallery (`gal`) | `WRITE_EXTERNAL_STORAGE` (maxSdk 29) + `ACCESS_MEDIA_LOCATION` **ADDED** | `NSPhotoLibraryAddUsageDescription` **ADDED** | ADDED |
 | Audio playback (`audioplayers`) | no extra permission | no extra permission | present |
 | Deep links — custom scheme (`app_links`) | `nymchat://` intent-filter | `CFBundleURLTypes` scheme `nymchat` | present |
-| Deep links — universal links | autoVerify intent-filters for `web.nymchat.app`, `nymchat.app` **FIXED** | `associated-domains` for same hosts **FIXED** | FIXED |
+| Deep links — universal links | autoVerify intent-filters for `app.nymchat.app`, `app.nym.bar`, `web.nymchat.app`, `nymchat.app` **FIXED** | `associated-domains` for same hosts **FIXED** | FIXED |
 | Open Lightning wallet / external URLs (`url_launcher`) | `<queries>` `lightning` + `https` + SEND **ADDED https** | `LSApplicationQueriesSchemes` `lightning` + `https`/`http`/`mailto`/`tel` **ADDED** | ADDED |
 | Share (`share_plus`) | SEND query **ADDED** | system | ADDED |
 | Cleartext policy | `usesCleartextTraffic="false"` **ADDED** (app uses only wss/https) | ATS default (secure) | ADDED |
@@ -86,7 +86,7 @@ already-published association files; aligning the namespace/MainActivity to
 - **`CODE_SIGN_ENTITLEMENTS` was missing from `project.pbxproj`** — added `Runner/Runner.entitlements` to all three Runner build configs (Debug/Profile/Release). Without it, associated domains and keychain groups never reach the signed app.
 - **`IPHONEOS_DEPLOYMENT_TARGET` 12.0 → 15.0** in all three configs — `flutter_webrtc 0.12.x` needs ≥13 and the Podfile/`AppFrameworkInfo.plist` already pin 15.0; the project file was inconsistent. Now uniform at 15.0.
 - Info.plist: added `NSPhotoLibraryAddUsageDescription`, `NSFaceIDUsageDescription`, `ITSAppUsesNonExemptEncryption`; `UIBackgroundModes` now includes `audio`/`voip`/`remote-notification`; `LSApplicationQueriesSchemes` now includes `https`/`http`/`mailto`/`tel`.
-- Entitlements: associated-domains list the deep-link hosts, `web.nymchat.app` and `nymchat.app`; added `keychain-access-groups` for `flutter_secure_storage`.
+- Entitlements: associated-domains now list all four deep-link hosts (was only `web.nymchat.app`/`nymchat.app`, but the code parses `app.nymchat.app`/`app.nym.bar`); added `keychain-access-groups` for `flutter_secure_storage`.
 - Podfile already forces the 15.0 floor and enables `permission_handler` macros (camera/photos/microphone/location). Left intact.
 
 ---
@@ -118,7 +118,7 @@ configure and compile with the current config.
 
 1. **Android signing**: provide `android/key.properties` + a release keystore (build.gradle already reads them). Debug build needs none.
 2. **iOS signing / team**: `DEVELOPMENT_TEAM` is unset in `project.pbxproj`. Set it in Xcode (Apple Developer account `KJ6U2Y9B2M`, per the AASA `appID`) and enable the Associated Domains + Keychain Sharing capabilities so the entitlements provision.
-3. **Universal-link hosting**: serve `web/.well-known/assetlinks.json` (Android) and `web/.well-known/apple-app-site-association` (iOS) over HTTPS at the real hosts. The repo copies pin `com.nym.bar` + team `KJ6U2Y9B2M` and enumerate `nymchat.app`/`web.nymchat.app`, which is the whole host set. Update the `sha256_cert_fingerprints` in `assetlinks.json` to the real signing-cert SHA-256.
+3. **Universal-link hosting**: serve `web/.well-known/assetlinks.json` (Android) and `web/.well-known/apple-app-site-association` (iOS) over HTTPS at the real hosts. The repo copies pin `com.nym.bar` + team `KJ6U2Y9B2M` but currently only enumerate `nymchat.app`/`web.nymchat.app`; if `app.nymchat.app`/`app.nym.bar` are live hosts, host the files there too (the manifest/entitlements now accept all four). Update the `sha256_cert_fingerprints` in `assetlinks.json` to the real signing-cert SHA-256.
 4. **Push (FCM)**: currently a guarded no-op (`firebase_messaging`/`firebase_core` are intentionally not in `pubspec.yaml` to stay de-Google-able — see `lib/services/firebase_messaging_service.dart`). To enable real push: add those plugins, drop in `google-services.json` (Android) + `GoogleService-Info.plist` (iOS), apply the `com.google.gms.google-services` Gradle plugin, and add the `aps-environment` key to `Runner.entitlements` with an APNs-enabled provisioning profile. The `remote-notification` background mode and `POST_NOTIFICATIONS` permission are already in place for that switch-on.
 
 ---

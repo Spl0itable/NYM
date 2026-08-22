@@ -2522,14 +2522,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'connections and the Bluetooth mesh running while the app is in '
               'the background, so messages arrive without reopening it. Uses '
               'more battery. Android shows a permanent notification while it '
-              'is on; iOS limits how long connections can be held.'),
+              'is on; iOS limits how long connections can be held and, with '
+              'identity encryption on, catches up only while the device has '
+              'been unlocked at least once since it was powered on.'),
           child: FormGroup(
             label: tr('Stay Connected in Background'),
             hint: tr('Keeps relay connections and the Bluetooth mesh running '
                 'while the app is in the background, so messages arrive '
                 'without reopening it. Uses more battery. Android shows a '
                 'permanent notification while it is on; iOS limits how long '
-                'connections can be held.'),
+                'connections can be held and, with identity encryption on, '
+                'catches up only while the device has been unlocked at least '
+                'once since it was powered on.'),
             // Save-gated like its Data & Backup siblings (09-M1): the platform
             // keep-alive is started from the app shell when the setting's
             // committed value flips, not from this dropdown.
@@ -2567,8 +2571,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       _GroupSpec(
-        text: tr('Transfer Settings to Another User Recipient hex pubkey '
-            '(64 chars) Send Transfers your nickname, avatar, and all '
+        text: tr('Transfer Settings to Another User Recipient npub or hex '
+            'pubkey Send Transfers your nickname, avatar, and all '
             'preferences to the specified pubkey'),
         child: FormGroup(
           label: tr('Transfer Settings to Another User'),
@@ -2583,7 +2587,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   Expanded(
                     child: FormInput(
                       controller: _transferPubkeyController,
-                      hint: tr('Recipient hex pubkey (64 chars)'),
+                      hint: tr('Recipient npub or hex pubkey'),
                       onChanged: (_) {
                         if (_transferError != null) {
                           setState(() => _transferError = null);

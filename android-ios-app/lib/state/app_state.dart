@@ -3726,11 +3726,26 @@ class AppStateNotifier extends StateNotifier<AppState> {
     Set<String>? friends,
     Set<String>? blockedUsers,
     Set<String>? blockedKeywords,
+    Set<String>? pinnedChannels,
+    Set<String>? hiddenChannels,
+    Set<String>? blockedChannels,
   }) {
     if (friends != null) state.friends.addAll(friends);
     if (blockedUsers != null) state.blockedUsers.addAll(blockedUsers);
     if (blockedKeywords != null) {
       state.blockedKeywords.addAll(blockedKeywords.map((k) => k.toLowerCase()));
+    }
+    // Channel keys are stored lowercased everywhere else (`togglePin` and
+    // friends go through the same normalisation), so fold them here too rather
+    // than trusting whatever case an older build wrote.
+    if (pinnedChannels != null) {
+      state.pinnedChannels.addAll(pinnedChannels.map((k) => k.toLowerCase()));
+    }
+    if (hiddenChannels != null) {
+      state.hiddenChannels.addAll(hiddenChannels.map((k) => k.toLowerCase()));
+    }
+    if (blockedChannels != null) {
+      state.blockedChannels.addAll(blockedChannels.map((k) => k.toLowerCase()));
     }
     _scheduleEmit();
   }

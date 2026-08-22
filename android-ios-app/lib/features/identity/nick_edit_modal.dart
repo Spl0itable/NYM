@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/crypto/bech32_codec.dart';
+import '../../core/crypto/key_format.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -100,9 +102,18 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return 'image/jpeg';
   }
 
+  /// Which form the full public key is shown in (npub by default). Shared
+  /// app-wide with the user context menu via `nym_pubkey_format`.
+  PubkeyFormat _pubkeyFormat = PubkeyFormat.npub;
+
   @override
   void initState() {
     super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      if (!mounted) return;
+      final stored = readPubkeyFormat(prefs);
+      if (stored != _pubkeyFormat) setState(() => _pubkeyFormat = stored);
+    });
     final id = ref.read(nostrControllerProvider).identity;
     // Prefer the live `selfNym` (which `_ingestProfile` updates from the D1
     // kind-0 profile on login) over the identity's derived/ephemeral nym, so the
@@ -333,7 +344,10 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   /// The full-hex pubkey panel (`#pubkeySlideout`, index.html:1159-1169): a
   /// title, an explanatory paragraph, the full pubkey, and a Copy button.
   Widget _pubkeySlideout(NymColors c) {
-    final pk = _pubkey;
+    // npub by default, one tap from hex — the same app-wide preference the
+    // user context menu writes (`nym_pubkey_format`, key_format.dart).
+    final isNpub = _pubkeyFormat == PubkeyFormat.npub;
+    final pk = formatPubkeyForDisplay(_pubkey, _pubkeyFormat);
     return Container(
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.all(12),
@@ -345,7 +359,10 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(tr('Full Hex Pubkey'),
+          Text(
+              isNpub
+                  ? tr('Full Public Key (npub)')
+                  : tr('Full Public Key (hex)'),
               style: TextStyle(
                   color: c.text, fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
@@ -372,13 +389,30 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               _smallButton(
                 c,
                 tr('Copy'),
-                () => _copyToClipboard(pk, tr('Pubkey copied')),
+                () => _copyToClipboard(
+                    pk, isNpub ? tr('npub copied') : tr('Pubkey copied')),
+              ),
+              const SizedBox(width: 6),
+              _smallButton(
+                c,
+                isNpub ? tr('Show hex') : tr('Show npub'),
+                _togglePubkeyFormat,
               ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  /// Flip npub⇄hex and persist, so the context menu agrees on next open.
+  Future<void> _togglePubkeyFormat() async {
+    final next = _pubkeyFormat == PubkeyFormat.npub
+        ? PubkeyFormat.hex
+        : PubkeyFormat.npub;
+    setState(() => _pubkeyFormat = next);
+    final prefs = await SharedPreferences.getInstance();
+    await writePubkeyFormat(prefs, next);
   }
 
   Widget _avatarGroup(NymColors c) {

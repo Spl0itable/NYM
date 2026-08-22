@@ -6,12 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/crypto/bech32_codec.dart' as bech32;
+import '../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../core/crypto/bitchat.dart' as bitchat;
 import '../core/crypto/keys.dart' as keys;
 import '../core/crypto/pow.dart' as pow;
 import '../core/crypto/schnorr.dart' as schnorr;
 import '../core/constants/event_kinds.dart';
-import '../features/channels/channel_share.dart';
 import '../core/constants/relays.dart';
 import '../core/constants/storage_keys.dart';
 import '../core/theme/nym_colors.dart';
@@ -4644,7 +4644,7 @@ class NostrController {
   void cmdShare() {
     final state = _ref.read(appStateProvider);
     if (state.view.kind != ViewKind.channel) return;
-    _emitSystemMessage(buildChannelShareUrl(state.view.id));
+    _emitSystemMessage('https://app.nym.bar/#${state.view.id}');
   }
 
   /// `/quit` — disconnect (cmdQuit). Stops the service; full reload is the
@@ -4755,15 +4755,13 @@ class NostrController {
   /// miss on a differently-encoded id.
   void startPM(String peerPubkey, {String? nym}) {
     var peer = peerPubkey.trim();
-    if (RegExp(r'^npub1', caseSensitive: false).hasMatch(peer)) {
-      try {
-        peer = bech32.decodeNpub(peer.toLowerCase());
-      } catch (_) {
-        return; // malformed npub — nothing to open
-      }
-    }
-    if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(peer)) {
-      peer = peer.toLowerCase();
+    // Accept a public key in either form — hex, npub or nprofile.
+    final normalized = normalizePubkeyInput(peer);
+    if (normalized != null) {
+      peer = normalized;
+    } else if (RegExp(r'^(npub|nprofile)1', caseSensitive: false)
+        .hasMatch(peer)) {
+      return; // malformed bech32 key — nothing to open
     }
     if (peer.isEmpty) return;
     final appState = _ref.read(appStateProvider.notifier);
@@ -7169,6 +7167,13 @@ class NostrController {
       friends: _readSet(StorageKeys.friends),
       blockedUsers: _readSet(StorageKeys.blocked),
       blockedKeywords: _readSet(StorageKeys.blockedKeywords),
+      // These three were persisted on every change but never read back, so a
+      // favourited / hidden / blocked channel silently reverted on the next
+      // launch. They restore alongside the social sets because they are the
+      // same kind of thing: per-user preferences that outlive a session.
+      pinnedChannels: _readSet(StorageKeys.pinnedChannels),
+      hiddenChannels: _readSet(StorageKeys.hiddenChannels),
+      blockedChannels: _readSet(StorageKeys.blockedChannels),
     );
   }
 

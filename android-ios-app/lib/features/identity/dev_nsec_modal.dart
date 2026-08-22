@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 
-import '../../core/crypto/bech32_codec.dart';
+import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/crypto/keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
@@ -38,14 +38,13 @@ class DevNsecResult {
 /// Verifies [nsec] maps to the developer pubkey (`verifyDeveloperNsec`,
 /// users.js:75-86). Returns the result on a match, or null otherwise.
 DevNsecResult? verifyDeveloperNsec(String nsec) {
-  try {
-    final bytes = decodeNsec(nsec.trim());
-    if (bytes.length != 32) return null;
-    final derived = getPublicKeyHex(bytes);
-    if (derived == kVerifiedDeveloperPubkey) {
-      return DevNsecResult(nsec: nsec.trim(), pubkey: derived);
-    }
-  } catch (_) {}
+  // Either form of private key — `nsec1…` or bare 64-char hex.
+  final bytes = normalizePrivkeyInput(nsec);
+  if (bytes == null || bytes.length != 32) return null;
+  final derived = getPublicKeyHex(bytes);
+  if (derived == kVerifiedDeveloperPubkey) {
+    return DevNsecResult(nsec: nsec.trim(), pubkey: derived);
+  }
   return null;
 }
 
@@ -143,7 +142,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                                 style: TextStyle(
                                     color: c.textBright, fontSize: 15),
                                 decoration:
-                                    ModalChrome.inputDecoration(c, 'nsec1...'),
+                                    ModalChrome.inputDecoration(c, 'nsec1... or hex private key'),
                               ),
                             ),
                             if (_error) ...[

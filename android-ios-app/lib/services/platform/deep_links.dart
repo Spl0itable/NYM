@@ -24,10 +24,14 @@ import '../../models/group.dart';
 /// The hosts the app accepts deep links from — kept in sync with the
 /// AndroidManifest intent-filter + iOS associated-domains. `shareChannel()`
 /// builds links on the runtime origin (`web.nymchat.app` in production — the
-/// only OFFICIAL_HOST, `build-verify.js:10`); `nymchat.app` is the apex.
+/// only OFFICIAL_HOST, `build-verify.js:10`); `nymchat.app` is the apex; the
+/// legacy `app.nymchat.app` is still parsed so older shared links keep working;
+/// `app.nym.bar` is the message-formatter chip host.
 const Set<String> kNymLinkHosts = {
   'web.nymchat.app',
   'nymchat.app',
+  'app.nymchat.app',
+  'app.nym.bar',
 };
 
 /// The kind of deep link a [parseNymLink] call resolved to.

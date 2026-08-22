@@ -13,7 +13,7 @@ import '../i18n/i18n.dart';
 /// `shareChannel()` uses `window.location.origin + pathname` (channels.js:413),
 /// which in production resolves to `web.nymchat.app` — the only OFFICIAL_HOST
 /// (`build-verify.js:10`). The native app mirrors that production host so shared
-/// links open the live web PWA.
+/// links open the live web PWA. (`app.nymchat.app` does not exist.)
 const String kNymchatShareHost = 'https://web.nymchat.app';
 
 /// Builds the share URL for a channel (`shareChannel`, channels.js): the base

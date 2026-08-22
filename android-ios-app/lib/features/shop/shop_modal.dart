@@ -9,6 +9,8 @@ import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/crypto/key_format.dart' show normalizePubkeyInput;
+import 'shop_purchase_policy.dart';
 import '../../core/constants/relays.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -195,6 +197,26 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             ),
           ),
           const SizedBox(height: 4),
+          // Where purchases happen on a platform that can't sell here. A plain
+          // statement with no tap target — see shop_purchase_policy.dart.
+          if (shopPurchasesDisabled) ...[
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: c.insetFill,
+                border: Border.all(color: c.insetBorder),
+                borderRadius: NymRadius.rsm,
+              ),
+              child: Text(
+                tr('Flair cannot be purchased in this app. Items are bought '
+                    'from the Nymchat web app in your browser. Anything you '
+                    'already own works here as usual.'),
+                style: TextStyle(color: c.textDim, fontSize: 12, height: 1.45),
+              ),
+            ),
+          ],
           // `.shop-title .nm-h-16` subtitle: 12px, `--text-dim`, and it INHERITS
           // the `.shop-title { font-weight: 700 }` (the `.nm-h-16` rules only set
           // size + colour) — so the subtitle is bold too. Reserve right room for
@@ -656,8 +678,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       title: tr('Gift Item'),
       item: item,
       description: tr(
-          "Enter the recipient's hex pubkey (64 characters). You pay for the "
-          'item and it lands directly in their inventory.'),
+          "Enter the recipient's public key — an npub or a 64-character hex "
+          'pubkey. You pay for the item and it lands directly in their '
+          'inventory.'),
       selfPubkey: identity?.pubkey,
       // shop.js:1650 — the exact self-gift rejection copy.
       selfMessage: tr('Use GET to buy an item for yourself.'),
@@ -700,8 +723,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       title: tr('Transfer Item'),
       item: item,
       description: tr(
-          "Enter the recipient's hex pubkey (64 characters). The item will be "
-          'revoked from your inventory and assigned to theirs.'),
+          "Enter the recipient's public key — an npub or a 64-character hex "
+          'pubkey. The item will be revoked from your inventory and assigned '
+          'to theirs.'),
       selfPubkey: identity.pubkey,
       // shop.js:1731 — the exact self-transfer rejection copy.
       selfMessage: tr('Cannot transfer to yourself.'),
@@ -769,7 +793,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
 }
 
 class _ShopItemCard extends StatelessWidget {
-  const _ShopItemCard({
+  _ShopItemCard({
     required this.item,
     required this.owned,
     required this.active,
@@ -782,7 +806,14 @@ class _ShopItemCard extends StatelessWidget {
     this.ownedItem,
     this.availability,
     this.sampleEdition,
-  });
+    bool? purchasesDisabled,
+  }) : purchasesDisabled = purchasesDisabled ?? shopPurchasesDisabled;
+
+  /// Hides the BUY / GIFT actions where this platform can't sell (iOS — see
+  /// shop_purchase_policy.dart). Injectable so the behaviour is testable off
+  /// the platform it applies to.
+
+  final bool purchasesDisabled;
 
   final ShopItem item;
   final bool owned;
@@ -1042,7 +1073,8 @@ class _ShopItemCard extends StatelessWidget {
       // shop.js:869).
       return [
         price,
-        if (availability == null)
+        // GIFT is a purchase too, so it goes with BUY where selling is off.
+        if (availability == null && !purchasesDisabled)
           _OrangePillButton(label: tr('GIFT'), onTap: onGift),
       ];
     }
@@ -1062,6 +1094,9 @@ class _ShopItemCard extends StatelessWidget {
       ];
     }
     // Not owned (and every bundle): price, BUY, GIFT (`_shopItemActionsHtml`).
+    // The price still shows where selling is off — it's what the item costs on
+    // the web, and the header says where that is.
+    if (purchasesDisabled) return [price];
     return [
       price,
       _OrangePillButton(label: tr('BUY'), onTap: onBuy),
@@ -1539,7 +1574,6 @@ class _RecipientPubkeyDialog extends StatefulWidget {
 
 class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
   final _controller = TextEditingController();
-  static final _hexRe = RegExp(r'^[0-9a-f]{64}$');
   String? _error;
 
   @override
@@ -1549,9 +1583,11 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
   }
 
   void _submit() {
-    final pk = _controller.text.trim().toLowerCase();
-    if (!_hexRe.hasMatch(pk)) {
-      setState(() => _error = tr('Invalid pubkey. Must be 64 hex characters.'));
+    // A public key in either accepted form — npub or hex (key_format.dart).
+    final pk = normalizePubkeyInput(_controller.text);
+    if (pk == null) {
+      setState(() => _error = tr(
+          'Invalid public key. Paste an npub or a 64-character hex pubkey.'));
       return;
     }
     if (widget.selfPubkey != null && pk == widget.selfPubkey) {
@@ -1624,7 +1660,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
                   autofocus: true,
                   style: TextStyle(color: c.text, fontSize: 13),
                   decoration: InputDecoration(
-                    hintText: tr('Recipient hex pubkey (64 chars)'),
+                    hintText: tr('Recipient npub or hex pubkey'),
                     hintStyle: TextStyle(color: c.textDim),
                     enabledBorder: OutlineInputBorder(
                       borderSide: BorderSide(color: c.glassBorder),

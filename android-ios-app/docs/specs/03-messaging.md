@@ -121,8 +121,8 @@ in `message-format.js` for rendering `"40.71°N, 74.01°W"` style titles.
 
 ### 1.7 Sharing URLs
 
-- `shareChannel()` builds `${origin}${pathname}#<channel>` (e.g. `https://web.nymchat.app/#u10h8`).
-- Formatter recognizes deep links `https://<share host>/#<e|g|c>:<channelId>` and renders them as
+- `shareChannel()` builds `${origin}${pathname}#<channel>` (e.g. `https://app.nym.bar/#u10h8`).
+- Formatter recognizes deep links `https://app.nym.bar/#<e|g|c>:<channelId>` and renders them as
   clickable `.channel-link` chips (`data-action="channelLink"`, `data-channel-ref="<prefix>:<id>"`).
 - In-message `#channel` references are linkified by the formatter (geohash vs named distinguished,
   `active-channel` class applied when it matches the current channel).
@@ -608,7 +608,7 @@ trigger chars (`RX_FORMAT_TRIGGERS`), only `\n`→`<br>`.
 - Video `mp4|webm|ogg|mov` → `<video>` container (proxied, fallback mirrors, expand button).
 - Image `jpg|jpeg|png|gif|webp` → `<img class="msg-img">` (proxied, fallbacks). Adjacent media collapse
   into `.message-gallery` (`gallery-2/3/4plus`).
-- `<share host>/#<e|g|c>:<id>` → channel-link chip. `…#gjoin=<token>` → group-invite "Join <name>" chip
+- `app.nym.bar/#<e|g|c>:<id>` → channel-link chip. `…#gjoin=<token>` → group-invite "Join <name>" chip
   (validated via `parseGroupInvite`). Other `https?://…` → `<a target=_blank rel=noopener>`.
 
 **Mentions & emoji**:

@@ -24,7 +24,7 @@ import 'settings_widgets.dart';
 /// resolves (and if the fetch fails offline). Kept in sync with the main
 /// project's `NYMCHAT_VERSION` at release; the live value from
 /// [_kVersionUrl] supersedes it whenever reachable.
-const String kAboutVersion = 'v3.73.532';
+const String kAboutVersion = 'v3.73.533';
 
 /// Live app version, published by the main project's build as a tiny
 /// `version.json` (`{"version":"vX.Y.Z"}`) derived from `NYMCHAT_VERSION`. The

@@ -33,7 +33,7 @@ import '../../features/groups/group_logic.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/dev_nsec_modal.dart';
 import '../../features/messages/format/message_content.dart'
-    show InlineEmojiText, proxiedMedia;
+    show InlineEmojiText, MessageContent, openFullscreenMedia, proxiedMedia;
 import '../../features/messages/format/nym_format.dart' show NymFormat;
 import '../../features/messages/inline_network_image.dart';
 import '../../features/nymbot/nymbot_models.dart';
@@ -47,6 +47,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../context_menu/interaction_hooks.dart';
+import 'composer_format.dart';
 import 'message_row.dart' show GroupInfoMember, encodeGroupInfoSystemMessage;
 
 /// Session-wide per-conversation unsent drafts — the PWA's app-level
@@ -195,6 +196,22 @@ class _ComposerState extends ConsumerState<Composer> {
   final _translateSearchController = TextEditingController();
   String _translateQuery = '';
   bool _translating = false;
+
+  // --- WYSIWYG formatting toolbar ------------------------------------------
+  // An optional toolbar above the field writes the markdown for the user, so
+  // formatting a message never requires knowing the syntax (`#formatInputBtn` /
+  // `.format-toolbar`, rich-compose.js). The draft itself stays plain markdown.
+  bool _formatToolbarOpen = false;
+  bool _formatPreviewOpen = false;
+
+  /// Bytes of media attached this session, keyed by the hosted URL they were
+  /// uploaded to — lets the attachment strip draw a thumbnail without
+  /// re-downloading what we just sent up.
+  final Map<String, Uint8List> _localMediaPreviews = {};
+
+  /// One entry per file in the current upload batch that hasn't landed yet, so
+  /// the strip shows a dimmed placeholder the instant files are picked.
+  List<({Uint8List? bytes, bool isVideo})> _uploadingPreviews = const [];
 
   /// Translate-dropdown favorites (`nym_translate_favorites`), pinned to the top
   /// of the language list. Loaded once prefs resolve (translate.js:93-99).
@@ -659,6 +676,15 @@ class _ComposerState extends ConsumerState<Composer> {
     _prefs = prefs;
     _recents = EmojiRecentsStore(prefs).load();
     _translateFavorites = _loadTranslateFavorites(prefs);
+    // Toolbar/preview visibility persist under the same keys the PWA uses.
+    final toolbar = prefs.getBool(kFormatToolbarKey) ?? false;
+    final preview = prefs.getBool(kFormatPreviewKey) ?? false;
+    if (mounted && (toolbar != _formatToolbarOpen || preview != _formatPreviewOpen)) {
+      setState(() {
+        _formatToolbarOpen = toolbar;
+        _formatPreviewOpen = preview;
+      });
+    }
     return prefs;
   }
 
@@ -1315,6 +1341,7 @@ class _ComposerState extends ConsumerState<Composer> {
       _uploadMime = null;
       _uploadIndex = 0;
       _uploadTotal = 0;
+      _uploadingPreviews = const [];
     });
   }
 
@@ -1363,6 +1390,16 @@ class _ComposerState extends ConsumerState<Composer> {
     setState(() {
       _uploadCancelled = false;
       _uploadTotal = picked.length;
+      // Dimmed placeholders appear the moment files are picked; each is filled
+      // in with real bytes as the loop reads them, then retired on upload.
+      _uploadingPreviews = [
+        for (final f in picked)
+          (
+            bytes: null,
+            isVideo: (f.mimeType ?? _guessImageMime(f.name))
+                .startsWith('video/')
+          ),
+      ];
     });
 
     final controller = ref.read(nostrControllerProvider);
@@ -1382,10 +1419,18 @@ class _ComposerState extends ConsumerState<Composer> {
       }
       final contentType = file.mimeType ?? _guessImageMime(file.name);
       if (!mounted) return;
+      final isVideo = contentType.startsWith('video/');
       setState(() {
         _uploadProgress = 0.1;
         _uploadMime = contentType;
         _uploadIndex = i + 1;
+        // Now that the bytes are read, the placeholder can show the real image.
+        if (_uploadingPreviews.isNotEmpty) {
+          _uploadingPreviews = [
+            (bytes: isVideo ? null : bytes, isVideo: isVideo),
+            ..._uploadingPreviews.skip(1),
+          ];
+        }
       });
       final url = await controller.uploadImage(
         bytes,
@@ -1398,9 +1443,16 @@ class _ComposerState extends ConsumerState<Composer> {
       if (_uploadCancelled) break;
       if (url == null) {
         _onSystemMessage(tr('Failed to upload media.'));
+        setState(() => _uploadingPreviews = _uploadingPreviews.skip(1).toList());
         continue;
       }
       urls.add(url);
+      setState(() {
+        // Hand this file's bytes to its hosted URL so the thumbnail carries
+        // straight over from placeholder to attachment without flickering.
+        if (!isVideo) _localMediaPreviews[url] = bytes;
+        _uploadingPreviews = _uploadingPreviews.skip(1).toList();
+      });
     }
 
     if (!mounted) return;
@@ -1411,11 +1463,14 @@ class _ComposerState extends ConsumerState<Composer> {
       _uploadCancelled = false;
       _uploadIndex = 0;
       _uploadTotal = 0;
+      _uploadingPreviews = const [];
     });
     // Drop the results entirely if the user pressed ✕ mid-batch.
     if (wasCancelled || urls.isEmpty) return;
     // Append all URLs space-joined (then a trailing space), like the PWA.
     final existing = _controller.text;
+    // Without the separator a draft ending mid-word would glue onto the first
+    // URL and neither the formatter nor the attachment strip would see it.
     final needsSpace = existing.isNotEmpty && !existing.endsWith(' ');
     _controller.text = '$existing${needsSpace ? ' ' : ''}${urls.join(' ')} ';
     _controller.selection =
@@ -1581,6 +1636,9 @@ class _ComposerState extends ConsumerState<Composer> {
   /// tappable — over the field that would otherwise paint on top of it.
   Widget _inputWithChips(BuildContext context, bool inputEnabled) {
     final block = _popout ? null : _chipBlock();
+    // Attachments / preview / toolbar stack between the chip and the field, the
+    // same order as the PWA's `#composerPanels` (rich-compose.js).
+    final panels = _formatPanels(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -1590,6 +1648,12 @@ class _ComposerState extends ConsumerState<Composer> {
           curve: Curves.easeOut,
           alignment: Alignment.bottomLeft,
           child: block ?? const SizedBox(height: 0, width: double.infinity),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          alignment: Alignment.bottomLeft,
+          child: panels ?? const SizedBox(height: 0, width: double.infinity),
         ),
         _input(context, inputEnabled),
       ],
@@ -2039,9 +2103,10 @@ class _ComposerState extends ConsumerState<Composer> {
             fontSize: fontSize),
         filled: true,
         fillColor: fill,
-        // The translate button only exists when there's text (A9), so only then
-        // does the input reserve right padding for it (`paddingRight 38px`).
-        contentPadding: EdgeInsets.fromLTRB(16, 10, hasText ? 38 : 16, 10),
+        // The inline action row is 8px gutter + 26px per button + a 2px gap, so
+        // the field reserves 38px for the formatting toggle alone and 66px once
+        // the translate button joins it (`syncComposerInlineActions`).
+        contentPadding: EdgeInsets.fromLTRB(16, 10, hasText ? 66 : 38, 10),
         border: border,
         enabledBorder: border,
         focusedBorder: OutlineInputBorder(
@@ -2054,15 +2119,26 @@ class _ComposerState extends ConsumerState<Composer> {
     Widget stack = Stack(
       children: [
         field,
-        // `#translateInputBtn` starts `.nm-hidden` and `display:flex` ONLY when
-        // the field has text (translate.js:588-600). Render it solely then — no
-        // faded ghost when empty.
-        if (hasText)
-          Positioned(
-            right: 8,
-            bottom: 10,
-            child: _translateButton(context),
+        // The composer's inline action row. The formatting toggle is always
+        // offered; `#translateInputBtn` starts `.nm-hidden` and `display:flex`
+        // ONLY when the field has text (translate.js:588-600), so it joins the
+        // row only then — no faded ghost when empty.
+        Positioned(
+          right: 8,
+          bottom: 10,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FormatInputButton(
+                active: _formatToolbarOpen,
+                enabled: inputEnabled,
+                onTap: _toggleFormatToolbar,
+              ),
+              if (hasText) const SizedBox(width: 2),
+              if (hasText) _translateButton(context),
+            ],
           ),
+        ),
       ],
     );
     // `div.message-input.input-disabled { opacity: 0.55; cursor: not-allowed }`
@@ -2125,6 +2201,135 @@ class _ComposerState extends ConsumerState<Composer> {
         translating: _translating,
         onTap: _toggleTranslateDropdown,
       ),
+    );
+  }
+
+  // --- WYSIWYG formatting ---------------------------------------------------
+
+  /// `toggleFormatToolbar` — reveal/hide the markdown toolbar and remember the
+  /// choice, so a user who composes with it keeps it between sessions.
+  Future<void> _toggleFormatToolbar() async {
+    setState(() => _formatToolbarOpen = !_formatToolbarOpen);
+    final prefs = await _ensurePrefs();
+    await prefs.setBool(kFormatToolbarKey, _formatToolbarOpen);
+  }
+
+  Future<void> _toggleFormatPreview() async {
+    setState(() => _formatPreviewOpen = !_formatPreviewOpen);
+    final prefs = await _ensurePrefs();
+    await prefs.setBool(kFormatPreviewKey, _formatPreviewOpen);
+  }
+
+  /// Rewrite the draft with [tool] applied to the current selection (or the word
+  /// under the caret when nothing is selected), then restore focus so the user
+  /// can keep typing inside the delimiters that were just inserted.
+  ///
+  /// Operates on the RAW controller text rather than [_draftText]: each rendered
+  /// custom emoji is exactly one sentinel char in that text, so the selection
+  /// offsets the field reports line up with it one-for-one. Expanding first
+  /// would shift every offset past the first emoji.
+  void _applyFormatTool(FormatTool tool) {
+    final sel = _controller.selection;
+    final text = _controller.text;
+    // A field that has never been focused reports offset -1; treat that as the
+    // caret sitting at the end of the draft.
+    final start = sel.start < 0 ? text.length : sel.start;
+    final end = sel.end < 0 ? text.length : sel.end;
+    final out = applyFormatTool(FormatEdit(text, start, end), tool);
+    _controller.value = TextEditingValue(
+      text: out.text,
+      selection: TextSelection(baseOffset: out.start, extentOffset: out.end),
+    );
+    _onInputChanged();
+    _focus.requestFocus();
+  }
+
+  /// Drop one attachment from the draft (the ✕ on a thumbnail).
+  void _removeAttachment(int index) {
+    final out = removeComposerMedia(_controller.text, index);
+    _controller.value = TextEditingValue(
+      text: out.text,
+      selection: TextSelection.collapsed(offset: out.start),
+    );
+    _onInputChanged();
+    _focus.requestFocus();
+  }
+
+  /// The panel stack that sits between the quote/edit chip and the field:
+  /// attachments on top, then the live preview, then the toolbar. Returns null
+  /// when nothing is showing so the composer keeps its normal height.
+  Widget? _formatPanels(BuildContext context) {
+    final c = context.nym;
+    final matches = composerMediaMatches(_controller.text);
+    final panels = <Widget>[];
+
+    if (matches.isNotEmpty || _uploadingPreviews.isNotEmpty) {
+      panels.add(ComposerMediaStrip(
+        matches: matches,
+        uploading: _uploadingPreviews,
+        localPreviews: _localMediaPreviews,
+        onRemove: _removeAttachment,
+        onOpen: (m) {
+          // Only stills open fullscreen — the video viewer is bound to an
+          // inline [VideoMessage]'s controller, and the 56px poster already
+          // answers "did I attach the right clip?".
+          if (m.isVideo) return;
+          final images = matches.where((e) => !e.isVideo).toList();
+          final idx = images.indexWhere((e) => e.start == m.start);
+          openFullscreenMedia(
+            context,
+            images.map((e) => proxiedMedia(e.url)).toList(),
+            idx < 0 ? 0 : idx,
+          );
+        },
+      ));
+    }
+
+    if (_formatToolbarOpen && _formatPreviewOpen) {
+      final draft = _draftText();
+      panels.add(Container(
+        constraints: const BoxConstraints(maxHeight: 140),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: c.bgTertiary,
+          border: Border.all(color: c.glassBorder),
+          borderRadius: NymRadius.rmd,
+        ),
+        child: SingleChildScrollView(
+          child: draft.trim().isEmpty
+              ? Text(
+                  tr('Nothing to preview yet'),
+                  style: TextStyle(
+                      color: c.textDim,
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic),
+                )
+              // The very same renderer the message list uses, so the preview is
+              // a faithful "what you get".
+              : MessageContent(content: draft),
+        ),
+      ));
+    }
+
+    if (_formatToolbarOpen) {
+      panels.add(FormatToolbar(
+        onTool: _applyFormatTool,
+        previewOpen: _formatPreviewOpen,
+        onTogglePreview: _toggleFormatPreview,
+      ));
+    }
+
+    if (panels.isEmpty) return null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < panels.length; i++)
+          Padding(
+            padding: EdgeInsets.only(bottom: i == panels.length - 1 ? 8 : 4),
+            child: panels[i],
+          ),
+      ],
     );
   }
 

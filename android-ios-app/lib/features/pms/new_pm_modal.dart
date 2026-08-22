@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../core/crypto/bech32_codec.dart';
+import '../../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -32,17 +32,9 @@ String? resolveRecipientPubkey(String input, Map<String, User> users) {
   final raw = input.trim().replaceFirst(RegExp(r'^@'), '');
   if (raw.isEmpty) return null;
 
-  // Direct hex pubkey.
-  if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(raw)) return raw.toLowerCase();
-
-  // npub.
-  if (RegExp(r'^npub1', caseSensitive: false).hasMatch(raw)) {
-    try {
-      return decodeNpub(raw.toLowerCase());
-    } catch (_) {
-      return null;
-    }
-  }
+  // A public key in either accepted form — hex, npub or nprofile.
+  final asPubkey = normalizePubkeyInput(raw);
+  if (asPubkey != null) return asPubkey;
 
   // Nym match (case-insensitive, with or without #suffix).
   final query = raw.toLowerCase();

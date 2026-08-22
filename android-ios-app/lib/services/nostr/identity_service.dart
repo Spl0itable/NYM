@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/bech32_codec.dart' as bech32;
+import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/crypto/keys.dart';
 import '../../core/utils/nym_utils.dart';
 import '../storage/key_value_store.dart';
@@ -152,12 +153,16 @@ class IdentityService {
   /// exactly like [boot] (cached kind-0 login-profile name → 'nym' fallback,
   /// via [_durableLoginNym]).
   Future<Identity> loginWithNsec(String nsec) async {
-    final input = nsec.trim();
-    final sk =
-        bech32.decodeNsec(input); // throws on invalid (len-checked below)
-    if (sk.length != 32) {
-      throw const FormatException('nsec must decode to 32 bytes');
+    // A private key is accepted in either form — `nsec1…` or a bare 64-char
+    // hex key (`normalizePrivkeyInput`, key_format.dart).
+    final sk = normalizePrivkeyInput(nsec);
+    if (sk == null || sk.length != 32) {
+      throw const FormatException(
+          'expected an nsec1… or a 64-character hex private key');
     }
+    // Always persist the canonical nsec, whichever form was pasted — the
+    // restore path ([boot]) decodes the stored string as bech32.
+    final input = bech32.encodeNsecBytes(sk);
     final pubkey = getPublicKeyHex(sk);
 
     // Persist the durable login (KV) + the nsec (secure store), mirroring the

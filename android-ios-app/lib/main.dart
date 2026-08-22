@@ -6,7 +6,9 @@ import 'dart:async';
 import 'app.dart';
 import 'core/constants/storage_keys.dart';
 import 'core/theme/nym_theme.dart';
+import 'features/identity/vault_settings_modal.dart' show identityVaultProvider;
 import 'features/identity/vault_boot_unlock.dart';
+import 'services/platform/background_refresh.dart';
 import 'services/storage/key_value_store.dart';
 import 'state/app_state.dart';
 import 'state/nostr_controller.dart';
@@ -75,6 +77,10 @@ class _BootUnlockGate extends ConsumerStatefulWidget {
 class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
   late bool _unlocked;
 
+  /// Claims the background-refresh channel while locked; `app.dart` re-claims
+  /// it with its own handler once the app tree mounts.
+  final _bgRefresh = BackgroundRefreshService();
+
   @override
   void initState() {
     super.initState();
@@ -84,7 +90,42 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
     if (_unlocked) {
       // No vault: boot the identity + relays now (was main()'s fire-and-forget).
       _bootController();
+    } else {
+      _armBackgroundWake();
     }
+  }
+
+  /// A locked process boots nothing — the app tree below this gate never
+  /// mounts, so no relays, no catch-up, and (because `app.dart` is where the
+  /// `runRefresh` handler is registered) nothing even answers the OS.
+  ///
+  /// That is fine while a person is looking at the unlock screen. It is not
+  /// fine when iOS relaunched us in the BACKGROUND for a `BGAppRefresh`
+  /// window: nobody is there to type a password, so the window is wasted and
+  /// the user gets no notifications until they next open the app by hand.
+  ///
+  /// So the handler is claimed here too. A wake arriving while locked unlocks
+  /// from the escrowed key ([IdentityVault.unlockForBackgroundWake]) and boots
+  /// exactly as a real unlock would. The wake itself is the signal that this is
+  /// a background launch — no native probe needed, and a foreground launch is
+  /// untouched and still prompts.
+  void _armBackgroundWake() {
+    if (!BackgroundRefreshService.isSupported) return;
+    _bgRefresh.start(() async {
+      if (!_unlocked) {
+        final secrets =
+            await ref.read(identityVaultProvider).unlockForBackgroundWake();
+        // No escrow (or a stale one): nothing can run. Returning ends the
+        // window promptly, which is what keeps iOS granting more of them.
+        if (secrets == null) return;
+        if (!mounted) return;
+        _onUnlocked(secrets);
+        // Let the freshly-mounted app finish wiring up before the catch-up
+        // runs against it.
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      await ref.read(nostrControllerProvider).runBackgroundCatchUp();
+    });
   }
 
   void _bootController({Map<String, String>? unlockedSecrets}) {

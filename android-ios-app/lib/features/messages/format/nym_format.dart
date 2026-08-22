@@ -241,7 +241,7 @@ class CustomEmojiNode extends InlineNode {
   final String url;
 }
 
-/// `<share host>/#<e|g|c>:<id>` channel-link chip.
+/// `app.nym.bar/#<e|g|c>:<id>` channel-link chip.
 class ChannelLinkChip extends InlineNode {
   const ChannelLinkChip({required this.ref, required this.label});
 
@@ -736,13 +736,10 @@ class NymFormat {
         (m) => _NodeTok(_MediaInline(
             MediaItem(url: _proxied(m[1]!, ctx.proxyBase), isVideo: false))));
 
-    // Channel-link chip: <share host>/#<e|g|c>:<id>. The hosts are the ones
-    // `buildChannelShareUrl` emits and `kNymLinkHosts` accepts — spelled out
-    // rather than imported, because this formatter is pure Dart and
-    // deep_links.dart pulls in a plugin.
+    // Channel-link chip: app.nym.bar/#<e|g|c>:<id>
     tokens = _splitByRegex(
         tokens,
-        RegExp(r'https?://(?:web\.nymchat\.app|nymchat\.app)/#([egc]):([^\s<>"]+)',
+        RegExp(r'https?://app\.nym\.bar/#([egc]):([^\s<>"]+)',
             caseSensitive: false), (m) {
       return _NodeTok(ChannelLinkChip(ref: '${m[1]}:${m[2]}', label: m[0]!));
     });

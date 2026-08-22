@@ -68,7 +68,7 @@ void main() {
 
     test('detects an svg behind the media proxy (url= query)', () {
       const proxied =
-          'https://web.nymchat.app/api/proxy?emoji=1&url=https%3A%2F%2Fcdn%2Fblob.svg';
+          'https://app.nym.bar/api/proxy?emoji=1&url=https%3A%2F%2Fcdn%2Fblob.svg';
       expect(isSvgUrl(proxied), isTrue);
     });
 

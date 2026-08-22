@@ -63,6 +63,33 @@ String decodeNpub(String npub) {
   return bytesToHex(r.data);
 }
 
+/// Pulls the pubkey out of an `nprofile`. Unlike npub/nsec/note, nprofile wraps
+/// a TLV payload — a run of (type, length, value) records — where type 0 is the
+/// 32-byte pubkey and the rest are relay hints we don't need here. Supported so
+/// that anywhere the app accepts a public key, a pasted nprofile works too.
+String decodeNprofilePubkey(String nprofile) {
+  final r = _decode(nprofile);
+  if (r.hrp != 'nprofile') {
+    throw FormatException('Expected nprofile, got ${r.hrp}');
+  }
+  final data = r.data;
+  var i = 0;
+  while (i + 2 <= data.length) {
+    final type = data[i];
+    final len = data[i + 1];
+    final start = i + 2;
+    if (start + len > data.length) break;
+    if (type == 0) {
+      if (len != 32) {
+        throw const FormatException('nprofile pubkey must be 32 bytes');
+      }
+      return bytesToHex(data.sublist(start, start + len));
+    }
+    i = start + len;
+  }
+  throw const FormatException('nprofile has no pubkey record');
+}
+
 /// Encodes a 64-char hex private key as an `nsec`.
 String encodeNsec(String hexPrivkey) => _encode('nsec', hexToBytes(hexPrivkey));
 

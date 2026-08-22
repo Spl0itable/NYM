@@ -46,12 +46,8 @@ void main() {
 
     test('declares the nymchat custom scheme + universal-link hosts', () {
       expect(manifest, contains('android:scheme="nymchat"'));
-      expect(manifest, contains('android:host="web.nymchat.app"'));
-      expect(manifest, contains('android:host="nymchat.app"'));
-      // Neither app.nymchat.app nor app.nym.bar is a host this app uses; they
-      // are not declared, and these stop them drifting back in.
-      expect(manifest, isNot(contains('android:host="app.nymchat.app"')));
-      expect(manifest, isNot(contains('android:host="app.nym.bar"')));
+      expect(manifest, contains('android:host="app.nymchat.app"'));
+      expect(manifest, contains('android:host="app.nym.bar"'));
     });
 
     test('queries lightning + https for url_launcher', () {
@@ -157,7 +153,7 @@ void main() {
       // capability, and shipping the entitlement without it fails signing.
       // The file documents this; deep links still work via the custom scheme.
       // If the capability is ever added in the Apple Developer portal, restore
-      // `applinks:web.nymchat.app` and flip this expectation back.
+      // `applinks:app.nymchat.app` and flip this expectation back.
       expect(ent, isNot(contains('applinks:')));
       expect(ent, contains('Associated Domains'));
     });

@@ -214,11 +214,21 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                               const SizedBox(height: 14),
                               _TogglePanel(
                                 title: tr('Stay connected in background'),
+                                // The iOS caveat belongs here in particular:
+                                // this modal is where someone lands when
+                                // messages aren't arriving, and "it only
+                                // catches up in windows the system grants" is
+                                // usually the answer on that platform.
                                 hint: tr('Keep relay connections and the '
                                     'Bluetooth mesh running while Nymchat is in '
                                     'the background, so messages and '
                                     'notifications arrive without opening it. '
-                                    'Uses more battery.'),
+                                    'Uses more battery. On iOS the system '
+                                    'decides when a suspended app may catch up, '
+                                    'so notifications can lag; with identity '
+                                    'encryption on, catch-up works only once '
+                                    'the device has been unlocked at least once '
+                                    'since it was powered on.'),
                                 enabled: backgroundConnectivity,
                                 onToggle: (v) => ref
                                     .read(settingsProvider.notifier)

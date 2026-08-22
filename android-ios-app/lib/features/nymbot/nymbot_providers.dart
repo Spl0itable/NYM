@@ -17,7 +17,7 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../core/crypto/bech32_codec.dart' show decodeNpub;
+import '../../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../../core/crypto/gift_wrap.dart' as giftwrap;
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
@@ -1318,14 +1318,9 @@ class BotChatController extends StateNotifier<BotChatState> {
           '"confirm" to execute (e.g. ?transfer @friend#a1b2 confirm).');
       return;
     }
-    String? targetPubkey;
-    if (RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(targetArg)) {
-      targetPubkey = targetArg.toLowerCase();
-    } else if (RegExp(r'^npub1', caseSensitive: false).hasMatch(targetArg)) {
-      try {
-        targetPubkey = decodeNpub(targetArg).toLowerCase();
-      } catch (_) {}
-    }
+    // A public key in either accepted form — hex, npub or nprofile —
+    // otherwise a nym to resolve.
+    var targetPubkey = normalizePubkeyInput(targetArg);
     targetPubkey ??= resolvePubkeyFromNym(targetArg);
     if (targetPubkey == null) {
       _system('Could not resolve "$targetArg". Try ?transfer with a full nym '

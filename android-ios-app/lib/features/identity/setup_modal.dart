@@ -10,7 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants/site_links.dart';
 import '../../core/constants/storage_keys.dart';
-import '../../core/crypto/bech32_codec.dart';
+import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/platform/deep_links.dart';
@@ -363,16 +363,10 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       setState(() => _loginError = tr('Please enter your nsec.'));
       return;
     }
-    try {
-      final bytes = decodeNsec(input);
-      if (bytes.length != 32) {
-        setState(() =>
-            _loginError = tr('Invalid nsec key. Please check and try again.'));
-        return;
-      }
-    } catch (_) {
-      setState(() =>
-          _loginError = tr('Invalid nsec key. Please check and try again.'));
+    // Accepts either form of private key — `nsec1…` or bare 64-char hex.
+    if (normalizePrivkeyInput(input) == null) {
+      setState(() => _loginError =
+          tr('Invalid private key. Paste an nsec1… or a 64-character hex key.'));
       return;
     }
     setState(() {
@@ -615,7 +609,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       _field(
         c,
         controller: _nsecCtl,
-        hint: 'nsec1...',
+        hint: 'nsec1... or 64-char hex private key',
         obscureText: true,
       ),
       if (_loginError != null) ...[
