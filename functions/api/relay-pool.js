@@ -628,10 +628,17 @@ export async function onRequest(context) {
     if (!archiveEnabled || !ev || typeof ev.id !== 'string' || !isArchivableChannelKind(ev.kind)) return;
     const tags = Array.isArray(ev.tags) ? ev.tags : [];
     const getTag = (n) => { const t = tags.find((x) => Array.isArray(x) && x[0] === n); return t ? t[1] : null; };
-    // kind 30078 is shared by presence/settings/etc; only archive polls and vouch lists.
+    // kind 30078 is shared by presence/settings/etc; only archive polls, vouch
+    // lists and post-quantum key announcements — the same allowlist the
+    // inbound path applies, and it has to stay the same one. An announcement
+    // that reached D1 only via a relay echo would be missing for exactly as
+    // long as no relay echoed it back through this worker, which is precisely
+    // the window right after publishing, when a peer opening a conversation is
+    // most likely to look it up.
     if (ev.kind === 30078) {
       const t = getTag('t');
-      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches') return;
+      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches'
+        && t !== 'nym-pq') return;
     }
     const channel = sanitizeChannelKey(channelFromTags(getTag, ev.kind));
     if (!channel) return;
