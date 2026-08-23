@@ -33,8 +33,7 @@
         PQ_D_TAG,
         PQ_TTL_SEC,
 
-        // --- capability + policy -------------------------------------------
-
+        // capability + policy 
         /// Whether the ML-KEM implementation loaded at all.
         pqSupported() {
             return !!(window.NymCrypto && window.NymCrypto.pqAvailable && window.NymCrypto.pqAvailable());
@@ -127,8 +126,7 @@
             } catch (_) { }
         },
 
-        // --- our own key ----------------------------------------------------
-
+        // our own key
         _pqEpoch() {
             try { return parseInt(localStorage.getItem('nym_pq_epoch') || '0', 10) || 0; }
             catch (_) { return 0; }
@@ -177,8 +175,7 @@
             return out;
         },
 
-        // --- announcement ---------------------------------------------------
-
+        // announcement 
         _pqDeviceId() {
             let id = null;
             try { id = localStorage.getItem('nym_pq_device_id'); } catch (_) { }
@@ -329,8 +326,7 @@
             this.publishPqAnnouncement();
         },
 
-        // --- peer keys ------------------------------------------------------
-
+        // peer keys 
         /// Records a capability entry. `pk` may be null — that still means
         /// "this pubkey runs Nymchat", which is the signal the send path uses
         /// to skip the Bitchat wrap.
