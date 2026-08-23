@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   translateText, mtSupports, indicSupports, cleanLlmOutput, langName,
+  detectSourceLang, llmMaxTokens,
   MT_MODEL, LLM_MODEL, INDIC_MODEL, MAX_CHARS,
 } from '../functions/api/_translate.js';
 
@@ -335,6 +336,97 @@ section('mixed-language messages');
     chk(`${label}: but an untranslatable fragment may be kept`,
       /genuinely has no translation/.test(p));
   }
+}
+
+// ------------------------------------------------- source-language detection
+// The app can never label a source -- a message from a stranger is whatever it
+// is -- so every on-demand translation sent `auto`, mtSupports() refused it,
+// and the 1.2B MT model was unreachable from the app. Everything paid 26B
+// instruct latency, including the scripts MT handles natively.
+section('detecting the source so the fast model is reachable');
+{
+  // The message from the report: ten words of Arabic that took about a minute.
+  const arabic = 'يعم يلعنها م آخرها وظيفة كبيرة 10 بواكي ف الشهر';
+  chk('the reported Arabic message is detected', detectSourceLang(arabic) === 'ar');
+  chk('and that makes the MT model reachable for it',
+    mtSupports(detectSourceLang(arabic), 'es') === true);
+
+  const cases = [
+    ['ja', 'こんにちは、今日はいい天気ですね'],
+    ['ko', '안녕하세요 오늘 날씨가 좋네요'],
+    ['zh', '欢迎来到频道请文明发言不要暴露个人隐私'],
+    ['ru', 'Привет как дела у тебя сегодня'],
+    ['uk', 'Привіт як твої справи сьогодні їжа'],
+    ['el', 'Γεια σου τι κανεις σημερα φιλε'],
+    ['he', 'שלום מה שלומך היום חבר שלי'],
+    ['th', 'สวัสดีครับ วันนี้อากาศดีมากเลย'],
+    ['hi', 'नमस्ते आप कैसे हैं आज मौसम अच्छा है'],
+    ['ka', 'გამარჯობა როგორ ხარ დღეს მეგობარო'],
+    ['hy', 'Բարև ձեզ ինչպես եք այսօր ընկեր'],
+    ['ta', 'வணக்கம் நீங்கள் எப்படி இருக்கிறீர்கள்'],
+    ['my', 'မင်္ဂလာပါ ဒီနေ့ ရာသီဥတု ကောင်းတယ်'],
+    ['km', 'សួស្តី តើអ្នកសុខសប្បាយជាទេ ថ្ងៃនេះ'],
+  ];
+  for (const [want, text] of cases) {
+    const got = detectSourceLang(text);
+    chk(`${want} is detected from its script`, got === want, `got ${got}`);
+    chk(`${want} routes to the MT model`, mtSupports(got, 'en') === true);
+  }
+
+  // Related languages sharing a script are peeled apart by letters only they
+  // use. Getting one of these wrong degrades a translation; defaulting to
+  // English, which is what an unlabelled source did, invalidates it.
+  chk('Persian is told apart from Arabic', detectSourceLang('سلام حال شما چطور است امروز') === 'fa');
+  chk('Urdu is told apart from both', detectSourceLang('آپ کیسے ہیں آج کا دن اچھا ہے') === 'ur');
+  chk('Serbian is told apart from Russian', detectSourceLang('Здраво како си данас пријатељу') === 'sr');
+
+  // The guard rails.
+  chk('Latin script stays with the instruct model',
+    detectSourceLang('hello how are you doing today friend') === null);
+  chk('a short string is not evidence of anything', detectSourceLang('ok 👍') === null);
+  chk('empty input detects nothing', detectSourceLang('') === null);
+
+  // The mixed-language message that had to keep going to the instruct model:
+  // it is the only engine that translates BOTH halves instead of passing the
+  // half it already recognises through untouched.
+  const mixed = '@anon5948 欢迎来到频道！请文明发言。\nWelcome! Be civil and avoid revealing private information.';
+  chk('a genuinely mixed message still goes to the instruct model',
+    detectSourceLang(mixed) === null);
+  // ...but a mention must not be what tips a single-language message over.
+  chk('a mention does not derail an otherwise single-language message',
+    detectSourceLang('@anon5948 ' + arabic) === 'ar');
+  chk('a URL does not either',
+    detectSourceLang(arabic + ' https://example.com/some/long/path') === 'ar');
+}
+
+section('the detected source actually routes');
+{
+  const ai = mockAi({ ...mtOk('hola'), ...llmOk('should not be used') });
+  const r = await translateText(ai, {
+    text: 'يعم يلعنها م آخرها وظيفة كبيرة 10 بواكي ف الشهر',
+    source: 'auto', target: 'es',
+  });
+  chk('an auto-source Arabic message reaches the MT model',
+    ai.calls.length === 1 && ai.calls[0].model === MT_MODEL, JSON.stringify(ai.calls.map(c => c.model)));
+  chk('and is labelled with what it sent', ai.calls[0].body.source_lang === 'ar');
+  chk('the caller is told what was detected', r.detectedLanguage === 'ar');
+  chk('and which engine answered', r.engine === 'mt');
+  chk('the translation comes back', r.translatedText === 'hola');
+}
+
+section('a generation budget proportional to the input');
+{
+  chk('a short message does not get a 2048-token budget', llmMaxTokens('hello') < 200);
+  chk('but is never clipped to nothing', llmMaxTokens('hi') >= 64);
+  chk('a long one is still capped', llmMaxTokens('x'.repeat(MAX_CHARS)) === 2048);
+  chk('the budget grows with the input',
+    llmMaxTokens('x'.repeat(400)) > llmMaxTokens('x'.repeat(40)));
+
+  const ai = mockAi({ ...llmOk('bonjour') });
+  await translateText(ai, { text: 'hello there', source: 'auto', target: 'fr' });
+  chk('the LLM call carries the scaled budget',
+    ai.calls[0].body.max_tokens === llmMaxTokens('hello there'),
+    JSON.stringify(ai.calls[0].body.max_tokens));
 }
 
 section(`\n${pass} passed, ${fail} failed`);

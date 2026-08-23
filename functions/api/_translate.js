@@ -16,8 +16,17 @@ export const LLM_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 /// Hard cap on a single translation, matching what the callers already slice to.
 export const MAX_CHARS = 5000;
 
-/// Enough for the translation of a MAX_CHARS input plus script expansion.
+/// Ceiling for the translation of a MAX_CHARS input plus script expansion.
 const LLM_MAX_TOKENS = 2048;
+
+/// A generation budget proportional to the input. Translation output is the
+/// same content in another language, so it is bounded by the input's own
+/// length -- generously, since scripts expand and a token is not a character.
+/// The floor keeps very short inputs from being clipped mid-word.
+export function llmMaxTokens(text) {
+  const chars = String(text || '').length;
+  return Math.max(64, Math.min(LLM_MAX_TOKENS, Math.ceil(chars * 2) + 48));
+}
 
 /// Our language codes that the MT model carries, mapped to the code IT uses.
 /// Everything absent here goes straight to the instruct model.
@@ -119,6 +128,123 @@ export const langName = (code) => LLM_LANG_NAMES.get(code) || code;
 export function indicSupports(source, target) {
   return source === 'en' && INDIC_LANGS.has(target);
 }
+
+/// Guesses the source language from the script the text is written in.
+/// Returns an MT_LANGS code, or null when we cannot tell — and null is the
+/// safe answer, because it routes to the instruct model, which does detect.
+export function detectSourceLang(text) {
+  // Mentions, URLs and code carry Latin letters that say nothing about the
+  // language of the prose around them. Left in, a single @mention could drag
+  // an otherwise-Arabic message below the dominance threshold.
+  const stripped = String(text || '')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/@[\w#-]+/g, ' ')
+    .replace(/`[^`]*`/g, ' ');
+
+  const counts = new Map();
+  let total = 0;
+  for (const ch of stripped) {
+    const script = scriptOf(ch.codePointAt(0));
+    if (!script) continue;
+    counts.set(script, (counts.get(script) || 0) + 1);
+    total++;
+  }
+  if (total < MIN_DETECT_CHARS) return null;
+
+  let best = null, bestN = 0;
+  for (const [script, n] of counts) {
+    if (n > bestN) { best = script; bestN = n; }
+  }
+  // Genuinely mixed text is the instruct model's job — it is the only engine
+  // that translates every part of a two-language message rather than passing
+  // the half it already recognises through untouched.
+  if (!best || bestN / total < SCRIPT_DOMINANCE) return null;
+
+  const resolver = SCRIPT_LANGS.get(best);
+  const code = typeof resolver === 'function' ? resolver(stripped) : resolver;
+  // Never hand back something the MT model has no entry for.
+  return code && MT_LANGS.has(code) ? code : null;
+}
+
+/// Below this, a script tally is too small to mean anything — "OK 👍" is not
+/// evidence of anything.
+const MIN_DETECT_CHARS = 8;
+
+/// How much of the text one script must account for before we call it the
+/// language. Anything less is mixed, and mixed goes to the instruct model.
+const SCRIPT_DOMINANCE = 0.85;
+
+/// The Unicode block a character belongs to, for the scripts we can act on.
+/// Deliberately coarse: this is a routing hint, not a segmenter.
+function scriptOf(cp) {
+  if ((cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a)
+    || (cp >= 0xc0 && cp <= 0x24f)) return 'latin';
+  if (cp >= 0x400 && cp <= 0x52f) return 'cyrillic';
+  if (cp >= 0x370 && cp <= 0x3ff) return 'greek';
+  if (cp >= 0x531 && cp <= 0x58f) return 'armenian';
+  if (cp >= 0x590 && cp <= 0x5ff) return 'hebrew';
+  if ((cp >= 0x600 && cp <= 0x6ff) || (cp >= 0x750 && cp <= 0x77f)
+    || (cp >= 0xfb50 && cp <= 0xfdff) || (cp >= 0xfe70 && cp <= 0xfeff)) return 'arabic';
+  if (cp >= 0x900 && cp <= 0x97f) return 'devanagari';
+  if (cp >= 0x980 && cp <= 0x9ff) return 'bengali';
+  if (cp >= 0xa00 && cp <= 0xa7f) return 'gurmukhi';
+  if (cp >= 0xa80 && cp <= 0xaff) return 'gujarati';
+  if (cp >= 0xb00 && cp <= 0xb7f) return 'oriya';
+  if (cp >= 0xb80 && cp <= 0xbff) return 'tamil';
+  if (cp >= 0xc80 && cp <= 0xcff) return 'kannada';
+  if (cp >= 0xd00 && cp <= 0xd7f) return 'malayalam';
+  if (cp >= 0xd80 && cp <= 0xdff) return 'sinhala';
+  if (cp >= 0xe00 && cp <= 0xe7f) return 'thai';
+  if (cp >= 0xe80 && cp <= 0xeff) return 'lao';
+  if (cp >= 0x1000 && cp <= 0x109f) return 'myanmar';
+  if (cp >= 0x10a0 && cp <= 0x10ff) return 'georgian';
+  if (cp >= 0x1200 && cp <= 0x137f) return 'ethiopic';
+  if (cp >= 0x1780 && cp <= 0x17ff) return 'khmer';
+  if ((cp >= 0xac00 && cp <= 0xd7af) || (cp >= 0x1100 && cp <= 0x11ff)
+    || (cp >= 0x3130 && cp <= 0x318f)) return 'hangul';
+  // Kana and Han are ONE bucket. Ordinary Japanese prose interleaves them
+  // sentence by sentence, so counting them apart means neither ever reaches
+  // the dominance threshold and every Japanese message falls through to the
+  // instruct model -- the exact case this is meant to catch. Which of the two
+  // languages it is gets decided in the resolver instead.
+  if ((cp >= 0x3040 && cp <= 0x30ff) || (cp >= 0x31f0 && cp <= 0x31ff)
+    || (cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf)) return 'cjk';
+  return null;
+}
+
+/// Script -> language, or a resolver that peels related languages apart by the
+/// letters only they use. Ordered most-specific first inside each resolver.
+const SCRIPT_LANGS = new Map(Object.entries({
+  greek: 'el', armenian: 'hy', hebrew: 'he', bengali: 'bn', gurmukhi: 'pa',
+  gujarati: 'gu', oriya: 'or', tamil: 'ta', kannada: 'kn', malayalam: 'ml',
+  sinhala: 'si', thai: 'th', lao: 'lo', myanmar: 'my', georgian: 'ka',
+  ethiopic: 'am', khmer: 'km', hangul: 'ko',
+  // Kana is Japanese-only and ordinary Japanese prose is never without it, so
+  // its presence anywhere in the run settles the question. Han alone is
+  // Chinese. Kanji-only Japanese exists but is vanishingly rare in a chat
+  // message, and reading it as Chinese is a near miss, not nonsense.
+  cjk: (t) => (/[\u3040-\u30ff\u31f0-\u31ff]/.test(t) ? 'ja' : 'zh'),
+  arabic: (t) => {
+    if (/[\u067c\u0689\u0693\u0696\u069a\u06bc\u06cd]/.test(t)) return 'ps';
+    if (/[\u0679\u0688\u0691\u06ba\u06d2]/.test(t)) return 'ur';
+    if (/[\u06aa\u06b3\u068f\u067f\u0683]/.test(t)) return 'sd';
+    if (/[\u067e\u0686\u0698\u06af]/.test(t)) return 'fa';
+    return 'ar';
+  },
+  cyrillic: (t) => {
+    if (/[\u04d9\u0493\u049b\u04a3\u04b1\u04bb]/.test(t)) return 'kk';
+    if (/[\u0456\u0457\u0454\u0491]/.test(t)) return 'uk';
+    if (/\u045e/.test(t)) return 'be';
+    if (/[\u0458\u0459\u045a\u045f\u045b\u0452]/.test(t)) return 'sr';
+    if (/[\u0453\u045c\u0455]/.test(t)) return 'mk';
+    return 'ru';
+  },
+  // Marathi's ल़ळ is the one cheap tell; Hindi is otherwise the dominant
+  // Devanagari language by a wide margin.
+  devanagari: (t) => (/\u0933/.test(t) ? 'mr' : 'hi'),
+  // Latin spans too many of our languages to guess from shape alone.
+  latin: () => null,
+}));
 
 /// Whether the MT model is worth trying for this pair.
 ///
@@ -226,9 +352,16 @@ function mixedLanguageClause(target) {
 export async function translateText(ai, { text, source, target }) {
   if (!ai) throw new Error('AI binding not configured');
   const q = String(text).slice(0, MAX_CHARS);
-  const sl = source || 'auto';
+  let sl = source || 'auto';
   if (!q.trim()) throw new Error('nothing to translate');
   if (!target) throw new Error('no target language');
+
+  // An unlabelled source is the ONLY thing the on-demand callers ever send, so
+  // without this the fast MT path is unreachable from the app entirely and
+  // every message a user taps translate on pays instruct-model latency. See
+  // detectSourceLang for why a script guess is safe here and null is not a
+  // failure.
+  if (sl === 'auto') sl = detectSourceLang(q) || 'auto';
 
   const failures = [];
 
@@ -311,7 +444,10 @@ export async function translateText(ai, { text, source, target }) {
           { role: 'system', content: system },
           { role: 'user', content: q },
         ],
-        max_tokens: LLM_MAX_TOKENS,
+        // Bounded by the input rather than the 5000-char ceiling: a ten-word
+        // message cannot need two thousand tokens, and leaving room for a
+        // runaway generation is leaving room for it to cost a minute.
+        max_tokens: llmMaxTokens(q),
       });
       const out = cleanLlmOutput(pickLlmText(res), q);
       if (out) return { translatedText: out, detectedLanguage: sl, engine: 'llm' };
