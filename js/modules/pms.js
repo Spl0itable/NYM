@@ -275,19 +275,10 @@ Object.assign(NYM.prototype, {
         // offline long enough that missed rotations may have expired off relays.
         this._dmCatchupReady.then(() => {
             try { this._maybeSendGroupKeyResyncs(); } catch (_) { }
-            // (Re)advertise our post-quantum key. Publishing here rather than
-            // at connect gives the catch-up window time to deliver our own
-            // existing announcement first, so the device roster is merged onto
-            // what is already published instead of clobbering it.
-            try {
-                // Every Nymchat client announces itself, post-quantum or not —
-                // that announcement is what tells peers they can skip the
-                // Bitchat wrap. So this is no longer gated on pqEnabled().
-                if (!this._pqLastPublishAt) this.publishPqAnnouncement();
-                else this.maybeRepublishPqAnnouncement();
-                this._pqMarkUpgradeIfNeeded();
-                this.maybeShowPqUpgradeNotice();
-            } catch (_) { }
+            // (Re)advertise our capability announcement. connectToRelays does
+            // the same on a first connect — this function only ever runs on a
+            // RE-connect, so it cannot be the only place that announces.
+            try { this.schedulePqAnnouncement(); } catch (_) { }
         });
 
         if (this.pendingDMs.size === 0) return;

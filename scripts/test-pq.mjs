@@ -1094,5 +1094,47 @@ section('badge state');
         && clas.includes('crypto-lock-irc'));
 }
 
+// ------------------------------------------------- announcement is published
+// Two defects, each of which alone made every message classical on both ends
+// while everything downstream looked healthy. Neither was catchable from the
+// crypto or the discovery code: the key was simply never anywhere to be found.
+section('announcement reaches peers');
+{
+    const relaysSrc = fs.readFileSync(path.join(root, 'js/modules/relays.js'), 'utf8');
+    const pmsSrc = fs.readFileSync(path.join(root, 'js/modules/pms.js'), 'utf8');
+
+    // Defect 1: publishing hung off retryPendingDMsOnReconnect, and every one
+    // of that function's call sites is a RE-connect. A client that logged in
+    // and stayed connected never announced, so a brand new account could not
+    // be found by anyone however well discovery worked.
+    const connectFn = relaysSrc.slice(
+        relaysSrc.indexOf('async connectToRelays()'),
+        relaysSrc.indexOf('async connectToRelays()') + 20000);
+    const announcesOnConnect =
+        (connectFn.match(/schedulePqAnnouncement\(\)/g) || []).length;
+    chk('the FIRST connect announces, not only reconnects', announcesOnConnect >= 2);
+    chk('the reconnect path announces too',
+        pmsSrc.includes('schedulePqAnnouncement()'));
+    chk('publishing is not reachable ONLY from a reconnect handler',
+        !/retryPendingDMsOnReconnect[\s\S]{0,2000}publishPqAnnouncement\(\)/.test(pmsSrc));
+
+    // Defect 2: the worker archived nym-pq on the INBOUND path only, so
+    // publishing wrote nothing to D1 — leaving the archive empty exactly in
+    // the window right after a publish, when a peer is most likely to look up.
+    const workerSrc = fs.readFileSync(path.join(root, 'functions/api/relay-pool.js'), 'utf8');
+    const outFn = workerSrc.slice(
+        workerSrc.indexOf('function archiveOutgoingEvent('),
+        workerSrc.indexOf('function archiveEventValid('));
+    const inFn = workerSrc.slice(
+        workerSrc.indexOf('function archiveInboundEvent('),
+        workerSrc.indexOf('function deleteArchivedFromDeletion('));
+    chk('publishing an announcement archives it to D1', outFn.includes("'nym-pq'"));
+    chk('receiving one archives it too', inFn.includes("'nym-pq'"));
+    // The two allowlists drifting apart IS the bug, so hold them together.
+    const tagsOf = (src) => (src.match(/t !== '([a-z-]+)'/g) || []).sort().join(',');
+    chk('the inbound and outbound allowlists stay identical',
+        tagsOf(outFn) === tagsOf(inFn) && tagsOf(outFn).length > 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

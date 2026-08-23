@@ -1151,6 +1151,13 @@ Object.assign(NYM.prototype, {
                     // Subscribe to events via the pool
                     this._poolSubscribe();
 
+                    // Announce our post-quantum capability. The reconnect
+                    // paths do this too, but this is a FIRST connect and they
+                    // never run on one — without this a fresh login never
+                    // publishes a key, and every peer silently falls back to
+                    // classical.
+                    try { this.schedulePqAnnouncement(); } catch (_) { }
+
                     // Set initial channel label
                     if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
                         this._renderChannelTitle(this.currentChannel, this.currentGeohash || this.currentChannel);
@@ -1297,6 +1304,9 @@ Object.assign(NYM.prototype, {
 
             // Start subscriptions on all connected relays
             this.subscribeToAllRelays();
+
+            // Announce our post-quantum capability (see the pool branch above).
+            try { this.schedulePqAnnouncement(); } catch (_) { }
 
             // Switch to the pinned landing channel or PM-only mode landing
             setTimeout(() => {

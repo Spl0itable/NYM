@@ -21,6 +21,10 @@
     /// one subscription per member.
     const PQ_PREFETCH_MAX = 60;
     const PQ_REPUBLISH_SEC = 24 * 3600;
+    /// How long after connecting we wait before announcing. Matches the DM
+    /// catch-up window, so our own existing announcement has arrived and its
+    /// device roster is merged rather than clobbered.
+    const PQ_ANNOUNCE_DELAY_MS = 3000;
     // Devices unseen for this long drop off the roster shown in settings.
     const PQ_DEVICE_STALE_SEC = 30 * 24 * 3600;
 
@@ -293,6 +297,25 @@
         /// to being indistinguishable from a Bitchat user.
         async retractPqAnnouncement() {
             return this.publishPqAnnouncement();
+        },
+
+        /// Schedules our announcement for shortly after connecting, at most
+        /// once per pending window.
+        schedulePqAnnouncement() {
+            if (this._pqAnnounceTimer) return;
+            this._pqAnnounceTimer = setTimeout(() => {
+                this._pqAnnounceTimer = null;
+                try {
+                    if (!this.pubkey) return;
+                    // Not gated on pqEnabled(): every Nymchat client announces
+                    // itself, post-quantum or not, because the announcement is
+                    // also what tells peers to skip the Bitchat wrap.
+                    if (!this._pqLastPublishAt) this.publishPqAnnouncement();
+                    else this.maybeRepublishPqAnnouncement();
+                    this._pqMarkUpgradeIfNeeded();
+                    this.maybeShowPqUpgradeNotice();
+                } catch (_) { }
+            }, PQ_ANNOUNCE_DELAY_MS);
         },
 
         /// Republishes on a daily cadence so the 7-day expiry never lapses
