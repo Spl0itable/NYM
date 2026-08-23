@@ -1293,7 +1293,17 @@ Object.assign(NYM.prototype, {
                     dupMsg.content = messageContent;
                     needsRerender = true;
                 }
-                if (isPqWrap && !dupMsg.pqEncrypted) dupMsg.pqEncrypted = true;
+                if (isPqWrap && !dupMsg.pqEncrypted) {
+                    dupMsg.pqEncrypted = true;
+                    // Flip the on-screen shield immediately, exactly as the
+                    // lock below does: a message whose classical copy rendered
+                    // first would otherwise keep claiming it is not
+                    // quantum-resistant until something re-rendered the row.
+                    if (typeof this.refreshMessagePqBadge === 'function') {
+                        this.refreshMessagePqBadge(dupMsg.nymMessageId || dupMsg.id);
+                    }
+                    needsRerender = true;
+                }
                 if (senderVerified === true && dupMsg.senderVerified !== true) {
                     dupMsg.senderVerified = true;
                     // Flip the on-screen lock immediately so the verified copy

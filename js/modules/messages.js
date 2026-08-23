@@ -3582,7 +3582,8 @@ Object.assign(NYM.prototype, {
         if (partial) {
             const row = anchorEl.closest ? anchorEl.closest('.message') : null;
             const id = row && row.dataset ? row.dataset.messageId : null;
-            const msg = id && typeof this._findMessageById === 'function' ? this._findMessageById(id) : null;
+            const hit = id && typeof this._findMessageById === 'function' ? this._findMessageById(id) : null;
+            const msg = hit && hit.msg;
             const cov = (msg && msg.pqCoverage)
                 || (id && typeof this.pqGroupCoverageFor === 'function' ? this.pqGroupCoverageFor(id) : null);
             const detail = cov ? `${cov.pq} of ${cov.total} members` : 'some members';
@@ -3712,8 +3713,8 @@ Object.assign(NYM.prototype, {
         if (!nymMessageId) return;
         const row = document.querySelector(`.message[data-message-id="${CSS.escape(nymMessageId)}"]`);
         if (!row) return;
-        const msg = typeof this._findMessageById === 'function' ? this._findMessageById(nymMessageId) : null;
-        const state = this._pqBadgeState(msg);
+        const found = typeof this._findMessageById === 'function' ? this._findMessageById(nymMessageId) : null;
+        const state = this._pqBadgeState(found && found.msg);
         row.querySelectorAll('.crypto-pq-badge').forEach(el => el.remove());
         if (!state) { delete row.dataset.pqEncrypted; return; }
         row.dataset.pqEncrypted = state;

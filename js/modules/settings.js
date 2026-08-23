@@ -435,6 +435,10 @@ Object.assign(NYM.prototype, {
     },
 
     async _publishEncryptedSettings(settingsData) {
+        // Stored settings exist but this session could not read them, so what
+        // is in memory is defaults, not the user's state. Writing that back
+        // would destroy the rows we could not open.
+        if (this._settingsRestoreUnreadable) return;
         // Don't overwrite stored settings until we've loaded them. On a fresh
         // device an early save (e.g. from an incoming group message) would
         // otherwise clobber D1/relay with default state before the load lands.
@@ -923,6 +927,8 @@ Object.assign(NYM.prototype, {
 
     async _saveSettingsBlobToD1(dTag, plaintext) {
         if (!this.pubkey) return false;
+        // See _publishEncryptedSettings: never write over rows we could not read.
+        if (this._settingsRestoreUnreadable) return false;
         try {
             // Embed the real category in the (encrypted) blob so the cleartext
             // D1 column can be an opaque per-account hash.
@@ -1010,8 +1016,10 @@ Object.assign(NYM.prototype, {
         // encrypted blob as __cat (the D1 column is an opaque per-account hash);
         // legacy rows fall back to the cleartext column name.
         const decoded = [];
+        let storedBlobs = 0;
         for (const [cat, entry] of Object.entries(cats)) {
             if (!entry || !entry.blob) continue;
+            storedBlobs++;
             try {
                 const plain = await this._decryptSettingsBlob(entry.blob);
                 if (!plain) continue;
@@ -1021,6 +1029,13 @@ Object.assign(NYM.prototype, {
                 delete payload.__cat;
                 decoded.push({ realCat, payload, updatedAt: entry.updatedAt || 0 });
             } catch (_) { }
+        }
+
+        if (storedBlobs > 0 && decoded.length === 0) {
+            this._settingsRestoreUnreadable = true;
+            console.warn(`[NostrSync] ${storedBlobs} stored settings categories could not be decrypted; `
+                + 'saving is disabled this session so they are not overwritten');
+            return false;
         }
 
         const isCore = (c) => c === 'nymchat-settings' || c.startsWith('nymchat-settings-');

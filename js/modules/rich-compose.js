@@ -503,7 +503,8 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Placeholder thumbnails rendered from the local files
+    // Placeholder thumbnails rendered from the local files while their upload is
+    // still in flight, so the strip appears the instant a file is picked.
 
     _composerAttachmentSeq: 0,
 

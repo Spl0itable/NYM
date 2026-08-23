@@ -64,6 +64,12 @@ onNotice((text) => {
 // number was crossed.
 const TICK_MS = 400;
 
+// Languages ran strictly one after another, which is what made a sync of a
+// handful of new strings take the better part of an hour: a copy tweak is only
+// a batch or two per language, so almost all of the wall time was 132 waits in
+// a row rather than any real work. They share nothing, so they overlap freely.
+// The per-language batch concurrency inside translateMissing is unchanged and
+// nests under this.
 const LANG_CONCURRENCY = Number(process.env.NYM_I18N_LANG_CONCURRENCY || 8);
 
 let failed = 0;

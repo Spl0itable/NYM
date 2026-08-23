@@ -595,7 +595,18 @@
         /// hazard, because the recipient is the one who decapsulates.
         pqSelfKeyFor() {
             if (!this.pqSelfEnabled()) return null;
-            return this.pqKeyFor(this.pubkey);
+            // DERIVED, not read from the registry. The registry entry is
+            // whatever epoch was last announced — possibly by another device on
+            // this nsec, at an epoch this one has never held — while decryption
+            // only ever tries pqSelfCandidates(), which walks OUR epoch and the
+            // few before it. Taking the announced key could therefore seal our
+            // own settings and archive to a key we cannot open, and the failure
+            // is silent and total: the blob is simply unreadable ever after.
+            // Deriving keeps the two sides on the same key by construction, and
+            // has the side benefit of working from the first save rather than
+            // only after the announcement lands.
+            const keys = this.pqSelfKeys();
+            return (keys && keys.publicKey) || null;
         },
 
         /// Whether a peer has published a live capability announcement, i.e.

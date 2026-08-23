@@ -1300,7 +1300,14 @@ Object.assign(NYM.prototype, {
             dupGroupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
         }
         if (dupGroupMsg) {
-            if (isPqWrap && !dupGroupMsg.pqEncrypted) dupGroupMsg.pqEncrypted = true;
+            if (isPqWrap && !dupGroupMsg.pqEncrypted) {
+                dupGroupMsg.pqEncrypted = true;
+                if (typeof this.refreshMessagePqBadge === 'function') {
+                    this.refreshMessagePqBadge(dupGroupMsg.nymMessageId || dupGroupMsg.id);
+                }
+                this.channelDOMCache.delete(groupConvKey);
+                this.persistPMMessages(groupConvKey);
+            }
             if (senderVerified === true && dupGroupMsg.senderVerified !== true) {
                 dupGroupMsg.senderVerified = true;
                 this._setMessageVerifiedDOM(dupGroupMsg.nymMessageId || dupGroupMsg.id, true);

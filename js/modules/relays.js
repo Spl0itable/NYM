@@ -2673,10 +2673,16 @@ Object.assign(NYM.prototype, {
                 }
             }
             const authors = [...pqAuthors].slice(0, 500);
-            filters.push({
-                kinds: [30078], "#t": [this.PQ_D_TAG], authors,
-                limit: authors.length
-            });
+            if (d1Available) {
+                filters.push({
+                    kinds: [30078], "#t": [this.PQ_D_TAG], since: nowSec, limit: 1
+                });
+            } else {
+                filters.push({
+                    kinds: [30078], "#t": [this.PQ_D_TAG], authors,
+                    limit: authors.length
+                });
+            }
         }
         if (d1Available) {
             filters.push({ kinds: [30078], "#t": ["nym-vouches"], since: nowSec, limit: 1 });

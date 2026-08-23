@@ -1136,5 +1136,95 @@ section('announcement reaches peers');
         tagsOf(outFn) === tagsOf(inFn) && tagsOf(outFn).length > 0);
 }
 
+// ------------------------------------------------ self-addressed copies
+// Settings, the archive and self-wraps are sealed to OUR OWN key. Getting that
+// key from the wrong place is silent and permanent: the blob is simply
+// unreadable ever after, and a client that cannot read its settings falls back
+// to defaults and then saves those over the rows it could not open.
+section('the key we seal our own copies to');
+{
+    const relaysSrc = fs.readFileSync(path.join(root, 'js/modules/relays.js'), 'utf8');
+    const pqSrc = fs.readFileSync(path.join(root, 'js/modules/pq.js'), 'utf8');
+    const settingsSrc = fs.readFileSync(path.join(root, 'js/modules/settings.js'), 'utf8');
+
+    const selfFn = pqSrc.slice(pqSrc.indexOf('pqSelfKeyFor() {'),
+        pqSrc.indexOf('pqSelfKeyFor() {') + 1200);
+    chk('it is DERIVED from our own epoch, not read from the registry',
+        selfFn.includes('this.pqSelfKeys()') && !/return this\.pqKeyFor\(this\.pubkey\)/.test(selfFn));
+    chk('and still refuses when we cannot decapsulate',
+        selfFn.includes('if (!this.pqSelfEnabled()) return null;'));
+
+    // Deriving is what guarantees encrypt and decrypt agree: pqSelfKeys() IS
+    // the first entry pqSelfCandidates() walks.
+    const app = new NYM();
+    app.privkey = bobSk;
+    app.pubkey = bobPk;
+    app.pqKeys = new Map();
+    app._persistDedupSets = () => { };
+    const sealTo = app.pqSelfKeyFor();
+    chk('a self key exists before any announcement has been published', !!sealTo);
+    const cands = app.pqUnwrapCandidates([app.privkey]);
+    chk('the key we seal to is one we hold the secret half of',
+        cands.some(c => c.kemPk && eq(c.kemPk, sealTo)));
+
+    // The case that broke settings: another device on this nsec announced a
+    // key from an epoch this device has never held.
+    const foreign = NC.pqKeypairFromPrivkey(bobSk, 9);
+    app._pqRecord(app.pubkey, foreign.publicKey, Math.floor(Date.now() / 1000) + 604800, 9);
+    const afterForeign = app.pqSelfKeyFor();
+    chk("another device's announced epoch cannot hijack our own seal key",
+        eq(afterForeign, sealTo) && !eq(afterForeign, foreign.publicKey));
+
+    // Settings must never be written over rows we could not read.
+    chk('an unreadable restore disables saving rather than overwriting',
+        settingsSrc.includes('_settingsRestoreUnreadable'));
+    chk('the D1 write honours it too',
+        /_saveSettingsBlobToD1[\s\S]{0,400}_settingsRestoreUnreadable/.test(settingsSrc));
+
+    // Under D1 every filter is a live tail; history comes from the archive.
+    const pqStart = relaysSrc.indexOf('if (this.pubkey && typeof this.pqEnabled');
+    const pqFilter = relaysSrc.slice(pqStart, pqStart + 2200);
+    chk('the announcement filter is a live tail under D1, not a backfill',
+        /d1Available[\s\S]{0,400}since: nowSec, limit: 1/.test(pqFilter));
+    chk('and still backfills by author in direct mode',
+        /else[\s\S]{0,300}authors,[\s\S]{0,80}limit: authors\.length/.test(pqFilter));
+}
+
+// ------------------------------------------------ live badge updates
+// A group's coverage is only known after the fan-out, and a PM's hybrid copy
+// can arrive after its classical one — so the shield has to update in place,
+// the way the verification lock already does.
+section('the shield updates in place');
+{
+    const messagesSrc = fs.readFileSync(path.join(root, 'js/modules/messages.js'), 'utf8');
+    const pmsSrc = fs.readFileSync(path.join(root, 'js/modules/pms.js'), 'utf8');
+    const groupsSrc = fs.readFileSync(path.join(root, 'js/modules/groups.js'), 'utf8');
+
+    const refresh = messagesSrc.slice(
+        messagesSrc.indexOf('refreshMessagePqBadge(nymMessageId) {'),
+        messagesSrc.indexOf('refreshMessagePqBadge(nymMessageId) {') + 1400);
+    // _findMessageById returns { msg, convKey, store }. Handing the wrapper to
+    // _pqBadgeState read isPM/isGroup/pqCoverage off an object with none of
+    // them, so it answered '' and the badge was DELETED instead of updated.
+    chk('the lookup wrapper is unwrapped before the state is read',
+        /_pqBadgeState\(found && found\.msg\)/.test(refresh));
+    chk('and never passes the wrapper straight in',
+        !/_pqBadgeState\(\s*this\._findMessageById/.test(refresh));
+
+    // The popup reads the same lookup and made the same mistake.
+    const popup = messagesSrc.slice(
+        messagesSrc.indexOf("title = 'Partly quantum-resistant'") - 700,
+        messagesSrc.indexOf("title = 'Partly quantum-resistant'"));
+    chk('the badge popup unwraps it too', /hit && hit\.msg/.test(popup));
+
+    // Parity with the lock: both dedup paths already flip the lock in place.
+    chk('a PM upgraded to post-quantum refreshes its shield',
+        /isPqWrap && !dupMsg\.pqEncrypted[\s\S]{0,400}refreshMessagePqBadge/.test(pmsSrc));
+    chk('a group message does too',
+        /isPqWrap && !dupGroupMsg\.pqEncrypted[\s\S]{0,400}refreshMessagePqBadge/.test(groupsSrc));
+    chk('and the group send refreshes once coverage is known',
+        /pqGroupCoverageFor\(nymMessageId\)[\s\S]{0,500}refreshMessagePqBadge/.test(groupsSrc));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
