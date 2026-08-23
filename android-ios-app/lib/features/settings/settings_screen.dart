@@ -50,6 +50,40 @@ import 'settings_widgets.dart';
 ///
 /// Each control's label text, option order and option labels are copied
 /// verbatim from `index.html`'s `#settingsModal` markup.
+/// The post-quantum status line, named so a test can hold the translation
+/// catalog to it — a caveat only English speakers can read is not a caveat.
+const String kPqStatusFull = 'Active for messages with other Nymchat users.';
+const String kPqStatusSendOnly =
+    'Active for messages you send to other Nymchat users. Messages you receive, '
+    'and your own synced settings and history, stay on standard encryption: '
+    'your signer holds the key they would have to be derived from, and won\'t '
+    'do the post-quantum half. Logging in with your nsec covers both directions.';
+const String kPqStatusUnavailable =
+    'Not available. Post-quantum encryption needs the ML-KEM implementation, '
+    'which did not load.';
+
+/// What this device can do and what is actually happening are different
+/// questions, and the line above only ever answered the first. It read
+/// "Active" while every message was still going out classically, because no
+/// peer's key had ever been fetched — so the one indicator that should have
+/// caught that said everything was fine.
+const String kPqReachNone =
+    'No contact has published a post-quantum key yet, so messages are still '
+    'going out on standard encryption. This turns on by itself as soon as one '
+    'does.';
+const String kPqReachSome = 'Currently in use with {count} contacts.';
+const String kPqReachOne = 'Currently in use with 1 contact.';
+
+/// Every literal the post-quantum status line can show.
+const List<String> kPqStatusStrings = [
+  kPqStatusFull,
+  kPqStatusSendOnly,
+  kPqStatusUnavailable,
+  kPqReachNone,
+  kPqReachSome,
+  kPqReachOne,
+];
+
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({
     super.key,
@@ -1469,6 +1503,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         '⚠ Audio/video calls and P2P file sharing connect peers directly over '
         'WebRTC, which can reveal your true IP address to the other party. '
         'Use a VPN or Tor to help conceal it.');
+    // Post-quantum: what is possible is decided by the login type, not a
+    // preference — and sending and receiving are different questions. A signer
+    // login can hybridize the WRAP it builds itself, but cannot decapsulate,
+    // so it sends post-quantum and receives classical. See PqPolicy.
+    final nostrCtrl = ref.read(nostrControllerProvider);
+    final pqCapable = nostrCtrl.pqCapable;
+    final pqSendOnly = !pqCapable && nostrCtrl.pqEnabled;
+    final pqPeers = nostrCtrl.pqKnownPeerCount;
+    final pqReach = pqPeers == 0
+        ? tr(kPqReachNone)
+        : pqPeers == 1
+            ? tr(kPqReachOne)
+            : tr(kPqReachSome, {'count': '$pqPeers'});
+    final pqStatus = pqCapable
+        ? '${tr(kPqStatusFull)} $pqReach'
+        : pqSendOnly
+            ? '${tr(kPqStatusSendOnly)} $pqReach'
+            : tr(kPqStatusUnavailable);
     final dmTtlItems = <({int value, String label})>[
       (value: 3600, label: tr('1 hour')),
       (value: 21600, label: tr('6 hours')),
@@ -1601,6 +1653,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: s.acceptCalls,
             items: acceptItems,
             onChanged: (v) => _mutate((d) => d.copyWith(acceptCalls: v)),
+          ),
+        ),
+      ),
+      // Read-only status, not a setting: post-quantum is simply how Nymchat
+      // talks to Nymchat. Shown anyway so the security posture is visible, and
+      // so an extension / NIP-46 login is told WHY it is classical rather than
+      // left to wonder — that is a property of the login, not a preference.
+      _GroupSpec(
+        text: tr(
+            'Quantum-resistant encryption {status} Private messages and group '
+            'chats with other Nymchat users add ML-KEM-768 (a post-quantum key '
+            'exchange) alongside the standard NIP‑44 secp256k1 ECDH.',
+            {'status': pqStatus}),
+        child: FormGroup(
+          label: tr('Quantum-resistant encryption'),
+          hint: tr('Private messages and group chats with other Nymchat users '
+              'add ML-KEM-768 (a post-quantum key exchange) alongside the '
+              'standard NIP‑44 secp256k1 ECDH, so both would have to be broken '
+              'to read a message and traffic recorded today can\'t be decrypted '
+              'by a future quantum computer. This is automatic and has no '
+              'setting. Bitchat users and other Nostr clients keep receiving '
+              'standard NIP‑17 exactly as before.'),
+          child: Text(
+            pqStatus,
+            style: TextStyle(
+              color: context.nym.text.withValues(alpha: 0.85),
+              fontSize: 13,
+            ),
           ),
         ),
       ),

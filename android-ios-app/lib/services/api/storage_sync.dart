@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 
 import '../../core/constants/storage_keys.dart';
 import '../../models/settings.dart';
+import '../../core/crypto/pq.dart' as pq;
 import '../nostr/event_signer.dart';
 import '../storage/key_value_store.dart';
 import 'api_client.dart';
@@ -1903,6 +1905,42 @@ class StorageSync {
     return events;
   }
 
+  /// One author's rows out of one archived channel (`channel-get` with an
+  /// `authors` filter).
+  ///
+  /// Separate from [channelGet] because it answers a different question. An
+  /// unfiltered channel read returns the newest 500 events, which is right for
+  /// a feed and wrong for "what did THIS pubkey publish" — the nym-pq channel
+  /// holds one announcement per user, so the peer being asked about could be
+  /// anywhere in the table. It also skips the 60s per-channel throttle, which
+  /// exists to stop a feed being re-pulled and would otherwise make the second
+  /// peer looked up in a minute get nothing.
+  ///
+  /// Returns raw events. The CALLER must verify their signatures: D1 is a
+  /// cache, not an authority.
+  Future<List<Map<String, dynamic>>> channelGetByAuthor(
+    String channel,
+    String author,
+  ) async {
+    if (channel.isEmpty || author.isEmpty) return const [];
+    StorageStream stream;
+    try {
+      stream = await _api.storageStream({
+        'action': 'channel-get',
+        'channel': channel,
+        'authors': [author],
+      });
+    } catch (_) {
+      return const [];
+    }
+    final events = <Map<String, dynamic>>[];
+    for (final item in stream.items) {
+      if (item is! Map) continue;
+      events.add(Map<String, dynamic>.from(item));
+    }
+    return events;
+  }
+
   /// Purges a NIP-09-deleted channel message from the D1 archive
   /// (`channel-delete`, storage.js:1123-1150). A PUBLIC call — the signed
   /// kind-5 [deletionEvent] IS the authorization (the worker verifies its
@@ -2234,17 +2272,69 @@ class StorageSync {
     _authBuilder = builder;
   }
 
+  /// Our ML-KEM keypairs (current epoch first, then the window of previous
+  /// ones), supplied by the controller. Empty until post-quantum is up, and
+  /// permanently empty for a login that cannot do it.
+  List<({Uint8List kemSk, Uint8List kemPk})> _pqSelfKeys = const [];
+
+  void setPqSelfKeys(List<({Uint8List kemSk, Uint8List kemPk})> keys) {
+    _pqSelfKeys = List.unmodifiable(keys);
+  }
+
+  /// The D1 blob holds the same conversation list, group keys and history
+  /// categories as the relay gift wrap beside it, so protecting one without the
+  /// other protects neither. With a local nsec this is the hybrid; there is no
+  /// size cap to work around, since D1 takes the blob whatever it weighs.
+  ///
+  /// An extension or NIP-46 signer returns a finished NIP-44 payload rather
+  /// than a conversation key, so there is no hybrid one to derive — those
+  /// logins stay classical by construction (PqPolicy.capable).
   Future<String?> _encryptToSelf(String plaintext) async {
     try {
-      return await _signer.nip44Encrypt(_pubkey, plaintext);
+      final signer = _signer;
+      final selfKem = _pqSelfKeys.isEmpty ? null : _pqSelfKeys.first;
+      if (signer is LocalSigner && selfKem != null) {
+        try {
+          return pq.pqEncrypt(
+              plaintext, signer.privkey, _pubkey, selfKem.kemPk);
+        } catch (_) {
+          // Fall through to NIP-44 rather than losing the write.
+        }
+      }
+      return await signer.nip44Encrypt(_pubkey, plaintext);
     } catch (_) {
       return null;
     }
   }
 
+  /// Reads either form. A blob written before this device had a post-quantum
+  /// key, or by a device signing with an extension, is still plain NIP-44 — the
+  /// `pq1.` prefix says which, so both stay readable and nothing needs
+  /// migrating. A rotated key is handled by trying every epoch still derivable
+  /// from the nsec.
   Future<String?> _decryptFromSelf(String ciphertext) async {
     try {
-      return await _signer.nip44Decrypt(_pubkey, ciphertext);
+      final signer = _signer;
+      if (pq.isPqPayload(ciphertext)) {
+        if (signer is! LocalSigner) return null;
+        for (final k in _pqSelfKeys) {
+          try {
+            return pq.pqDecrypt(
+              ciphertext,
+              _pubkey,
+              pq.PqIdentity(
+                privkey: signer.privkey,
+                kemSecretKey: k.kemSk,
+                kemPublicKey: k.kemPk,
+              ),
+            );
+          } catch (_) {
+            // Wrong epoch — try the next.
+          }
+        }
+        return null;
+      }
+      return await signer.nip44Decrypt(_pubkey, ciphertext);
     } catch (_) {
       return null;
     }

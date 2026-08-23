@@ -97,4 +97,7 @@ class AppDataTopic {
   static const String pollVote = 'nym-poll-vote';
   static const String vouches = 'nym-vouches';
   static const String settingsTransferPrefix = 'nym-settings-transfer-';
+
+  /// Hybrid post-quantum key announcement (see features/identity/pq_registry.dart).
+  static const String postQuantum = 'nym-pq';
 }

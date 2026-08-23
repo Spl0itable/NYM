@@ -9,15 +9,19 @@ import '../core/crypto/bech32_codec.dart' as bech32;
 import '../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../core/crypto/bitchat.dart' as bitchat;
 import '../core/crypto/keys.dart' as keys;
+import '../core/crypto/ml_kem.dart';
 import '../core/crypto/pow.dart' as pow;
+import '../core/crypto/pq.dart' as pq;
 import '../core/crypto/schnorr.dart' as schnorr;
 import '../core/constants/event_kinds.dart';
 import '../core/constants/relays.dart';
 import '../core/constants/storage_keys.dart';
 import '../core/theme/nym_colors.dart';
 import '../core/utils/nym_utils.dart';
+import '../services/api/api_config.dart';
 import '../features/calls/call_providers.dart';
 import '../features/commands/action_rate_limit.dart';
+import '../features/identity/pq_registry.dart';
 import '../features/mesh/ghost_mode.dart';
 import '../features/mesh/mesh_controller.dart';
 import '../features/commands/command_handler.dart';
@@ -358,6 +362,10 @@ class NostrController {
         secretWrite: _ref.read(identityVaultProvider).secretSet,
       );
 
+      // Post-quantum policy has to be resolved before the first send, and its
+      // first-boot default depends on whether this is an upgrade.
+      _loadPqSettings();
+
       // NIP-46 remote-signer login: restore the persisted session and build a
       // remote signer (no local key). Mirrors the PWA's `signEvent` dispatch by
       // `nostrLoginMethod === 'nip46'` (Identity has pubkey=remotePubkey,
@@ -512,6 +520,7 @@ class NostrController {
         profileAuthors: [
           for (final c in bootState.pmConversations) c.pubkey,
         ],
+        pqAuthors: _pqAuthorList(),
       );
 
       // Live gift-wrap REQ over the restored ephemeral pubkeys (the PWA's
@@ -554,9 +563,12 @@ class NostrController {
       _ref.read(appStateProvider.notifier).onPMConversationAdded = (_) {
         final svc = _service;
         if (svc == null) return;
-        svc.updateCriticalInputs(profileAuthors: [
-          for (final c in _ref.read(appStateProvider).pmConversations) c.pubkey,
-        ]);
+        svc.updateCriticalInputs(
+          profileAuthors: [
+            for (final c in _ref.read(appStateProvider).pmConversations) c.pubkey,
+          ],
+          pqAuthors: _pqAuthorList(),
+        );
       };
 
       // Cross-device storage sync (`/api/storage`). Durable = logged-in
@@ -675,7 +687,42 @@ class NostrController {
       // most likely moment a stuck DM finally lands (pms.js
       // `retryPendingDMsOnReconnect`, F02 auto-retry).
       _retryPendingDmsOnReconnect();
+      // (Re)advertise our capability announcement. Driven from the connection
+      // edge itself, NOT from the D1 backfill above — see
+      // [schedulePqAnnouncement] for why that coupling was a bug.
+      schedulePqAnnouncement();
     }
+  }
+
+  Timer? _pqAnnounceTimer;
+
+  /// Schedules our capability announcement for shortly after connecting, at
+  /// most once per pending window.
+  ///
+  /// This used to be the final statement of [_backfillFromD1OnReconnect], which
+  /// made publishing our key contingent on an unrelated archive restore
+  /// succeeding. That function returns early when storage sync is unavailable
+  /// and again on its 30s throttle, and it awaits three restores that can each
+  /// throw — and any one of those paths skipped the announcement entirely.
+  ///
+  /// Nothing surfaces that. The send path still encrypts, still delivers, still
+  /// shows a padlock; it just falls back to classical on BOTH ends, because
+  /// neither peer can find a key that was never published.
+  ///
+  /// Idempotent, so every connect path can call it unconditionally: the pending
+  /// timer collapses duplicate calls, and an announcement that has already gone
+  /// out is throttled by [pqRepublishInterval] inside
+  /// [publishPqAnnouncement].
+  void schedulePqAnnouncement() {
+    if (_pqAnnounceTimer != null) return;
+    // Matches the PWA's PQ_ANNOUNCE_DELAY_MS: long enough for our own existing
+    // announcement to arrive, so the device roster is merged onto what is
+    // already published rather than clobbering it.
+    _pqAnnounceTimer = Timer(const Duration(seconds: 3), () {
+      _pqAnnounceTimer = null;
+      if (_service == null || _identity == null) return;
+      unawaited(publishPqAnnouncement());
+    });
   }
 
   /// Last `_backfillFromD1OnReconnect` run (ms) — the PWA's 30s throttle so a
@@ -740,6 +787,10 @@ class NostrController {
     // After catch-up: re-exchange group ephemeral keys if this client was
     // offline long enough that missed rotations may have expired off relays.
     unawaited(_maybeSendGroupKeyResyncs());
+    // (Re)advertise our post-quantum key. Also scheduled straight off the
+    // connection edge, so a failure anywhere above cannot cost us the
+    // announcement — see [schedulePqAnnouncement].
+    schedulePqAnnouncement();
   }
 
   /// Rebuilds the web of trust from D1 (vouch lists are archived under the
@@ -1117,6 +1168,10 @@ class NostrController {
     if (!_settingsHydratedC.isCompleted) _settingsHydratedC.complete();
     _deletedIdsPersistTimer?.cancel();
     _deletedIdsPersistTimer = null;
+    _pqKeysPersistTimer?.cancel();
+    _pqKeysPersistTimer = null;
+    _pqAnnounceTimer?.cancel();
+    _pqAnnounceTimer = null;
     // Flush any pending debounced group-store / read-watermark writes before we
     // drop the identity + app-state handles below (the persist reads both).
     _flushDebouncedPersists();
@@ -1467,6 +1522,8 @@ class NostrController {
       final topic = event.tagValue('t');
       if (topic == AppDataTopic.vouches) {
         _ingestVouch(event);
+      } else if (topic == AppDataTopic.postQuantum) {
+        _ingestPqAnnouncement(event);
       } else if (topic == AppDataTopic.poll || topic == AppDataTopic.pollVote) {
         // Live polls/votes from the critical REQ's poll filter (relays.js:
         // 2533-2535) route through the same store ingest the D1 archive
@@ -3038,6 +3095,7 @@ class NostrController {
       wrapId: u.wrapId,
       selfPubkey: self,
       senderVerified: u.senderVerified,
+      pqEncrypted: u.isPq,
     );
     if (m == null) return;
     // Resolve the display author against the users map — the PWA's
@@ -3132,6 +3190,7 @@ class NostrController {
       eventKind: EventKind.giftWrap,
       nymMessageId: nymMessageId,
       senderVerified: u.senderVerified,
+      pqEncrypted: u.isPq,
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,
     );
   }
@@ -4083,6 +4142,363 @@ class NostrController {
   /// they get a NIP-17 wrap. An UNKNOWN peer (in neither set) gets BOTH.
   final Set<String> _nymUsers = <String>{};
 
+  /// Announced ML-KEM keys, keyed by pubkey. Holding one for a peer is exactly
+  /// what makes them post-quantum capable (features/identity/pq_registry.dart).
+  final PqRegistry _pqRegistry = PqRegistry();
+
+  /// In-flight and recently-failed announcement lookups, so two sends racing
+  /// for the same new peer open one subscription rather than two, and a peer
+  /// who simply has no announcement is not re-queried on every send.
+  final Map<String, Future<void>> _pqLookups = {};
+  final Map<String, int> _pqLookupMisses = {};
+
+  /// How long a miss is trusted. Long enough that the send path is not
+  /// re-querying constantly, short enough to pick up a peer who upgrades
+  /// mid-conversation.
+  static const int _pqMissTtlMs = 10 * 60 * 1000;
+
+  /// Cap on a single prefetch sweep, so opening a large group does not fire one
+  /// subscription per member.
+  static const int _pqPrefetchMax = 60;
+
+  /// Makes sure we have looked for [pubkey]'s announcement at least once before
+  /// deciding how to encrypt to them. Resolves either way — a peer with no
+  /// announcement is a normal outcome, not an error.
+  Future<void> ensurePqAnnouncement(String pubkey) {
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) return Future<void>.value();
+    if (!PqPolicy.enabled(privkey: identity.privkey, mode: _pqMode)) {
+      return Future<void>.value();
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final nowSec = nowMs ~/ 1000;
+    // Only an entry WITH A KEY ends the search. A keyless one says "this is a
+    // Nymchat client that published no post-quantum key" — true when we
+    // recorded it, and recorded for a week. A peer who was on an older build,
+    // or signed in with an extension, and has since switched to their nsec
+    // would go on getting classical messages for the rest of that week if this
+    // returned early on the stale answer. The point of this lookup is the key,
+    // so not having one is a reason to look again, not to stop.
+    if (_pqRegistry.keyFor(pubkey, nowSec: nowSec, enabled: true) != null) {
+      return Future<void>.value();
+    }
+    final existing = _pqLookups[pubkey];
+    if (existing != null) return existing;
+    // Re-checking is rate-limited rather than free: a peer who really has no
+    // key — a Bitchat user, a signer login — must not be re-queried on every
+    // send.
+    final missedAt = _pqLookupMisses[pubkey];
+    if (missedAt != null && nowMs - missedAt < _pqMissTtlMs) {
+      return Future<void>.value();
+    }
+    final f = _pqAnnouncementFromD1(pubkey).then((gotIt) {
+      // D1 answered with a verified key, so there is nothing to ask the relays.
+      if (gotIt) return Future<void>.value();
+      return service.fetchPqAnnouncement(
+      pubkey,
+      // Lets the lookup stop the moment the key lands, and keep listening past
+      // the EOSE quorum until then.
+      found: () => _pqRegistry.keyFor(
+            pubkey,
+            nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            enabled: true,
+          ) !=
+          null,
+      );
+    }).whenComplete(() {
+      _pqLookups.remove(pubkey);
+      final sec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      // A lookup that came back without a key counts as a miss, so the rate
+      // limit applies to it — otherwise a keyless peer would be re-queried on
+      // every send now that a keyless entry no longer stops the search.
+      if (_pqRegistry.keyFor(pubkey, nowSec: sec, enabled: true) == null) {
+        _pqLookupMisses[pubkey] = DateTime.now().millisecondsSinceEpoch;
+      } else {
+        _pqLookupMisses.remove(pubkey);
+      }
+    });
+    _pqLookups[pubkey] = f;
+    return f;
+  }
+
+  /// How many contacts we hold a live post-quantum key for. Surfaced in
+  /// settings so the status line can report what is actually happening rather
+  /// than only what this device is capable of.
+  int get pqKnownPeerCount => _pqRegistry
+      .knownPeers(nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000)
+      .length;
+
+  /// Asks D1 for a peer's announcement. True when it produced a usable key.
+  ///
+  /// Tried BEFORE the relays because it has no race in it. A relay lookup
+  /// completes on an EOSE quorum, and the relays that do NOT carry the
+  /// announcement are the ones that answer instantly — so the quorum can be
+  /// reached by relays with nothing while the one holding the key is still
+  /// working. One query to one place cannot lose a race there is no race in.
+  ///
+  /// D1 is a cache, not an authority: every event is signature-checked here
+  /// exactly as a relay event is. That signature binds the ML-KEM key to the
+  /// Nostr identity, so our own backend cannot substitute a key it could then
+  /// read messages with — it would have to forge secp256k1.
+  Future<bool> _pqAnnouncementFromD1(String pubkey) async {
+    final sync = _storageSync;
+    final service = _service;
+    if (sync == null || service == null) return false;
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await sync.channelGetByAuthor(AppDataTopic.postQuantum, pubkey);
+    } catch (_) {
+      return false;
+    }
+    NostrEvent? best;
+    for (final raw in rows) {
+      NostrEvent ev;
+      try {
+        ev = NostrEvent.fromJson(raw);
+      } catch (_) {
+        continue;
+      }
+      if (ev.kind != EventKind.appData || ev.pubkey != pubkey) continue;
+      if (best != null && best.createdAt >= ev.createdAt) continue;
+      best = ev;
+    }
+    if (best == null) return false;
+    try {
+      if (!await service.verifyEvent(best)) return false;
+    } catch (_) {
+      return false;
+    }
+    _ingestPqAnnouncement(best);
+    return _pqRegistry.keyFor(
+          pubkey,
+          nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          enabled: true,
+        ) !=
+        null;
+  }
+
+  /// Warms the announcements for everyone in a conversation, so the key is
+  /// already in hand by the time the first message is sent.
+  void prefetchPqAnnouncements(Iterable<String> pubkeys) {
+    var n = 0;
+    for (final pk in pubkeys) {
+      if (!TrustGraph.isHex64(pk)) continue;
+      if (++n > _pqPrefetchMax) break;
+      unawaited(ensurePqAnnouncement(pk));
+    }
+  }
+
+  /// Whether this identity sends post-quantum and advertises itself as able to
+  /// receive it. Loaded from prefs at boot; see [PqPolicy.initialMode] for why
+  /// an upgrade defaults off.
+  PqMode _pqMode = PqMode.off;
+
+  /// Wall-clock of our last announcement publish, for the daily republish.
+  int _pqLastPublishMs = 0;
+
+  /// Devices carried by our own announcement, so a republish merges onto the
+  /// existing roster rather than clobbering it.
+  List<PqDevice> _pqDevices = const [];
+
+  PqMode get pqMode => _pqMode;
+
+  /// True when this install was upgraded into post-quantum rather than starting
+  /// with it, and the user has not been told yet.
+  bool get pqUpgradeNoticePending =>
+      _ref.read(keyValueStoreProvider).getString(StorageKeys.pqUpgradeNotice) ==
+      'pending';
+
+  Future<void> dismissPqUpgradeNotice() async =>
+      _ref.read(keyValueStoreProvider).remove(StorageKeys.pqUpgradeNotice);
+
+  /// True when post-quantum is both possible and switched on.
+  bool get pqEnabled =>
+      PqPolicy.enabled(privkey: _identity?.privkey, mode: _pqMode);
+
+  /// Whether we can RECEIVE post-quantum — needs the nsec, since the ML-KEM
+  /// keypair derives from it. Extension and NIP-46 logins can send but not
+  /// receive; see PqPolicy.
+  bool get pqCapable => PqPolicy.capable(privkey: _identity?.privkey);
+
+  /// Whether copies addressed to ourselves can be post-quantum.
+  bool get pqSelfEnabled =>
+      PqPolicy.selfEnabled(privkey: _identity?.privkey, mode: _pqMode);
+
+  /// Our own ML-KEM key, for copies addressed to OURSELVES.
+  ///
+  /// Null unless we can decapsulate, which is not the same question as whether
+  /// a key exists. A second device holding the nsec may have announced one for
+  /// this npub; encapsulating to it from an extension or NIP-46 login — which
+  /// cannot derive its secret half — would lock THIS device out of its own
+  /// history. Outbound messages have no such hazard: the recipient decapsulates.
+  Uint8List? pqSelfKey() {
+    if (!pqSelfEnabled) return null;
+    // DERIVED, not read from the registry. The registry entry is whatever
+    // epoch was last announced -- possibly by another device on this nsec, at
+    // an epoch this one has never held -- while decryption only ever tries
+    // pqSelfCandidateKeys(), which walks OUR epoch and the few before it.
+    // Taking the announced key could seal our own settings and archive to a key
+    // we cannot open, and that failure is silent and total: the blob is simply
+    // unreadable ever after. Deriving keeps both sides on the same key by
+    // construction, and works from the first save rather than only once the
+    // announcement has landed.
+    return _pqSelfKeys()?.publicKey;
+  }
+
+  /// A group member's announced ML-KEM key, or null. Keyed by their REAL
+  /// pubkey — the announcement is published by the identity, not by the
+  /// rotating ephemeral key the classical leg encrypts to.
+  Uint8List? _pqGroupKeyFor(String memberPubkey) => _pqRegistry.keyFor(
+        memberPubkey,
+        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        enabled: pqEnabled,
+      );
+
+  /// Whose post-quantum announcements we watch: our conversation partners,
+  /// group members and ourselves. Unlike the vouch list — a broadcast web of
+  /// trust — post-quantum keys are only needed for peers we actually message,
+  /// so this is scoped rather than fetched wholesale.
+  List<String> _pqAuthorList() {
+    if (!pqEnabled) return const [];
+    final out = <String>{};
+    final self = _identity?.pubkey;
+    if (self != null) out.add(self);
+    final state = _ref.read(appStateProvider);
+    for (final c in state.pmConversations) {
+      out.add(c.pubkey);
+    }
+    for (final g in _ref.read(groupsProvider)) {
+      out.addAll(g.members);
+    }
+    return out.toList();
+  }
+
+  /// Ingests a peer's (already signature-verified) `nym-pq` announcement.
+  void _ingestPqAnnouncement(NostrEvent event) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    _pqRegistry.ingest(event.pubkey, event.content, nowSec: nowSec);
+    if (event.pubkey == _identity?.pubkey) {
+      final ann = PqAnnouncement.parse(event.content);
+      if (ann != null && !ann.retracted) _pqDevices = ann.devices;
+    }
+    _schedulePersistPqKeys();
+  }
+
+  /// Debounced (5s) persist of the peer key registry, riding the same pattern
+  /// as [_schedulePersistDeletedIds].
+  ///
+  /// Without this a relaunch starts cold, and a cold registry does not fail
+  /// loudly — it makes the next message to every peer classical while their
+  /// announcements are looked up again, which is invisible apart from a
+  /// downgraded badge. See [PqRegistry.hydrate] for why restoring is safe.
+  Timer? _pqKeysPersistTimer;
+  void _schedulePersistPqKeys() {
+    if (_pqKeysPersistTimer != null) return;
+    if (PanicWipe.inProgress) return;
+    _pqKeysPersistTimer = Timer(const Duration(seconds: 5), () {
+      _pqKeysPersistTimer = null;
+      final cache = _cache;
+      if (cache == null || !cache.isOpen) return;
+      if (PanicWipe.inProgress) return;
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      unawaited(cache
+          .saveMetaMap(CacheStore.metaPqKeys, _pqRegistry.toJson(nowSec: nowSec))
+          .catchError((_) {}));
+    });
+  }
+
+  /// Our ML-KEM keypair for the current epoch, or null when we can't derive one.
+  MlKemKeyPair? _pqSelfKeys() {
+    final privkey = _identity?.privkey;
+    if (privkey == null) return null;
+    return pq.pqKeypairFromPrivkey(privkey, _pqEpoch);
+  }
+
+  int _pqEpoch = 0;
+
+  /// Loads the persisted post-quantum settings. On first boot of a
+  /// post-quantum-capable build the default comes from [PqPolicy.initialMode]:
+  /// a fresh install can turn it on safely because no older device can exist
+  /// yet, an upgrade cannot because one might.
+  void _loadPqSettings() {
+    final kv = _ref.read(keyValueStoreProvider);
+    // Post-quantum is on for anyone who can do it. The only thing that reads
+    // this key is the undocumented escape hatch; nothing writes it.
+    _pqMode =
+        kv.getString(StorageKeys.pqMode) == 'off' ? PqMode.off : PqMode.on;
+    // `nym_last_online_ts` is written by every prior version, so its presence
+    // marks this as an upgrade rather than a fresh install — and only an
+    // upgrade can strand an older device on the same npub.
+    if (kv.getString(StorageKeys.pqUpgradeSeen) == null) {
+      unawaited(kv.setString(StorageKeys.pqUpgradeSeen, '1'));
+      if (PqPolicy.upgradeNoticeNeeded(
+          seenBefore: kv.getString('nym_last_online_ts') != null)) {
+        unawaited(kv.setString(StorageKeys.pqUpgradeNotice, 'pending'));
+      }
+    }
+    _pqEpoch = int.tryParse(kv.getString(StorageKeys.pqEpoch) ?? '') ?? 0;
+  }
+
+  /// A stable per-device id for the announcement roster. Random, not derived
+  /// from anything identifying — it only distinguishes our own devices from
+  /// each other in a list only we can act on.
+  Future<String> _pqDeviceId() async {
+    final kv = _ref.read(keyValueStoreProvider);
+    final existing = kv.getString(StorageKeys.pqDeviceId);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final bytes = keys.randomBytes(4);
+    final id = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    await kv.setString(StorageKeys.pqDeviceId, id);
+    return id;
+  }
+
+  /// Publishes (or republishes) our announcement, merging this device into the
+  /// roster. No-op when post-quantum is off — turning it off retracts instead.
+  /// Publishes our capability announcement.
+  ///
+  /// EVERY Nymchat client publishes this, not only post-quantum-capable ones:
+  /// its presence is signed proof that a pubkey runs Nymchat, which is what
+  /// lets the send path skip the speculative Bitchat wrap. The ML-KEM key
+  /// rides along only when post-quantum is both possible and switched on.
+  Future<void> publishPqAnnouncement({bool force = false}) async {
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) return;
+    if (!force &&
+        _pqLastPublishMs != 0 &&
+        DateTime.now().millisecondsSinceEpoch - _pqLastPublishMs <
+            pqRepublishInterval.inMilliseconds) {
+      return;
+    }
+    // A KEM key only when we can actually use one.
+    final keys = pqEnabled ? _pqSelfKeys() : null;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final devices = PqPolicy.mergeDeviceRoster(
+        _pqDevices, await _pqDeviceId(), ApiConfig.appVersion, nowSec: nowSec);
+    final signed = await service.publishPqAnnouncement(
+      kemPublicKey: keys?.publicKey,
+      epoch: _pqEpoch,
+      devices: devices,
+    );
+    if (signed == null) return;
+    _pqDevices = devices;
+    _pqLastPublishMs = DateTime.now().millisecondsSinceEpoch;
+    // Record our own entry so self-addressed wraps resolve through the same
+    // lookup as everyone else's.
+    _pqRegistry.record(
+        identity.pubkey, keys?.publicKey, nowSec + pqTtl.inSeconds, _pqEpoch);
+    _schedulePersistPqKeys();
+  }
+
+  /// Our own ML-KEM decrypt candidates: current epoch first, then a bounded
+  /// window of previous ones so a wrap sent just before a rotation still opens.
+  List<({Uint8List kemSk, Uint8List kemPk})> pqSelfCandidateKeys() {
+    final privkey = _identity?.privkey;
+    if (privkey == null) return const [];
+    return pqSelfCandidates(privkey, _pqEpoch);
+  }
+
   /// Publishes a 1:1 PM in the transport(s) the peer understands (PWA
   /// `sendNIP17PM` dual-send, pms.js:326-372). A known-bitchat peer gets a
   /// `bitchat1:` wrap, a known-nym peer a NIP-17 wrap, and an unknown peer BOTH.
@@ -4098,12 +4514,29 @@ class NostrController {
     final identity = _identity;
     if (service == null || identity == null) return;
 
-    final isKnownBitchat = _bitchatUsers.contains(recipientPubkey);
-    final isKnownNym = _nymUsers.contains(recipientPubkey);
-    final isUnknown = !isKnownBitchat && !isKnownNym;
+    // Make sure we have looked for their announcement at least once before
+    // deciding. Opening the conversation already kicks this off, so this
+    // normally resolves straight off the cache; it matters for the paths that
+    // send without opening anything, and for the first message of a brand new
+    // thread — whose conversation entry does not exist yet, so the critical
+    // subscription has not been rebuilt around them.
+    await ensurePqAnnouncement(recipientPubkey);
+
+    // Which transports this recipient gets. See PqPmPlan.decide for why
+    // post-quantum replaces rather than accompanies the others.
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final pqOn = PqPolicy.enabled(privkey: identity.privkey, mode: _pqMode);
+    final plan = PqPmPlan.decide(
+      recipientKemKey:
+          _pqRegistry.keyFor(recipientPubkey, nowSec: nowSec, enabled: pqOn),
+      knownBitchat: _bitchatUsers.contains(recipientPubkey),
+      knownNym: _nymUsers.contains(recipientPubkey),
+      provenNymchat:
+          _pqRegistry.isKnownNymchatClient(recipientPubkey, nowSec: nowSec),
+    );
 
     UnsignedEvent? bitchatRumor;
-    if (isKnownBitchat || isUnknown) {
+    if (plan.bitchat) {
       // The bitchat rumor's content is a `bitchat1:` packet; it carries the SAME
       // `nymMessageId` (`x` tag) as the nym rumor so a peer's reaction/receipt
       // matches across both formats (pms.js:339-346).
@@ -4130,13 +4563,25 @@ class NostrController {
       );
     }
 
+    // The echo went on screen before the recipient's key was looked up, so it
+    // still reads as classical. Tell it what actually went out.
+    for (final t in rumor.tags) {
+      if (t.length > 1 && t[0] == 'x') {
+        _ref.read(appStateProvider.notifier)
+            .markOwnMessagePq(t[1], pqEncrypted: plan.pq);
+        break;
+      }
+    }
+
     await service.publishPM(
       rumor: rumor,
       recipientPubkey: recipientPubkey,
       settings: _msgSettings,
       onWrap: onWrap,
       bitchatRumor: bitchatRumor,
-      sendNymWrap: isKnownNym || isUnknown,
+      sendNymWrap: plan.nym,
+      recipientKemPublicKey: plan.kemPublicKey,
+      selfKemPublicKey: pqSelfKey(),
     );
   }
 
@@ -4427,6 +4872,14 @@ class NostrController {
         encryptTo: (pk) => ek.encryptionPubkeyFor(pk, identity.pubkey),
         settings: _msgSettings,
         onWrap: _archiveSentWrap,
+        kemKeyFor: _pqGroupKeyFor,
+        // The fan-out counts how many members got a post-quantum wrap as it
+        // builds them, which is only knowable during the send. Partial coverage
+        // must not read as protected -- one classical copy of the same
+        // plaintext is all an attacker needs -- so the badge carries the count
+        // rather than a yes/no.
+        onCoverage: (pq, total) => appState.markOwnMessagePq(
+            nymMessageId, coverage: (pq: pq, total: total)),
       );
     }
   }
@@ -5986,6 +6439,7 @@ class NostrController {
         encryptTo: (pk) => ek.encryptionPubkeyFor(pk, identity.pubkey),
         settings: _msgSettings,
         onWrap: _archiveSentWrap,
+        kemKeyFor: _pqGroupKeyFor,
       );
       return true;
     }
@@ -7671,6 +8125,14 @@ class NostrController {
       // so relay backlog / D1 replay can't resurrect a deleted message.
       appState.hydrateDeletedIds(trust[3]);
       appState.onDeletedIdsChanged = _schedulePersistDeletedIds;
+      // Peers' announced ML-KEM keys, so the first message after a relaunch is
+      // post-quantum instead of silently classical while discovery re-runs.
+      // Bounded by each announcement's own expiry — see [PqRegistry.hydrate].
+      final pqKeys = await cache.loadMetaMap(CacheStore.metaPqKeys);
+      if (pqKeys.isNotEmpty) {
+        _pqRegistry.hydrate(pqKeys,
+            nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      }
     } catch (e) {
       debugPrint('hydrateFromCache failed: $e');
     }
@@ -8918,6 +9380,37 @@ class NostrController {
       ...groups.allEphemeralSecretKeys(),
       ..._ref.read(ghostModeProvider).secretKeys,
     ]);
+    // Refreshed alongside the ephemeral keys so a rotation or a login change
+    // takes effect on the same tick.
+    service.setPqSelfKeys(pqCapable ? pqSelfCandidateKeys() : const []);
+    // Announcements are needed to SEND, which a signer login can now do, so the
+    // watch list follows the send gate — without a peer's announcement there is
+    // no key to encapsulate to.
+
+    // The D1 settings blob holds the same content as the relay wrap beside it,
+    // so it takes the same keys — protecting one without the other protects
+    // neither.
+    _storageSync?.setPqSelfKeys(pqCapable ? pqSelfCandidateKeys() : const []);
+    // Group fan-out resolves each member's announced ML-KEM key through the
+    // registry. Keyed by the member's REAL pubkey — the announcement is
+    // published by the identity, not the rotating ephemeral key the classical
+    // leg encrypts to.
+    groups.kemKeyFor = (memberPubkey) {
+      final key = _pqRegistry.keyFor(
+        memberPubkey,
+        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        enabled: pqEnabled,
+      );
+      // A member we hold nothing for may simply never have been asked about: a
+      // group joined since we connected is not in the critical subscription's
+      // author list, and only a PM conversation change rebuilds it. Look them
+      // up in the background so the next message covers them. The fan-out
+      // cannot wait on this — it is building wraps for the whole roster right
+      // now — so this message still goes classical to that member, and the
+      // shield reports partial coverage, which is the truth.
+      if (key == null) unawaited(ensurePqAnnouncement(memberPubkey));
+      return key;
+    };
   }
 
   void _refreshEphemeralSubscriptions() {
@@ -10409,6 +10902,7 @@ class NostrController {
         encryptTo: (pk) => ek.encryptionPubkeyFor(pk, identity.pubkey),
         settings: _msgSettings,
         onWrap: _archiveSentWrap,
+        kemKeyFor: _pqGroupKeyFor,
       );
       return;
     }

@@ -305,6 +305,20 @@ String autoTranslateTargetFor(Settings settings) {
   return (ui.isNotEmpty && ui != 'en') ? ui : '';
 }
 
+/// The language a MANUAL translate should target.
+///
+/// Unlike [autoTranslateTargetFor] this never returns empty: a manual translate
+/// is an explicit request, so it has to produce something. There is no "pick a
+/// language" prompt any more — every user chooses one at first run and that
+/// pick is adopted as the translation target, so asking again on the first
+/// translation was asking a question already answered, and it interrupted the
+/// very action the user had just taken.
+String manualTranslateTargetFor(Settings settings) {
+  if (settings.translateLanguage.isNotEmpty) return settings.translateLanguage;
+  final ui = settings.uiLanguage;
+  return ui.isNotEmpty ? ui : 'en';
+}
+
 /// Whether auto-translate is enabled AND gated in for [message]'s conversation
 /// type (public channel / PM / group), per [settings]. Own messages and
 /// system/action rows are never auto-translated. Callers must still check that

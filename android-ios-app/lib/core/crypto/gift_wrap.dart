@@ -7,6 +7,7 @@ import '../../services/nostr/event_signer.dart';
 import 'bitchat.dart' as bitchat;
 import 'keys.dart';
 import 'nip44.dart' as nip44;
+import 'pq.dart' as pq;
 import 'schnorr.dart';
 
 /// NIP-59 gift wrapping (matches nym-crypto.js `nip59Wrap`, `bitchatWrap`,
@@ -86,6 +87,61 @@ NostrEvent nip59Wrap({
   );
 }
 
+/// Hybrid post-quantum NIP-59 gift wrap (matches nym-crypto.js `pqNip59Wrap`).
+///
+/// Structurally identical to [nip59Wrap] — same kinds, same tags, same
+/// signatures, same +/-2h jitter — but BOTH the seal and the wrap derive their
+/// NIP-44 conversation key from the hybrid ECDH + ML-KEM-768 combiner instead
+/// of plain ECDH. [recipientKemPublicKey] is the recipient's announced ML-KEM
+/// public key; callers only reach this path when they hold a valid one, so
+/// there is no in-band negotiation and no downgrade surface.
+///
+/// Local-key only: the seal's classical leg is static-static ECDH from the
+/// sender's identity key, and a NIP-46 remote signer returns a finished NIP-44
+/// payload rather than a conversation key, leaving no way to inject a hybrid
+/// one. Those logins stay on the classical path by construction.
+NostrEvent pqNip59Wrap({
+  required UnsignedEvent rumor,
+  required Uint8List senderPrivkey,
+  required String recipientPubkey,
+  required Uint8List recipientKemPublicKey,
+  int? expiration,
+}) {
+  final senderPub = getPublicKeyHex(senderPrivkey);
+  final rumorMap = _buildRumorMap(rumor, senderPub);
+
+  // Seal (kind 13), signed by the real sender key.
+  final seal = finalizeEvent(
+    UnsignedEvent(
+      pubkey: senderPub,
+      createdAt: randomNow(),
+      kind: 13,
+      tags: const [],
+      content: pq.pqEncrypt(jsonEncode(rumorMap), senderPrivkey, recipientPubkey,
+          recipientKemPublicKey),
+    ),
+    senderPrivkey,
+  );
+
+  // Wrap (kind 1059), signed by a fresh ephemeral key.
+  final ephSk = generatePrivateKey();
+  final tags = <List<String>>[
+    ['p', recipientPubkey],
+    if (expiration != null && expiration != 0) ['expiration', '$expiration'],
+  ];
+  return finalizeEvent(
+    UnsignedEvent(
+      pubkey: getPublicKeyHex(ephSk),
+      createdAt: randomNow(),
+      kind: 1059,
+      tags: tags,
+      content: pq.pqEncrypt(jsonEncode(seal.toJson()), ephSk, recipientPubkey,
+          recipientKemPublicKey),
+    ),
+    ephSk,
+  );
+}
+
 /// Async, signer-driven NIP-59 wrap. The **seal (kind 13)** is signed by
 /// [senderSigner] and its content encrypted via `senderSigner.nip44Encrypt`
 /// (so it works for a NIP-46 *remote* signer, not just a local key); the
@@ -100,11 +156,24 @@ NostrEvent nip59Wrap({
 /// For a [LocalSigner] this produces output indistinguishable from [nip59Wrap]
 /// (same seal author = sender pubkey, same NIP-44 conversation key), so the
 /// existing sync callers and tests are unaffected.
+/// [recipientKemPublicKey], when non-null, makes the WRAP layer hybrid.
+///
+/// The seal cannot be: a signer returns a finished NIP-44 payload rather than a
+/// conversation key, so there is nowhere to mix the KEM secret in. The wrap's
+/// ephemeral key is ours, generated here, so that layer can be — and it is the
+/// layer that matters. What a recorder stores is the wrap; reaching the seal at
+/// all means breaking it first, so a hybrid wrap already defeats
+/// harvest-now-decrypt-later. The seal's classical encryption is only reachable
+/// by someone who has ALREADY broken the post-quantum layer.
+///
+/// unwrapGiftWrap accepts a hybrid wrap around a classical seal, so this is
+/// readable by every shipped build with no version gate.
 Future<NostrEvent> nip59WrapAsync({
   required UnsignedEvent rumor,
   required EventSigner senderSigner,
   required String recipientPubkey,
   int? expiration,
+  Uint8List? recipientKemPublicKey,
 }) async {
   final senderPub = senderSigner.pubkey;
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -124,18 +193,21 @@ Future<NostrEvent> nip59WrapAsync({
 
   // Wrap (kind 1059) — fresh local ephemeral key (local NIP-44 + schnorr).
   final ephSk = generatePrivateKey();
-  final ckWrap = nip44.getConversationKey(ephSk, recipientPubkey);
   final tags = <List<String>>[
     ['p', recipientPubkey],
     if (expiration != null && expiration != 0) ['expiration', '$expiration'],
   ];
+  final sealJson = jsonEncode(seal.toJson());
+  final content = recipientKemPublicKey != null
+      ? pq.pqEncrypt(sealJson, ephSk, recipientPubkey, recipientKemPublicKey)
+      : nip44.encrypt(sealJson, nip44.getConversationKey(ephSk, recipientPubkey));
   return finalizeEvent(
     UnsignedEvent(
       pubkey: getPublicKeyHex(ephSk),
       createdAt: randomNow(),
       kind: 1059,
       tags: tags,
-      content: nip44.encrypt(jsonEncode(seal.toJson()), ckWrap),
+      content: content,
     ),
     ephSk,
   );
@@ -229,26 +301,66 @@ Future<NostrEvent> bitchatWrap({
   );
 }
 
-/// A decrypt candidate identity: a secret key and whether to try the bitchat
-/// transport for it.
-typedef UnwrapCandidate = ({Uint8List sk, bool bitchat});
+/// A decrypt candidate identity: a secret key, whether to try the bitchat
+/// transport for it, and optionally the ML-KEM keypair that lets it open hybrid
+/// post-quantum wraps. A candidate with null KEM material simply cannot match a
+/// `pq1.` payload and falls through to the next one, so mixed-capability key
+/// sets (e.g. rotating group ephemeral keys, only some of which are PQ) are
+/// safe.
+typedef UnwrapCandidate = ({
+  Uint8List sk,
+  bool bitchat,
+  Uint8List? kemSk,
+  Uint8List? kemPk,
+});
+
+/// Builds a classical-only candidate. Convenience for the many call sites that
+/// have no ML-KEM material.
+UnwrapCandidate classicalCandidate(Uint8List sk, {bool bitchat = false}) =>
+    (sk: sk, bitchat: bitchat, kemSk: null, kemPk: null);
 
 bool _isV2(String? content) => content != null && content.startsWith('v2:');
 
 /// Attempts to decrypt + parse a kind-1059 gift [wrap] against ordered
-/// [candidates]. Tries bitchat (`v2:`) first when enabled, then NIP-44. Returns
-/// the recovered seal event, the rumor map, and whether bitchat was used, or
-/// null if no candidate succeeds.
-Future<({NostrEvent seal, Map<String, dynamic> rumor, bool isBitchat})?>
-    unwrapGiftWrap(NostrEvent wrap, List<UnwrapCandidate> candidates) async {
+/// [candidates]. Returns the recovered seal event, the rumor map, and which
+/// transport was used, or null if no candidate succeeds.
+///
+/// The transport is chosen by inspecting the payload, never by trusting a tag:
+/// `pq1.` selects the hybrid post-quantum path, `v2:` bitchat, and anything
+/// else plain NIP-44.
+Future<
+    ({
+      NostrEvent seal,
+      Map<String, dynamic> rumor,
+      bool isBitchat,
+      bool isPq
+    })?> unwrapGiftWrap(
+    NostrEvent wrap, List<UnwrapCandidate> candidates) async {
   for (final cand in candidates) {
     final sk = cand.sk;
     try {
       NostrEvent seal;
       Map<String, dynamic> rumor;
       var isBitchat = false;
+      var isPq = false;
 
-      if (cand.bitchat && _isV2(wrap.content)) {
+      if (pq.isPqPayload(wrap.content)) {
+        final kemSk = cand.kemSk, kemPk = cand.kemPk;
+        if (kemSk == null || kemPk == null) continue;
+        final self =
+            pq.PqIdentity(privkey: sk, kemSecretKey: kemSk, kemPublicKey: kemPk);
+        seal = NostrEvent.fromJson(
+            jsonDecode(pq.pqDecrypt(wrap.content, wrap.pubkey, self))
+                as Map<String, dynamic>);
+        // The seal is expected to be PQ too (pqNip59Wrap writes both layers),
+        // but accept a NIP-44 seal so a future wrap-only variant stays readable.
+        final rumorJson = pq.isPqPayload(seal.content)
+            ? pq.pqDecrypt(seal.content, seal.pubkey, self)
+            : nip44.decrypt(
+                seal.content, nip44.getConversationKey(sk, seal.pubkey));
+        rumor = jsonDecode(rumorJson) as Map<String, dynamic>;
+        isPq = true;
+      } else if (cand.bitchat && _isV2(wrap.content)) {
         final sealJson =
             await bitchat.decryptBitchat(wrap.content, wrap.pubkey, sk);
         seal =
@@ -271,7 +383,7 @@ Future<({NostrEvent seal, Map<String, dynamic> rumor, bool isBitchat})?>
             as Map<String, dynamic>;
       }
 
-      return (seal: seal, rumor: rumor, isBitchat: isBitchat);
+      return (seal: seal, rumor: rumor, isBitchat: isBitchat, isPq: isPq);
     } catch (_) {
       // try next candidate
     }

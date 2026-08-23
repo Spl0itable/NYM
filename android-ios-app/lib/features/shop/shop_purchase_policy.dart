@@ -28,3 +28,16 @@ bool get shopPurchasesDisabled {
     return false;
   }
 }
+
+/// Whether Nymbot credits can be bought or gifted from inside the app.
+///
+/// Credits are a consumable digital good bought over Lightning, so Apple's
+/// rules land on them exactly as they land on flair — and the answer is the
+/// same one [shopPurchasesDisabled] gives, for the same reasons. It is a
+/// separate getter only so the two surfaces read for themselves, and so
+/// changing one platform's answer later does not silently change the other's.
+///
+/// On iOS this both hides the Buy chip in the Nymbot control bar and turns the
+/// credits sheet into a statement: no button, no tappable link, no call to
+/// action pointing anywhere. Credits already on the account keep working.
+bool get botCreditPurchasesDisabled => shopPurchasesDisabled;

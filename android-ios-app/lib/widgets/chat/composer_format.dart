@@ -1,12 +1,15 @@
-// composer_format.dart — the composer's optional WYSIWYG affordances: a
-// formatting toolbar that writes the markdown for the user, a live preview of
-// the rendered result, and thumbnail previews of the images/videos attached to
-// the draft (shown BEFORE send so the user can confirm what they picked).
+// composer_format.dart — the composer's WYSIWYG affordances: a formatting
+// toolbar that writes the markdown for the user, and thumbnail previews of the
+// images/videos attached to the draft (shown BEFORE send so the user can
+// confirm what they picked).
+//
+// There is no preview panel: the field renders the formatting itself, with the
+// markers hidden (composer_markdown.dart).
 //
 // Mirrors the PWA's `js/modules/rich-compose.js` one-for-one: the same toolbar
-// set, the same markdown transforms, the same `nym_format_toolbar` /
-// `nym_format_preview` preference keys, and the same panel stack above the
-// input (attachments → preview → toolbar → field).
+// set, the same markdown transforms, the same `nym_format_toolbar` preference
+// key, and the same panel stack above the input (attachments → upload bar →
+// toolbar → field).
 //
 // The draft on the wire stays plain markdown — the format every client parses
 // via NymFormat — so nothing here changes what is sent, only how it is composed.
@@ -22,10 +25,9 @@ import '../../features/i18n/i18n.dart';
 import '../../features/messages/format/message_content.dart' show proxiedMedia;
 import '../nym_icons.dart' show NymSvgIcon;
 
-/// Persisted toolbar/preview visibility. Same localStorage keys as the PWA so a
-/// user who turns the toolbar on there finds it on here once settings sync.
+/// Persisted toolbar visibility. Same localStorage key as the PWA so a user who
+/// turns the toolbar on there finds it on here once settings sync.
 const String kFormatToolbarKey = 'nym_format_toolbar';
-const String kFormatPreviewKey = 'nym_format_preview';
 
 /// How a tool rewrites the draft.
 enum FormatToolKind { wrap, linePrefix, codeBlock }
@@ -306,20 +308,51 @@ final RegExp _mediaRx = RegExp(
 );
 const _videoExts = {'mp4', 'webm', 'ogg', 'mov'};
 
-List<ComposerMediaMatch> composerMediaMatches(String value) {
+/// Media URLs in [value], for the composer's attachment strip.
+///
+/// [knownMedia] maps a URL we uploaded this session to whether it is a video.
+/// It exists because the regex can only recognise media by file extension, and
+/// Blossom is content-addressed: several servers hand back a bare
+/// `https://host/<sha256>` with no extension at all. Those are unmistakably
+/// media — we just uploaded them — so they are matched by identity instead of
+/// by shape. Without this the attachment strip empties the moment an upload
+/// completes and the user is left looking at a raw URL.
+List<ComposerMediaMatch> composerMediaMatches(String value,
+    {Map<String, bool>? knownMedia}) {
   if (value.isEmpty) return const [];
-  return _mediaRx.allMatches(value).map((m) {
+  final out = _mediaRx.allMatches(value).map((m) {
     final ext = (m.group(2) ?? '').toLowerCase();
     return ComposerMediaMatch(
         m.group(1)!, m.start, m.start + m.group(1)!.length, _videoExts.contains(ext));
   }).toList();
+  if (knownMedia == null || knownMedia.isEmpty) return out;
+
+  for (final entry in knownMedia.entries) {
+    final url = entry.key;
+    if (url.isEmpty) continue;
+    var i = value.indexOf(url);
+    while (i >= 0) {
+      final end = i + url.length;
+      // A bare URL can be a prefix of an extension-bearing one the regex
+      // already claimed; never report the same span twice.
+      final overlaps = out.any((m) => i < m.end && end > m.start);
+      if (!overlaps) out.add(ComposerMediaMatch(url, i, end, entry.value));
+      i = value.indexOf(url, end);
+    }
+  }
+  // Strip order has to follow the draft, and [removeComposerMedia] indexes into
+  // this list, so position order is load-bearing rather than cosmetic.
+  out.sort((a, b) => a.start.compareTo(b.start));
+  return out;
 }
 
 /// Remove the attachment at [index] from [value], swallowing one adjacent space
 /// so a removal from the middle doesn't leave a double space behind. Returns the
 /// new draft plus the caret offset.
-FormatEdit removeComposerMedia(String value, int index) {
-  final matches = composerMediaMatches(value);
+FormatEdit removeComposerMedia(String value, int index,
+    {Map<String, bool>? knownMedia}) {
+  // Must see the same list the strip rendered, or the ✕ removes the wrong one.
+  final matches = composerMediaMatches(value, knownMedia: knownMedia);
   if (index < 0 || index >= matches.length) {
     return FormatEdit(value, value.length, value.length);
   }
@@ -401,55 +434,43 @@ class _FormatInputButtonState extends State<FormatInputButton> {
 
 /// `.format-toolbar` — the row of markdown tools plus the preview toggle.
 class FormatToolbar extends StatelessWidget {
-  const FormatToolbar({
-    super.key,
-    required this.onTool,
-    required this.previewOpen,
-    required this.onTogglePreview,
-  });
+  const FormatToolbar({super.key, required this.onTool});
 
   final void Function(FormatTool tool) onTool;
-  final bool previewOpen;
-  final VoidCallback onTogglePreview;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    // Same shell as the autocomplete dropdown (autocomplete_dropdown.dart): it
+    // sits in the same slot above the field and should read as the same
+    // surface — opaque `--glass-bg` under solid-ui, bg-tertiary in glass mode,
+    // rounded across the top only, `--shadow-lg`.
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
-        color: c.bgTertiary,
+        color: c.glassBg.a == 1.0 ? c.glassBg : c.bgTertiary,
         border: Border.all(color: c.glassBorder),
-        borderRadius: NymRadius.rmd,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        boxShadow: [
+          BoxShadow(
+            color:
+                c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
+            blurRadius: 32,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final tool in kFormatTools)
-              _FormatToolButton(tool: tool, onTap: () => onTool(tool)),
-            Container(
-              width: 1,
-              height: 16,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              color: c.glassBorder,
-            ),
-            _FormatToolButton(
-              tool: const FormatTool(
-                id: 'preview',
-                kind: FormatToolKind.wrap,
-                token: '',
-                label: 'Preview formatting',
-                svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-                    '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/>'
-                    '<circle cx="12" cy="12" r="3"/></svg>',
-              ),
-              active: previewOpen,
-              onTap: onTogglePreview,
-            ),
-          ],
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final tool in kFormatTools)
+                _FormatToolButton(tool: tool, onTap: () => onTool(tool)),
+            ],
+          ),
         ),
       ),
     );
@@ -457,15 +478,10 @@ class FormatToolbar extends StatelessWidget {
 }
 
 class _FormatToolButton extends StatefulWidget {
-  const _FormatToolButton({
-    required this.tool,
-    required this.onTap,
-    this.active = false,
-  });
+  const _FormatToolButton({required this.tool, required this.onTap});
 
   final FormatTool tool;
   final VoidCallback onTap;
-  final bool active;
 
   @override
   State<_FormatToolButton> createState() => _FormatToolButtonState();
@@ -478,7 +494,7 @@ class _FormatToolButtonState extends State<_FormatToolButton> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final tool = widget.tool;
-    final lit = widget.active || _hover;
+    final lit = _hover;
     final color = lit ? c.primary : c.textDim;
 
     Widget child;
@@ -537,13 +553,11 @@ class _FormatToolButtonState extends State<_FormatToolButton> {
             height: 26,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: widget.active
-                  ? c.primaryA(0.15)
-                  : (_hover
-                      ? (c.isLight
-                          ? Colors.black.withValues(alpha: 0.06)
-                          : Colors.white.withValues(alpha: 0.08))
-                      : null),
+              color: _hover
+                  ? (c.isLight
+                      ? Colors.black.withValues(alpha: 0.06)
+                      : Colors.white.withValues(alpha: 0.08))
+                  : null,
               borderRadius: BorderRadius.circular(4),
             ),
             child: child,
@@ -554,27 +568,65 @@ class _FormatToolButtonState extends State<_FormatToolButton> {
   }
 }
 
+/// What an attachment is doing. The tile renders from this, so the wheel is
+/// per file rather than one bar for the batch.
+enum ComposerAttachmentStatus { uploading, done, failed }
+
+/// One file the user attached, with its own lifecycle.
+///
+/// This — not the draft text — is what decides which media a message carries.
+/// URLs used to be appended to the input as each upload landed and the strip
+/// parsed them back out, which is what made a finished upload's preview vanish
+/// and put a wall of links in front of the user mid-sentence.
+class ComposerAttachment {
+  ComposerAttachment({
+    required this.id,
+    required this.isVideo,
+    required this.contentType,
+    this.bytes,
+    this.status = ComposerAttachmentStatus.uploading,
+    this.url = '',
+    this.error = '',
+  });
+
+  final int id;
+  final bool isVideo;
+  final String contentType;
+
+  /// Read once and kept, so a failed upload can be retried without re-picking.
+  Uint8List? bytes;
+  ComposerAttachmentStatus status;
+  String url;
+  String error;
+
+  bool get isDone => status == ComposerAttachmentStatus.done && url.isNotEmpty;
+}
+
 /// `.media-preview-strip` — a horizontal row of attachment thumbnails with a ✕
-/// on each, plus dimmed placeholders for uploads still in flight.
+/// on each. An in-flight upload spins on its own tile; a failed one turns into
+/// its own retry button.
 class ComposerMediaStrip extends StatelessWidget {
   const ComposerMediaStrip({
     super.key,
     required this.matches,
-    required this.uploading,
+    required this.attachments,
     required this.onRemove,
     required this.onOpen,
+    this.onRemoveAttachment,
+    this.onRetry,
     this.localPreviews = const {},
   });
 
-  /// Attachments currently referenced by the draft.
+  /// Attachments currently referenced by the draft (a pasted or typed URL).
   final List<ComposerMediaMatch> matches;
 
-  /// One entry per in-flight upload: the bytes already read for the upload plus
-  /// whether the file is a video.
-  final List<({Uint8List? bytes, bool isVideo})> uploading;
+  /// Files attached through the picker, in the order they were added.
+  final List<ComposerAttachment> attachments;
 
   final void Function(int index) onRemove;
   final void Function(ComposerMediaMatch match) onOpen;
+  final void Function(ComposerAttachment a)? onRemoveAttachment;
+  final void Function(ComposerAttachment a)? onRetry;
 
   /// Hosted URL → the bytes we uploaded, for media attached this session.
   /// Previewing from those bytes avoids re-downloading what we just sent up and
@@ -598,7 +650,8 @@ class ComposerMediaStrip extends StatelessWidget {
           children: [
             for (var i = 0; i < matches.length; i++)
               Padding(
-                padding: EdgeInsets.only(right: i == matches.length - 1 && uploading.isEmpty ? 0 : 6),
+                padding: EdgeInsets.only(
+                    right: i == matches.length - 1 && attachments.isEmpty ? 0 : 6),
                 child: _MediaThumb(
                   url: matches[i].url,
                   bytes: localPreviews[matches[i].url],
@@ -607,15 +660,20 @@ class ComposerMediaStrip extends StatelessWidget {
                   onOpen: () => onOpen(matches[i]),
                 ),
               ),
-            for (var i = 0; i < uploading.length; i++)
+            for (var i = 0; i < attachments.length; i++)
               Padding(
                 padding:
-                    EdgeInsets.only(right: i == uploading.length - 1 ? 0 : 6),
+                    EdgeInsets.only(right: i == attachments.length - 1 ? 0 : 6),
                 child: _MediaThumb(
-                  url: '',
-                  bytes: uploading[i].bytes,
-                  isVideo: uploading[i].isVideo,
-                  uploading: true,
+                  url: attachments[i].url,
+                  bytes: attachments[i].bytes,
+                  isVideo: attachments[i].isVideo,
+                  status: attachments[i].status,
+                  error: attachments[i].error,
+                  onRemove: onRemoveAttachment == null
+                      ? null
+                      : () => onRemoveAttachment!(attachments[i]),
+                  onRetry: onRetry == null ? null : () => onRetry!(attachments[i]),
                 ),
               ),
           ],
@@ -632,7 +690,9 @@ class _MediaThumb extends StatelessWidget {
     required this.isVideo,
     this.onRemove,
     this.onOpen,
-    this.uploading = false,
+    this.onRetry,
+    this.status = ComposerAttachmentStatus.done,
+    this.error = '',
   });
 
   final String url;
@@ -640,7 +700,12 @@ class _MediaThumb extends StatelessWidget {
   final bool isVideo;
   final VoidCallback? onRemove;
   final VoidCallback? onOpen;
-  final bool uploading;
+  final VoidCallback? onRetry;
+  final ComposerAttachmentStatus status;
+  final String error;
+
+  bool get _uploading => status == ComposerAttachmentStatus.uploading;
+  bool get _failed => status == ComposerAttachmentStatus.failed;
 
   @override
   Widget build(BuildContext context) {
@@ -678,10 +743,12 @@ class _MediaThumb extends StatelessWidget {
       );
     }
 
-    return GestureDetector(
-      onTap: uploading ? null : onOpen,
+    final tile = GestureDetector(
+      // A failed tile IS the retry control, so one file failing never costs the
+      // user the rest of the batch.
+      onTap: _uploading ? null : (_failed ? onRetry : onOpen),
       child: MouseRegion(
-        cursor: uploading ? MouseCursor.defer : SystemMouseCursors.click,
+        cursor: _uploading ? MouseCursor.defer : SystemMouseCursors.click,
         child: SizedBox(
           width: 56,
           height: 56,
@@ -691,8 +758,8 @@ class _MediaThumb extends StatelessWidget {
               fit: StackFit.expand,
               children: [
                 Container(color: Colors.black.withValues(alpha: 0.25)),
-                Opacity(opacity: uploading ? 0.4 : 1.0, child: media),
-                if (uploading)
+                Opacity(opacity: _uploading || _failed ? 0.4 : 1.0, child: media),
+                if (_uploading)
                   const Center(
                     child: SizedBox(
                       width: 18,
@@ -700,7 +767,23 @@ class _MediaThumb extends StatelessWidget {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                if (!uploading && onRemove != null)
+                if (_failed)
+                  Center(
+                    child: Icon(Icons.refresh_rounded,
+                        size: 20, color: c.danger),
+                  ),
+                if (_failed)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: c.danger, width: 1.5),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (!_uploading && onRemove != null)
                   Positioned(
                     top: 2,
                     right: 2,
@@ -726,6 +809,16 @@ class _MediaThumb extends StatelessWidget {
           ),
         ),
       ),
+    );
+
+    // The reason rides on the tile, not in a toast naming a file already off
+    // screen.
+    if (!_failed) return tile;
+    return Tooltip(
+      message: error.isEmpty
+          ? tr('Tap to retry')
+          : '$error — ${tr('Tap to retry')}',
+      child: tile,
     );
   }
 

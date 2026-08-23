@@ -39,6 +39,7 @@ import '../../state/settings_provider.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import 'bitchat_user_color.dart';
+import 'crypto_pq_badge.dart';
 import 'crypto_verified_badge.dart';
 import '../context_menu/context_menu_actions.dart';
 import '../context_menu/context_menu_panel.dart';
@@ -387,6 +388,18 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// `message.isPM`); public channel messages carry no seal and show nothing.
   /// Within sealed messages: `senderVerified == true` → verified, `false` →
   /// unverified, `null` → unknown (seal unavailable, e.g. restored history).
+  /// Post-quantum shield state, or null when no shield should show. Kept
+  /// separate from [_cryptoState] because the lock encodes authentication and
+  /// the shield encodes confidentiality — a message can be one without the
+  /// other, so they cannot share a glyph.
+  PqBadgeState? get _pqState {
+    if (!message.isPM && !message.isGroup) return null;
+    return pqBadgeStateFor(
+      pqEncrypted: message.pqEncrypted,
+      pqCoverage: message.pqCoverage,
+    );
+  }
+
   CryptoVerifyState? get _cryptoState {
     if (!message.isPM && !message.isGroup) return null;
     switch (message.senderVerified) {
@@ -1265,6 +1278,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                 // `.message-time` after the clock (PM/group only).
                 if (_cryptoState != null)
                   CryptoVerifiedBadge(state: _cryptoState!),
+                // `.crypto-pq-badge`: the post-quantum shield follows the lock.
+                if (_pqState != null)
+                  CryptoPqBadge(
+                      state: _pqState!, coverage: message.pqCoverage),
                 if (message.viaMesh) _MeshBadge(color: context.nym.primary),
               ],
             ),
@@ -1774,6 +1791,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         // `.crypto-lock-bubble`: the verification lock follows the in-bubble
         // time (PM/group only).
         if (_cryptoState != null) CryptoVerifiedBadge(state: _cryptoState!),
+        if (_pqState != null)
+          CryptoPqBadge(state: _pqState!, coverage: message.pqCoverage),
         if (message.viaMesh) _MeshBadge(color: context.nym.primary),
       ],
     );

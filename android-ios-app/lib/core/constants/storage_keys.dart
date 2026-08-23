@@ -6,6 +6,13 @@
 class StorageKeys {
   StorageKeys._();
 
+  // Hybrid post-quantum messaging (features/identity/pq_registry.dart)
+  static const pqMode = 'nym_pq_mode';
+  static const pqEpoch = 'nym_pq_epoch';
+  static const pqDeviceId = 'nym_pq_device_id';
+  static const pqUpgradeNotice = 'nym_pq_upgrade_notice';
+  static const pqUpgradeSeen = 'nym_pq_upgrade_seen';
+
   // Identity / login
   static const nostrLoginMethod = 'nym_nostr_login_method';
   static const nostrLoginPubkey = 'nym_nostr_login_pubkey';

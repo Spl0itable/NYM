@@ -74,6 +74,24 @@ Uint8List getConversationKey(Uint8List privkey, String pubkeyHex) {
   );
 }
 
+// The hybrid post-quantum key agreement in pq.dart reuses NIP-44's exact ECDH
+// and HKDF primitives — it swaps only how the 32-byte conversation key is
+// derived, leaving the payload format below untouched. These thin wrappers
+// expose them rather than duplicating the definitions, so the two schemes can
+// never drift apart.
+
+/// NIP-44's secp256k1 ECDH: lift [pubkeyHex] to the even-y point, multiply by
+/// [privkey], return the 32-byte big-endian x coordinate.
+Uint8List ecdhSharedX(Uint8List privkey, String pubkeyHex) =>
+    _ecdhSharedX(privkey, pubkeyHex);
+
+/// HKDF-Extract-SHA256(salt, ikm) -> 32-byte PRK.
+Uint8List hkdfExtract(Uint8List salt, Uint8List ikm) => _hkdfExtract(salt, ikm);
+
+/// HKDF-Expand-SHA256(prk, info, length) -> OKM.
+Uint8List hkdfExpand(Uint8List prk, Uint8List info, int length) =>
+    _hkdfExpand(prk, info, length);
+
 // --- Per-message keys / padding ---------------------------------------------
 
 ({Uint8List chachaKey, Uint8List chachaNonce, Uint8List hmacKey}) _messageKeys(

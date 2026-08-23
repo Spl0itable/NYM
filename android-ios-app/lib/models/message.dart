@@ -89,6 +89,8 @@ class Message {
     this.eventKind = 0,
     this.isHistorical = false,
     this.senderVerified,
+    this.pqEncrypted = false,
+    this.pqCoverage,
     this.bitchatMessageId,
     this.nymMessageId,
     this.deliveryStatus = DeliveryStatus.sending,
@@ -154,6 +156,21 @@ class Message {
   /// history, or a public channel message that carries no seal). Drives the
   /// `.crypto-verified-badge` lock shown on PM/group messages.
   bool? senderVerified;
+
+  /// True when this message arrived over (or was sent on) the hybrid
+  /// post-quantum transport. Deliberately SEPARATE from [senderVerified]:
+  /// that is authentication, this is confidentiality, and the two are
+  /// orthogonal — a message can be post-quantum encrypted yet unverified, or
+  /// verified yet classically encrypted. Drives the `.crypto-pq-badge` shield
+  /// rendered beside the verification lock.
+  bool pqEncrypted;
+
+  /// For a group message we sent: how many of the members got a post-quantum
+  /// wrap, out of how many. Lets the badge say "8 of 10 members" instead of
+  /// implying all-or-nothing, and OVERRIDES [pqEncrypted] when present — an
+  /// optimistic per-message flag must never outrank what actually went on the
+  /// wire.
+  ({int pq, int total})? pqCoverage;
   String? bitchatMessageId;
   String? nymMessageId;
   DeliveryStatus deliveryStatus;
@@ -252,6 +269,9 @@ class Message {
         'eventKind': eventKind,
         'isHistorical': isHistorical,
         'senderVerified': senderVerified,
+        'pqEncrypted': pqEncrypted,
+        if (pqCoverage != null) 'pqCoverPq': pqCoverage!.pq,
+        if (pqCoverage != null) 'pqCoverTotal': pqCoverage!.total,
         'bitchatMessageId': bitchatMessageId,
         'nymMessageId': nymMessageId,
         'deliveryStatus': deliveryStatus.name,
@@ -328,6 +348,11 @@ class Message {
       isHistorical: j['isHistorical'] == true,
       senderVerified:
           j['senderVerified'] is bool ? j['senderVerified'] as bool : null,
+      // Absent in messages persisted before post-quantum shipped.
+      pqEncrypted: j['pqEncrypted'] is bool ? j['pqEncrypted'] as bool : false,
+      pqCoverage: (j['pqCoverPq'] is int && j['pqCoverTotal'] is int)
+          ? (pq: j['pqCoverPq'] as int, total: j['pqCoverTotal'] as int)
+          : null,
       bitchatMessageId: j['bitchatMessageId'] as String?,
       nymMessageId: j['nymMessageId'] as String?,
       deliveryStatus: deliveryStatusFromString(j['deliveryStatus'] as String?),

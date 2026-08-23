@@ -13,6 +13,32 @@ class GroupManager {
 
   final NostrService _service;
 
+  /// Resolves a member's announced ML-KEM key, or null when they have none.
+  /// Supplied by the controller, which owns the announcement registry. Null
+  /// (the default) leaves every group send classical.
+  ///
+  /// Keyed by the member's REAL pubkey: the announcement is published by the
+  /// identity, not by the rotating ephemeral key the classical leg encrypts to.
+  Uint8List? Function(String memberPubkey)? kemKeyFor;
+
+  /// Post-quantum coverage of the last message sent per group message id, so
+  /// the UI can say "quantum-resistant to 8 of 10 members" rather than implying
+  /// all-or-nothing. A group message counts as protected only when EVERY member
+  /// got a post-quantum wrap — one classical copy of the same plaintext is
+  /// enough for an attacker.
+  final Map<String, ({int pq, int total})> _pqCoverage = {};
+
+  /// Coverage for [nymMessageId], or null if unknown.
+  ({int pq, int total})? pqCoverageFor(String nymMessageId) =>
+      _pqCoverage[nymMessageId];
+
+  void _recordCoverage(String nymMessageId, int pq, int total) {
+    _pqCoverage[nymMessageId] = (pq: pq, total: total);
+    while (_pqCoverage.length > 2000) {
+      _pqCoverage.remove(_pqCoverage.keys.first);
+    }
+  }
+
   /// groupId → rotating ephemeral key state.
   final Map<String, GroupEphemeralKeys> _keys = {};
 
@@ -139,6 +165,7 @@ class GroupManager {
       recipients: members,
       encryptTo: (pk) => pk,
       settings: settings,
+      kemKeyFor: kemKeyFor,
     );
     return group;
   }
@@ -181,6 +208,8 @@ class GroupManager {
       recipients: group.members,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
+      kemKeyFor: kemKeyFor,
+      onCoverage: (pq, total) => _recordCoverage(nymMessageId, pq, total),
     );
     return ok ? nymMessageId : null;
   }
@@ -210,6 +239,7 @@ class GroupManager {
       recipients: others,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
+      kemKeyFor: kemKeyFor,
     );
   }
 
@@ -240,6 +270,7 @@ class GroupManager {
       recipients: others,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
+      kemKeyFor: kemKeyFor,
     );
   }
 
@@ -271,6 +302,7 @@ class GroupManager {
       recipients: group.members,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
+      kemKeyFor: kemKeyFor,
     );
   }
 
@@ -305,6 +337,7 @@ class GroupManager {
       recipients: others,
       encryptTo: (pk) => pk,
       settings: settings,
+      kemKeyFor: kemKeyFor,
     );
   }
 
@@ -337,6 +370,7 @@ class GroupManager {
       recipients: [requesterPubkey],
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
+      kemKeyFor: kemKeyFor,
     );
   }
 
@@ -366,6 +400,7 @@ class GroupManager {
       rumor: rumor,
       recipients: to,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
+      kemKeyFor: kemKeyFor,
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/core/crypto/gift_wrap.dart' as gw;
 import 'package:nym_bar/core/crypto/keys.dart';
 import 'package:nym_bar/core/crypto/nip44.dart' as nip44;
+import 'package:nym_bar/core/crypto/pq.dart' as pq;
 import 'package:nym_bar/core/crypto/schnorr.dart' as schnorr;
 import 'package:nym_bar/models/nostr_event.dart';
 import 'package:nym_bar/services/nostr/event_signer.dart';
@@ -109,7 +110,7 @@ void main() {
       expect(schnorr.verifyEvent(wrap), isTrue);
 
       final result = await gw.unwrapGiftWrap(wrap, [
-        (sk: recipientSk, bitchat: false),
+        gw.classicalCandidate(recipientSk),
       ]);
       expect(result, isNotNull);
       expect(result!.rumor['content'], 'async wrap contents');
@@ -118,6 +119,101 @@ void main() {
       expect(result.seal.pubkey, senderPub);
       expect(schnorr.verifyEvent(result.seal), isTrue);
       expect(result.isBitchat, isFalse);
+    });
+
+    test('a remote signer still hybridizes the wrap it builds itself', () async {
+      // The seal goes through the signer and cannot be hybrid — it returns a
+      // finished NIP-44 payload, with no conversation key to mix the KEM
+      // secret into. The wrap's ephemeral key IS ours, so that layer can be.
+      //
+      // And the wrap is the layer that matters: it is what a relay stores, so
+      // reaching the seal at all means breaking it first. A recorder who breaks
+      // secp256k1 later still cannot open the outer layer.
+      final senderSk = generatePrivateKey();
+      final recipientSk = generatePrivateKey();
+      final senderPub = getPublicKeyHex(senderSk);
+      final recipientPub = getPublicKeyHex(recipientSk);
+      final kem = pq.pqKeypairFromPrivkey(recipientSk, 0);
+
+      final signer = _FakeRemoteSigner(senderSk);
+      final wrap = await gw.nip59WrapAsync(
+        rumor: UnsignedEvent(
+          pubkey: senderPub,
+          createdAt: 1700000000,
+          kind: 14,
+          tags: [
+            ['p', recipientPub]
+          ],
+          content: 'sealed remotely, wrapped hybrid',
+        ),
+        senderSigner: signer,
+        recipientPubkey: recipientPub,
+        recipientKemPublicKey: kem.publicKey,
+      );
+
+      // What the relay stores needs ML-KEM to open.
+      expect(pq.isPqPayload(wrap.content), isTrue);
+      expect(signer.encryptCalls, 1, reason: 'the seal still goes through the signer');
+
+      final result = await gw.unwrapGiftWrap(wrap, [
+        (
+          sk: recipientSk,
+          bitchat: false,
+          kemSk: kem.secretKey,
+          kemPk: kem.publicKey
+        ),
+      ]);
+      expect(result, isNotNull);
+      expect(result!.rumor['content'], 'sealed remotely, wrapped hybrid');
+      expect(result.isPq, isTrue);
+      // The seal inside is plain NIP-44 — that is the half a signer owns.
+      expect(pq.isPqPayload(result.seal.content), isFalse);
+      // Sender authentication is unchanged.
+      expect(result.seal.pubkey, senderPub);
+      expect(schnorr.verifyEvent(result.seal), isTrue);
+    });
+
+    test('a classical-only holder of the key cannot open a hybrid wrap',
+        () async {
+      final recipientSk = generatePrivateKey();
+      final kem = pq.pqKeypairFromPrivkey(recipientSk, 0);
+      final wrap = await gw.nip59WrapAsync(
+        rumor: UnsignedEvent(
+          pubkey: getPublicKeyHex(generatePrivateKey()),
+          createdAt: 1700000000,
+          kind: 14,
+          tags: const [],
+          content: 'x',
+        ),
+        senderSigner: _FakeRemoteSigner(generatePrivateKey()),
+        recipientPubkey: getPublicKeyHex(recipientSk),
+        recipientKemPublicKey: kem.publicKey,
+      );
+      expect(
+        await gw.unwrapGiftWrap(wrap, [gw.classicalCandidate(recipientSk)]),
+        isNull,
+      );
+    });
+
+    test('without a KEM key a remote wrap is classical, exactly as before',
+        () async {
+      final recipientSk = generatePrivateKey();
+      final wrap = await gw.nip59WrapAsync(
+        rumor: UnsignedEvent(
+          pubkey: getPublicKeyHex(generatePrivateKey()),
+          createdAt: 1700000000,
+          kind: 14,
+          tags: const [],
+          content: 'classical',
+        ),
+        senderSigner: _FakeRemoteSigner(generatePrivateKey()),
+        recipientPubkey: getPublicKeyHex(recipientSk),
+      );
+      expect(pq.isPqPayload(wrap.content), isFalse);
+      final result =
+          await gw.unwrapGiftWrap(wrap, [gw.classicalCandidate(recipientSk)]);
+      expect(result!.rumor['content'], 'classical');
+      expect(result.isPq, isFalse);
     });
 
     test('expiration tag is carried on the wrap', () async {
@@ -170,7 +266,7 @@ void main() {
       // Recipient recovers the rumor with their local key, proving the seal was
       // encrypted to them via the remote signer's conversation key.
       final result = await gw.unwrapGiftWrap(wrap, [
-        (sk: recipientSk, bitchat: false),
+        gw.classicalCandidate(recipientSk),
       ]);
       expect(result, isNotNull);
       expect(result!.rumor['content'], 'remote-sealed DM');
@@ -243,7 +339,7 @@ void main() {
       );
 
       final result = await gw.unwrapGiftWrap(wrap, [
-        (sk: friendSk, bitchat: false),
+        gw.classicalCandidate(friendSk),
       ]);
       expect(result, isNotNull);
       expect(result!.rumor['kind'], 25054);

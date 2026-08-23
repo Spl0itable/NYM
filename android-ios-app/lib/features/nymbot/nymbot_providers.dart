@@ -872,7 +872,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     try {
       final wrap = NostrEvent.fromJson(wrapJson);
       final unwrapped =
-          await giftwrap.unwrapGiftWrap(wrap, [(sk: sk, bitchat: false)]);
+          await giftwrap.unwrapGiftWrap(wrap, [giftwrap.classicalCandidate(sk)]);
       if (unwrapped == null || !mounted) return;
       final rumor = unwrapped.rumor;
       final msg = PmLogic.mapPmRumor(

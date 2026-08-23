@@ -40,7 +40,7 @@ void main() {
       expect(wrap.kind, EventKind.giftWrap);
 
       final res =
-          await unwrapGiftWrap(wrap, [(sk: recipientSk, bitchat: false)]);
+          await unwrapGiftWrap(wrap, [classicalCandidate(recipientSk)]);
       expect(res, isNotNull);
       expect(res!.rumor['content'], 'hello over nip-17');
       expect(res.rumor['pubkey'], senderPk);
@@ -79,7 +79,7 @@ void main() {
       final selfWrap = nip59Wrap(
           rumor: rumor, senderPrivkey: selfSk, recipientPubkey: selfPk);
       final res =
-          await unwrapGiftWrap(selfWrap, [(sk: selfSk, bitchat: false)]);
+          await unwrapGiftWrap(selfWrap, [classicalCandidate(selfSk)]);
       final m = PmLogic.mapPmRumor(
         rumor: res!.rumor,
         wrapId: selfWrap.id,
@@ -794,7 +794,7 @@ void main() {
       );
       final wrap = nip59Wrap(
           rumor: rumor, senderPrivkey: selfSk, recipientPubkey: memberPk);
-      final res = await unwrapGiftWrap(wrap, [(sk: memberSk, bitchat: false)]);
+      final res = await unwrapGiftWrap(wrap, [classicalCandidate(memberSk)]);
       expect(res, isNotNull);
       expect(res!.rumor['content'], 'group payload');
       final tags = (res.rumor['tags'] as List)

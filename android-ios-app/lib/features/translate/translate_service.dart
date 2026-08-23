@@ -1,11 +1,21 @@
+import 'dart:async';
+import 'dart:convert';
+
 import '../../services/api/api_client.dart';
 
 /// On-demand message translation routed through the backend `/api/proxy`
 /// worker (`?action=translate`), exactly like the PWA (`translate.js`
-/// `_doTranslate`, lines 332-359). The PWA ALWAYS proxies translation to hide
-/// the user's IP from Google Translate, so we mirror that and drop the direct
-/// `translate.googleapis.com` path. The proxy worker itself forwards to the
-/// Google `gtx` endpoint server-side (`proxy.js` `handleTranslate`).
+/// `_doTranslate`). The models run on our own infrastructure, so the text of a
+/// private message never reaches a third party.
+///
+/// There is no fallback any more, and its removal is the point rather than a
+/// regression. It existed because the proxy's own upstream WAS Google, which
+/// rate-limits by caller IP: a Worker egresses from an address shared with
+/// every other Worker in its colo, so a busy colo returned 502 for everyone
+/// behind it while the same request from a phone succeeded. Reaching around
+/// the proxy fixed that by handing Google the plaintext of a message the user
+/// chose to keep private. Now the proxy is the only thing that can translate,
+/// so a failure is reported instead of routed around.
 ///
 /// [translate] mirrors the PWA's `_translatePreservingMentions`
 /// (`translate.js:292-328`) — the function BOTH the inline message-translate
@@ -141,16 +151,41 @@ class TranslateService {
     String targetLang,
   ) async {
     final body = chunk.length > 5000 ? chunk.substring(0, 5000) : chunk;
+    final TranslateResult res;
     try {
-      final res = await api.translate(body, targetLang, source: 'auto');
-      return TranslationResult(
-        translatedText: res.translatedText,
-        detectedLanguage:
-            res.detectedLanguage.isEmpty ? 'auto' : res.detectedLanguage,
-      );
+      res = await api.translate(body, targetLang, source: 'auto');
     } on ApiException catch (e) {
-      throw TranslateException('Translation failed: HTTP ${e.statusCode}');
+      // Surface the backend's own sentence rather than "ApiException(translate:
+      // HTTP 502)". It already writes one for a person to read, and the detail
+      // that is not for them — which model refused and why — never leaves the
+      // worker's log.
+      throw TranslateException(_backendMessage(e));
     }
+    // An empty body with a success status is a failure wearing a success's
+    // clothes: it would replace the message with nothing.
+    if (res.translatedText.trim().isEmpty) {
+      throw const TranslateException('Translation failed: empty result');
+    }
+    return TranslationResult(
+      translatedText: res.translatedText,
+      detectedLanguage:
+          res.detectedLanguage.isEmpty ? 'auto' : res.detectedLanguage,
+    );
+  }
+
+  /// The human-readable reason out of a failed proxy call, or a plain fallback
+  /// when the body is not the JSON we expect.
+  static String _backendMessage(ApiException e) {
+    try {
+      final decoded = jsonDecode(e.body);
+      if (decoded is Map && decoded['error'] is String) {
+        final msg = (decoded['error'] as String).trim();
+        if (msg.isNotEmpty) return msg;
+      }
+    } catch (_) {
+      // Not JSON — fall through.
+    }
+    return 'Translation is unavailable right now';
   }
 
   /// Replaces every emoji unit with an `EMJ<n>EMJ` placeholder so the upstream

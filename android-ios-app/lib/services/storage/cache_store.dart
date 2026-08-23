@@ -62,6 +62,7 @@ class CacheStore {
   static const String metaNymchatVouches = 'nymchatVouches';
   static const String metaTrustedPubkeys = 'trustedPubkeys';
   static const String metaPoolShardLastSeen = 'poolShardLastSeen';
+  static const String metaPqKeys = 'pqKeys';
 
   static const String _dbName = 'nym_cache.db';
   static const int _dbVersion = 2;

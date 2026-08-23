@@ -16,7 +16,9 @@ import '../../core/crypto/isolate_verifier.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../core/crypto/nip44.dart' as nip44;
 import '../../core/crypto/pow.dart';
+import '../../core/crypto/pq.dart' as pq;
 import '../../core/crypto/schnorr.dart' as schnorr;
+import '../../features/identity/pq_registry.dart';
 import '../../features/messages/trust_graph.dart';
 import '../../models/channel.dart' as ch;
 import '../../models/nostr_event.dart';
@@ -65,9 +67,15 @@ class GiftWrapUnwrapped {
     required this.rumor,
     required this.senderVerified,
     required this.isBitchat,
+    this.isPq = false,
     this.rawWrap,
     this.fromArchive = false,
   });
+
+  /// True when this wrap arrived over the hybrid post-quantum transport.
+  /// Orthogonal to [senderVerified]: that is authentication, this is
+  /// confidentiality.
+  final bool isPq;
 
   /// True when this wrap was replayed from the D1 archive (`pm-get` boot /
   /// reconnect restore) rather than arriving live off a relay — the PWA's
@@ -462,11 +470,13 @@ class NostrService {
     bool channelMode = true,
     Iterable<String> vouchAuthors = const [],
     Iterable<String> profileAuthors = const [],
+    Iterable<String> pqAuthors = const [],
   }) async {
     _handlers = handlers;
     _channelMode = channelMode;
     _vouchAuthors = _sanitizeVouchAuthors(vouchAuthors);
     _profileAuthors = List<String>.unmodifiable(profileAuthors);
+    _pqAuthors = _sanitizeVouchAuthors(pqAuthors);
     _wireProxyFallback();
     pool.connectAll();
 
@@ -495,6 +505,12 @@ class NostrService {
   /// `!settings.groupChatPMOnlyMode` (relays.js:2488) — gates every
   /// public-channel filter out of the critical set.
   bool _channelMode = true;
+
+  /// Authors whose post-quantum key announcements we watch: our conversation
+  /// partners, group members and ourselves. Unlike the vouch list — a broadcast
+  /// web of trust — PQ keys are only needed for peers we actually message, so
+  /// this filter is scoped rather than fetched wholesale (pq.js / relays.js).
+  List<String> _pqAuthors = const [];
 
   /// DIRECT-mode vouch REQ authors: the current trust graph's pubkeys
   /// (`this.nymchatPubkeys`, relays.js:2538-2542), hex64-filtered and capped
@@ -678,6 +694,32 @@ class NostrService {
         },
       ));
     }
+    // Hybrid post-quantum key announcements.
+    //
+    // Under D1 this is a live tail only, like every other filter here: history
+    // comes from the archive (`_pqAnnouncementFromD1`) and a discovery miss
+    // additionally fetches the single peer it needs. Asking the relays for one
+    // announcement per author made this the one filter that backfilled in
+    // proxy-pool mode, on every reconnect and every subscription rebuild.
+    if (d1Available) {
+      filters.add(NostrFilter(
+        kinds: [EventKind.appData],
+        since: nowSec,
+        limit: 1,
+        tags: {
+          't': [AppDataTopic.postQuantum],
+        },
+      ));
+    } else if (_pqAuthors.isNotEmpty) {
+      filters.add(NostrFilter(
+        kinds: [EventKind.appData],
+        authors: _pqAuthors,
+        limit: _pqAuthors.length,
+        tags: {
+          't': [AppDataTopic.postQuantum],
+        },
+      ));
+    }
     // NIP-30 custom emoji packs: real-time + limit:1 under D1 (history via the
     // D1 emoji restore); else discover up to 300 (relays.js:2546-2548).
     filters.add(NostrFilter(
@@ -725,6 +767,7 @@ class NostrService {
     bool? channelMode,
     Iterable<String>? vouchAuthors,
     Iterable<String>? profileAuthors,
+    Iterable<String>? pqAuthors,
   }) {
     var changed = false;
     if (channelMode != null && channelMode != _channelMode) {
@@ -742,6 +785,13 @@ class NostrService {
       final next = List<String>.unmodifiable(profileAuthors);
       if (!listEquals(next, _profileAuthors)) {
         _profileAuthors = next;
+        changed = true;
+      }
+    }
+    if (pqAuthors != null) {
+      final next = _sanitizeVouchAuthors(pqAuthors);
+      if (!listEquals(next, _pqAuthors)) {
+        _pqAuthors = next;
         changed = true;
       }
     }
@@ -1041,6 +1091,66 @@ class NostrService {
     return sub;
   }
 
+  /// Cap on how long a one-shot announcement lookup waits before giving up and
+  /// letting the message go classical — which is the behaviour that was there
+  /// before, not a new failure mode.
+  static const Duration pqLookupTimeout = Duration(milliseconds: 2500);
+
+  /// Fetches one peer's post-quantum announcement now, rather than waiting for
+  /// the critical subscription to be rebuilt around them.
+  ///
+  /// That rebuild only happens once a PM conversation entry exists, and it is
+  /// debounced 750ms on top — but the entry for a brand new conversation is
+  /// not created until the first message has already been sent. So the key was
+  /// never in hand for the message that needed it, and the shield never
+  /// appeared on it.
+  ///
+  /// Events are routed through the normal [onEvent] handler, so the registry
+  /// ingests this exactly as it would a pushed announcement.
+  /// How long to keep listening after EOSE, when the key still has not
+  /// arrived. EOSE completes on a quorum of relays, not all of them, and the
+  /// relays that do NOT carry the announcement are the ones that answer
+  /// instantly — they have nothing to look up. So the quorum can be reached by
+  /// relays that have nothing while the one holding the key is still working,
+  /// and giving up there is how two users who had both published their keys
+  /// went on messaging each other classically.
+  static const Duration pqEoseGrace = Duration(milliseconds: 600);
+
+  Future<void> fetchPqAnnouncement(String pubkey, {bool Function()? found}) async {
+    if (!TrustGraph.isHex64(pubkey)) return;
+    final sub = pool.subscribe([
+      NostrFilter(
+        kinds: [EventKind.appData],
+        authors: [pubkey],
+        limit: 1,
+        tags: {
+          't': [AppDataTopic.postQuantum],
+        },
+      ),
+    ]);
+    final s = sub.events.listen((e) => _handlers?.onEvent?.call(e));
+    try {
+      await sub.eose.timeout(pqLookupTimeout, onTimeout: () => null);
+      // The relay sends EOSE after the stored event, but delivery of the event
+      // itself is a separate microtask; give it one turn to be ingested.
+      await Future<void>.delayed(Duration.zero);
+      // Then keep listening, briefly, for a relay that was slower than the
+      // quorum. Skipped the moment the key is in hand, so a lookup that
+      // succeeded does not sit out the grace period.
+      if (found != null && !found()) {
+        final deadline = DateTime.now().add(pqEoseGrace);
+        while (!found() && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+        }
+      }
+    } catch (_) {
+      // A relay that never answers is a normal outcome here.
+    } finally {
+      await s.cancel();
+      sub.close();
+    }
+  }
+
   /// Adds ephemeral group pubkeys as additional `#p` gift-wrap subscriptions so
   /// rotated-key group messages reach us. Best-effort; auto-managed by the
   /// controller as keys rotate.
@@ -1085,14 +1195,33 @@ class NostrService {
 
   /// Candidate secret keys for unwrap: our identity key plus any registered
   /// ephemeral group keys.
-  List<({Uint8List sk, bool bitchat})> _candidates() {
-    final out = <({Uint8List sk, bool bitchat})>[];
+  List<giftwrap.UnwrapCandidate> _candidates() {
+    final out = <giftwrap.UnwrapCandidate>[];
     final sk = identity.privkey;
-    if (sk != null) out.add((sk: sk, bitchat: true));
+    if (sk != null) {
+      // Our identity key paired with each ML-KEM epoch, newest first, so a
+      // wrap sent just before a rotation still opens. These come first because
+      // unwrapGiftWrap picks the transport by inspecting the payload — a
+      // classical wrap simply falls through them to the classical candidate.
+      for (final k in _pqSelfKeys) {
+        out.add((sk: sk, bitchat: false, kemSk: k.kemSk, kemPk: k.kemPk));
+      }
+      out.add(giftwrap.classicalCandidate(sk, bitchat: true));
+    }
+    // Group ephemeral keys stay classical: v1 hybridizes groups through the
+    // identity ML-KEM key, leaving the rotating secp keys exactly as they were.
     for (final esk in _ephemeralSks) {
-      out.add((sk: esk, bitchat: false));
+      out.add(giftwrap.classicalCandidate(esk));
     }
     return out;
+  }
+
+  /// Our ML-KEM keypairs (current epoch + a bounded window of previous ones),
+  /// supplied by the controller so rotated-key post-quantum wraps decrypt.
+  List<({Uint8List kemSk, Uint8List kemPk})> _pqSelfKeys = const [];
+
+  void setPqSelfKeys(List<({Uint8List kemSk, Uint8List kemPk})> keys) {
+    _pqSelfKeys = List.unmodifiable(keys);
   }
 
   /// Registered ephemeral secret keys (current + previous group keys) supplied
@@ -1174,7 +1303,7 @@ class NostrService {
     if (res == null) return;
 
     await _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
-        fromArchive: fromArchive, isBitchat: res.isBitchat);
+        fromArchive: fromArchive, isBitchat: res.isBitchat, isPq: res.isPq);
   }
 
   /// True when [wrap] is addressed (`['p', …]`) to our identity pubkey (vs an
@@ -1215,6 +1344,7 @@ class NostrService {
     NostrEvent seal,
     Map<String, dynamic> rumor, {
     required bool isBitchat,
+    bool isPq = false,
     bool fromArchive = false,
   }) async {
     // We successfully decrypted this wrap — record its id so a later archive
@@ -1254,6 +1384,7 @@ class NostrService {
       rumor: emitRumor,
       senderVerified: senderVerified,
       isBitchat: isBitchat,
+      isPq: isPq,
       rawWrap: wrap.toJson(),
       fromArchive: fromArchive,
     ));
@@ -1459,6 +1590,67 @@ class NostrService {
     return signed;
   }
 
+  /// created_at of the last `nym-pq` announcement we published, so a rapid
+  /// republish cannot tie on the second and be dropped by the relay's
+  /// replacement tie-break.
+  int _lastPqTs = 0;
+
+  /// Publishes our kind-30078 `nym-pq` announcement: the ML-KEM-768 public key
+  /// other Nymchat clients encapsulate to. Mirrors the PWA's
+  /// `publishPqAnnouncement` (js/modules/pq.js).
+  ///
+  /// The event's signature is what binds the KEM key to this Nostr identity —
+  /// an attacker cannot substitute their own without also forging a secp256k1
+  /// signature. The NIP-40 `expiration` tag lets relays drop a stale
+  /// announcement on their own, so a downgraded or abandoned device stops
+  /// attracting post-quantum messages it cannot read.
+  /// [kemPublicKey] is null for a Nymchat client that cannot or will not do
+  /// post-quantum; the announcement still goes out, because its presence is
+  /// what tells peers we run Nymchat.
+  Future<NostrEvent?> publishPqAnnouncement({
+    required Uint8List? kemPublicKey,
+    required int epoch,
+    required List<PqDevice> devices,
+  }) async {
+    final sig = signer;
+    if (sig == null) return null;
+    // Kind 30078 is addressable (NIP-01): the relay keeps one event per
+    // (kind, pubkey, d-tag), so this replaces our previous announcement in
+    // place rather than adding a second one.
+    //
+    // Replacement is decided by created_at, and on a TIE the relay keeps the
+    // lexically-lower event id — so a republish landing in the same second as
+    // the last one can be silently dropped, leaving peers on a stale key. A
+    // key rotation immediately after a boot publish is exactly that case.
+    // Same monotonic floor [publishProfile] uses for kind 0.
+    final nowSec = max(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      _lastPqTs + 1,
+    );
+    _lastPqTs = nowSec;
+    final exp = nowSec + pqTtl.inSeconds;
+    final signed = await sig.sign(
+      UnsignedEvent(
+        pubkey: identity.pubkey,
+        createdAt: nowSec,
+        kind: EventKind.appData,
+        tags: [
+          ['d', AppDataTopic.postQuantum],
+          ['t', AppDataTopic.postQuantum],
+          ['expiration', '$exp'],
+        ],
+        content: PqAnnouncement.encode(
+          publicKey: kemPublicKey,
+          expiresAt: exp,
+          epoch: epoch,
+          devices: devices,
+        ),
+      ),
+    );
+    await pool.publish(signed);
+    return signed;
+  }
+
   /// created_at of the newest self kind-0 we've published OR received
   /// (nostr-core.js `_lastKind0Ts`, advanced at 148 on publish and 625-627 on
   /// inbound): the monotonic floor for [publishProfile] timestamps.
@@ -1601,10 +1793,17 @@ class NostrService {
   /// indistinguishable from the synchronous path. For a NIP-46 remote signer
   /// the **seal** must round-trip the network (`nip44_encrypt` + `sign_event`),
   /// so that path stays on [giftwrap.nip59WrapAsync] as before.
+  /// [recipientKemPublicKey], when non-null, makes the wrap hybrid. A local
+  /// signer hybridizes both layers; a remote one hybridizes the WRAP only,
+  /// because a signer returns a finished NIP-44 payload rather than a
+  /// conversation key and the seal has nowhere to mix the KEM secret in. The
+  /// wrap is the layer that matters — it is what a recorder stores, and
+  /// reaching the seal means breaking it first.
   Future<NostrEvent?> _buildWrap(
     UnsignedEvent rumor,
     String recipientPubkey, {
     int? expiration,
+    Uint8List? recipientKemPublicKey,
   }) async {
     final sig = signer;
     if (sig == null) return null;
@@ -1614,15 +1813,17 @@ class NostrService {
         senderPrivkey: sig.privkey,
         recipientPubkey: recipientPubkey,
         expiration: expiration,
+        recipientKemPk: recipientKemPublicKey,
       );
     }
-    // Remote (NIP-46) signer: seal via the remote RPCs; the wrap layer still
-    // uses a fresh local ephemeral key.
+    // Remote (NIP-46) signer: seal via the remote RPCs; the wrap layer uses a
+    // fresh local ephemeral key, which is ours, so it can still be hybrid.
     return giftwrap.nip59WrapAsync(
       rumor: rumor,
       senderSigner: sig,
       recipientPubkey: recipientPubkey,
       expiration: expiration,
+      recipientKemPublicKey: recipientKemPublicKey,
     );
   }
 
@@ -1654,9 +1855,10 @@ class NostrService {
     UnsignedEvent rumor,
     String recipientPubkey, {
     int? expiration,
+    Uint8List? recipientKemPublicKey,
   }) async {
-    final wrap =
-        await _buildWrap(rumor, recipientPubkey, expiration: expiration);
+    final wrap = await _buildWrap(rumor, recipientPubkey,
+        expiration: expiration, recipientKemPublicKey: recipientKemPublicKey);
     if (wrap == null) return null;
     // Gift wraps (kind 1059) publish via DM_EVENT so the proxy gives them
     // priority to the default relays (relays.js `sendDMToRelays`). In direct
@@ -1683,6 +1885,8 @@ class NostrService {
     void Function(NostrEvent wrap)? onWrap,
     UnsignedEvent? bitchatRumor,
     bool sendNymWrap = true,
+    Uint8List? recipientKemPublicKey,
+    Uint8List? selfKemPublicKey,
   }) async {
     if (signer == null) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -1704,13 +1908,19 @@ class NostrService {
     // never receives the wrap at all in pool mode (relays carry no history;
     // their next `pm-get` restore is the only delivery path).
     if (sendNymWrap) {
-      final recipientWrap =
-          await _wrapAndPublish(rumor, recipientPubkey, expiration: expiration);
+      final recipientWrap = await _wrapAndPublish(rumor, recipientPubkey,
+          expiration: expiration,
+          recipientKemPublicKey: recipientKemPublicKey);
       if (recipientWrap != null) onWrap?.call(recipientWrap);
     }
     if (recipientPubkey != identity.pubkey) {
-      final selfWrap =
-          await _wrapAndPublish(rumor, identity.pubkey, expiration: expiration);
+      // The self-addressed copy is post-quantum whenever we are, otherwise it
+      // would be the weakest link: an attacker who breaks secp256k1 could read
+      // the whole archive regardless of how the outbound copy was sealed. Our
+      // own ML-KEM key is nsec-derived, so every device sharing the nsec opens
+      // it.
+      final selfWrap = await _wrapAndPublish(rumor, identity.pubkey,
+          expiration: expiration, recipientKemPublicKey: selfKemPublicKey);
       if (selfWrap != null) onWrap?.call(selfWrap);
     }
     return true;
@@ -1719,12 +1929,30 @@ class NostrService {
   /// Publishes a group rumor: one gift wrap per [recipients], each encrypted to
   /// the supplied per-member [encryptTo] pubkey (ephemeral when known).
   /// (docs/specs/03 §4.3)
+  /// [kemKeyFor], when supplied, returns the member's announced ML-KEM key or
+  /// null. Because each member already gets an independent wrap, a group can
+  /// mix post-quantum and classical recipients with no protocol change and no
+  /// negotiation — which is what keeps mixed Nymchat/Bitchat groups working.
+  ///
+  /// The two legs use different keys on purpose: the classical ECDH goes to the
+  /// member's rotating ephemeral pubkey (via [encryptTo]), keeping the metadata
+  /// protection that rotation buys, while the KEM leg encapsulates to their
+  /// long-lived identity ML-KEM key. Security is max(classical, PQ), so the
+  /// rotation still delivers its forward secrecy against classical attackers
+  /// while the KEM leg delivers harvest-now-decrypt-later protection.
+  ///
+  /// Returns the post-quantum coverage of the fan-out via [onCoverage]: a group
+  /// message counts as protected only when EVERY member got a post-quantum
+  /// wrap, since one classical copy of the same plaintext is enough for an
+  /// attacker.
   Future<bool> publishGroupMessage({
     required UnsignedEvent rumor,
     required List<String> recipients,
     required String Function(String memberPubkey) encryptTo,
     MessagingSettings settings = const MessagingSettings(),
     void Function(NostrEvent wrap)? onWrap,
+    Uint8List? Function(String memberPubkey)? kemKeyFor,
+    void Function(int pqCount, int total)? onCoverage,
   }) async {
     final sig = signer;
     if (sig == null) return false;
@@ -1739,11 +1967,26 @@ class NostrService {
     // the per-recipient loop.
     if (sig is LocalSigner) {
       final targets = [for (final pk in recipients) encryptTo(pk)];
+      // Keyed by the ENCRYPTION target (the ephemeral pubkey), because that is
+      // what wrapMany looks jobs up by — while the key itself comes from the
+      // member's real pubkey, which is what published the announcement.
+      final kemByTarget = <String, Uint8List>{};
+      var pqCount = 0;
+      if (kemKeyFor != null) {
+        for (var i = 0; i < recipients.length; i++) {
+          final k = kemKeyFor(recipients[i]);
+          if (k != null) {
+            kemByTarget[targets[i]] = k;
+            pqCount++;
+          }
+        }
+      }
       final wraps = await _cryptoWorker.wrapMany(
         rumor: rumor,
         senderPrivkey: sig.privkey,
         recipientPubkeys: targets,
         expiration: expiration,
+        recipientKemPks: kemByTarget.isEmpty ? null : kemByTarget,
       );
       for (final wrap in wraps) {
         if (wrap != null) {
@@ -1751,14 +1994,23 @@ class NostrService {
           onWrap?.call(wrap);
         }
       }
+      onCoverage?.call(pqCount, recipients.length);
       return true;
     }
 
+    // Remote (NIP-46) signer: the seal goes through the signer and cannot be
+    // hybrid, but the wrap's ephemeral key is ours, so it still can be — and
+    // the wrap is the layer a recorder stores. Coverage is counted the same
+    // way, since the protection against that threat is the same.
+    var remotePq = 0;
     for (final pk in recipients) {
-      final wrap =
-          await _wrapAndPublish(rumor, encryptTo(pk), expiration: expiration);
+      final kem = kemKeyFor?.call(pk);
+      if (kem != null) remotePq++;
+      final wrap = await _wrapAndPublish(rumor, encryptTo(pk),
+          expiration: expiration, recipientKemPublicKey: kem);
       if (wrap != null) onWrap?.call(wrap);
     }
+    onCoverage?.call(remotePq, recipients.length);
     return true;
   }
 
@@ -2008,40 +2260,76 @@ class NostrService {
     final rumorJson = jsonEncode(rumorMap);
     if (utf8.encode(rumorJson).length > 65535) return null;
 
-    // Seal (kind 13) encrypted + signed by the active signer, backdated
-    // created_at like every NIP-59 seal (`randomNow`).
-    final sealContent = await sig.nip44Encrypt(self, rumorJson);
-    final seal = await sig.sign(
-      UnsignedEvent(
-        pubkey: self,
-        createdAt: giftwrap.randomNow(),
-        kind: 13,
-        tags: const [],
-        content: sealContent,
-      ),
-    );
-    final sealJson = jsonEncode(seal.toJson());
-    if (utf8.encode(sealJson).length > 65535) return null;
-
-    // Wrap (kind 1059) by a fresh ephemeral key with the nym-sync outer tags.
-    final ephSk = keys.generatePrivateKey();
-    final ckWrap = nip44.getConversationKey(ephSk, self);
     final outerD = sha256.convert(utf8.encode('$self:$dTag')).toString();
-    final wrapped = schnorr.finalizeEvent(
-      UnsignedEvent(
-        pubkey: keys.getPublicKeyHex(ephSk),
-        createdAt: giftwrap.randomNow(),
-        kind: EventKind.giftWrap,
-        tags: [
-          ['p', self],
-          ['d', outerD],
-          ['k', 'nym-sync'],
-        ],
-        content: nip44.encrypt(sealJson, ckWrap),
-      ),
-      ephSk,
+
+    // Builds both layers with whichever encryption is in play. Null when the
+    // sealed plaintext outgrows what NIP-44 can carry, or the frame outgrows
+    // what relays take.
+    Future<NostrEvent?> build(
+      Future<String> Function(String plaintext) seal,
+      String Function(String plaintext, Uint8List ephSk) wrap,
+    ) async {
+      final sealed = await sig.sign(
+        UnsignedEvent(
+          pubkey: self,
+          createdAt: giftwrap.randomNow(),
+          kind: 13,
+          tags: const [],
+          content: await seal(rumorJson),
+        ),
+      );
+      final sealJson = jsonEncode(sealed.toJson());
+      if (utf8.encode(sealJson).length > 65535) return null;
+      final ephSk = keys.generatePrivateKey();
+      final wrapped = schnorr.finalizeEvent(
+        UnsignedEvent(
+          pubkey: keys.getPublicKeyHex(ephSk),
+          createdAt: giftwrap.randomNow(),
+          kind: EventKind.giftWrap,
+          tags: [
+            ['p', self],
+            ['d', outerD],
+            ['k', 'nym-sync'],
+          ],
+          content: wrap(sealJson, ephSk),
+        ),
+        ephSk,
+      );
+      if (jsonEncode(['EVENT', wrapped.toJson()]).length > 65000) return null;
+      return wrapped;
+    }
+
+    // Settings are a self-addressed gift wrap like any other, and they carry
+    // more about a user than most single messages do — the conversation list,
+    // the group keys, the history categories. Left classical they would be the
+    // weakest thing on the relay: readable by anyone who breaks secp256k1,
+    // regardless of how carefully the messages themselves were sealed.
+    //
+    // Only with a local nsec. An extension or NIP-46 signer returns a finished
+    // NIP-44 payload rather than a conversation key, so there is no hybrid one
+    // to derive (PqPolicy.capable).
+    final ownSk = identity.privkey;
+    final selfKem = _pqSelfKeys.isEmpty ? null : _pqSelfKeys.first;
+    if (ownSk != null && selfKem != null) {
+      final wrapped = await build(
+        (pt) async => pq.pqEncrypt(pt, ownSk, self, selfKem.kemPk),
+        (pt, ephSk) => pq.pqEncrypt(pt, ephSk, self, selfKem.kemPk),
+      );
+      if (wrapped != null) {
+        await pool.publishDm(wrapped);
+        return wrapped;
+      }
+      // The hybrid costs ~1.5 KB a layer for the KEM ciphertext, which a
+      // category already close to the relay cap cannot absorb. Losing the sync
+      // entirely would be a worse trade than losing the post-quantum layer, so
+      // an oversized one falls back rather than going unpublished.
+    }
+
+    final wrapped = await build(
+      (pt) => sig.nip44Encrypt(self, pt),
+      (pt, ephSk) => nip44.encrypt(pt, nip44.getConversationKey(ephSk, self)),
     );
-    if (jsonEncode(['EVENT', wrapped.toJson()]).length > 65000) return null;
+    if (wrapped == null) return null;
     await pool.publishDm(wrapped);
     return wrapped;
   }

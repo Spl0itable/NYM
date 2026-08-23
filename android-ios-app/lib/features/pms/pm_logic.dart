@@ -80,6 +80,7 @@ class PmLogic {
     required String wrapId,
     required String selfPubkey,
     required bool senderVerified,
+    bool pqEncrypted = false,
   }) {
     if ((rumor['kind'] as num?)?.toInt() != EventKind.dmRumor) return null;
     final senderPubkey = rumor['pubkey'] as String?;
@@ -130,6 +131,7 @@ class PmLogic {
       eventKind: EventKind.giftWrap,
       nymMessageId: nymMessageId,
       senderVerified: senderVerified,
+      pqEncrypted: pqEncrypted,
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer?.toJson(),
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,

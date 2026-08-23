@@ -39,6 +39,7 @@ import '../emoji/emoji_picker.dart';
 import '../emoji/gif_picker.dart';
 import '../i18n/i18n.dart';
 import '../reactions/reaction_picker.dart';
+import '../shop/shop_purchase_policy.dart';
 import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import 'bot_credits_modal.dart';
@@ -532,18 +533,24 @@ class _BotControlBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(child: left),
-          SizedBox(width: gap),
-          // `.bot-ctrl-buy`: the lightning-accented purchase chip.
-          _CtrlButton(
-            svg: _kSvgBolt,
-            label: tr('Buy'),
-            active: false,
-            buy: true,
-            labelMaxWidth: labelMax,
-            colors: c,
-            compact: compact,
-            onTap: onTapBuy,
-          ),
+          // The Buy chip is a call to action for a purchase, so it is absent on
+          // a platform that can't take one — see shop_purchase_policy.dart. The
+          // credits sheet still opens by other routes (`?buy`, running out) and
+          // says where credits are bought instead.
+          if (!botCreditPurchasesDisabled) ...[
+            SizedBox(width: gap),
+            // `.bot-ctrl-buy`: the lightning-accented purchase chip.
+            _CtrlButton(
+              svg: _kSvgBolt,
+              label: tr('Buy'),
+              active: false,
+              buy: true,
+              labelMaxWidth: labelMax,
+              colors: c,
+              compact: compact,
+              onTap: onTapBuy,
+            ),
+          ],
         ],
       ),
     );

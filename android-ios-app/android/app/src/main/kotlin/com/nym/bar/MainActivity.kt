@@ -35,6 +35,35 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // "Build integrity": hash the installed APK and report who signed and
+        // installed it, so Dart can compare against the developer's published,
+        // signed release manifest. See BuildIntegrity.
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            BUILD_INTEGRITY_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "inspect" -> {
+                    // Reads tens of megabytes — never on the platform thread.
+                    Thread {
+                        val payload = try {
+                            BuildIntegrity.inspect(applicationContext)
+                        } catch (e: Throwable) {
+                            null
+                        }
+                        runOnUiThread {
+                            if (payload == null) {
+                                result.error("inspect_failed", "could not inspect the install", null)
+                            } else {
+                                result.success(payload)
+                            }
+                        }
+                    }.start()
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     /**
@@ -69,5 +98,6 @@ class MainActivity : FlutterFragmentActivity() {
 
     companion object {
         private const val BACKGROUND_CHANNEL = "app.nymchat/background_connectivity"
+        private const val BUILD_INTEGRITY_CHANNEL = "app.nymchat/build_integrity"
     }
 }

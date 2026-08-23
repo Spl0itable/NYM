@@ -17,73 +17,91 @@ release_source: build/app/outputs/flutter-apk/app-release.apk
 repository: https://github.com/Spl0itable/NYM
 
 # --- App metadata ---
-name: Nymchat
-summary: Ephemeral Nostr chat with E2E-encrypted PMs, group chats, audio/video calls, and Lightning zaps — no registration required.
+name: Nymchat - Geohash Mesh Chat
+summary: Encrypted chat with Bluetooth mesh. No phone number, no account, works offline.
 description: |
-  Nymchat (NYM aka Nostr Ynstant Messenger) is a feature-rich, ephemeral chat
-  client built on the Nostr protocol, bridged with Bitchat for pseudonymous,
-  temporary messaging. No registration required — pick a nym and start
-  chatting instantly, or log in with an existing Nostr account.
+  Nymchat is an encrypted messenger with no account, no phone number and no server that knows who you are.
 
-  **Identity**
-  - Ephemeral sessions: generate a temporary keypair and pseudonym per session
-  - Log in with a persistent Nostr identity (NIP-07, NIP-46, or nsec)
-  - Optional identity encryption with password, PIN, passkey, or biometrics
-  - Panic wipe: press-and-hold to instantly destroy all local data
+  Your identity is a key your device generates. Keep it, back it up, or throw it away and make a new one. No email. No SMS code. Nothing to leak.
 
-  **Messaging**
-  - End-to-end encrypted 1:1 DMs via NIP-17 gift wraps (NIP-59)
-  - End-to-end encrypted group chats with rotating ephemeral keys and
-    post-compromise recovery — relays cannot correlate group membership
-  - Forward secrecy and configurable disappearing messages
-  - Read receipts and typing indicators (per-scope: everyone, friends, or off)
-  - Rich text (Markdown), emoji reactions (NIP-25), polls, and custom emoji
-  - Peer-to-peer file sharing over WebRTC data channels
+  ★ WORKS OFFLINE, OVER BLUETOOTH MESH
 
-  **Channels**
-  - Location-based geohash channels (kind 20000)
-  - Named topic channels (kind 23333)
-  - Geohash Explorer: browse location channels on an interactive globe
+  When there is no internet and no cell service, Nymchat keeps working. Messages relay from phone to phone over a Bluetooth mesh — up to seven hops — so a crowded venue, a train tunnel, a hiking trail, a festival or a network blackout is still a conversation. Every message is encrypted on the mesh exactly as it is online, and everything syncs the moment one device reaches the network again. The mesh is compatible with Bitchat, so those devices join the same rooms.
 
-  **Voice & Video**
-  - 1:1 and group audio/video calls — signaling over NIP-17 gift wraps,
-    media peer-to-peer over WebRTC
+  ★ PUBLIC CHANNELS BY LOCATION
 
-  **Lightning**
-  - Send and receive Lightning zaps on messages and profiles (NIP-57)
-  - In-app flair shop: buy cosmetic styles and badges with Bitcoin
+  Geohash channels turn any place on Earth into a public chat room. The channel name is the location: everyone whose device resolves to the same square lands in the same room. Open the geohash explorer, spin the globe, and drop into anywhere. Named channels cover everything that is not about a place.
 
-  **Privacy & Moderation**
-  - No Google Play Services, Firebase, or trackers
-  - User and keyword blocking, flood protection, image blur
-  - Group roles: owner, moderator, kick, ban, transfer ownership
+  ★ PRIVATE MESSAGES THAT HIDE THE METADATA
 
-  **Customization**
-  - Themes: Bitchat, Matrix Green, Amber Terminal, Cyberpunk, Hacker Blue, Ghost
-  - IRC-style or bubble layout, adjustable text size, wallpapers
+  Private and group chats are end-to-end encrypted and gift-wrapped, so the relays carrying them cannot tell who is talking to whom, let alone what was said. Turn read receipts and typing indicators off. Set messages to disappear. Private messages work over the Bluetooth mesh too.
+
+  ★ AUDIO AND VIDEO CALLS
+
+  One-to-one and group calls, set up over encrypted events and then carried peer to peer between the devices taking part. No server in the middle of the media.
+
+  ★ GHOST MODE
+
+  Rotate to a throwaway identity on a timer. Nickname, keys and the Bluetooth name the device advertises all change together, so one session cannot be linked to the last.
+
+  ★ LIGHTNING PAYMENTS
+
+  Zap sats to a good post without leaving the chat. Buy flair that changes how your messages and nickname look to everyone else in the app.
+
+  ★ NYMBOT, THE BUILT-IN ASSISTANT
+
+  Ask a question in any public channel for free — summarize the thread, translate a message, explain a command. Or open a private, encrypted chat with it.
+
+  ★ AND THE REST
+
+  Polls, reactions, replies, peer-to-peer file transfer, message translation into more than a hundred languages, six themes, block lists, keyword filters and reporting.
+
+  ★ OPEN, DECENTRALIZED, UNOWNED
+
+  Nymchat is built on Nostr, an open protocol nobody owns. There is no Nymchat account because there is no Nymchat server to hold one — the app talks to a network of independent relays, and you choose which. It is free software under the AGPL-3.0 and the source is public.
+
+  Private chat that survives the network going down. Decentralized. Pseudonymous. Unstoppable.
 
 tags:
   - nostr
   - messaging
+  - chat
   - social
   - bitcoin
   - lightning
+  - zaps
+  - privacy
+  - encryption
+  - e2ee
+  - bluetooth
+  - mesh
+  - offline
+  - bitchat
+  - decentralized
+  - anonymous
+  - geohash
 
 website: https://nymchat.app
 
-# SPDX identifier. Add a LICENSE file to the repo, then set this to match
-# (e.g. MIT, Apache-2.0, GPL-3.0-only). Left commented until a license exists.
-# license: MIT
+# SPDX identifier, matching the LICENSE file in this repo (a verbatim copy of
+# the one in Spl0itable/NYM). "-only" rather than "-or-later": neither the
+# project README nor any source header offers the "or any later version"
+# upgrade clause, so the grant is version 3 alone.
+license: AGPL-3.0-only
 
 # --- Media (local paths, relative to repo root) ---
 icon: assets/images/NYM-icon.png
-# Add real device screenshots (phone-sized PNGs) and list them here — the
-# listing looks much better with 2–5 of them.
-# images:
-#   - assets/store/screenshots/1-chats.png
-#   - assets/store/screenshots/2-call.png
+# Device screenshots, 1080x1920 each. These are captures of the real app, not
+# mockups; regenerate them with the screenshot kit in the nym-web repo.
+images:
+  - store/screenshots/01-channels.png
+  - store/screenshots/02-bluetooth-mesh.png
+  - store/screenshots/03-private-messages.png
+  - store/screenshots/04-geohash-explorer.png
+  - store/screenshots/05-nymbot-pro.png
 
 # --- Release notes ---
-# Point at a CHANGELOG.md (Keep a Changelog format lets zsp pull the section
-# that matches the APK version). Create one, then uncomment:
-# release_notes: CHANGELOG.md
+# Keep a Changelog format: zsp pulls the section whose heading matches the
+# version read out of the APK, so add a new `## [x.y.z] - DATE` block on every
+# release and keep it in step with pubspec.yaml's `version:`.
+release_notes: CHANGELOG.md

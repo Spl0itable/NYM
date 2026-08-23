@@ -33,7 +33,7 @@ import '../../features/groups/group_logic.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/dev_nsec_modal.dart';
 import '../../features/messages/format/message_content.dart'
-    show InlineEmojiText, MessageContent, openFullscreenMedia, proxiedMedia;
+    show InlineEmojiText, openFullscreenMedia, proxiedMedia;
 import '../../features/messages/format/nym_format.dart' show NymFormat;
 import '../../features/messages/inline_network_image.dart';
 import '../../features/nymbot/nymbot_models.dart';
@@ -48,6 +48,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../context_menu/interaction_hooks.dart';
 import 'composer_format.dart';
+import 'composer_markdown.dart';
 import 'message_row.dart' show GroupInfoMember, encodeGroupInfoSystemMessage;
 
 /// Session-wide per-conversation unsent drafts — the PWA's app-level
@@ -202,16 +203,36 @@ class _ComposerState extends ConsumerState<Composer> {
   // formatting a message never requires knowing the syntax (`#formatInputBtn` /
   // `.format-toolbar`, rich-compose.js). The draft itself stays plain markdown.
   bool _formatToolbarOpen = false;
-  bool _formatPreviewOpen = false;
 
   /// Bytes of media attached this session, keyed by the hosted URL they were
   /// uploaded to — lets the attachment strip draw a thumbnail without
   /// re-downloading what we just sent up.
   final Map<String, Uint8List> _localMediaPreviews = {};
 
-  /// One entry per file in the current upload batch that hasn't landed yet, so
-  /// the strip shows a dimmed placeholder the instant files are picked.
-  List<({Uint8List? bytes, bool isVideo})> _uploadingPreviews = const [];
+  /// Every URL we uploaded this session -> whether it is a video.
+  ///
+  /// Blossom is content-addressed and several servers return a bare
+  /// `https://host/<sha256>` with no file extension, which the media regex
+  /// cannot recognise. We know these are media because we just uploaded them,
+  /// so they are matched by identity — see [composerMediaMatches]. Videos are
+  /// included even though [_localMediaPreviews] has no bytes for them, since
+  /// the strip still needs to know they are attachments.
+  final Map<String, bool> _uploadedMedia = {};
+
+  /// Files attached through the picker, in the order added. This — not the
+  /// draft text — is what decides which media the message carries; the URLs are
+  /// appended when the message is sent.
+  final List<ComposerAttachment> _attachments = [];
+  int _attachmentSeq = 0;
+
+  /// Hosted URLs for the attachments that finished, in order. A tile still
+  /// uploading or failed contributes nothing, so a half-finished batch can
+  /// never put a broken link in a message.
+  List<String> get attachmentUrls =>
+      [for (final a in _attachments) if (a.isDone) a.url];
+
+  bool get hasPendingUploads =>
+      _attachments.any((a) => a.status == ComposerAttachmentStatus.uploading);
 
   /// Translate-dropdown favorites (`nym_translate_favorites`), pinned to the top
   /// of the language list. Loaded once prefs resolve (translate.js:93-99).
@@ -272,7 +293,6 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// MIME of the in-flight upload, so the progress label reads
   /// "Uploading video…" vs "…image…" (F6).
-  String? _uploadMime;
 
   // --- Autocomplete / command palette state --------------------------------
   // The active trigger token at the caret + its rendered content. Mirrors the
@@ -655,6 +675,9 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   void _onFocusChanged() {
+    // The markdown markers in the field follow the caret, and a field nobody is
+    // typing in has no caret to follow.
+    _controller.composerFocused = _focus.hasFocus;
     if (mounted) setState(() {});
   }
 
@@ -676,14 +699,10 @@ class _ComposerState extends ConsumerState<Composer> {
     _prefs = prefs;
     _recents = EmojiRecentsStore(prefs).load();
     _translateFavorites = _loadTranslateFavorites(prefs);
-    // Toolbar/preview visibility persist under the same keys the PWA uses.
+    // Toolbar visibility persists under the same key the PWA uses.
     final toolbar = prefs.getBool(kFormatToolbarKey) ?? false;
-    final preview = prefs.getBool(kFormatPreviewKey) ?? false;
-    if (mounted && (toolbar != _formatToolbarOpen || preview != _formatPreviewOpen)) {
-      setState(() {
-        _formatToolbarOpen = toolbar;
-        _formatPreviewOpen = preview;
-      });
+    if (mounted && toolbar != _formatToolbarOpen) {
+      setState(() => _formatToolbarOpen = toolbar);
     }
     return prefs;
   }
@@ -1195,11 +1214,30 @@ class _ComposerState extends ConsumerState<Composer> {
       return;
     }
 
-    // Nothing to send unless there's typed text OR a pending quote (the PWA
-    // allows sending a bare quote: `if (!content && !this.pendingQuote) return`).
-    if (typed.trim().isEmpty && _pendingQuote == null) return;
+    // Sending mid-upload would drop that attachment without saying so: its
+    // tile is still spinning, so it has no URL to contribute yet.
+    if (hasPendingUploads) {
+      _onSystemMessage(
+          tr('Still uploading — send again once the attachments finish.'));
+      return;
+    }
 
-    final content = _composeOutgoing(typed);
+    // Attachments live on their tiles, not in the draft, so their URLs are
+    // appended here rather than typed into the input as each upload landed. A
+    // failed tile contributes nothing, so a half-finished batch cannot put a
+    // broken link in the message.
+    final urls = attachmentUrls;
+
+    // Nothing to send unless there's typed text, an attachment, OR a pending
+    // quote (the PWA allows sending a bare quote).
+    if (typed.trim().isEmpty && urls.isEmpty && _pendingQuote == null) return;
+
+    var composed = typed;
+    if (urls.isNotEmpty) {
+      final needsSpace = composed.isNotEmpty && !composed.endsWith(' ');
+      composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
+    }
+    final content = _composeOutgoing(composed);
 
     // Routes through the NostrController: optimistic local echo + relay
     // publish when an identity is live, falling back to local echo otherwise.
@@ -1210,6 +1248,8 @@ class _ComposerState extends ConsumerState<Composer> {
     // quote prepend, messages.js:2363-2364).
     _pushSentHistory(content);
     _controller.clear();
+    // The message carrying them has gone out, so the tiles go with it.
+    _attachments.clear();
     _popout = false;
     _syncPopoutPortal();
     _hideOverlay();
@@ -1285,9 +1325,22 @@ class _ComposerState extends ConsumerState<Composer> {
       _send();
       return;
     }
-    if (typed.trim().isEmpty && _pendingQuote == null) return;
+    // Same attachment handling as [_send] — an anon send drops the tiles too,
+    // so it has to carry their URLs or they are silently lost.
+    if (hasPendingUploads) {
+      _onSystemMessage(
+          tr('Still uploading — send again once the attachments finish.'));
+      return;
+    }
+    final urls = attachmentUrls;
+    if (typed.trim().isEmpty && urls.isEmpty && _pendingQuote == null) return;
     final controller = ref.read(nostrControllerProvider);
-    final content = _composeOutgoing(typed);
+    var composed = typed;
+    if (urls.isNotEmpty) {
+      final needsSpace = composed.isNotEmpty && !composed.endsWith(' ');
+      composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
+    }
+    final content = _composeOutgoing(composed);
     // Publish the draft under a FRESH ephemeral keypair (unlinkable to the
     // durable nym), mirroring the normal send's fire-and-forget dispatch.
     controller.sendCurrentPseudonymous(content);
@@ -1295,6 +1348,8 @@ class _ComposerState extends ConsumerState<Composer> {
     // (messages.js:2363-2364) — see [_send].
     _pushSentHistory(content);
     _controller.clear();
+    // The message carrying them has gone out, so the tiles go with it.
+    _attachments.clear();
     _popout = false;
     _syncPopoutPortal();
     _hideOverlay();
@@ -1320,29 +1375,66 @@ class _ComposerState extends ConsumerState<Composer> {
 
   // --- Attachments: image upload (Blossom) + P2P file share -----------------
 
-  /// `#uploadProgress` state (0..1, null = hidden). Mirrors the PWA's progress
-  /// bar shown during `uploadImage` (users.js:971).
-  double? _uploadProgress;
-
-  /// Set by the cancel ✕ (`cancelUpload`) so an in-flight upload, once it
-  /// resolves, is discarded instead of appended (the underlying
-  /// `uploadImage` future isn't cancellable — F11).
+  /// Set by the cancel ✕ so an in-flight upload, once it resolves, is discarded
+  /// instead of kept (the underlying `uploadImage` future isn't cancellable).
   bool _uploadCancelled = false;
 
-  /// 1-based index + total of the current multi-file upload (users.js:1006-1008
-  /// labels "Uploading i of N…" when N>1). 0/0 = single-file (no "of N").
-  int _uploadIndex = 0;
-  int _uploadTotal = 0;
+  /// Drops one attachment (the ✕ on its tile).
+  void _removeAttachment2(ComposerAttachment a) {
+    setState(() => _attachments.remove(a));
+  }
 
-  void _cancelUpload() {
+  /// Everything the message carried has gone out, so the tiles go with it.
+  void clearAttachments() {
+    if (_attachments.isEmpty) return;
+    setState(() => _attachments.clear());
+  }
+
+  /// Uploads one attachment and reflects the outcome on its own tile. Never
+  /// throws: a failure marks that ONE tile retryable and leaves the rest of the
+  /// batch alone.
+  Future<void> _uploadAttachment(ComposerAttachment a) async {
+    final bytes = a.bytes;
+    if (bytes == null || bytes.isEmpty) return;
+    if (mounted) {
+      setState(() {
+        a.status = ComposerAttachmentStatus.uploading;
+        a.error = '';
+      });
+    }
+    String? url;
+    try {
+      url = await ref
+          .read(nostrControllerProvider)
+          .uploadImage(bytes, contentType: a.contentType);
+    } catch (e) {
+      url = null;
+      a.error = e.toString();
+    }
+    if (!mounted) return;
+    if (_uploadCancelled) return;
     setState(() {
-      _uploadCancelled = true;
-      _uploadProgress = null;
-      _uploadMime = null;
-      _uploadIndex = 0;
-      _uploadTotal = 0;
-      _uploadingPreviews = const [];
+      if (url == null || url.isEmpty) {
+        a.status = ComposerAttachmentStatus.failed;
+        if (a.error.isEmpty) a.error = tr('Failed to upload media.');
+        if (a.error.length > 120) a.error = a.error.substring(0, 120);
+      } else {
+        a.status = ComposerAttachmentStatus.done;
+        a.url = url;
+        a.error = '';
+        // Hand this file's bytes to its hosted URL so the thumbnail carries
+        // straight over without flickering or re-fetching what we just sent.
+        if (!a.isVideo) _localMediaPreviews[url] = bytes;
+        _uploadedMedia[url] = a.isVideo;
+      }
     });
+  }
+
+  /// Re-runs one failed upload from the bytes its tile still holds.
+  Future<void> _retryAttachment(ComposerAttachment a) async {
+    if (a.status == ComposerAttachmentStatus.uploading) return;
+    _uploadCancelled = false;
+    await _uploadAttachment(a);
   }
 
   /// Image/Video button (`selectImage` → fileInput `multiple`, accepts image +
@@ -1387,98 +1479,45 @@ class _ComposerState extends ConsumerState<Composer> {
     const maxUpload = 50 * 1024 * 1024; // 50 MB cap (users.js:977)
 
     if (!mounted) return;
-    setState(() {
-      _uploadCancelled = false;
-      _uploadTotal = picked.length;
-      // Dimmed placeholders appear the moment files are picked; each is filled
-      // in with real bytes as the loop reads them, then retired on upload.
-      _uploadingPreviews = [
-        for (final f in picked)
-          (
-            bytes: null,
-            isVideo: (f.mimeType ?? _guessImageMime(f.name))
-                .startsWith('video/')
-          ),
-      ];
-    });
+    _uploadCancelled = false;
 
-    final controller = ref.read(nostrControllerProvider);
-    final urls = <String>[];
-    for (var i = 0; i < picked.length; i++) {
-      if (!mounted || _uploadCancelled) break;
-      final file = picked[i];
-      final Uint8List bytes;
+    // Every picked file becomes a tile immediately, each with its own wheel.
+    // There is no batch-wide progress bar any more: it could only describe the
+    // batch, so with several files in flight it could not say which one it was
+    // waiting on, and it sat on top of the previews while doing it.
+    final fresh = <ComposerAttachment>[];
+    for (final f in picked) {
+      Uint8List bytes;
       try {
-        bytes = await file.readAsBytes();
+        bytes = await f.readAsBytes();
       } catch (_) {
-        continue;
+        continue; // an unreadable pick
       }
       if (bytes.length > maxUpload) {
         _onSystemMessage(tr('Files must be under 50MB.'));
         continue;
       }
-      final contentType = file.mimeType ?? _guessImageMime(file.name);
-      if (!mounted) return;
+      final contentType = f.mimeType ?? _guessImageMime(f.name);
       final isVideo = contentType.startsWith('video/');
-      setState(() {
-        _uploadProgress = 0.1;
-        _uploadMime = contentType;
-        _uploadIndex = i + 1;
-        // Now that the bytes are read, the placeholder can show the real image.
-        if (_uploadingPreviews.isNotEmpty) {
-          _uploadingPreviews = [
-            (bytes: isVideo ? null : bytes, isVideo: isVideo),
-            ..._uploadingPreviews.skip(1),
-          ];
-        }
-      });
-      final url = await controller.uploadImage(
-        bytes,
+      fresh.add(ComposerAttachment(
+        id: ++_attachmentSeq,
+        isVideo: isVideo,
         contentType: contentType,
-        onProgress: (p) {
-          if (mounted && !_uploadCancelled) setState(() => _uploadProgress = p);
-        },
-      );
-      if (!mounted) return;
-      if (_uploadCancelled) break;
-      if (url == null) {
-        _onSystemMessage(tr('Failed to upload media.'));
-        setState(() => _uploadingPreviews = _uploadingPreviews.skip(1).toList());
-        continue;
-      }
-      urls.add(url);
-      setState(() {
-        // Hand this file's bytes to its hosted URL so the thumbnail carries
-        // straight over from placeholder to attachment without flickering.
-        if (!isVideo) _localMediaPreviews[url] = bytes;
-        _uploadingPreviews = _uploadingPreviews.skip(1).toList();
-      });
+        // A video's bytes are kept for the retry path even though the 56px
+        // tile cannot draw a frame from them.
+        bytes: bytes,
+      ));
     }
+    if (fresh.isEmpty || !mounted) return;
+    setState(() => _attachments.addAll(fresh));
 
-    if (!mounted) return;
-    final wasCancelled = _uploadCancelled;
-    setState(() {
-      _uploadProgress = null;
-      _uploadMime = null;
-      _uploadCancelled = false;
-      _uploadIndex = 0;
-      _uploadTotal = 0;
-      _uploadingPreviews = const [];
-    });
-    // Drop the results entirely if the user pressed ✕ mid-batch.
-    if (wasCancelled || urls.isEmpty) return;
-    // Append all URLs space-joined (then a trailing space), like the PWA.
-    final existing = _controller.text;
-    // Without the separator a draft ending mid-word would glue onto the first
-    // URL and neither the formatter nor the attachment strip would see it.
-    final needsSpace = existing.isNotEmpty && !existing.endsWith(' ');
-    _controller.text = '$existing${needsSpace ? ' ' : ''}${urls.join(' ')} ';
-    _controller.selection =
-        TextSelection.collapsed(offset: _controller.text.length);
-    // Appended media urls can push past the popout threshold — recompute.
-    _onInputChanged();
-    _focus.requestFocus();
+    for (final a in fresh) {
+      if (!mounted || _uploadCancelled) break;
+      await _uploadAttachment(a);
+    }
+    if (mounted) _focus.requestFocus();
   }
+
 
   /// File button (`selectP2PFile` → p2pFileInput): pick any file and offer it as
   /// a P2P transfer (`shareP2PFile`, p2p.js:86).
@@ -1594,7 +1633,9 @@ class _ComposerState extends ConsumerState<Composer> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_uploadProgress != null) _uploadBar(context),
+            // The upload bar now lives inside the composer's panel stack,
+            // immediately under the media strip (see [_formatPanels]), so the
+            // preview of what is uploading sits above its own progress.
             widget.compact
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1696,99 +1737,6 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  /// `.upload-progress` — a panel (bg glass-bg, glass border, top corners
-  /// radius-sm, 12px padding, 8px bottom gap) floating above the input with a
-  /// label + cancel ✕ + a thin gradient progress bar (users.js:988-1008).
-  /// Single: "Uploading image..." / "Uploading video..."; multi: "Uploading
-  /// i of N...". The bar fills primary→secondary.
-  Widget _uploadBar(BuildContext context) {
-    final c = context.nym;
-    final isVideo = (_uploadMime ?? '').startsWith('video/');
-    final label = _uploadTotal > 1
-        ? tr('Uploading {i} of {total}...',
-            {'i': _uploadIndex, 'total': _uploadTotal})
-        : (isVideo ? tr('Uploading video...') : tr('Uploading image...'));
-    final fraction = (_uploadProgress ?? 0.1).clamp(0.0, 1.0);
-    // In solid-ui the panel is repainted with --glass-bg (#14141e dark /
-    // opaque #ffffff light — styles-themes-responsive.css:1593-1627, sourced
-    // AFTER the light white@0.92 rule so it wins in both themes).
-    final solidUi = ref.watch(settingsProvider.select((s) => s.solidUi));
-    return Container(
-      // `.upload-progress`: bg literal rgba(20,20,35,0.9) dark
-      // (styles-components.css:1142-1153); `body.light-mode .upload-progress`
-      // → white@0.92 (styles-themes-responsive.css:1179). border 1px glass
-      // (light: black@0.08 = glassBorder), radius-sm top corners, padding 12,
-      // margin-bottom 8.
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: solidUi
-            ? c.glassBg
-            : (c.isLight
-                ? Colors.white.withValues(alpha: 0.92)
-                : const Color(0xE6141423)),
-        border: Border.all(color: c.glassBorder),
-        borderRadius:
-            const BorderRadius.vertical(top: Radius.circular(NymRadius.sm)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(label,
-                    style: TextStyle(color: c.textDim, fontSize: 12)),
-              ),
-              // `.upload-progress-close` (22×22 ✕, radius-sm), cancels the
-              // in-flight upload.
-              Material(
-                type: MaterialType.transparency,
-                borderRadius: NymRadius.rsm,
-                child: InkWell(
-                  onTap: _cancelUpload,
-                  borderRadius: NymRadius.rsm,
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: Center(
-                      child: NymSvgIcon(NymIcons.close,
-                          size: 14, color: c.textDim),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // `.progress-bar`: height 6, bg rgba(255,255,255,0.05), radius 10;
-          // `.progress-fill`: linear-gradient(90deg, primary, secondary).
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              height: 6,
-              color: Colors.white.withValues(alpha: 0.05),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: FractionallySizedBox(
-                  widthFactor: fraction,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(10),
-                      gradient: LinearGradient(
-                        colors: [c.primary, c.secondary],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   /// Collapsed `.input-wrapper` height reserved in-flow while the popout floats
   /// (`--composer-row-base`, ui-context.js:1741 ≈ a single text row + padding).
@@ -2060,6 +2008,11 @@ class _ComposerState extends ConsumerState<Composer> {
       maxLines: _popout ? 12 : flatMaxLines,
       minLines: 1,
       textInputAction: TextInputAction.newline,
+      // A markdown block marker is painted out of existence, so a plain
+      // Backspace would eat it one invisible character at a time. This takes
+      // the whole marker (or unwraps the whole fence) instead; every other
+      // edit passes straight through.
+      inputFormatters: const [RichMarkerDeleteFormatter()],
       onChanged: (_) {
         _onInputChanged();
         // Emit a typing indicator on real keystrokes (PWA sends kind-69420
@@ -2214,12 +2167,6 @@ class _ComposerState extends ConsumerState<Composer> {
     await prefs.setBool(kFormatToolbarKey, _formatToolbarOpen);
   }
 
-  Future<void> _toggleFormatPreview() async {
-    setState(() => _formatPreviewOpen = !_formatPreviewOpen);
-    final prefs = await _ensurePrefs();
-    await prefs.setBool(kFormatPreviewKey, _formatPreviewOpen);
-  }
-
   /// Rewrite the draft with [tool] applied to the current selection (or the word
   /// under the caret when nothing is selected), then restore focus so the user
   /// can keep typing inside the delimiters that were just inserted.
@@ -2246,7 +2193,8 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// Drop one attachment from the draft (the ✕ on a thumbnail).
   void _removeAttachment(int index) {
-    final out = removeComposerMedia(_controller.text, index);
+    final out = removeComposerMedia(_controller.text, index,
+        knownMedia: _uploadedMedia);
     _controller.value = TextEditingValue(
       text: out.text,
       selection: TextSelection.collapsed(offset: out.start),
@@ -2256,17 +2204,23 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   /// The panel stack that sits between the quote/edit chip and the field:
-  /// attachments on top, then the live preview, then the toolbar. Returns null
-  /// when nothing is showing so the composer keeps its normal height.
+  /// attachments on top, then the upload bar, then the toolbar. There is no
+  /// preview panel — the field renders the formatting itself. Returns null when
+  /// nothing is showing so the composer keeps its normal height.
   Widget? _formatPanels(BuildContext context) {
-    final c = context.nym;
-    final matches = composerMediaMatches(_controller.text);
+    final matches =
+        composerMediaMatches(_controller.text, knownMedia: _uploadedMedia);
     final panels = <Widget>[];
 
-    if (matches.isNotEmpty || _uploadingPreviews.isNotEmpty) {
+    // Order matters: the strip goes in FIRST so the preview of what is being
+    // uploaded sits directly above its own progress bar, and the bar drops away
+    // beneath it the moment the upload lands.
+    if (matches.isNotEmpty || _attachments.isNotEmpty) {
       panels.add(ComposerMediaStrip(
         matches: matches,
-        uploading: _uploadingPreviews,
+        attachments: _attachments,
+        onRemoveAttachment: _removeAttachment2,
+        onRetry: _retryAttachment,
         localPreviews: _localMediaPreviews,
         onRemove: _removeAttachment,
         onOpen: (m) {
@@ -2285,38 +2239,8 @@ class _ComposerState extends ConsumerState<Composer> {
       ));
     }
 
-    if (_formatToolbarOpen && _formatPreviewOpen) {
-      final draft = _draftText();
-      panels.add(Container(
-        constraints: const BoxConstraints(maxHeight: 140),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: c.bgTertiary,
-          border: Border.all(color: c.glassBorder),
-          borderRadius: NymRadius.rmd,
-        ),
-        child: SingleChildScrollView(
-          child: draft.trim().isEmpty
-              ? Text(
-                  tr('Nothing to preview yet'),
-                  style: TextStyle(
-                      color: c.textDim,
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic),
-                )
-              // The very same renderer the message list uses, so the preview is
-              // a faithful "what you get".
-              : MessageContent(content: draft),
-        ),
-      ));
-    }
-
     if (_formatToolbarOpen) {
-      panels.add(FormatToolbar(
-        onTool: _applyFormatTool,
-        previewOpen: _formatPreviewOpen,
-        onTogglePreview: _toggleFormatPreview,
-      ));
+      panels.add(FormatToolbar(onTool: _applyFormatTool));
     }
 
     if (panels.isEmpty) return null;
@@ -2557,7 +2481,7 @@ class _ComposerState extends ConsumerState<Composer> {
         // Inert until relays connect (same `sendEnabled` as SEND), then the
         // existing in-upload guard takes over.
         enabled: sendEnabled,
-        onTap: _uploadProgress != null ? null : _pickAndUploadImage,
+        onTap: hasPendingUploads ? null : _pickAndUploadImage,
       ),
       _IconBtn(
         svg: NymIcons.composerFile,
@@ -3780,11 +3704,28 @@ class EmojiSentinelController extends TextEditingController {
     _nextSentinel = _kSentinelBase;
   }
 
-  /// Paints the editing text: each sentinel char becomes the custom-emoji image
-  /// (the SAME construction [InlineEmojiText] / the message `CustomEmojiNode` use
-  /// — `InlineNetworkImage(url: proxiedMedia(url, emoji:true), …)` so the composer
-  /// emoji is pixel-identical to the rendered-message one), every other run is a
-  /// normal [TextSpan] using the passed [style].
+  /// Whether the field owning this controller has focus. Drives nothing but the
+  /// markdown markers: they follow the caret, and a field nobody is typing in
+  /// has no caret to follow, so they stay hidden. Set from the composer's focus
+  /// listener.
+  bool get composerFocused => _composerFocused;
+  bool _composerFocused = false;
+  set composerFocused(bool value) {
+    if (_composerFocused == value) return;
+    _composerFocused = value;
+    notifyListeners();
+  }
+
+  /// Paints the editing text: markdown renders as formatted text with its
+  /// delimiters hidden (see composer_markdown.dart), and each sentinel char
+  /// becomes the custom-emoji image (the SAME construction [InlineEmojiText] /
+  /// the message `CustomEmojiNode` use — `InlineNetworkImage(url:
+  /// proxiedMedia(url, emoji:true), …)` so the composer emoji is pixel-identical
+  /// to the rendered-message one). Every other run is a normal [TextSpan].
+  ///
+  /// The spans always cover the draft character for character — a hidden
+  /// delimiter is painted at zero size rather than dropped — so the offsets the
+  /// field reports keep addressing [text], which is what gets sent.
   @override
   TextSpan buildTextSpan({
     required BuildContext context,
@@ -3792,18 +3733,90 @@ class EmojiSentinelController extends TextEditingController {
     required bool withComposing,
   }) {
     final src = text;
-    // Fast path: no sentinel of either kind → defer to the framework's default
-    // (also keeps composing-region underlines intact while typing plain text).
-    if ((_sentinelToCode.isEmpty && _sentinelToMention.isEmpty) ||
-        !_rxSentinel.hasMatch(src)) {
+    final hasSentinel = (_sentinelToCode.isNotEmpty ||
+            _sentinelToMention.isNotEmpty) &&
+        _rxSentinel.hasMatch(src);
+    // Never restyle mid-composition: the framework's own span carries the
+    // composing-region underline, and an IME has enough to contend with.
+    final composing =
+        withComposing && value.composing.isValid && !value.composing.isCollapsed;
+    final runs = composing ? const <RichRun>[] : parseRichFormat(src);
+    final formatted = hasRichFormat(runs);
+    // Fast path: nothing to paint → defer to the framework's default (also keeps
+    // composing-region underlines intact while typing plain text).
+    if (!hasSentinel && !formatted) {
       return super.buildTextSpan(
           context: context, style: style, withComposing: withComposing);
     }
     final baseStyle = style ?? const TextStyle();
+    final children = <InlineSpan>[];
+    if (formatted) {
+      final sel = value.selection;
+      final caret = _composerFocused && sel.isValid ? sel : null;
+      _emitRuns(
+        runs: runs,
+        src: src,
+        style: baseStyle,
+        fieldStyle: baseStyle,
+        colors: context.nym,
+        caretStart: caret?.start ?? -1,
+        caretEnd: caret?.end ?? -1,
+        out: children,
+      );
+    } else {
+      _emitPlain(src, 0, src.length, baseStyle, children);
+    }
+    return TextSpan(style: baseStyle, children: children);
+  }
+
+  /// Walks the parse tree, layering each run's style and emitting its delimiters
+  /// around its children.
+  void _emitRuns({
+    required List<RichRun> runs,
+    required String src,
+    required TextStyle style,
+    required TextStyle fieldStyle,
+    required NymColors colors,
+    required int caretStart,
+    required int caretEnd,
+    required List<InlineSpan> out,
+  }) {
+    for (final run in runs) {
+      if (run.isText) {
+        _emitPlain(src, run.start, run.end, style, out);
+        continue;
+      }
+      final revealed = run.revealedAt(caretStart, caretEnd);
+      final inner = richRunStyle(style, run.type, colors);
+      final mark = richMarkStyle(inner, fieldStyle, revealed, colors,
+          keepSpace: run.emptyBody);
+      if (run.open.isNotEmpty) {
+        out.add(TextSpan(text: run.open, style: mark));
+      }
+      _emitRuns(
+        runs: run.children,
+        src: src,
+        style: inner,
+        fieldStyle: fieldStyle,
+        colors: colors,
+        caretStart: caretStart,
+        caretEnd: caretEnd,
+        out: out,
+      );
+      if (run.close.isNotEmpty) {
+        out.add(TextSpan(text: run.close, style: mark));
+      }
+    }
+  }
+
+  /// `src[from, to)` as spans: sentinels become their emoji image or mention
+  /// chip, everything else is one [TextSpan] in [baseStyle].
+  void _emitPlain(String src, int from, int to, TextStyle baseStyle,
+      List<InlineSpan> children) {
+    if (to <= from) return;
     // 1.4× the font size, square — `div.message-input .custom-emoji
     // { width/height: 1.4em }` (styles-chat.css:1703-1708).
     final side = (baseStyle.fontSize ?? 14) * 1.4;
-    final children = <InlineSpan>[];
     final buf = StringBuffer();
 
     void flushText() {
@@ -3812,7 +3825,7 @@ class EmojiSentinelController extends TextEditingController {
       buf.clear();
     }
 
-    for (final rune in src.runes) {
+    for (final rune in src.substring(from, to).runes) {
       final isSentinel = rune >= _kSentinelBase && rune <= _kSentinelEnd;
       final chStr = isSentinel ? String.fromCharCode(rune) : null;
       final code = chStr == null ? null : _sentinelToCode[chStr];
@@ -3864,7 +3877,6 @@ class EmojiSentinelController extends TextEditingController {
       ));
     }
     flushText();
-    return TextSpan(style: baseStyle, children: children);
   }
 }
 

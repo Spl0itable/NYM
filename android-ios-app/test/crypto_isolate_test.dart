@@ -80,7 +80,7 @@ void main() {
 
       // Unwrap it (also through the isolate entrypoint) → original rumor.
       final results = await unwrapBatchIsolate([
-        unwrapJob(wrap, [(sk: recipientSk, bitchat: false)]),
+        unwrapJob(wrap, [gw.classicalCandidate(recipientSk)]),
       ]);
       expect(results.length, 1);
       final res = results.first!;
@@ -145,11 +145,11 @@ void main() {
       for (var i = 0; i < 3; i++) {
         final wrap = NostrEvent.fromJson(wraps[i]!);
         final ok = await unwrapBatchIsolate([
-          unwrapJob(wrap, [(sk: sks[i], bitchat: false)]),
+          unwrapJob(wrap, [gw.classicalCandidate(sks[i])]),
         ]);
         expect(ok.first, isNotNull, reason: 'recipient $i should decrypt');
         final wrong = await unwrapBatchIsolate([
-          unwrapJob(wrap, [(sk: sks[(i + 1) % 3], bitchat: false)]),
+          unwrapJob(wrap, [gw.classicalCandidate(sks[(i + 1) % 3])]),
         ]);
         expect(wrong.first, isNull, reason: 'wrong key must not decrypt');
       }
@@ -179,7 +179,7 @@ void main() {
       );
 
       final candidates = <gw.UnwrapCandidate>[
-        (sk: recipientSk, bitchat: false),
+        gw.classicalCandidate(recipientSk),
       ];
 
       // Existing synchronous reference output.
@@ -217,7 +217,7 @@ void main() {
         recipientPubkey: recipientPub,
       );
       final candidates = <gw.UnwrapCandidate>[
-        (sk: recipientSk, bitchat: true),
+        gw.classicalCandidate(recipientSk, bitchat: true),
       ];
 
       final sync = await gw.unwrapGiftWrap(wrap, candidates);
@@ -245,7 +245,7 @@ void main() {
       );
       // Wrong candidate key — must skip to null, never throw.
       final batch = await unwrapBatchIsolate([
-        unwrapJob(wrap, [(sk: stranger, bitchat: false)]),
+        unwrapJob(wrap, [gw.classicalCandidate(stranger)]),
       ]);
       expect(batch.length, 1);
       expect(batch.first, isNull);
@@ -280,8 +280,8 @@ void main() {
       );
 
       final batch = await unwrapBatchIsolate([
-        unwrapJob(goodWrap, [(sk: goodSk, bitchat: false)]),
-        unwrapJob(badWrap, [(sk: stranger, bitchat: false)]),
+        unwrapJob(goodWrap, [gw.classicalCandidate(goodSk)]),
+        unwrapJob(badWrap, [gw.classicalCandidate(stranger)]),
       ]);
       expect(batch.length, 2);
       expect(batch[0], isNotNull); // decryptable
@@ -306,8 +306,8 @@ void main() {
       // First candidate is wrong, second is the real recipient.
       final batch = await unwrapBatchIsolate([
         unwrapJob(wrap, [
-          (sk: generatePrivateKey(), bitchat: false),
-          (sk: recipientSk, bitchat: false),
+          gw.classicalCandidate(generatePrivateKey()),
+          gw.classicalCandidate(recipientSk),
         ]),
       ]);
       final res = batch.first;
@@ -347,7 +347,7 @@ void main() {
       for (var i = 0; i < 2; i++) {
         final res = await worker.unwrap(
           wraps[i]!,
-          [(sk: sks[i], bitchat: false)],
+          [gw.classicalCandidate(sks[i])],
         );
         expect(res, isNotNull);
         expect(res!.rumor['content'], 'facade fan-out');
@@ -387,7 +387,7 @@ void main() {
       );
       final res = await worker.unwrap(
         wrap,
-        [(sk: generatePrivateKey(), bitchat: false)],
+        [gw.classicalCandidate(generatePrivateKey())],
       );
       expect(res, isNull);
     });
@@ -407,7 +407,7 @@ void main() {
         recipientPubkey: recipientPub,
       );
       final job =
-          debugEncodeUnwrapJob(wrap, [(sk: recipientSk, bitchat: false)]);
+          debugEncodeUnwrapJob(wrap, [gw.classicalCandidate(recipientSk)]);
       // The encoded job is a plain JSON-able map carrying the key as hex.
       expect(job['wrap'], isA<Map<String, dynamic>>());
       final cands = (job['cands'] as List).cast<Map<String, dynamic>>();

@@ -7,11 +7,36 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/theme/nym_metrics.dart';
 import '../../features/identity/modal_chrome.dart';
+import '../shop/shop_purchase_policy.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import 'nymbot_models.dart';
 import 'nymbot_providers.dart';
+
+/// The copy shown instead of the purchase UI where credits can't be sold,
+/// named so a test can hold the background-translation catalog to it: a string
+/// the catalog doesn't carry stays English in every other language, silently.
+const String kBotCreditsBuyNotice =
+    'Nymbot credits cannot be purchased in this app. Credits are '
+    'bought from the Nymchat web app in your browser. Credits you '
+    'already have work here as usual.';
+const String kBotCreditsGiftNotice =
+    'Nymbot credits cannot be gifted from this app. Credits are '
+    'bought from the Nymchat web app in your browser, and can be '
+    'gifted from there. Credits you already have work here as '
+    'usual.';
+const String kBotCreditsHeader = 'NYMBOT CREDITS';
+const String kBotCreditsTitle = 'Nymbot private message credits';
+
+/// Every literal the credits sheet shows when purchases are off.
+const List<String> kBotCreditsDisabledStrings = [
+  kBotCreditsBuyNotice,
+  kBotCreditsGiftNotice,
+  kBotCreditsHeader,
+  kBotCreditsTitle,
+];
 
 /// The Nymbot **buy / gift credits** modal — a 1:1 port of the PWA's
 /// `showBotCreditsModal` (zaps.js:530-660) presented as a bottom sheet.
@@ -184,7 +209,9 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                     border: Border(bottom: BorderSide(color: c.glassBorder)),
                   ),
                   child: Text(
-                    tr('SEND LIGHTNING ZAP'),
+                    botCreditPurchasesDisabled
+                        ? tr(kBotCreditsHeader)
+                        : tr('SEND LIGHTNING ZAP'),
                     style: TextStyle(
                       color: c.primary,
                       fontSize: 22,
@@ -195,17 +222,21 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                 ),
                 // PWA `zapRecipientInfo`: gift vs buy heading.
                 Text(
-                  widget.isGift
-                      ? tr('Gift Nymbot credits to @{nym}',
-                          {'nym': widget.giftRecipientNym ?? 'user'})
-                      : tr('Buy Nymbot private message credits'),
+                  botCreditPurchasesDisabled
+                      ? tr(kBotCreditsTitle)
+                      : widget.isGift
+                          ? tr('Gift Nymbot credits to @{nym}',
+                              {'nym': widget.giftRecipientNym ?? 'user'})
+                          : tr('Buy Nymbot private message credits'),
                   style: TextStyle(
                       color: c.textBright,
                       fontSize: 16,
                       fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 14),
-                if (_invoice == null) ...[
+                if (botCreditPurchasesDisabled)
+                  _purchasesDisabledNote(c)
+                else if (_invoice == null) ...[
                   _tierToggle(c),
                   const SizedBox(height: 12),
                   _amountGrid(c),
@@ -265,6 +296,28 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
         // `.modal-close`: 32×32 glass ✕ chip, absolute top-right (14,14).
         ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
       ],
+    );
+  }
+
+  /// Where credits are bought on a platform that can't sell them here. Mirrors
+  /// the flair shop's note (shop_modal.dart) down to the chrome, and like it is
+  /// deliberately a STATEMENT: no button, no tappable link, nothing that reads
+  /// as a call to action pointing at an outside purchase — see
+  /// shop_purchase_policy.dart.
+  Widget _purchasesDisabledNote(NymColors c) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4, bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: c.insetFill,
+        border: Border.all(color: c.insetBorder),
+        borderRadius: NymRadius.rsm,
+      ),
+      child: Text(
+        tr(widget.isGift ? kBotCreditsGiftNotice : kBotCreditsBuyNotice),
+        style: TextStyle(color: c.textDim, fontSize: 12, height: 1.45),
+      ),
     );
   }
 

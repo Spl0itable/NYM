@@ -3,6 +3,8 @@
 // the card dropping its BUY / GIFT actions when the gate is on.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nym_bar/features/i18n/app_strings_catalog.dart';
+import 'package:nym_bar/features/nymbot/bot_credits_modal.dart';
 import 'package:nym_bar/features/shop/shop_purchase_policy.dart';
 
 void main() {
@@ -27,5 +29,31 @@ void main() {
     expect(find.byType(TextButton), findsNothing);
     expect(find.byType(InkWell), findsNothing);
     expect(find.byType(GestureDetector), findsNothing);
+  });
+
+  group('Nymbot credits', () {
+    test('follow the same gate as flair', () {
+      // Credits are the same kind of digital good; the two answers must not be
+      // able to drift apart by accident.
+      expect(botCreditPurchasesDisabled, shopPurchasesDisabled);
+      expect(botCreditPurchasesDisabled, isFalse);
+    });
+
+    test('every string the disabled sheet shows is in the sweep catalog', () {
+      for (final s in kBotCreditsDisabledStrings) {
+        expect(kAppStringsCatalog, contains(s), reason: s);
+      }
+    });
+
+    testWidgets('the notice is a statement, not a call to action',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(body: Text(kBotCreditsBuyNotice)),
+      ));
+      expect(find.text(kBotCreditsBuyNotice), findsOneWidget);
+      expect(find.byType(TextButton), findsNothing);
+      expect(find.byType(InkWell), findsNothing);
+      expect(find.byType(GestureDetector), findsNothing);
+    });
   });
 }

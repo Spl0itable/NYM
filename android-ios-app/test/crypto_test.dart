@@ -391,7 +391,7 @@ void main() {
       expect(wrap.kind, 1059);
 
       final res =
-          await gw.unwrapGiftWrap(wrap, [(sk: recipientSk, bitchat: true)]);
+          await gw.unwrapGiftWrap(wrap, [gw.classicalCandidate(recipientSk, bitchat: true)]);
       expect(res, isNotNull);
       expect(res!.isBitchat, isTrue);
       expect(res.rumor['pubkey'], senderPub);
@@ -436,7 +436,7 @@ void main() {
       expect(schnorr.verifyEvent(wrap), isTrue);
 
       final result = await gw.unwrapGiftWrap(wrap, [
-        (sk: recipientSk, bitchat: false),
+        gw.classicalCandidate(recipientSk),
       ]);
       expect(result, isNotNull);
       expect(result!.rumor['content'], 'secret DM contents');
@@ -482,7 +482,7 @@ void main() {
       expect(wrap.content.startsWith('v2:'), isTrue);
 
       final result = await gw.unwrapGiftWrap(wrap, [
-        (sk: recipientSk, bitchat: true),
+        gw.classicalCandidate(recipientSk, bitchat: true),
       ]);
       expect(result, isNotNull);
       expect(result!.isBitchat, isTrue);
@@ -521,7 +521,7 @@ void main() {
       expect(wrap.content.startsWith('v2:'), isTrue);
 
       final result = await gw.unwrapGiftWrap(wrap, [
-        (sk: recipientSk, bitchat: true),
+        gw.classicalCandidate(recipientSk, bitchat: true),
       ]);
       expect(result, isNotNull);
       expect(result!.isBitchat, isTrue);
@@ -551,7 +551,7 @@ void main() {
         recipientPubkey: recipientPub,
       );
       final result = await gw.unwrapGiftWrap(wrap, [
-        (sk: stranger, bitchat: false),
+        gw.classicalCandidate(stranger),
       ]);
       expect(result, isNull);
     });

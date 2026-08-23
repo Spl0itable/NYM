@@ -173,7 +173,24 @@ void showVerificationPopup(BuildContext context, CryptoVerifyState state) {
       ),
   };
 
-  // Anchor on the tapped lock's global bounds (the PWA's
+  showAnchoredInfoPopup(context, title: title, titleColor: titleColor, body: body);
+}
+
+/// The `.reactors-modal`-chromed `.verification-popup` card, anchored to a
+/// tapped badge. Shared by the verification lock and the post-quantum shield so
+/// the two popups can never drift apart visually.
+///
+/// Placement mirrors the PWA (`showVerificationPopup`, messages.js): 6px above
+/// the anchor when there's head-room, else 6px below; horizontally clamped to
+/// the 8px viewport gutters. No dimming scrim — dismissed on the next outside
+/// tap or drag.
+void showAnchoredInfoPopup(
+  BuildContext context, {
+  required String title,
+  required Color titleColor,
+  required String body,
+}) {
+  // Anchor on the tapped badge's global bounds (the PWA's
   // `anchorEl.getBoundingClientRect()`).
   final box = context.findRenderObject() as RenderBox?;
   if (box == null || !box.hasSize) return;

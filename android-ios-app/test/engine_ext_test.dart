@@ -447,7 +447,7 @@ void main() {
       expect(wrap.kind, 1059);
 
       final res = await giftwrap.unwrapGiftWrap(wrap, [
-        (sk: recipSk, bitchat: false),
+        giftwrap.classicalCandidate(recipSk),
       ]);
       expect(res, isNotNull);
       expect((res!.rumor['kind'] as num).toInt(), 25053);

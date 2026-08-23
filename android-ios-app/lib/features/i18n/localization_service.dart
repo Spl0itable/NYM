@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 import '../../services/api/api_client.dart';
 import '../../services/storage/key_value_store.dart';
@@ -159,12 +160,78 @@ class LocalizationService {
       return;
     }
     _loadCache();
+    // Fetch the pre-translated pack for this language before queueing anything.
+    // It usually answers the whole sweep in one request, so the queues below
+    // are left with only what it does not carry.
+    unawaited(_primeFromPack(next));
     // Re-translate anything already rendered so the switch is visible at once.
     for (final s in _seen) {
       if (!_cache.containsKey(s)) _pending.add(s);
     }
     _scheduleFlush();
     onChanged?.call();
+  }
+
+  /// Languages whose pack has already been fetched this session, so a switch
+  /// back does not re-download it.
+  final Set<String> _packed = {};
+
+  /// Forgets which packs have been fetched, so the next language switch asks
+  /// again. Exists for tests: the service is a process-wide singleton, so
+  /// without it one test's fetch suppresses the next one's.
+  @visibleForTesting
+  void resetPackStateForTest() => _packed.clear();
+
+  /// Reads one bundled pack. Injectable so tests need no asset bundle.
+  Future<String> Function(String assetKey) packLoader = rootBundle.loadString;
+
+  /// The pre-translated pack for [code], merged into the cache.
+  ///
+  /// Every user who picked a language used to re-pay for the same ~1500
+  /// strings, one request each, and watch the interface fill in over tens of
+  /// seconds. The finished translations now ship with the app as a flat JSON
+  /// map per language (`assets/i18n/<lang>.json`), so switching language is a
+  /// single asset read and everything it carries is already in the cache by the
+  /// time the sweep looks.
+  ///
+  /// Bundled rather than fetched, deliberately. A phone that meshes over
+  /// Bluetooth with the network down still has to be able to switch language,
+  /// and this is the one part of the interface that used to need a server to
+  /// work at all. Flutter reads an asset only when asked, so carrying every
+  /// language costs bundle size rather than memory.
+  ///
+  /// On-device entries win: a string already translated here is either from the
+  /// pack already, or newer than it. Anything the pack lacks — a string added
+  /// since the last export, or one the extractor could not see — still goes
+  /// through the runtime queues exactly as before, so a missing or malformed
+  /// pack costs nothing but the old behaviour.
+  Future<void> _primeFromPack(String code) async {
+    if (code.isEmpty || code == 'en' || !_packed.add(code)) return;
+    try {
+      final raw = await packLoader('assets/i18n/$code.json');
+      // A language switch while the asset was loading: those translations
+      // belong to a language that is no longer showing.
+      if (_lang != code) return;
+      final map = jsonDecode(raw);
+      if (map is! Map) return;
+      var added = 0;
+      map.forEach((k, v) {
+        if (k is! String || v is! String || v.isEmpty) return;
+        if (_cache.containsKey(k)) return;
+        _cache[k] = v;
+        // Nothing still queued for a string the pack just answered.
+        _pending.remove(k);
+        _primePending.remove(k);
+        _sweepPending.remove(k);
+        added++;
+      });
+      if (added == 0) return;
+      _persist();
+      onChanged?.call();
+    } catch (_) {
+      // No pack for this language yet, or a malformed one — the runtime queues
+      // still handle it, exactly as before packs existed.
+    }
   }
 
   /// Returns the localized form of [source] for the active language, applying

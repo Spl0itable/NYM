@@ -16,14 +16,12 @@ import '../../features/i18n/i18n.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/shop/cosmetics.dart';
-import '../../features/translate/translate_language_prompt.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../../models/group.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
-import '../../state/settings_provider.dart';
 import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
@@ -827,16 +825,10 @@ class ContextMenuPanel extends ConsumerWidget {
   Future<void> _translate(BuildContext context, WidgetRef ref) async {
     final content = target.content;
     if (content == null) return;
-    final settings = ref.read(settingsProvider);
-    String? chosenLang;
-    if (settings.translateLanguage.isEmpty) {
-      if (!context.mounted) return;
-      chosenLang = await promptTranslateLanguage(context);
-      if (chosenLang == null) return;
-      // settings persistence is owned by another slice; pass the chosen lang to
-      // the inline render directly (translate.js saves it to settings too).
-    }
-    onTranslateInline?.call(chosenLang);
+    // No language prompt: the target resolves from the language chosen at
+    // first run (see manualTranslateTargetFor). Null lets the inline render
+    // resolve it itself, which is the same answer.
+    onTranslateInline?.call(null);
   }
 
   Future<void> _zap(BuildContext context, WidgetRef ref) async {
