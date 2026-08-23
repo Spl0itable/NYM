@@ -416,8 +416,10 @@ section('the detected source actually routes');
 
 section('a generation budget proportional to the input');
 {
-  chk('a short message does not get a 2048-token budget', llmMaxTokens('hello') < 200);
-  chk('but is never clipped to nothing', llmMaxTokens('hi') >= 64);
+  chk('a short message does not get the full ceiling', llmMaxTokens('hello') < 2048);
+  // The floor is deliberately roomy: undershooting costs a truncated or empty
+  // translation if the model emits anything before the answer.
+  chk('but keeps headroom for a preamble', llmMaxTokens('hi') >= 256);
   chk('a long one is still capped', llmMaxTokens('x'.repeat(MAX_CHARS)) === 2048);
   chk('the budget grows with the input',
     llmMaxTokens('x'.repeat(400)) > llmMaxTokens('x'.repeat(40)));
@@ -427,6 +429,51 @@ section('a generation budget proportional to the input');
   chk('the LLM call carries the scaled budget',
     ai.calls[0].body.max_tokens === llmMaxTokens('hello there'),
     JSON.stringify(ai.calls[0].body.max_tokens));
+}
+
+// ------------------------------------------------------- empty-response paths
+section('when the instruct model answers with nothing');
+{
+  // The ay=Aymara logs: two attempts, both empty, both from an identical call.
+  let seen = [];
+  const ai = mockAi({
+    [LLM_MODEL]: (body) => {
+      seen.push(body.messages[0].content);
+      return { choices: [{ message: { content: '' }, finish_reason: 'stop' }],
+               usage: { completion_tokens: 0 } };
+    },
+  });
+  let threw = null;
+  try { await translateText(ai, { text: 'Send', source: 'en', target: 'ay' }); }
+  catch (e) { threw = e; }
+  chk('an empty answer is an error, never a blank translation', threw !== null);
+  chk('it is asked twice', seen.length === 2);
+  chk('but the second ask is different', seen[0] !== seen[1],
+    'an identical retry cannot turn an empty answer into a full one');
+  chk('the retry names the target language', seen[1].includes('Aymara'));
+  chk('the diagnostic reports what the model generated',
+    /completion_tokens=0/.test(threw.message), threw.message);
+  chk('and why it stopped', /finish=stop/.test(threw.message), threw.message);
+
+  // The other half of "empty": text we simply failed to read.
+  const shapes = [
+    ['content as typed parts', { choices: [{ message: { content: [{ text: 'hola' }] } }] }],
+    ['completions-style text', { choices: [{ text: 'hola' }] }],
+    ['a streaming delta', { choices: [{ delta: { content: 'hola' } }] }],
+  ];
+  for (const [label, res] of shapes) {
+    const a2 = mockAi({ [LLM_MODEL]: res });
+    const r = await translateText(a2, { text: 'hello', source: 'en', target: 'ay' });
+    chk(`${label} is read, not reported empty`, r.translatedText === 'hola');
+  }
+
+  // A genuinely empty response must still be distinguishable from those.
+  const a3 = mockAi({ [LLM_MODEL]: { choices: [], usage: { completion_tokens: 7 } } });
+  let e3 = null;
+  try { await translateText(a3, { text: 'hello', source: 'en', target: 'ay' }); }
+  catch (e) { e3 = e; }
+  chk('tokens generated but nothing extracted is visible in the log',
+    /completion_tokens=7/.test(e3.message) && /choices=0/.test(e3.message), e3.message);
 }
 
 section(`\n${pass} passed, ${fail} failed`);

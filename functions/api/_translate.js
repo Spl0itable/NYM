@@ -25,7 +25,9 @@ const LLM_MAX_TOKENS = 2048;
 /// The floor keeps very short inputs from being clipped mid-word.
 export function llmMaxTokens(text) {
   const chars = String(text || '').length;
-  return Math.max(64, Math.min(LLM_MAX_TOKENS, Math.ceil(chars * 2) + 48));
+  // Generous: the ceiling bounds a runaway generation, it is not a target.
+  // Undershooting costs a truncated or empty translation.
+  return Math.max(256, Math.min(LLM_MAX_TOKENS, Math.ceil(chars * 3) + 128));
 }
 
 /// Our language codes that the MT model carries, mapped to the code IT uses.
@@ -129,13 +131,12 @@ export function indicSupports(source, target) {
   return source === 'en' && INDIC_LANGS.has(target);
 }
 
-/// Guesses the source language from the script the text is written in.
-/// Returns an MT_LANGS code, or null when we cannot tell — and null is the
-/// safe answer, because it routes to the instruct model, which does detect.
+/// Guesses the source language from the script the text is written in, or
+/// null when we cannot tell -- null routes to the instruct model, which does
+/// detect.
 export function detectSourceLang(text) {
-  // Mentions, URLs and code carry Latin letters that say nothing about the
-  // language of the prose around them. Left in, a single @mention could drag
-  // an otherwise-Arabic message below the dominance threshold.
+  // Latin letters in mentions/URLs/code say nothing about the prose language,
+  // and could drag an otherwise-Arabic message below the threshold.
   const stripped = String(text || '')
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/@[\w#-]+/g, ' ')
@@ -202,11 +203,8 @@ function scriptOf(cp) {
   if (cp >= 0x1780 && cp <= 0x17ff) return 'khmer';
   if ((cp >= 0xac00 && cp <= 0xd7af) || (cp >= 0x1100 && cp <= 0x11ff)
     || (cp >= 0x3130 && cp <= 0x318f)) return 'hangul';
-  // Kana and Han are ONE bucket. Ordinary Japanese prose interleaves them
-  // sentence by sentence, so counting them apart means neither ever reaches
-  // the dominance threshold and every Japanese message falls through to the
-  // instruct model -- the exact case this is meant to catch. Which of the two
-  // languages it is gets decided in the resolver instead.
+  // Kana and Han are ONE bucket: Japanese prose interleaves them, so counting
+  // them apart means neither reaches the threshold. The resolver picks which.
   if ((cp >= 0x3040 && cp <= 0x30ff) || (cp >= 0x31f0 && cp <= 0x31ff)
     || (cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf)) return 'cjk';
   return null;
@@ -219,10 +217,8 @@ const SCRIPT_LANGS = new Map(Object.entries({
   gujarati: 'gu', oriya: 'or', tamil: 'ta', kannada: 'kn', malayalam: 'ml',
   sinhala: 'si', thai: 'th', lao: 'lo', myanmar: 'my', georgian: 'ka',
   ethiopic: 'am', khmer: 'km', hangul: 'ko',
-  // Kana is Japanese-only and ordinary Japanese prose is never without it, so
-  // its presence anywhere in the run settles the question. Han alone is
-  // Chinese. Kanji-only Japanese exists but is vanishingly rare in a chat
-  // message, and reading it as Chinese is a near miss, not nonsense.
+  // Kana is Japanese-only and Japanese prose is never without it. Han alone is
+  // Chinese; kanji-only Japanese is rare and reads as a near miss, not nonsense.
   cjk: (t) => (/[\u3040-\u30ff\u31f0-\u31ff]/.test(t) ? 'ja' : 'zh'),
   arabic: (t) => {
     if (/[\u067c\u0689\u0693\u0696\u069a\u06bc\u06cd]/.test(t)) return 'ps';
@@ -239,8 +235,7 @@ const SCRIPT_LANGS = new Map(Object.entries({
     if (/[\u0453\u045c\u0455]/.test(t)) return 'mk';
     return 'ru';
   },
-  // Marathi's ल़ळ is the one cheap tell; Hindi is otherwise the dominant
-  // Devanagari language by a wide margin.
+  // Marathi's ळ is the one cheap tell; Hindi otherwise dominates Devanagari.
   devanagari: (t) => (/\u0933/.test(t) ? 'mr' : 'hi'),
   // Latin spans too many of our languages to guess from shape alone.
   latin: () => null,
@@ -298,8 +293,24 @@ function pickLlmText(res) {
   if (typeof res.response === 'string') return res.response;
   if (res.result && typeof res.result.response === 'string') return res.result.response;
   const choice = Array.isArray(res.choices) ? res.choices[0] : null;
-  if (choice && choice.message && typeof choice.message.content === 'string') {
-    return choice.message.content;
+  if (choice) {
+    const msg = choice.message;
+    if (msg) {
+      if (typeof msg.content === 'string' && msg.content) return msg.content;
+      // Some stacks return content as typed parts rather than a string.
+      if (Array.isArray(msg.content)) {
+        const joined = msg.content
+          .map((part) => (typeof part === 'string' ? part
+            : (part && typeof part.text === 'string' ? part.text : '')))
+          .join('');
+        if (joined) return joined;
+      }
+    }
+    // Completions shape, and the streaming shape from a streaming backend.
+    if (typeof choice.text === 'string' && choice.text) return choice.text;
+    if (choice.delta && typeof choice.delta.content === 'string' && choice.delta.content) {
+      return choice.delta.content;
+    }
   }
   if (typeof res.output_text === 'string') return res.output_text;
   return '';
@@ -309,12 +320,33 @@ function pickLlmText(res) {
 /// text length rather than dumping the body — enough to tell "we read the wrong
 /// field" from "the model returned nothing", which is the only question worth
 /// asking when a translation comes back empty.
+/// Describes an unusable response. completion_tokens tells "generated
+/// nothing" apart from "we read the wrong field"; finish_reason tells both
+/// apart from a generation clipped by the budget.
 function describeResponse(res) {
   if (res == null) return 'null response';
   if (typeof res !== 'object') return `${typeof res} response`;
-  const keys = Object.keys(res);
-  const raw = pickLlmText(res);
-  return `keys=[${keys.join(',')}] text=${raw.length}ch`;
+  const parts = [`keys=[${Object.keys(res).join(',')}]`];
+  parts.push(`text=${pickLlmText(res).length}ch`);
+  const usage = res.usage || (res.result && res.result.usage);
+  if (usage) {
+    const done = usage.completion_tokens != null
+      ? usage.completion_tokens : usage.output_tokens;
+    if (done != null) parts.push(`completion_tokens=${done}`);
+  }
+  if (Array.isArray(res.choices)) {
+    parts.push(`choices=${res.choices.length}`);
+    const c = res.choices[0];
+    if (c && typeof c === 'object') {
+      parts.push(`choice0=[${Object.keys(c).join(',')}]`);
+      if (c.finish_reason != null) parts.push(`finish=${c.finish_reason}`);
+      if (c.message && typeof c.message === 'object') {
+        parts.push(`msg=[${Object.keys(c.message).join(',')}]`);
+        parts.push(`contentType=${c.message.content === null ? 'null' : typeof c.message.content}`);
+      }
+    }
+  }
+  return parts.join(' ');
 }
 
 /// The translated string out of whatever shape a translation model answered
@@ -356,11 +388,8 @@ export async function translateText(ai, { text, source, target }) {
   if (!q.trim()) throw new Error('nothing to translate');
   if (!target) throw new Error('no target language');
 
-  // An unlabelled source is the ONLY thing the on-demand callers ever send, so
-  // without this the fast MT path is unreachable from the app entirely and
-  // every message a user taps translate on pays instruct-model latency. See
-  // detectSourceLang for why a script guess is safe here and null is not a
-  // failure.
+  // Without this the fast MT path is unreachable from the app: the on-demand
+  // callers only ever send an unlabelled source.
   if (sl === 'auto') sl = detectSourceLang(q) || 'auto';
 
   const failures = [];
@@ -433,28 +462,25 @@ export async function translateText(ai, { text, source, target }) {
     + ' Keep a fragment as-is only when it genuinely has no translation — a '
     + 'name, a URL, a code. Never return the whole message unchanged.';
 
-  // Two attempts. A long generation that comes back with nothing in it is the
-  // shape of a model hitting an internal limit rather than one that has
-  // decided it cannot answer, and those are worth asking twice — particularly
-  // for the low-resource languages that only ever reach this path.
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // Two attempts, and the second is DIFFERENT. Repeating an identical request
+  // cannot help: an empty answer to a deterministic call is empty again, which
+  // is what the ay=Aymara logs showed twice in one request. The retry drops the
+  // long instruction block for a bare one, since a long prompt is itself a
+  // plausible reason a small-language translation comes back with nothing.
+  const prompts = [system, `Translate the user's message into ${langName(target)}. `
+    + 'Reply with the translation and nothing else.'];
+  for (const prompt of prompts) {
     try {
       const res = await ai.run(LLM_MODEL, {
         messages: [
-          { role: 'system', content: system },
+          { role: 'system', content: prompt },
           { role: 'user', content: q },
         ],
-        // Bounded by the input rather than the 5000-char ceiling: a ten-word
-        // message cannot need two thousand tokens, and leaving room for a
-        // runaway generation is leaving room for it to cost a minute.
+        // Bounded by the input rather than the 5000-char ceiling.
         max_tokens: llmMaxTokens(q),
       });
       const out = cleanLlmOutput(pickLlmText(res), q);
       if (out) return { translatedText: out, detectedLanguage: sl, engine: 'llm' };
-      // "Empty response" on its own conflates three different faults: the
-      // model returned nothing, we read the wrong field, or the cleaner ate
-      // the answer. The third cannot happen any more, and this tells the other
-      // two apart without another deploy to find out.
       failures.push(`${LLM_MODEL}: empty response (${describeResponse(res)})`);
     } catch (err) {
       failures.push(`${LLM_MODEL}: ${err && err.message ? err.message : String(err)}`);
