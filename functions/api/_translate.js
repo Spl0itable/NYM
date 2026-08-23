@@ -16,18 +16,23 @@ export const LLM_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 /// Hard cap on a single translation, matching what the callers already slice to.
 export const MAX_CHARS = 5000;
 
-/// Ceiling for the translation of a MAX_CHARS input plus script expansion.
-const LLM_MAX_TOKENS = 2048;
+/// Hard ceiling on a single generation.
+const LLM_MAX_TOKENS = 8192;
 
 /// A generation budget proportional to the input. Translation output is the
 /// same content in another language, so it is bounded by the input's own
 /// length -- generously, since scripts expand and a token is not a character.
 /// The floor keeps very short inputs from being clipped mid-word.
-export function llmMaxTokens(text) {
-  const chars = String(text || '').length;
-  // Generous: the ceiling bounds a runaway generation, it is not a target.
-  // Undershooting costs a truncated or empty translation.
-  return Math.max(256, Math.min(LLM_MAX_TOKENS, Math.ceil(chars * 3) + 128));
+/// The instruct model emits `reasoning_content` before its answer, and that
+/// reasoning is spent on how HARD the language is, not on how long the input
+/// is. Budgeting from input length starved it: ay=Aymara burned the whole
+/// allowance thinking and returned finish=length with empty content.
+///
+/// A flat allowance for reasoning plus room for the output, and [attempt]
+/// escalates it -- the one thing that turns a `length` cutoff into an answer.
+export function llmMaxTokens(text, attempt = 0) {
+  const forOutput = Math.ceil(String(text || '').length * 1.5);
+  return Math.min(LLM_MAX_TOKENS, (attempt === 0 ? 2048 : 6144) + forOutput);
 }
 
 /// Our language codes that the MT model carries, mapped to the code IT uses.
@@ -468,16 +473,16 @@ export async function translateText(ai, { text, source, target }) {
   // long instruction block for a bare one, since a long prompt is itself a
   // plausible reason a small-language translation comes back with nothing.
   const prompts = [system, `Translate the user's message into ${langName(target)}. `
-    + 'Reply with the translation and nothing else.'];
-  for (const prompt of prompts) {
+    + 'Answer immediately with the translation and nothing else. Do not '
+    + 'think first, do not explain, do not show your working.'];
+  for (let attempt = 0; attempt < prompts.length; attempt++) {
     try {
       const res = await ai.run(LLM_MODEL, {
         messages: [
-          { role: 'system', content: prompt },
+          { role: 'system', content: prompts[attempt] },
           { role: 'user', content: q },
         ],
-        // Bounded by the input rather than the 5000-char ceiling.
-        max_tokens: llmMaxTokens(q),
+        max_tokens: llmMaxTokens(q, attempt),
       });
       const out = cleanLlmOutput(pickLlmText(res), q);
       if (out) return { translatedText: out, detectedLanguage: sl, engine: 'llm' };

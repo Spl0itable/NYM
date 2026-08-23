@@ -414,20 +414,22 @@ section('the detected source actually routes');
   chk('the translation comes back', r.translatedText === 'hola');
 }
 
-section('a generation budget proportional to the input');
+section('a generation budget that leaves room to reason');
 {
-  chk('a short message does not get the full ceiling', llmMaxTokens('hello') < 2048);
-  // The floor is deliberately roomy: undershooting costs a truncated or empty
-  // translation if the model emits anything before the answer.
-  chk('but keeps headroom for a preamble', llmMaxTokens('hi') >= 256);
-  chk('a long one is still capped', llmMaxTokens('x'.repeat(MAX_CHARS)) === 2048);
-  chk('the budget grows with the input',
-    llmMaxTokens('x'.repeat(400)) > llmMaxTokens('x'.repeat(40)));
+  // The model reasons before answering, and reasoning is spent on how hard the
+  // language is, not how long the input is. A budget derived from input length
+  // starved it: 41 chars of Aymara hit finish=length with empty content.
+  chk('a short message still gets room to reason', llmMaxTokens('hello') >= 2048);
+  chk('the retry escalates the budget', llmMaxTokens('hello', 1) > llmMaxTokens('hello', 0));
+  chk('long input adds room for the OUTPUT on top',
+    llmMaxTokens('x'.repeat(2000)) > llmMaxTokens('hello'));
+  chk('but nothing exceeds the ceiling',
+    llmMaxTokens('x'.repeat(MAX_CHARS), 1) <= 8192);
 
   const ai = mockAi({ ...llmOk('bonjour') });
   await translateText(ai, { text: 'hello there', source: 'auto', target: 'fr' });
-  chk('the LLM call carries the scaled budget',
-    ai.calls[0].body.max_tokens === llmMaxTokens('hello there'),
+  chk('the LLM call carries the first-attempt budget',
+    ai.calls[0].body.max_tokens === llmMaxTokens('hello there', 0),
     JSON.stringify(ai.calls[0].body.max_tokens));
 }
 
@@ -454,6 +456,28 @@ section('when the instruct model answers with nothing');
   chk('the diagnostic reports what the model generated',
     /completion_tokens=0/.test(threw.message), threw.message);
   chk('and why it stopped', /finish=stop/.test(threw.message), threw.message);
+
+  // The shape actually observed for ay: the model spent the whole budget on
+  // reasoning_content and was cut off before writing any answer.
+  const budgets = [];
+  const starved = mockAi({
+    [LLM_MODEL]: (body) => {
+      budgets.push(body.max_tokens);
+      return { choices: [{ finish_reason: 'length', index: 0, logprobs: null,
+        message: { content: '', reasoning_content: 'thinking...', role: 'assistant' } }],
+        usage: { completion_tokens: body.max_tokens } };
+    },
+  });
+  let starvedErr = null;
+  try { await translateText(starved, { text: 'x'.repeat(41), source: 'en', target: 'ay' }); }
+  catch (e) { starvedErr = e; }
+  chk('a reasoning cutoff is reported as such',
+    /finish=length/.test(starvedErr.message) && /reasoning_content/.test(starvedErr.message),
+    starvedErr.message);
+  chk('the first budget leaves room to reason', budgets[0] >= 2048, String(budgets[0]));
+  chk('and the retry asks for more', budgets[1] > budgets[0], JSON.stringify(budgets));
+  chk('the retry also tells it not to think first',
+    /[Dd]o not.{0,20}think/.test(seen[1]), seen[1]);
 
   // The other half of "empty": text we simply failed to read.
   const shapes = [
