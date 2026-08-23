@@ -567,10 +567,25 @@ export async function onRequest(context) {
   function archiveInboundEvent(raw, kind, eventId) {
     if (!archiveEnabled || !eventId) return;
     // kind 30078 is shared by presence/settings/etc; only archive polls/votes
-    // (channel-scoped via g/d) and vouch lists (d = nym-vouches).
+    // (channel-scoped via g/d), vouch lists (d = nym-vouches) and post-quantum
+    // key announcements (d = nym-pq).
+    //
+    // The announcements are archived so a client can ask ONE authoritative
+    // question instead of racing several relays for the answer. Discovery used
+    // to fan a request out to five and take the first "nothing here", which the
+    // relays without the announcement always win because they have nothing to
+    // look up — so two users who had both published their keys went on
+    // messaging each other classically. D1 has no such race.
+    //
+    // Archiving does not make D1 trusted: the client verifies the signature on
+    // whatever comes back, exactly as it does for a relay event and for the
+    // vouch lists already stored here. That signature is what binds the ML-KEM
+    // key to the Nostr identity, so a substituted key would have to be forged
+    // rather than merely served.
     if (kind === 30078) {
       const t = extractTagValue(raw, 't');
-      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches') return;
+      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches'
+        && t !== 'nym-pq') return;
     }
     const channel = sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind));
     if (!channel) return;

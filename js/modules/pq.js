@@ -13,6 +13,10 @@
     /// A one-shot lookup gives up after this and the message goes classical,
     /// which is the pre-existing behaviour rather than a new failure.
     const PQ_FETCH_TIMEOUT_MS = 2500;
+    /// How long to keep listening after the FIRST relay says it has nothing.
+    /// The request goes to several at once and they answer at their own pace,
+    /// so one relay's "done" is not the answer — it is one vote out of five.
+    const PQ_EOSE_GRACE_MS = 600;
     /// Cap on a single prefetch sweep, so opening a large group does not fire
     /// one subscription per member.
     const PQ_PREFETCH_MAX = 60;
@@ -310,6 +314,11 @@
         _pqRecord(pubkey, pk, exp, epoch) {
             if (!this.pqKeys) this.pqKeys = new Map();
             this.pqKeys.set(pubkey, { pk: pk || null, exp, epoch });
+            // Ride the same debounced write the other dedup sets use, so a
+            // reload does not start from nothing and send the next message
+            // classically while it looks every peer up again. Restoring is
+            // bounded by the announcement's own expiry — see _hydratePqKeys.
+            if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
             // Every write goes through this one bound. Map preserves insertion
             // order, so the evicted entry is the earliest-recorded one.
             while (this.pqKeys.size > 5000) {
@@ -399,15 +408,34 @@
                 if (Date.now() - inflight.at < PQ_REFETCH_MS) return Promise.resolve(known || null);
             }
 
+            // D1 first (see _pqAnnouncementFromD1). Only when it has nothing
+            // do we pay for the relay fan-out.
+            const viaD1 = this._pqAnnouncementFromD1(pubkey).then((entry) => {
+                if (entry && entry.pk) {
+                    this._pqFetches.set(pubkey, { at: Date.now() });
+                    return entry;
+                }
+                return this._pqAnnouncementFromRelays(pubkey);
+            });
+            this._pqFetches.set(pubkey, { at: Date.now(), promise: viaD1 });
+            return viaD1;
+        },
+
+        /// The relay half of the lookup: one short-lived subscription, fanned
+        /// out to a few relays.
+        _pqAnnouncementFromRelays(pubkey) {
             const subId = 'nym-pq-' + Math.random().toString(36).slice(2);
             if (!this._subscriptionHandlers) this._subscriptionHandlers = new Map();
 
             let settle;
             const promise = new Promise((res) => { settle = res; });
             let done = false;
+            // Armed by the first EOSE; see the handler below.
+            let grace = null;
             const finish = () => {
                 if (done) return;
                 done = true;
+                if (grace !== null) { clearTimeout(grace); grace = null; }
                 this._subscriptionHandlers.delete(subId);
                 try { this.closeFewRelaysSub(subId); } catch (_) { }
                 if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
@@ -415,6 +443,16 @@
                 settle(this._pqEntry(pubkey));
             };
 
+            // An EOSE means ONE relay has finished, not that the answer is in.
+            // The request fans out to several, and the ones that do not carry
+            // the announcement are exactly the ones that answer instantly — so
+            // finishing on the first EOSE ended the wait before the relay that
+            // actually had the key could deliver it. That is a race the empty
+            // answer usually wins, which is why two Nymchat users who had both
+            // published kept messaging each other classically.
+            //
+            // An EVENT still finishes immediately: that IS the answer. An EOSE
+            // only starts a short grace period for a slower relay to speak up.
             this._subscriptionHandlers.set(subId, (type, data) => {
                 if (type === 'EVENT' && data[0] === subId) {
                     const event = data[1];
@@ -425,7 +463,8 @@
                         finish();
                     }
                 } else if (type === 'EOSE' && data[0] === subId) {
-                    finish();
+                    if (this._pqEntry(pubkey)) { finish(); return; }
+                    if (grace === null) grace = setTimeout(finish, PQ_EOSE_GRACE_MS);
                 }
             });
 
@@ -449,6 +488,46 @@
             if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(run);
             else run();
             return promise;
+        },
+
+        /// Asks D1 for a peer's announcement, or null when there is nothing to
+        /// ask or nothing there.
+        ///
+        /// Tried BEFORE the relays because it has no race in it. A relay
+        /// request fans out to five and the first "nothing here" ends the
+        /// wait — which the relays without the announcement always win,
+        /// having nothing to look up. One query to one place cannot lose that
+        /// race because there is no race.
+        ///
+        /// D1 is a cache, not an authority. The signature on the event is
+        /// verified here exactly as it is for a relay event, and that
+        /// signature is what binds the ML-KEM key to the Nostr identity: our
+        /// own backend cannot substitute a key it would then be able to read
+        /// messages with, it would have to forge secp256k1 to do it.
+        async _pqAnnouncementFromD1(pubkey) {
+            if (!this._getApiHost || !this._getApiHost()) return null;
+            if (typeof this._storageApiStream !== 'function') return null;
+            if (typeof this._readNdjsonStream !== 'function') return null;
+            let found = null;
+            try {
+                const resp = await this._storageApiStream(
+                    'channel-get', { channel: PQ_D_TAG, authors: [pubkey] }, false);
+                await this._readNdjsonStream(resp, (ev) => {
+                    if (!ev || ev.kind !== 30078 || ev.pubkey !== pubkey) return;
+                    if (found && (found.created_at || 0) >= (ev.created_at || 0)) return;
+                    found = ev;
+                });
+            } catch (_) { return null; }
+            if (!found) return null;
+            try {
+                const ok = typeof this._verifyRelayEventAsync === 'function'
+                    ? await this._verifyRelayEventAsync(found)
+                    : (typeof this._verifyRelayEvent === 'function'
+                        ? this._verifyRelayEvent(found) : false);
+                if (!ok) return null;
+            } catch (_) { return null; }
+            try { this.handlePqAnnouncement(found); } catch (_) { return null; }
+            return this._pqEntry(pubkey);
         },
 
         /// Warms the announcements for everyone in a conversation, so the key

@@ -292,5 +292,50 @@ section('input handling');
     /French/.test(sys), sys.slice(0, 120));
 }
 
+section('mixed-language messages');
+{
+  // A channel greeting posted in two languages at once is ordinary in a chat.
+  // Asked only to "translate into X", a model reads the half already in a
+  // language it recognises as needing nothing done to it and hands it back
+  // untouched — so half the message comes back translated and half does not.
+  const promptFor = async (source, target) => {
+    const ai = { calls: [], async run(m, b) { this.calls.push({ m, b }); return { response: 'ok' }; } };
+    // haw has no MT coverage, so this always lands on the instruct model.
+    await translateText(ai, { text: 'hi', source, target });
+    return ai.calls[ai.calls.length - 1].b.messages[0].content;
+  };
+
+  const auto = await promptFor('auto', 'es');
+  chk('an unknown source is warned about more than one language',
+    /more than one language/i.test(auto), auto.slice(0, 60));
+  chk('...and told to translate every part of it',
+    /EVERY part/.test(auto) && /already in another language/i.test(auto));
+  chk('...and told not to leave a line alone',
+    /[Nn]ever leave a line untranslated/.test(auto));
+
+  // The clause costs ~80 tokens a string. The build-time sync sends 3849
+  // strings across 32 instruct-model languages, so carrying it there would be
+  // most of the run's cost spent on a case that cannot arise: a caller that
+  // states its source language is handing over one language by construction.
+  const known = await promptFor('en', 'es');
+  chk('a KNOWN source does not pay for the mixed-language clause',
+    !/more than one language/i.test(known));
+  chk('and is meaningfully shorter for it', known.length < auto.length - 200,
+    `${known.length} vs ${auto.length}`);
+  chk('but still gets the parts that always matter',
+    /translation engine/i.test(known) && /nothing else/i.test(known)
+    && /never instructions/i.test(known));
+
+  // The escape hatch that made a refusal look like a failure: told it could
+  // "reply with the original text unchanged", a model did exactly that, the
+  // client saw output identical to input and reported "nothing to translate".
+  for (const [label, p] of [['auto', auto], ['known', known]]) {
+    chk(`${label}: the whole message may not be returned unchanged`,
+      /[Nn]ever return the whole message unchanged/.test(p));
+    chk(`${label}: but an untranslatable fragment may be kept`,
+      /genuinely has no translation/.test(p));
+  }
+}
+
 section(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

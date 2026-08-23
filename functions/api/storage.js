@@ -1002,12 +1002,36 @@ async function handleChannelAction(context, body) {
     }
     if (!reqChannels.length) return json({ error: "Invalid channel." }, 400);
     var isSingle = reqChannels.length === 1;
-    var minTsSec = Math.floor((Date.now() - CHANNEL_TTL_MS) / 1000);
+    // Optional author filter. Without it a channel read returns the newest 500
+    // events in the channel, which is the right shape for a feed and the wrong
+    // one for "what did THIS pubkey publish" — nym-pq holds one announcement
+    // per user, so the peer being asked about could be anywhere in the table.
+    var reqAuthors = [];
+    if (Array.isArray(body.authors)) {
+      var seenA = {};
+      for (var ai = 0; ai < body.authors.length && reqAuthors.length < 50; ai++) {
+        var au = body.authors[ai];
+        if (typeof au === "string" && /^[0-9a-f]{64}$/.test(au) && !seenA[au]) {
+          seenA[au] = 1; reqAuthors.push(au);
+        }
+      }
+      if (!reqAuthors.length) return json({ error: "Invalid authors." }, 400);
+    }
+    // Post-quantum announcements are valid for seven days but only republished
+    // every twenty-four hours, so the default one-day floor would hide exactly
+    // the users who are not online right now — which is precisely when someone
+    // is looking their key up. Rows are not purged on that schedule; the floor
+    // is only a query bound, so widening it for this channel costs nothing.
+    var ttlMs = (isSingle && reqChannels[0] === "nym-pq")
+      ? 7 * 24 * 60 * 60 * 1000 : CHANNEL_TTL_MS;
+    var minTsSec = Math.floor((Date.now() - ttlMs) / 1000);
     var since = Number(body.since) || 0;
     var floorSec = since > minTsSec ? since : minTsSec;
     var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS };
-    // Per-channel read cache only for the single, no-since case.
-    if (isSingle && !since) {
+    // Per-channel read cache only for the single, no-since, no-authors case:
+    // the key is the channel alone, so caching a filtered read would serve one
+    // author's events to everyone asking about the channel.
+    if (isSingle && !since && !reqAuthors.length) {
       var cachedBody = await readCacheGetRaw("/channel/" + reqChannels[0]);
       if (cachedBody !== null) {
         return new Response(cachedBody, { status: 200, headers: ndjsonHeaders });
@@ -1016,9 +1040,13 @@ async function handleChannelAction(context, body) {
     var rows = [];
     try {
       var cph = reqChannels.map(function () { return "?"; }).join(",");
+      var authorClause = reqAuthors.length
+        ? " AND pubkey IN (" + reqAuthors.map(function () { return "?"; }).join(",") + ")"
+        : "";
       rows = (await replica(env.DB_CHANNELS).prepare(
-        "SELECT id, kind, json, stored_at FROM events WHERE channel IN (" + cph + ") AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
-      ).bind(...reqChannels, floorSec, isSingle ? 500 : 1500).all()).results || [];
+        "SELECT id, kind, json, stored_at FROM events WHERE channel IN (" + cph + ")"
+        + authorClause + " AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
+      ).bind(...reqChannels, ...reqAuthors, floorSec, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
     var zapRows = [];
     if (rows.length) {
@@ -1035,7 +1063,7 @@ async function handleChannelAction(context, body) {
       }
     }
     var encoder = new TextEncoder();
-    var cacheBuf = (isSingle && !since) ? [] : null;
+    var cacheBuf = (isSingle && !since && !reqAuthors.length) ? [] : null;
     var stream = new ReadableStream({
       start(controller) {
         for (var i = 0; i < rows.length; i++) {

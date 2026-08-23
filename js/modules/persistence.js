@@ -24,6 +24,7 @@
     const META_PROCESSED_PM_EVENT_IDS = 'processedPMEventIds';
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
+    const META_PQ_KEYS = 'pqKeys';
     const META_NYMCHAT_VOUCHES = 'nymchatVouches';
     const META_TRUSTED_PUBKEYS = 'trustedPubkeys';
     const META_POOL_SHARD_LAST_SEEN = 'poolShardLastSeen';
@@ -309,6 +310,24 @@
                         ids: Array.from(this.nymchatPubkeys)
                     });
                 }
+                // Peers' post-quantum keys, so a reload does not start from
+                // nothing and send the next message classically while it looks
+                // them up again. Each entry carries the announcement's own
+                // expiry and is dropped on restore once past it — see
+                // _hydratePqKeys for why that bound matters.
+                if (this.pqKeys && this.pqKeys.size > 0) {
+                    const entries = [];
+                    for (const [pubkey, rec] of this.pqKeys) {
+                        if (!rec || !rec.exp) continue;
+                        entries.push([
+                            pubkey,
+                            rec.pk ? window.NymCrypto._b64uEncode(rec.pk) : null,
+                            rec.exp,
+                            rec.epoch || 0,
+                        ]);
+                    }
+                    if (entries.length) this._cachePut('meta', { key: META_PQ_KEYS, entries });
+                }
                 if (this.nymchatVouches && this.nymchatVouches.size > 0) {
                     this._cachePut('meta', {
                         key: META_NYMCHAT_VOUCHES,
@@ -337,9 +356,47 @@
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
+        /// Restores peers' post-quantum keys from the last session.
+        ///
+        /// A cached entry is a HINT, never the final word, and the difference
+        /// matters more here than for the other caches: this is a key we
+        /// ENCRYPT TO. A wrong one does not degrade the message to classical,
+        /// it makes it unreadable — the recipient has no secret half to
+        /// decapsulate with and the text never opens for them.
+        ///
+        /// Two bounds keep that from happening. Entries past the
+        /// announcement's own expiry are dropped rather than restored, and any
+        /// fresher announcement — pushed by the standing subscription, or
+        /// fetched from D1 — replaces what is here. Key ROTATION is survivable
+        /// even so: a recipient derives the current epoch and three before it,
+        /// so a slightly stale key still opens. What is not survivable is a
+        /// peer who moved from an nsec to a browser extension, because they
+        /// then hold no ML-KEM secret at all; that is what the expiry bound is
+        /// really protecting against.
+        async _hydratePqKeys(meta) {
+            if (!this.pqKeys) this.pqKeys = new Map();
+            const nowSec = Math.floor(Date.now() / 1000);
+            for (const m of meta) {
+                if (!m || m.key !== META_PQ_KEYS || !Array.isArray(m.entries)) continue;
+                for (const e of m.entries) {
+                    if (!Array.isArray(e) || e.length < 3) continue;
+                    const [pubkey, pkB64, exp, epoch] = e;
+                    if (typeof pubkey !== 'string' || typeof exp !== 'number') continue;
+                    if (exp <= nowSec) continue;
+                    let pk = null;
+                    if (pkB64) {
+                        try { pk = window.NymCrypto._b64uDecode(pkB64); } catch (_) { continue; }
+                        if (!(pk instanceof Uint8Array) || pk.length !== 1184) continue;
+                    }
+                    this.pqKeys.set(pubkey, { pk, exp, epoch: epoch || 0 });
+                }
+            }
+        },
+
         async _hydrateDedupSets() {
             try {
                 const meta = await this._cacheGetAll('meta');
+                try { await this._hydratePqKeys(meta); } catch (_) { }
                 for (const m of meta) {
                     if (!m || !m.key || !Array.isArray(m.ids)) continue;
                     if (m.key === META_PROCESSED_PM_EVENT_IDS && this.processedPMEventIds) {

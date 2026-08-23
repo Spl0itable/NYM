@@ -672,6 +672,10 @@ section('on-demand announcement discovery');
     // login, where the list starts empty, meant every peer.
     const mkPeer = () => T.getPublicKey(T.generateSecretKey());
     const live = () => Math.floor(Date.now() / 1000) + 3600;
+    // D1 is asked first and answers asynchronously (with nothing, in these
+    // tests — no API host is configured), so the relay request it falls back
+    // to lands a microtask later than it used to.
+    const tick = () => new Promise((r) => setTimeout(r, 0));
 
     // mkNym is scoped to the block above; the prototype itself is global.
     const mkFetcher = () => {
@@ -693,6 +697,7 @@ section('on-demand announcement discovery');
         const n = mkFetcher();
         const peer = mkPeer();
         n.ensurePqAnnouncement(peer);
+        await tick();
         chk('a peer we hold no key for is asked about', n.reqs.length === 1);
         const f = n.reqs[0][2];
         chk('the lookup is scoped to that peer',
@@ -707,6 +712,7 @@ section('on-demand announcement discovery');
         const kem = NC.pqKeypairFromPrivkey(T.generateSecretKey(), 0);
         n._pqRecord(peer, kem.publicKey, live(), 0);
         n.ensurePqAnnouncement(peer);
+        await tick();
         chk('a peer we already hold a KEY for is not re-asked', n.reqs.length === 0);
     }
     {
@@ -719,11 +725,13 @@ section('on-demand announcement discovery');
         const peer = mkPeer();
         n._pqRecord(peer, null, live(), 0);
         n.ensurePqAnnouncement(peer);
+        await tick();
         chk('a peer we hold a KEYLESS entry for is asked again', n.reqs.length === 1);
         // ...but not on every send: the re-check is rate-limited like a miss.
         const subId = n.reqs[0][1];
         n._subscriptionHandlers.get(subId)('EOSE', [subId]);
         n.ensurePqAnnouncement(peer);
+        await tick();
         chk('and not re-asked again straight away', n.reqs.length === 1);
     }
 
@@ -733,6 +741,7 @@ section('on-demand announcement discovery');
         const peer = mkPeer();
         const a = n.ensurePqAnnouncement(peer);
         const b = n.ensurePqAnnouncement(peer);
+        await tick();
         chk('concurrent lookups share one subscription', n.reqs.length === 1);
         chk('concurrent lookups share one promise', a === b);
     }
@@ -745,6 +754,7 @@ section('on-demand announcement discovery');
         const peer = T.getPublicKey(peerSk);
         const peerKem = NC.pqKeypairFromPrivkey(peerSk, 0);
         const waiting = n.ensurePqAnnouncement(peer);
+        await tick();
         const subId = n.reqs[0][1];
         const handler = n._subscriptionHandlers.get(subId);
         chk('a handler is registered for the lookup', typeof handler === 'function');
@@ -772,26 +782,238 @@ section('on-demand announcement discovery');
         const n = mkFetcher();
         const peer = mkPeer();
         const waiting = n.ensurePqAnnouncement(peer);
+        await tick();
         const subId = n.reqs[0][1];
         n._subscriptionHandlers.get(subId)('EOSE', [subId]);
         chk('an absent announcement resolves rather than hanging',
             (await waiting) === null);
         n.ensurePqAnnouncement(peer);
+        await tick();
         chk('a miss is not immediately re-asked', n.reqs.length === 1);
+    }
+
+    {
+        // The race that kept two post-quantum users messaging classically. The
+        // request fans out to several relays; the ones WITHOUT the announcement
+        // are the ones that answer instantly, and finishing on that first EOSE
+        // ended the wait before the relay that had the key could deliver it.
+        const n = mkFetcher();
+        const peerSk = T.generateSecretKey();
+        const peer = T.getPublicKey(peerSk);
+        const peerKem = NC.pqKeypairFromPrivkey(peerSk, 0);
+        const waiting = n.ensurePqAnnouncement(peer);
+        await tick();
+        const subId = n.reqs[0][1];
+        const handler = n._subscriptionHandlers.get(subId);
+
+        // Relay 1 has nothing and says so first.
+        handler('EOSE', [subId]);
+        chk('one relay\'s EOSE does not end the search',
+            !n._pqFetches.get(peer) || !!n._pqFetches.get(peer).promise);
+
+        // Relay 2 answers a moment later, as a slower relay does.
+        const exp = live();
+        handler('EVENT', [subId, {
+            kind: 30078, pubkey: peer,
+            tags: [['d', 'nym-pq'], ['t', 'nym-pq'], ['expiration', String(exp)]],
+            content: JSON.stringify({
+                v: 1, alg: 'mlkem768', nym: 1, epoch: 0,
+                pk: NC._b64uEncode(peerKem.publicKey), exp,
+            }),
+        }]);
+        chk('a later relay\'s answer is still taken', (await waiting) !== null);
+        chk('and the key is the one it announced',
+            !!n.pqKeyFor(peer) && eq(n.pqKeyFor(peer), peerKem.publicKey));
+        chk('so the send plan goes post-quantum', n.pqPmPlan(peer).pq === true);
+    }
+
+    {
+        // ...and an EOSE when the answer is already in ends it at once, rather
+        // than making every successful lookup wait out the grace period.
+        const n = mkFetcher();
+        const peerSk = T.generateSecretKey();
+        const peer = T.getPublicKey(peerSk);
+        const peerKem = NC.pqKeypairFromPrivkey(peerSk, 0);
+        const waiting = n.ensurePqAnnouncement(peer);
+        await tick();
+        const subId = n.reqs[0][1];
+        const handler = n._subscriptionHandlers.get(subId);
+        const exp = live();
+        handler('EVENT', [subId, {
+            kind: 30078, pubkey: peer,
+            tags: [['d', 'nym-pq'], ['t', 'nym-pq'], ['expiration', String(exp)]],
+            content: JSON.stringify({
+                v: 1, alg: 'mlkem768', nym: 1, epoch: 0,
+                pk: NC._b64uEncode(peerKem.publicKey), exp,
+            }),
+        }]);
+        chk('an event resolves immediately', (await waiting) !== null);
     }
 
     {
         const n = mkFetcher();
         n.prefetchPqAnnouncements([mkPeer(), mkPeer(), mkPeer()]);
+        await tick();
         chk('opening a conversation warms every member', n.reqs.length === 3);
         const n2 = mkFetcher();
         n2.prefetchPqAnnouncements(Array.from({ length: 200 }, mkPeer));
+        await tick();
         chk('a large group does not fire one subscription per member',
             n2.reqs.length === 60);
         const n3 = mkFetcher();
         n3.prefetchPqAnnouncements(['not-a-pubkey', '', null]);
+        await tick();
         chk('junk pubkeys are skipped', n3.reqs.length === 0);
     }
+}
+
+section('D1 is asked first, and is not trusted');
+{
+    const mkPeer2 = () => T.generateSecretKey();
+    const live2 = () => Math.floor(Date.now() / 1000) + 3600;
+
+    /// A nym whose D1 read returns `events` and whose signature check answers
+    /// `verified`.
+    const mkD1 = (events, verified = true) => {
+        const sk = T.generateSecretKey();
+        const n = new globalThis.NYM();
+        n.privkey = sk;
+        n.pubkey = T.getPublicKey(sk);
+        n.connected = true;
+        n.pqKeys = new Map();
+        n.reqs = [];
+        n._subscriptionHandlers = new Map();
+        n._isNostrHex64 = (v) => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+        n.closeFewRelaysSub = () => { };
+        n.sendRequestToFewRelays = (r) => n.reqs.push(r);
+        n._getApiHost = () => 'https://example.test';
+        n.d1Calls = [];
+        n._storageApiStream = async (action, extra) => {
+            n.d1Calls.push({ action, extra });
+            return { events };
+        };
+        n._readNdjsonStream = async (resp, onItem) => {
+            for (const e of resp.events) onItem(e);
+        };
+        n._verifyRelayEventAsync = async () => verified;
+        return n;
+    };
+
+    const announcement = (sk, { withKey = true } = {}) => {
+        const pub = T.getPublicKey(sk);
+        const kem = NC.pqKeypairFromPrivkey(sk, 0);
+        const exp = live2();
+        return T.finalizeEvent({
+            kind: 30078,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['d', 'nym-pq'], ['t', 'nym-pq'], ['expiration', String(exp)]],
+            content: JSON.stringify({
+                v: 1, alg: 'mlkem768', nym: 1, epoch: 0, exp,
+                ...(withKey ? { pk: NC._b64uEncode(kem.publicKey) } : {}),
+            }),
+        }, sk);
+    };
+
+    {
+        const peerSk = mkPeer2(), peer = T.getPublicKey(peerSk);
+        const n = mkD1([announcement(peerSk)]);
+        const entry = await n.ensurePqAnnouncement(peer);
+        chk('D1 is asked', n.d1Calls.length === 1);
+        chk('...for the right channel and author',
+            n.d1Calls[0].extra.channel === 'nym-pq'
+            && n.d1Calls[0].extra.authors[0] === peer);
+        chk('and its answer is used', !!entry && !!entry.pk);
+        // The point of the whole change: no relay race when D1 has it.
+        chk('no relay request is made when D1 answers', n.reqs.length === 0);
+        chk('the send plan goes post-quantum', n.pqPmPlan(peer).pq === true);
+    }
+
+    {
+        // D1 is a cache, not an authority. An event whose signature does not
+        // check out is worth less than nothing: the ML-KEM key inside is what
+        // peers encapsulate to, so accepting a forged one would hand whoever
+        // served it the plaintext.
+        const peerSk = mkPeer2(), peer = T.getPublicKey(peerSk);
+        const n = mkD1([announcement(peerSk)], false);
+        await n.ensurePqAnnouncement(peer);
+        chk('an unverified D1 event is refused', !n.pqKeyFor(peer));
+        chk('and the relays are asked instead', n.reqs.length === 1);
+    }
+
+    {
+        const peerSk = mkPeer2(), peer = T.getPublicKey(peerSk);
+        const n = mkD1([]);
+        await n.ensurePqAnnouncement(peer);
+        chk('an empty D1 answer falls back to the relays', n.reqs.length === 1);
+    }
+
+    {
+        // A keyless announcement in D1 is not the answer either — the lookup
+        // exists to find a KEY.
+        const peerSk = mkPeer2(), peer = T.getPublicKey(peerSk);
+        const n = mkD1([announcement(peerSk, { withKey: false })]);
+        await n.ensurePqAnnouncement(peer);
+        chk('a keyless D1 answer still tries the relays', n.reqs.length === 1);
+    }
+
+    {
+        // An event for someone else must never satisfy a lookup.
+        const peerSk = mkPeer2(), peer = T.getPublicKey(peerSk);
+        const otherSk = mkPeer2();
+        const n = mkD1([announcement(otherSk)]);
+        await n.ensurePqAnnouncement(peer);
+        chk('an announcement from a different pubkey is ignored', !n.pqKeyFor(peer));
+        chk('and does not end the search', n.reqs.length === 1);
+    }
+}
+
+section('the registry survives a reload');
+{
+    // A cached key is a HINT, never the final word — and the difference
+    // matters more here than for the other caches, because this is a key we
+    // ENCRYPT TO. A wrong one does not degrade a message to classical, it
+    // makes it unreadable: the recipient has no secret half to decapsulate
+    // with and the text never opens for them.
+    const src = fs.readFileSync(path.join(root, 'js/modules/persistence.js'), 'utf8');
+    const at = src.indexOf('        async _hydratePqKeys(');
+    let depth = 0, i = src.indexOf('{', at);
+    for (; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (depth === 0) break; }
+    }
+    const META = /const META_PQ_KEYS = '([^']+)'/.exec(src)[1];
+    const { _hydratePqKeys } = new Function('META_PQ_KEYS',
+        `return { ${src.slice(at, i + 1)} };`)(META);
+
+    const n = new globalThis.NYM();
+    n.pqKeys = new Map();
+    n._hydratePqKeys = _hydratePqKeys;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const kem = NC.pqKeypairFromPrivkey(T.generateSecretKey(), 0);
+    const pk = (n2) => T.getPublicKey(T.generateSecretKey());
+    const liveKey = pk(), expired = pk(), keyless = pk();
+
+    await n._hydratePqKeys([{ key: META, entries: [
+        [liveKey, NC._b64uEncode(kem.publicKey), nowSec + 3600, 0],
+        [expired, NC._b64uEncode(kem.publicKey), nowSec - 10, 0],
+        [keyless, null, nowSec + 3600, 0],
+    ] }]);
+
+    chk('a live key comes back', !!n.pqKeys.get(liveKey));
+    chk('...byte for byte', eq(n.pqKeys.get(liveKey).pk, kem.publicKey));
+    // The bound that keeps a stale key from making a message unreadable.
+    chk('an EXPIRED entry is dropped rather than restored', !n.pqKeys.get(expired));
+    chk('a keyless entry restores as keyless', 
+        !!n.pqKeys.get(keyless) && n.pqKeys.get(keyless).pk === null);
+
+    await n._hydratePqKeys([{ key: META, entries: [
+        ['a'.repeat(64), '!!!not-base64!!!', nowSec + 60, 0],
+        ['b'.repeat(64), NC._b64uEncode(new Uint8Array(32)), nowSec + 60, 0],
+        ['c'.repeat(64), NC._b64uEncode(kem.publicKey), 'not-a-number', 0],
+    ] }]);
+    chk('undecodable stored data is skipped', !n.pqKeys.get('a'.repeat(64)));
+    chk('a wrong-sized key is skipped', !n.pqKeys.get('b'.repeat(64)));
+    chk('a malformed expiry is skipped', !n.pqKeys.get('c'.repeat(64)));
 }
 
 section('badge state');
