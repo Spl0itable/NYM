@@ -378,16 +378,25 @@
         /// post-quantum.
         ensurePqAnnouncement(pubkey) {
             if (!pubkey || !this.pqEnabled()) return Promise.resolve(null);
-            if (this._pqEntry(pubkey)) return Promise.resolve(this._pqEntry(pubkey));
+            const known = this._pqEntry(pubkey);
+            // Only an entry WITH A KEY ends the search. A keyless one says
+            // "this is a Nymchat client that published no post-quantum key" —
+            // true when we recorded it, and recorded for a week. A peer who
+            // was on an older build, or signed in with an extension, and has
+            // since switched to their nsec would go on getting classical
+            // messages for the rest of that week because this returned early
+            // on the stale answer. The whole point of this lookup is the key,
+            // so not having one is a reason to look again, not to stop.
+            if (known && known.pk) return Promise.resolve(known);
             if (!this._pqFetches) this._pqFetches = new Map();
 
             const inflight = this._pqFetches.get(pubkey);
-            // A miss is cached for a while too: without that, every keystroke's
-            // worth of send-path checks would re-ask the relays for an
-            // announcement that does not exist.
+            // Re-checking is rate-limited rather than free: a peer who really
+            // has no key — a Bitchat user, a signer login — must not be
+            // re-queried on every send.
             if (inflight) {
                 if (inflight.promise) return inflight.promise;
-                if (Date.now() - inflight.at < PQ_REFETCH_MS) return Promise.resolve(null);
+                if (Date.now() - inflight.at < PQ_REFETCH_MS) return Promise.resolve(known || null);
             }
 
             const subId = 'nym-pq-' + Math.random().toString(36).slice(2);
@@ -424,9 +433,18 @@
             const req = ['REQ', subId, {
                 kinds: [30078], '#t': [PQ_D_TAG], authors: [pubkey], limit: 1
             }];
+            // The deadline starts NOW, not when the request goes out. The
+            // one-shot pool queues past four concurrent lookups, and the send
+            // path awaits this promise — so a deadline that only started once
+            // a slot freed would let a busy queue hold up a message
+            // indefinitely rather than letting it go classical and move on.
+            setTimeout(finish, PQ_FETCH_TIMEOUT_MS);
             const run = () => {
-                try { this.sendRequestToFewRelays(req); } catch (_) { finish(); return; }
-                setTimeout(finish, PQ_FETCH_TIMEOUT_MS);
+                if (done) { // gave up before a slot came free
+                    if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
+                    return;
+                }
+                try { this.sendRequestToFewRelays(req); } catch (_) { finish(); }
             };
             if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(run);
             else run();

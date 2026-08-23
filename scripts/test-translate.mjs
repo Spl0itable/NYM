@@ -185,6 +185,57 @@ section('cleaning up after an instruct model');
   chk('line breaks inside the translation survive',
     cleanLlmOutput('une\ndeux', 'one\ntwo') === 'une\ndeux');
   chk('a null answer becomes empty rather than "null"', cleanLlmOutput(null, 'x') === '');
+
+  // Each rule above is a guess about a shape the model MIGHT emit. A guess
+  // that swallows the whole answer has done more damage than the preamble it
+  // was removing, and it also makes the failure undiagnosable downstream —
+  // "empty response" would then mean either "the model said nothing" or "we
+  // deleted what it said".
+  chk('a label with nothing after it does not become empty',
+    cleanLlmOutput('Aymara:\n', 'hello') === 'Aymara:');
+  chk('an answer that is only an opener survives too',
+    cleanLlmOutput('Sure! Here is the translation:\n\n', 'hello').length > 0);
+  chk('bare quotes do not vanish', cleanLlmOutput('""', 'hello') === '""');
+}
+
+section('reading an instruct model\'s answer');
+{
+  // Reading the wrong field looks exactly like a model that returned nothing,
+  // so the failure has to be able to tell them apart.
+  const ai = (res) => ({ calls: [], async run() { return res; } });
+  const run = async (res) => {
+    const a = { calls: [], async run(m, b) { a.calls.push({ m, b }); return res; } };
+    try {
+      const r = await translateText(a, { text: 'hello', source: 'auto', target: 'fr' });
+      return { ok: true, text: r.translatedText };
+    } catch (e) { return { ok: false, message: e.message }; }
+  };
+  chk('the documented shape is read', (await run({ response: 'bonjour' })).text === 'bonjour');
+  chk('a nested result shape is read too',
+    (await run({ result: { response: 'bonjour' } })).text === 'bonjour');
+  chk('a chat-completion shape is read too',
+    (await run({ choices: [{ message: { content: 'bonjour' } }] })).text === 'bonjour');
+
+  const empty = await run({ response: '' });
+  chk('a genuinely empty answer still fails', empty.ok === false);
+  chk('and the failure names the shape it saw',
+    /keys=\[response\]/.test(empty.message), empty.message);
+  chk('and the text length, so "wrong field" is distinguishable',
+    /text=0ch/.test(empty.message), empty.message);
+
+  const unknown = await run({ mystery: 'bonjour' });
+  chk('an unread shape is reported with its keys, not as silence',
+    unknown.ok === false && /keys=\[mystery\]/.test(unknown.message), unknown.message);
+
+  // An empty answer is retried once; a thrown error is not.
+  let calls = 0;
+  const flaky = { async run() { calls++; return calls === 1 ? { response: '' } : { response: 'bonjour' }; } };
+  const r = await translateText(flaky, { text: 'hello', source: 'auto', target: 'fr' });
+  chk('an empty answer is retried once', calls === 2 && r.translatedText === 'bonjour');
+  let thrown = 0;
+  const broken = { async run() { thrown++; throw new Error('boom'); } };
+  try { await translateText(broken, { text: 'hello', source: 'auto', target: 'fr' }); } catch (_) { }
+  chk('a thrown error is not paid for twice', thrown === 1, String(thrown));
 }
 
 // ----------------------------------------------------------- the real list

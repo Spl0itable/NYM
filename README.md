@@ -265,40 +265,6 @@ Quote-reply to any Nymbot response to continue the conversation. The bot carries
 
 Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory. The Android APK can be downloaded directly from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).
 
-## Interface Translations
-
-The interface is available in 132 languages. Both clients used to translate it at runtime — a request per string, around 1500 of them — so every user who picked a language watched the UI fill in over tens of seconds, and paid for the same translations everyone before them had already paid for.
-
-They are now translated once, here, and committed:
-
-Run from **this repository** — it holds the Node toolchain, the cache, and the web app's own markup:
-
-```sh
-npm run i18n            # fill i18n/cache/<lang>.json for anything not already cached
-npm run i18n -- --list  # coverage report, no network
-```
-
-Strings go to the app's own backend (`/api/proxy?action=translate`), which runs the translation models on Workers AI — nothing is sent to a third party. Batched 20 per request; the backend still runs one inference per string, so what that saves is the round trip. Override the host with `NYM_TRANSLATE_PROXY` to point at a local `wrangler pages dev`. The run only ever sends what the cache is missing.
-
-Three engines, tried in order and falling through on any refusal ([`functions/api/_translate.js`](functions/api/_translate.js)): a purpose-built English→Indic translator for the 22 scheduled Indic languages, a general many-to-many translator for 79 more, and an instruct model for the 32 with no machine-translation coverage anywhere (Hawaiian, Krio, Akan, Esperanto and the like). Because the source here is always English, the sync takes the fast dedicated paths for 100 of the 132 languages.
-
-The source strings come from two places, because the two clients express their interface differently: the Flutter app's `kAppStringsCatalog`, which names every string explicitly and covers what both clients show, and the static markup in `index.html`. The PWA generates most of its text in JavaScript, which cannot be read statically — those strings are covered by the Flutter catalog, and anything missed falls back to translating on demand.
-
-The catalog is read from a checkout of the `flutter-app` repository beside this one (`../flutter-app/lib/features/i18n/app_strings_catalog.dart`; override with `NYM_FLUTTER_CATALOG`). It is deliberately **not** read from [`android-ios-app/`](android-ios-app/), which is a read-only mirror synced at release time — packs built from it would be a release behind the copy the app actually shows. Without that checkout the extraction tests skip rather than fail.
-
-The two clients then take the same cache by different routes, because a browser and a phone want opposite things:
-
-```sh
-npm run build                                        # web: dist/i18n/<lang>.json, fetched on demand
-npm run i18n:export -- --out ../flutter-app/assets/i18n   # app: bundled into the APK/IPA
-```
-
-The web app fetches one ~100 KB pack when a language is selected; downloading all 132 would be absurd. The app bundles the whole directory instead, so the interface is translated the instant a language is chosen — no request, no latency, and no dependency on being online, which matters for a client that is expected to work over a Bluetooth mesh with the network down. Commit the exported packs in the `flutter-app` repository; the export prunes languages that are no longer offered so a removed one does not linger in the bundle.
-
-Anything a pack does not carry — a string added since the last sync, or one the extractor could not see — still goes through the old on-demand path, so a missing, stale or unreachable pack costs nothing but the previous behaviour.
-
-Only strings still present in the app are shipped, so removing copy shrinks the packs rather than leaving a translation behind for text nobody can reach. The packs are deliberately **not** part of `build-manifest.json` or the `bundleHash`: those describe the running code, and a build with half-finished translations must produce the same hash as one with finished translations for "reproducible from source" to stay true.
-
 ## Verify Build
 
 The deployed web app is built deterministically, so anyone can confirm that the code running at the live site is exactly what is published in this repository.

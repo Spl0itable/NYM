@@ -701,11 +701,30 @@ section('on-demand announcement discovery');
     }
 
     {
+        // A key ends the search.
+        const n = mkFetcher();
+        const peer = mkPeer();
+        const kem = NC.pqKeypairFromPrivkey(T.generateSecretKey(), 0);
+        n._pqRecord(peer, kem.publicKey, live(), 0);
+        n.ensurePqAnnouncement(peer);
+        chk('a peer we already hold a KEY for is not re-asked', n.reqs.length === 0);
+    }
+    {
+        // A KEYLESS entry does not. It says "this was a Nymchat client with no
+        // post-quantum key" — true when recorded, and recorded for a week. A
+        // peer who was on an older build, or signed in with an extension, and
+        // has since switched to their nsec would go on getting classical
+        // messages for the rest of that week if this stopped here.
         const n = mkFetcher();
         const peer = mkPeer();
         n._pqRecord(peer, null, live(), 0);
         n.ensurePqAnnouncement(peer);
-        chk('a peer we already hold an entry for is not re-asked', n.reqs.length === 0);
+        chk('a peer we hold a KEYLESS entry for is asked again', n.reqs.length === 1);
+        // ...but not on every send: the re-check is rate-limited like a miss.
+        const subId = n.reqs[0][1];
+        n._subscriptionHandlers.get(subId)('EOSE', [subId]);
+        n.ensurePqAnnouncement(peer);
+        chk('and not re-asked again straight away', n.reqs.length === 1);
     }
 
     {

@@ -186,34 +186,53 @@ function batches(texts) {
 /// response to being throttled, and it is why failures arrived in exact
 /// multiples of the batch size: one throttled batch became twenty throttled
 /// strings, all of them spending their retries inside the same bad window.
-async function translateGroup(texts, target) {
+/// Whether the backend has already told us it does not speak the batch shape.
+/// Worth remembering for the run: an older deployment answers 400 to every
+/// batch, and finding that out once per group is a lot of wasted round trips.
+let batchUnsupported = false;
+
+/// Records why a string could not be translated, keyed by the string.
+///
+/// Every one of these used to be a bare `catch { null }`, so the reason was
+/// discarded and the report said "no translation returned" for a 400, a 502, a
+/// timeout and an empty answer alike. That is the difference between "this
+/// host is running an older deployment" and "this one string is
+/// untranslatable", and the run said neither.
+async function translateGroup(texts, target, reasons) {
   await pickRoute();
-  if (texts.length === 1) {
-    try { return [await translateOne(texts[0], target)]; }
-    catch { return [null]; }
+  const one = async (text) => {
+    try { return await translateOne(text, target); }
+    catch (err) { reasons.set(text, err.message || String(err)); return null; }
+  };
+  if (texts.length === 1 || batchUnsupported) {
+    const out = [];
+    for (const text of texts) out.push(await one(text));
+    return out;
   }
   try {
     const out = await withRetries(() => viaProxyBatch(texts, target));
     // A batch that came back with holes in it: retry just those, sequentially,
     // rather than re-sending the whole group.
-    if (out.some((v) => v === null)) {
-      for (let i = 0; i < out.length; i++) {
-        if (out[i] !== null) continue;
-        try { out[i] = await translateOne(texts[i], target); }
-        catch { out[i] = null; }
-      }
+    for (let i = 0; i < out.length; i++) {
+      if (out[i] === null) out[i] = await one(texts[i]);
     }
     return out;
   } catch (err) {
+    // A 400 means the endpoint does not know `texts[]` — an older deployment.
+    // Say so once, loudly: it is the difference between a slow run and a host
+    // that has not shipped the new worker yet.
+    if (/\b400\b/.test(err.message || '') && !batchUnsupported) {
+      batchUnsupported = true;
+      notice(`the backend rejected a batch (${err.message}) — this host is `
+        + 'probably running an older deployment without the batch endpoint. '
+        + 'Falling back to one request per string for the rest of this run.');
+    }
     if (isThrottled(err)) cooldownUntil = Math.max(cooldownUntil, Date.now() + THROTTLE_MS);
     // One string's failure is one string's failure. Returning `null` for it
     // keeps the other nineteen, and lets the caller name the string that
     // actually failed instead of blaming the batch it happened to be in.
     const out = [];
-    for (const text of texts) {
-      try { out.push(await translateOne(text, target)); }
-      catch { out.push(null); }
-    }
+    for (const text of texts) out.push(await one(text));
     return out;
   }
 }
@@ -253,15 +272,17 @@ export async function translateMissing(lang, sources, { onProgress } = {}) {
   let index = 0;
   let done = 0;
   const failures = [];
+  /// Why each failed string failed, filled in by translateGroup.
+  const reasons = new Map();
 
   const worker = async () => {
     while (index < queue.length) {
       const group = queue[index++];
       try {
-        const translated = await translateGroup(group, lang);
+        const translated = await translateGroup(group, lang, reasons);
         group.forEach((source, i) => {
           if (typeof translated[i] === 'string') cache[source] = translated[i];
-          else failures.push({ source, error: 'no translation returned' });
+          else failures.push({ source, error: reasons.get(source) || 'no translation returned' });
         });
       } catch (err) {
         for (const source of group) failures.push({ source, error: String(err.message || err) });
