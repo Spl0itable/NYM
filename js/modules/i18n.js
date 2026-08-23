@@ -694,13 +694,19 @@ Object.assign(NYM.prototype, {
                     // Close immediately and translate in the background — the app
                     // (and the tutorial) stay usable while strings fill in.
                     finish(code);
+                    // The translation target is adopted even when the pick did
+                    // NOT change the UI language. Confirming the pre-selected
+                    // language is the common case, and gating this on `changed`
+                    // left nym_translate_language empty for exactly those users
+                    // — who were then asked to pick a language all over again on
+                    // their first translation.
+                    this._syncTranslateLanguageToUi(code);
                     if (changed) {
                         this.applyUiLanguage(code).catch(() => { });
-                        this._syncTranslateLanguageToUi(code);
                         const select = document.getElementById('uiLanguageSelect');
                         if (select) select.value = code;
-                        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
                     }
+                    if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
                 });
             });
 

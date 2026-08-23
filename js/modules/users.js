@@ -1079,99 +1079,95 @@ Object.assign(NYM.prototype, {
 
         if (!this.mediaFallbacks) this.mediaFallbacks = new Map();
 
-        const progress = document.getElementById('uploadProgress');
-        const progressFill = document.getElementById('progressFill');
-        const progressLabel = document.getElementById('uploadProgressLabel');
-
-        const total = files.length;
-        const uploaded = [];
+        // Each file gets a tile with its own wheel. There is no batch-wide
+        // progress bar any more: it could only ever describe the batch, so with
+        // several files in flight it could not say which one it was waiting on,
+        // and it covered the previews while doing it.
+        const records = typeof this.addComposerAttachments === 'function'
+            ? this.addComposerAttachments(files) : [];
+        if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
 
         const abortCtrl = new AbortController();
         this._uploadAbort = abortCtrl;
         const signal = abortCtrl.signal;
 
         try {
-            progress.classList.add('active');
-            // The quote/edit chips and the autocomplete stack are positioned
-            // off this panel's height, so they have to be told it appeared.
-            if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
-            // Show local thumbnails immediately, before a single byte is up, so
-            // the user can verify what they picked (rich-compose.js).
-            if (typeof this.setComposerUploadPreviews === 'function') this.setComposerUploadPreviews(files);
-
-            for (let i = 0; i < total; i++) {
-                if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-                const file = files[i];
-                const isVideo = file.type.startsWith('video/');
-                const label = total > 1
-                    ? `Uploading ${i + 1} of ${total}…`
-                    : (isVideo ? 'Uploading video...' : 'Uploading image...');
-                progressLabel.textContent = label;
-                progressFill.style.width = `${Math.round((i / total) * 80) + 10}%`;
-
-                const arrayBuffer = await file.arrayBuffer();
-                const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-                const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-                const { url, server } = await this._uploadWithFallback(file, hashHex, signal);
-                uploaded.push({ url, hashHex, server, file });
-                // Retire this file's "uploading" placeholder and hand its local
-                // object URL to the hosted URL, so the thumbnail never flickers
-                // and we don't re-download what we just uploaded.
-                if (typeof this.resolveComposerUploadPreview === 'function') this.resolveComposerUploadPreview(url, file);
-            }
-
-            progressFill.style.width = '100%';
-
-            const input = document.getElementById('messageInput');
-            const appendedUrls = uploaded.map(u => u.url).join(' ');
-            if (input) {
-                // Separate from whatever the user already typed — without this a
-                // draft ending mid-word would glue itself onto the first URL and
-                // neither the formatter nor the attachment strip would see it.
-                const existing = input.value || '';
-                const sep = existing && !/\s$/.test(existing) ? ' ' : '';
-                input.value = existing + sep + appendedUrls + ' ';
-                input.focus();
-                if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
-            }
-
-            for (const u of uploaded) {
-                const predicted = BLOSSOM_SERVERS
-                    .filter(s => s !== u.server)
-                    .map(s => this._predictMirrorUrl(s, u.hashHex, u.url));
-                if (predicted.length) {
-                    this.mediaFallbacks.set(u.url, predicted);
-                    if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
-                }
-
-                this._mirrorBlobBackground(u.hashHex, u.url, u.server)
-                    .then(mirrors => {
-                        if (mirrors && mirrors.length) {
-                            const existing = this.mediaFallbacks.get(u.url) || [];
-                            this.mediaFallbacks.set(u.url, Array.from(new Set([...mirrors, ...existing])));
-                            if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
-                        }
-                    })
-                    .catch(() => { });
-            }
-        } catch (error) {
-            if (error && error.name === 'AbortError') {
-                this.displaySystemMessage(total > 1 ? 'Uploads cancelled.' : 'Upload cancelled.');
-            } else {
-                this.displaySystemMessage('Failed to upload media: ' + (error && error.message ? error.message : error));
+            for (const rec of records) {
+                if (signal.aborted) break;
+                await this._uploadOneAttachment(rec, signal);
             }
         } finally {
             if (this._uploadAbort === abortCtrl) this._uploadAbort = null;
-            if (typeof this.clearComposerUploadPreviews === 'function') {
-                this.clearComposerUploadPreviews();
-                this.updateComposerMediaPreviews();
-            }
-            setTimeout(() => {
-                progress.classList.remove('active');
-                if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
-            }, 500);
         }
+    },
+
+    // Uploads one attachment and reflects the outcome on its tile. Never
+    // throws: a failure marks that ONE tile retryable and leaves the rest of
+    // the batch alone, which is the whole reason the batch is not a single
+    // all-or-nothing operation any more.
+    async _uploadOneAttachment(rec, signal) {
+        if (!rec || !rec.file) return;
+        this.updateComposerAttachment(rec.id, { status: 'uploading', error: '' });
+        try {
+            const arrayBuffer = await rec.file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+            const hashHex = Array.from(new Uint8Array(hashBuffer))
+                .map(b => b.toString(16).padStart(2, '0')).join('');
+            const { url, server } = await this._uploadWithFallback(rec.file, hashHex, signal);
+            this.updateComposerAttachment(rec.id, {
+                status: 'done', url, hashHex, server, error: '',
+            });
+            this._registerMediaFallbacks(url, hashHex, server);
+        } catch (error) {
+            if (error && error.name === 'AbortError') {
+                // Cancelled, not failed: the tile goes away with the batch.
+                if (typeof this.removeComposerAttachment === 'function') {
+                    this.removeComposerAttachment(rec.id);
+                }
+                return;
+            }
+            this.updateComposerAttachment(rec.id, {
+                status: 'failed',
+                error: (error && error.message) ? String(error.message).slice(0, 120) : 'Upload failed',
+            });
+        }
+    },
+
+    // Re-runs one failed upload, from the file the tile still holds.
+    async retryComposerAttachment(id) {
+        const rec = typeof this.composerAttachmentById === 'function'
+            ? this.composerAttachmentById(id) : null;
+        if (!rec || rec.status === 'uploading') return;
+        const abortCtrl = new AbortController();
+        const prev = this._uploadAbort;
+        this._uploadAbort = abortCtrl;
+        try {
+            await this._uploadOneAttachment(rec, abortCtrl.signal);
+        } finally {
+            if (this._uploadAbort === abortCtrl) this._uploadAbort = prev || null;
+        }
+    },
+
+    // Predicted + real mirrors for a freshly uploaded blob, so a dead primary
+    // host does not take the message's media down with it.
+    _registerMediaFallbacks(url, hashHex, server) {
+        if (!this.mediaFallbacks) this.mediaFallbacks = new Map();
+        const predicted = BLOSSOM_SERVERS
+            .filter(s => s !== server)
+            .map(s => this._predictMirrorUrl(s, hashHex, url));
+        if (predicted.length) {
+            this.mediaFallbacks.set(url, predicted);
+            if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
+        }
+        this._mirrorBlobBackground(hashHex, url, server)
+            .then(mirrors => {
+                if (mirrors && mirrors.length) {
+                    const existing = this.mediaFallbacks.get(url) || [];
+                    this.mediaFallbacks.set(url, Array.from(new Set([...mirrors, ...existing])));
+                    if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
+                }
+            })
+            .catch(() => { });
     },
 
     // Stop in-flight uploads when the progress modal's close button is clicked.
@@ -1179,12 +1175,9 @@ Object.assign(NYM.prototype, {
         if (this._uploadAbort) {
             try { this._uploadAbort.abort(); } catch (_) { }
         }
-        if (typeof this.clearComposerUploadPreviews === 'function') {
-            this.clearComposerUploadPreviews();
-            this.updateComposerMediaPreviews();
+        if (typeof this.clearComposerAttachments === 'function') {
+            this.clearComposerAttachments();
         }
-        const progress = document.getElementById('uploadProgress');
-        if (progress) progress.classList.remove('active');
         if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
     },
 

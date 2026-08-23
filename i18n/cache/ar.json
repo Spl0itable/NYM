@@ -1485,6 +1485,7 @@
   "{target} was unbanned by {actor}.": "وَقَوْلُهُ تَعَالَى: {وَإِذْ قَالَ رَبُّكَ لِلْمَلاَئِكَةِ إِنِّي جَاعِلٌ فِي الأَرْضِ خَلِيفَةً} .",
   "{zappers} • {total} sats total": "{zappers} • إجمالي {total} ساتس",
   "{zappers} • {total} sats total ({u} unverified)": "{zappers} • إجمالي {total} ساتوشي ({u} غير مؤكد)",
+  "≈ {n} {tier} credit": "≈ {n} رصيد {tier}",
   "≈ {n} {tier} credits": "≈ {n} رصيد {tier}",
   "⏱️ Payment timeout - please check your wallet": "️ وقت الدفع - يرجى التحقق من محفظتك",
   "⚠ Audio/video calls and P2P file sharing connect peers directly over WebRTC, which can reveal your true IP address to the other party. Use a VPN or Tor to help conceal it.": "⚠ المكالمات الصوتية / الفيديو و مشاركة ملفات P2P تتواصل مع العملاء مباشرة عبر WebRTC ، والتي يمكن أن تكتشف عنوان IP الحقيقي الخاص بك إلى الأطراف الأخرى.",

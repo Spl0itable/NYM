@@ -1496,6 +1496,7 @@
   "⚡ zapped {sats} sats to your message": "⚡ {sats} sats ወደ መልእክትዎ ተላኩ",
   "⚡ zapped {sats} sats to your profile": "☀ zapped {sats} sats to የእርስዎን ፕሮፌስቶች",
   "⚡ zapped {sats} sats to your profile (unverified)": "zapped {sats} sats to your profile (የተረጋገጥ አይችልም)",
+  "⚡ zapped {sats} sats to: \"{preview}\"": "⚡ {sats} sats ወደ: \"{preview}\" ተላከ",
   "⚡ {price} sats": "አግኝቷል",
   "✅ Shop item restored successfully!": "✅ የሽያጭ ምርት ውጤታማ የተሰራ ነው!",
   "✓ All clear": "ከሁሉም ቀላል",

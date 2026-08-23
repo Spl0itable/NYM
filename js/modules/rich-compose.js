@@ -503,52 +503,94 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Placeholder thumbnails rendered from the local files while their upload is
-    // still in flight, so the strip appears the instant a file is picked.
-    setComposerUploadPreviews(files) {
-        this.clearComposerUploadPreviews();
-        this._composerUploadPreviews = (files || []).map(f => {
+    // Placeholder thumbnails rendered from the local files
+
+    _composerAttachmentSeq: 0,
+
+    // Registers freshly-picked files as uploading tiles, so the user sees what
+    // they chose before a byte is up. Returns the new records.
+    addComposerAttachments(files) {
+        if (!this._composerAttachments) this._composerAttachments = [];
+        const added = [];
+        for (const f of (files || [])) {
             let objectUrl = '';
             try { objectUrl = URL.createObjectURL(f); } catch (_) { }
-            return {
+            if (!objectUrl) continue;
+            const rec = {
+                id: 'att' + (++this._composerAttachmentSeq),
+                kind: (f.type || '').startsWith('video/') ? 'video' : 'image',
                 objectUrl,
-                kind: (f.type || '').startsWith('video/') ? 'video' : 'image'
+                status: 'uploading',
+                url: '',
+                file: f,
+                error: '',
             };
-        }).filter(p => p.objectUrl);
+            this._composerAttachments.push(rec);
+            added.push(rec);
+        }
         this.updateComposerMediaPreviews();
+        return added;
     },
 
-    // Retire the oldest in-flight placeholder once its upload resolves, handing
-    // its object URL over to the hosted URL so the thumbnail never flickers.
-    resolveComposerUploadPreview(url, file) {
-        const pending = this._composerUploadPreviews || [];
-        const done = pending.shift();
-        if (done) {
+    composerAttachmentById(id) {
+        return (this._composerAttachments || []).find(a => a.id === id) || null;
+    },
+
+    updateComposerAttachment(id, patch) {
+        const rec = this.composerAttachmentById(id);
+        if (!rec) return null;
+        Object.assign(rec, patch || {});
+        // The local object URL keeps standing in for the hosted one, so the
+        // thumbnail never flickers and we do not re-fetch what we just sent.
+        if (rec.status === 'done' && rec.url) {
             if (!this._composerMediaBlobs) this._composerMediaBlobs = new Map();
-            if (url && !this._composerMediaBlobs.has(url)) this._composerMediaBlobs.set(url, done.objectUrl);
-            else { try { URL.revokeObjectURL(done.objectUrl); } catch (_) { } }
-        } else {
-            this._rememberComposerMediaBlob(url, file);
-        }
-        if (url) {
+            if (!this._composerMediaBlobs.has(rec.url)) {
+                this._composerMediaBlobs.set(rec.url, rec.objectUrl);
+            }
             if (!this._composerMediaBlobHold) this._composerMediaBlobHold = new Set();
-            this._composerMediaBlobHold.add(url);
+            this._composerMediaBlobHold.add(rec.url);
+        }
+        this.updateComposerMediaPreviews();
+        return rec;
+    },
+
+    removeComposerAttachment(id) {
+        const list = this._composerAttachments || [];
+        const idx = list.findIndex(a => a.id === id);
+        if (idx < 0) return;
+        const [rec] = list.splice(idx, 1);
+        // Safe to revoke only while nothing else points at it: once uploaded,
+        // the blob map is standing in for the hosted URL.
+        if (rec && rec.status !== 'done') {
+            try { URL.revokeObjectURL(rec.objectUrl); } catch (_) { }
         }
         this.updateComposerMediaPreviews();
     },
 
-    clearComposerUploadPreviews() {
-        for (const p of (this._composerUploadPreviews || [])) {
-            try { URL.revokeObjectURL(p.objectUrl); } catch (_) { }
-        }
-        this._composerUploadPreviews = [];
-        // The draft has been written by now (or the batch failed), so held blobs
-        // are either referenced by it or genuinely orphaned.
-        if (this._composerMediaBlobHold) this._composerMediaBlobHold.clear();
+    // The hosted URLs to append to the outgoing message, in the order added.
+    // A still-uploading or failed tile contributes nothing.
+    composerAttachmentUrls() {
+        return (this._composerAttachments || [])
+            .filter(a => a.status === 'done' && a.url)
+            .map(a => a.url);
     },
 
-    // Rebuild the thumbnail strip from the draft. Cheap to call on every
-    // keystroke: it re-renders only when the set of attachments actually
+    composerHasPendingUploads() {
+        return (this._composerAttachments || []).some(a => a.status === 'uploading');
+    },
+
+    // Called once the message carrying these attachments has gone out.
+    clearComposerAttachments() {
+        for (const a of (this._composerAttachments || [])) {
+            if (a.status !== 'done') {
+                try { URL.revokeObjectURL(a.objectUrl); } catch (_) { }
+            }
+        }
+        this._composerAttachments = [];
+        if (this._composerMediaBlobHold) this._composerMediaBlobHold.clear();
+        this.updateComposerMediaPreviews();
+    },
+
     // changed, otherwise a keystroke would restart every <video> preload.
     updateComposerMediaPreviews() {
         const strip = document.getElementById('mediaPreviewStrip');
@@ -556,10 +598,11 @@ Object.assign(NYM.prototype, {
         if (!strip || !input) return;
 
         const matches = this._composerMediaMatches(input.value || '');
-        const pending = this._composerUploadPreviews || [];
-        this._releaseComposerMediaBlobs(matches.map(m => m.url));
+        const attachments = this._composerAttachments || [];
+        this._releaseComposerMediaBlobs(matches.map(m => m.url)
+            .concat(attachments.map(a => a.url).filter(Boolean)));
 
-        if (!matches.length && !pending.length) {
+        if (!matches.length && !attachments.length) {
             if (strip.dataset.sig !== '') {
                 strip.textContent = '';
                 strip.dataset.sig = '';
@@ -576,7 +619,8 @@ Object.assign(NYM.prototype, {
             return proxyBase ? `${proxyBase}?url=${encodeURIComponent(url)}` : url;
         };
 
-        const sig = matches.map(m => m.kind + ':' + m.url).join('|') + '#' + pending.map(p => p.objectUrl).join('|');
+        const sig = matches.map(m => m.kind + ':' + m.url).join('|') + '#'
+            + attachments.map(a => a.id + ':' + a.status).join('|');
         if (strip.dataset.sig === sig) return;
 
         const thumbs = matches.map((m, i) => {
@@ -592,15 +636,42 @@ Object.assign(NYM.prototype, {
             </div>`;
         });
 
-        const placeholders = pending.map(p => {
-            const s = this.escapeHtml(p.objectUrl);
-            const media = p.kind === 'video'
+        const closeSvg = '<svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" '
+            + 'stroke-width="2.5" fill="none" stroke-linecap="round">'
+            + '<line x1="18" y1="6" x2="6" y2="18"></line>'
+            + '<line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+        const retrySvg = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" '
+            + 'stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">'
+            + '<polyline points="1 4 1 10 7 10"></polyline>'
+            + '<path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>';
+
+        // One tile per attachment. The wheel IS the progress indicator, per
+        // file and in place, instead of one bar for the whole batch that could
+        // not say which file it was talking about.
+        const tiles = attachments.map(a => {
+            const s = this.escapeHtml(a.objectUrl);
+            const media = a.kind === 'video'
                 ? `<video class="media-preview-thumb" src="${s}" muted playsinline preload="metadata"></video>`
                 : `<img class="media-preview-thumb" src="${s}" alt="" decoding="async">`;
-            return `<div class="media-preview-item uploading">${media}<span class="media-preview-spinner" aria-hidden="true"></span></div>`;
+            const id = this.escapeHtml(a.id);
+            let overlay = '';
+            let title = '';
+            if (a.status === 'uploading') {
+                overlay = '<span class="media-preview-spinner" aria-hidden="true"></span>';
+                title = 'Uploading\u2026';
+            } else if (a.status === 'failed') {
+                overlay = `<span class="media-preview-retry" aria-hidden="true">${retrySvg}</span>`;
+                title = (a.error ? a.error + ' \u2014 ' : '') + 'Tap to retry';
+            } else if (a.kind === 'video') {
+                overlay = '<span class="media-preview-play" aria-hidden="true">\u25B6</span>';
+            }
+            return `<div class="media-preview-item ${a.status}" data-attachment-id="${id}" data-media-kind="${a.kind}" title="${this.escapeHtml(title)}">
+                ${media}${overlay}
+                <button type="button" class="media-preview-remove" data-attachment-remove="${id}" title="Remove attachment" aria-label="Remove attachment">${closeSvg}</button>
+            </div>`;
         });
 
-        strip.innerHTML = thumbs.join('') + placeholders.join('');
+        strip.innerHTML = thumbs.join('') + tiles.join('');
         strip.dataset.sig = sig;
         strip.classList.remove('nm-hidden');
         this._refreshComposerOffsets();
@@ -616,7 +687,25 @@ Object.assign(NYM.prototype, {
             if (remove) {
                 e.preventDefault();
                 e.stopPropagation();
-                this.removeComposerMedia(parseInt(remove.dataset.mediaRemove, 10));
+                if (remove.dataset.attachmentRemove) {
+                    this.removeComposerAttachment(remove.dataset.attachmentRemove);
+                } else {
+                    this.removeComposerMedia(parseInt(remove.dataset.mediaRemove, 10));
+                }
+                return;
+            }
+            const tile = e.target.closest('.media-preview-item[data-attachment-id]');
+            if (tile) {
+                e.preventDefault();
+                const rec = this.composerAttachmentById(tile.dataset.attachmentId);
+                if (!rec) return;
+                // A failed tile IS the retry button: the file is still held, so
+                // one failure never costs the user the rest of the batch.
+                if (rec.status === 'failed') this.retryComposerAttachment(rec.id);
+                else if (rec.status === 'done') {
+                    if (rec.kind === 'video') this.expandVideo(rec.objectUrl);
+                    else this.expandImage(rec.objectUrl);
+                }
                 return;
             }
             const item = e.target.closest('.media-preview-item');

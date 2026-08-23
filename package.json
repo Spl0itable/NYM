@@ -13,7 +13,8 @@
     "test:i18n": "node scripts/test-i18n.mjs",
     "pq:vectors": "node scripts/emit-pq-vectors.mjs",
     "pq:mlkem": "node scripts/build-mlkem.mjs",
-    "test:translate": "node scripts/test-translate.mjs"
+    "test:translate": "node scripts/test-translate.mjs",
+    "test:media": "node scripts/test-media-strip.mjs"
   },
   "devDependencies": {
     "@noble/post-quantum": "^0.7.0",

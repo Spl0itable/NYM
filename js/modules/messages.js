@@ -2365,6 +2365,23 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         let content = input.value.trim();
 
+        // Attachments live on their tiles, not in the draft, so their URLs are
+        // appended here rather than being typed into the input as each upload
+        // landed. A tile still uploading or failed contributes nothing, so a
+        // half-finished batch cannot put a broken link in the message.
+        // Sending mid-upload would drop that attachment without saying so: its
+        // tile is still spinning, so it has no URL to contribute yet.
+        if (typeof this.composerHasPendingUploads === 'function'
+            && this.composerHasPendingUploads()) {
+            this.displaySystemMessage('Still uploading — send again once the attachments finish.');
+            return;
+        }
+        const attachmentUrls = typeof this.composerAttachmentUrls === 'function'
+            ? this.composerAttachmentUrls() : [];
+        if (attachmentUrls.length) {
+            content = (content ? content + ' ' : '') + attachmentUrls.join(' ');
+        }
+
         if (!content && !this.pendingQuote) return;
 
         const meshOnly = typeof this.meshShouldCarry === 'function' &&
@@ -2449,6 +2466,8 @@ Object.assign(NYM.prototype, {
         }
 
         input.value = '';
+        // The message carrying them has gone out, so the tiles go with it.
+        if (typeof this.clearComposerAttachments === 'function') this.clearComposerAttachments();
         this.autoResizeTextarea(input);
         this.hideCommandPalette();
         this.hideAutocomplete();
@@ -2516,6 +2535,8 @@ Object.assign(NYM.prototype, {
         }
 
         input.value = '';
+        // The message carrying them has gone out, so the tiles go with it.
+        if (typeof this.clearComposerAttachments === 'function') this.clearComposerAttachments();
         this.autoResizeTextarea(input);
         this.hideCommandPalette();
         this.hideAutocomplete();

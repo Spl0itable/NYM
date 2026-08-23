@@ -64,35 +64,55 @@ onNotice((text) => {
 // number was crossed.
 const TICK_MS = 400;
 
+const LANG_CONCURRENCY = Number(process.env.NYM_I18N_LANG_CONCURRENCY || 8);
+
 let failed = 0;
-for (const [i, lang] of targets.entries()) {
+let started_ = 0;
+let done_ = 0;
+const runStarted = Date.now();
+
+async function runLang(lang, i) {
   const at = `[${String(i + 1).padStart(3)}/${targets.length}]`;
   const label = `${lang.code.padEnd(7)}${lang.name}`;
-  draw(`  ${at} ${label}  starting…`);
   const started = Date.now();
-  let last = 0;
   try {
-    const { translated } = await translateMissing(lang.code, sources, {
-      onProgress: (done, total) => {
-        const now = Date.now();
-        if (done !== total && now - last < TICK_MS) return;
-        last = now;
-        const pct = Math.floor((done / total) * 100);
-        draw(`  ${at} ${label}  ${done}/${total} (${pct}%)  ${Math.round((now - started) / 1000)}s`);
-      },
-    });
+    const { translated } = await translateMissing(lang.code, sources);
     const took = Math.round((Date.now() - started) / 1000);
+    done_++;
     draw(`  ${at} ${label}  ${translated === 0 ? 'cached' : `+${translated} in ${took}s`}`);
     process.stdout.write('\n');
     line = '';
   } catch (err) {
     failed++;
+    done_++;
     draw(`  ${at} ${label}  FAILED`);
     process.stdout.write('\n');
     line = '';
     console.error(`    ${err.message}`);
   }
 }
+
+// A heartbeat, because with several languages in flight a per-language
+// progress line would just fight itself for the same row.
+const ticker = setInterval(() => {
+  const secs = Math.round((Date.now() - runStarted) / 1000);
+  draw(`  ${done_}/${targets.length} languages  ${secs}s elapsed`);
+}, TICK_MS * 2);
+
+{
+  const queue = targets.map((lang, i) => ({ lang, i }));
+  const worker = async () => {
+    for (;;) {
+      const next = queue.shift();
+      if (!next) return;
+      started_++;
+      await runLang(next.lang, next.i);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(LANG_CONCURRENCY, queue.length) }, worker));
+}
+clearInterval(ticker);
 
 console.log(`\nroute: ${activeRoute()}`);
 if (failed > 0) {

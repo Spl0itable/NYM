@@ -212,84 +212,25 @@ Object.assign(NYM.prototype, {
         return favList.concat(rest);
     },
 
-    // Show a language-picker popup when the user tries to translate without a language set.
-    // Returns the chosen language code, or '' if cancelled.
-    _promptTranslateLanguage() {
-        return new Promise((resolve) => {
-            const languages = NYM_TRANSLATE_LANGUAGES
-                .slice()
-                .sort((a, b) => a.name.localeCompare(b.name));
-
-            const overlay = document.createElement('div');
-            overlay.className = 'modal active';
-            overlay.style.zIndex = '10003';
-            overlay.innerHTML = `
-                <div class="modal-content nm-tr-1">
-                    <h3 class="nm-tr-2">Select Your Language</h3>
-                    <p class="nm-tr-3">Choose the language you'd like messages translated into. This will be saved to your settings.</p>
-                    <input type="text" class="translate-lang-search nm-tr-4" placeholder="Search languages...">
-                    <div class="translate-lang-grid nm-tr-5">
-                        ${languages.map(l => this._languageOptionButton(l, '')).join('')}
-                    </div>
-                </div>
-            `;
-
-            const cleanup = (langCode) => {
-                overlay.remove();
-                resolve(langCode);
-            };
-
-            // Filter the grid as the user types
-            const search = overlay.querySelector('.translate-lang-search');
-            search.addEventListener('input', () => {
-                const q = search.value.trim().toLowerCase();
-                overlay.querySelectorAll('.translate-lang-option').forEach(btn => {
-                    btn.style.display = (!q || btn.dataset.name.includes(q)) ? '' : 'none';
-                });
-            });
-
-            // Click on a language option
-            overlay.querySelectorAll('.translate-lang-option').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const code = btn.dataset.lang;
-                    // Save to settings and localStorage
-                    this.settings.translateLanguage = code;
-                    localStorage.setItem('nym_translate_language', code);
-                    // Sync the settings modal select if it exists
-                    const select = document.getElementById('translateLanguageSelect');
-                    if (select) select.value = code;
-                    // Persist to relay so it survives reload
-                    if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-                    cleanup(code);
-                });
-                btn.addEventListener('mouseenter', () => {
-                    btn.style.background = 'rgba(255,255,255,0.1)';
-                    btn.style.borderColor = 'var(--primary)';
-                });
-                btn.addEventListener('mouseleave', () => {
-                    btn.style.background = 'rgba(255,255,255,0.04)';
-                    btn.style.borderColor = 'var(--glass-border)';
-                });
-            });
-
-            // Click on backdrop to cancel
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) cleanup('');
-            });
-
-            document.body.appendChild(overlay);
-            setTimeout(() => search.focus(), 50);
-        });
+    // The language messages get translated into.
+    //
+    // There is no "pick a language" prompt any more. Every user chooses one at
+    // first run (the UI-language picker, i18n.js), and that pick is adopted as
+    // the translation target — so asking again on the first translation was
+    // asking a question already answered, and it interrupted the very action
+    // the user had just taken. The UI language is the fallback for anyone whose
+    // setting predates that, and English the fallback for that.
+    _effectiveTranslateLanguage() {
+        const saved = this.settings && this.settings.translateLanguage;
+        if (saved) return saved;
+        const ui = typeof this.getUiLanguage === 'function' ? this.getUiLanguage() : '';
+        return ui || 'en';
     },
 
     // Translate a message and show the result inline below the original message.
     // Uses the CF proxy when available, falls back to calling Google Translate directly.
     async translateMessage(content, messageId) {
-        let targetLang = this.settings.translateLanguage;
-        if (!targetLang) {
-            targetLang = await this._promptTranslateLanguage();
-            if (!targetLang) return; // user cancelled
-        }
+        const targetLang = this._effectiveTranslateLanguage();
 
         // Strip HTML blockquote tags entirely (with their contents) so the
         // quoted reply doesn't pollute language detection. The quote may be in
@@ -447,11 +388,7 @@ Object.assign(NYM.prototype, {
     async translatePoll(pollId) {
         const poll = this.polls && this.polls.get && this.polls.get(pollId);
         if (!poll) return;
-        let targetLang = this.settings.translateLanguage;
-        if (!targetLang) {
-            targetLang = await this._promptTranslateLanguage();
-            if (!targetLang) return;
-        }
+        const targetLang = this._effectiveTranslateLanguage();
 
         const msgEl = document.querySelector(`[data-message-id="${pollId}"]`);
         let translationEl = msgEl && msgEl.querySelector('.message-translation');
@@ -711,7 +648,9 @@ Object.assign(NYM.prototype, {
             if (!msgId) return;
             const source = this._plainTextForTranslate(message.content);
             if (!source || source.length < 2) return;
-            const target = this.settings.translateLanguage;
+            // Same resolution as a manual translate, so auto-translate works
+            // for a user whose setting predates the first-run picker.
+            const target = this._effectiveTranslateLanguage();
 
             const cache = this._autoTranslateCache || (this._autoTranslateCache = new Map());
             const prev = cache.get(msgId);
@@ -745,7 +684,7 @@ Object.assign(NYM.prototype, {
         const { el, msgId, source, target } = job;
         // Bail if the language changed or the row is gone.
         if (!el || !el.isConnected) return;
-        if (this.settings.translateLanguage !== target) return;
+        if (this._effectiveTranslateLanguage() !== target) return;
         const cache = this._autoTranslateCache || (this._autoTranslateCache = new Map());
         const existing = cache.get(msgId);
         if (existing && existing.lang === target && existing.source === source && existing.status !== 'loading') {
