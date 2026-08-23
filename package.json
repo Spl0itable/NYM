@@ -3,10 +3,20 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "build": "node build.mjs",
+    "i18n": "node i18n/sync.mjs",
+    "i18n:list": "node i18n/sync.mjs --list",
+    "i18n:export": "node i18n/export.mjs",
     "canary:sign": "node scripts/sign-canary.mjs",
-    "canary:check": "node scripts/check-canary.mjs"
+    "canary:check": "node scripts/check-canary.mjs",
+    "test:pq": "node scripts/test-pq.mjs",
+    "test:wysiwyg": "node scripts/test-wysiwyg.mjs",
+    "test:i18n": "node scripts/test-i18n.mjs",
+    "pq:vectors": "node scripts/emit-pq-vectors.mjs",
+    "pq:mlkem": "node scripts/build-mlkem.mjs",
+    "test:translate": "node scripts/test-translate.mjs"
   },
   "devDependencies": {
+    "@noble/post-quantum": "^0.7.0",
     "esbuild": "^0.27.4",
     "html-minifier-terser": "^7.2.0",
     "nostr-tools": "^2.23.5"

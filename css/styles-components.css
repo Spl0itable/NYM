@@ -1189,7 +1189,7 @@ html.nym-needs-setup #setupModal {
 
 .upload-progress {
     position: absolute;
-    bottom: 100%;
+    bottom: calc(100% + var(--composer-panels-h, 0px));
     left: 0;
     right: 0;
     background: rgba(20, 20, 35, 0.9);
@@ -1495,6 +1495,43 @@ html.nym-needs-setup #setupModal {
 }
 
 .crypto-verified-badge:hover {
+    transform: scale(1.15);
+}
+
+.crypto-pq-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    margin-left: 3px;
+    color: #8b7cf6;
+    cursor: help;
+    vertical-align: middle;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+}
+
+.crypto-pq-badge.partial {
+    color: #9aa0a6;
+}
+
+.crypto-pq-badge.partial svg {
+    stroke-dasharray: 3 2;
+}
+
+.crypto-pq-badge.classical {
+    color: #9aa0a6;
+    opacity: 0.65;
+}
+
+.crypto-pq-badge svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.crypto-pq-badge:hover {
     transform: scale(1.15);
 }
 

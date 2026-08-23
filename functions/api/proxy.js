@@ -13,6 +13,7 @@
 //   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt)
 
 import { validateZapReceipt } from './_shared.js';
+import { translateText, MAX_CHARS } from './_translate.js';
 
 const ALLOWED_MEDIA_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
@@ -40,11 +41,8 @@ const GEO_RELAYS_URL = 'https://raw.githubusercontent.com/permissionlesstech/geo
 const GEO_RELAYS_VETTED_URL = 'https://raw.githubusercontent.com/permissionlesstech/bitchat/refs/heads/main/relays/online_relays_gps.csv';
 const GEO_RELAYS_CACHE_TTL = 300;
 
-// Translate endpoint
-const GOOGLE_TRANSLATE_URL = 'https://translate.googleapis.com/translate_a/single';
-
-// Timeout for translation requests
-const TRANSLATE_TIMEOUT = 8000;
+// Translate endpoints, tried in order.
+const TRANSLATE_CACHE_TTL = 86400;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -90,7 +88,7 @@ export async function onRequest(context) {
 
   try {
     if (action === 'translate') {
-      return await handleTranslate(request);
+      return await handleTranslate(request, context);
     } else if (action === 'unfurl') {
       return await handleUnfurl(url.searchParams.get('url'), context);
     } else if (action === 'upload') {
@@ -525,7 +523,17 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
 }
 
 // Translation
-async function handleTranslate(request) {
+//
+// One call to one Google endpoint, with a retry against a second one and a
+// day of edge cache in front. The retry and the cache both exist for the same
+// reason: the endpoint rate-limits by caller IP, and every Worker in a colo
+// shares one.
+//
+// Every failure path logs WHY. A 502 out of here used to be indistinguishable
+// in the Workers log from any other 502 — `outcome: ok`, no exceptions, an
+// empty `logs` array — because the reason only ever reached the response body,
+// which the log does not record.
+async function handleTranslate(request, context) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'POST required' }, 405);
   }
@@ -537,47 +545,119 @@ async function handleTranslate(request) {
     return jsonResponse({ error: 'Invalid JSON body' }, 400);
   }
 
-  const { text, source, target } = body;
-  if (!text || !target) {
+  const { text, texts, source, target } = body;
+  if (!target) {
+    return jsonResponse({ error: 'Missing target language' }, 400);
+  }
+  // A batch. The apps translate one message at a time, but the build-time
+  // interface sync has ~1500 strings per language across 132 languages, and one
+  // HTTP round trip each would be most of the wall clock. Each string is still
+  // its own inference call — the models take one input — so this saves the
+  // network, not the work.
+  if (Array.isArray(texts)) {
+    return await handleTranslateBatch(texts, source || 'auto', target, context);
+  }
+  if (!text) {
     return jsonResponse({ error: 'Missing text or target language' }, 400);
   }
 
+  const q = String(text).slice(0, MAX_CHARS);
+  const sl = source || 'auto';
+
+  // Same text, same pair, same answer. Keyed by a hash so the path stays a sane
+  // length and the cache key can't be steered by the text itself.
+  const cachePath = `/translate?k=${await sha256Hex(`${sl}\u0000${target}\u0000${q}`)}`;
+  const cached = await readEdgeCache(cachePath);
+  if (cached) return cached;
+
+  let result;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TRANSLATE_TIMEOUT);
-
-    const params = new URLSearchParams({
-      client: 'gtx',
-      sl: source || 'auto',
-      tl: target,
-      dt: 't',
-      q: text.slice(0, 5000),
+    result = await translateText(context.env && context.env.AI, {
+      text: q, source: sl, target,
     });
-
-    const resp = await fetch(`${GOOGLE_TRANSLATE_URL}?${params}`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-
-    if (!resp.ok) {
-      return jsonResponse({ error: `Google Translate returned ${resp.status}` }, 502);
-    }
-
-    const data = await resp.json();
-
-    // Response format: [[["translated text","original text",null,null,10],...],null,"detected_lang"]
-    let translatedText = '';
-    if (Array.isArray(data[0])) {
-      translatedText = data[0].map(seg => seg[0] || '').join('');
-    }
-
-    const detectedLanguage = data[2] || source || 'auto';
-
-    return jsonResponse({ translatedText, detectedLanguage });
   } catch (err) {
-    const msg = err.name === 'AbortError' ? 'timeout' : err.message;
-    return jsonResponse({ error: 'Translation failed: ' + msg }, 502);
+    // The detail — which model refused and why — goes to the log, where it is
+    // the whole diagnosis: a failure on one language code with others working
+    // is a coverage gap, while a failure on every code is the binding or the
+    // account. It does NOT go to the client. Model identifiers name the
+    // infrastructure vendor, which this project deliberately never does in
+    // user-facing text, and "m2m100-1.2b: unsupported language" is not a
+    // sentence that helps whoever pressed translate.
+    console.error(`[translate] failed (tl=${target}, len=${q.length}): ${err.message}`);
+    return jsonResponse({ error: 'Translation is unavailable for this language right now', target }, 502);
   }
+
+  return writeEdgeCache(
+    context,
+    cachePath,
+    JSON.stringify({
+      translatedText: result.translatedText,
+      detectedLanguage: result.detectedLanguage || sl,
+      engine: result.engine,
+    }),
+    'application/json',
+    TRANSLATE_CACHE_TTL,
+  );
+}
+
+/// Translates a list of strings in one request.
+///
+/// Bounded on both count and total size so a single call cannot tie up a
+/// worker indefinitely, and run a few at a time rather than all at once —
+/// these are inference calls, and firing 25 in parallel is how you find the
+/// account's concurrency limit rather than the fast path.
+///
+/// Partial success is a real outcome and is reported as one: a null in the
+/// results array means that string failed, and the caller decides what to do
+/// about it. Failing the whole batch because one string could not be
+/// translated would throw away 24 good translations.
+const TRANSLATE_BATCH_MAX = 25;
+const TRANSLATE_BATCH_BYTES = 20000;
+const TRANSLATE_BATCH_CONCURRENCY = 4;
+
+async function handleTranslateBatch(texts, source, target, context) {
+  if (texts.length === 0) return jsonResponse({ translations: [] });
+  if (texts.length > TRANSLATE_BATCH_MAX) {
+    return jsonResponse({ error: `Too many strings (max ${TRANSLATE_BATCH_MAX})` }, 400);
+  }
+  const items = texts.map((t) => String(t == null ? '' : t).slice(0, MAX_CHARS));
+  const total = items.reduce((n, t) => n + t.length, 0);
+  if (total > TRANSLATE_BATCH_BYTES) {
+    return jsonResponse({ error: `Batch too large (max ${TRANSLATE_BATCH_BYTES} chars)` }, 400);
+  }
+
+  const ai = context.env && context.env.AI;
+  const out = new Array(items.length).fill(null);
+  const failures = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      const q = items[i];
+      if (!q.trim()) continue;
+      try {
+        const r = await translateText(ai, { text: q, source, target });
+        out[i] = r.translatedText;
+      } catch (err) {
+        failures.push(`[${i}] ${err.message}`);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(TRANSLATE_BATCH_CONCURRENCY, items.length) }, worker),
+  );
+
+  if (failures.length) {
+    console.error(`[translate] batch tl=${target}: ${failures.length}/${items.length} failed: ${failures.slice(0, 3).join('; ')}`);
+  }
+  // Not edge-cached: a batch is a different list every time, so the key would
+  // never be hit twice. The single-string path is the one that caches.
+  return jsonResponse({ translations: out, failed: failures.length });
+}
+
+async function sha256Hex(input) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // URL Unfurling (Open Graph), edge-cached for 1 hour

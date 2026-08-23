@@ -47,6 +47,50 @@ const htmlMinifyOptions = {
   minifyJS: true,
 };
 
+// Writes one pack per language whose cache covers at least one source string.
+// Returns a short line for the build summary.
+async function emitI18nPacks() {
+  let languages;
+  let sources;
+  try {
+    ({ sources } = await (await import('./i18n/strings.mjs')).loadSources());
+    languages = await (await import('./i18n/languages.mjs')).loadLanguages();
+  } catch (err) {
+    return `i18n packs: skipped (${err.message})`;
+  }
+
+  const live = new Set(sources);
+  let written = 0;
+  let complete = 0;
+  let bytes = 0;
+  for (const lang of languages) {
+    let cache;
+    try {
+      cache = JSON.parse(await fs.readFile(path.join(root, 'i18n', 'cache', `${lang.code}.json`), 'utf8'));
+    } catch {
+      continue; // No cache for this language yet.
+    }
+    // Only strings still in the app: a stale entry would ship a translation for
+    // copy that no longer exists, and grow the pack every user downloads.
+    const pack = {};
+    let have = 0;
+    for (const [source, translated] of Object.entries(cache)) {
+      if (!live.has(source) || typeof translated !== 'string' || !translated) continue;
+      pack[source] = translated;
+      have++;
+    }
+    if (have === 0) continue;
+    const body = JSON.stringify(pack);
+    await emit(path.join('i18n', `${lang.code}.json`), body);
+    written++;
+    bytes += body.length;
+    if (have === sources.length) complete++;
+  }
+  if (written === 0) return 'i18n packs: none (run `npm run i18n`)';
+  return `i18n packs: ${written} languages (${complete} complete), `
+    + `${(bytes / written / 1024).toFixed(0)} KB each on average`;
+}
+
 async function emit(rel, code) {
   const dest = path.join(dist, rel);
   await fs.mkdir(path.dirname(dest), { recursive: true });
@@ -150,6 +194,8 @@ async function run() {
   const appVersion = versionMatch ? versionMatch[1] : 'unknown';
   await emit('version.json', JSON.stringify({ version: appVersion }));
 
+  const packSummary = await emitI18nPacks();
+
   // Service worker: stamp a per-build cache version so each deploy gets a fresh
   // cache and old ones are pruned on activate.
   const swVersion = sha8([...assetMap.values()].sort().join('|'));
@@ -161,7 +207,8 @@ async function run() {
     'css/no-inline.css',
     'js/defer-css.js', 'js/theme-init.js', 'js/setup-modal-init.js',
     'js/modules/inline-bindings.js', 'js/modules/dialog.js', 'js/nostr-tools.js',
-    'js/app.js', 'js/nym-crypto.js', 'js/modules/crypto-pool.js',
+    'js/app.js', 'js/vendor/ml-kem.js', 'js/nym-crypto.js', 'js/modules/crypto-pool.js',
+    'js/modules/pq.js',
     'js/modules/persistence.js', 'js/modules/key-vault.js', 'js/modules/panic.js',
     'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/users.js',
     'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',
@@ -210,6 +257,8 @@ async function run() {
   Cache-Control: public, max-age=31536000, immutable
 /data/*
   Cache-Control: public, max-age=31536000, immutable
+/i18n/*
+  Cache-Control: public, max-age=86400
 /index.html
   Cache-Control: no-cache
 /
@@ -224,6 +273,7 @@ async function run() {
   await emit('_headers', headers.replace(/\s*$/, '') + cacheRules);
 
   console.log(`Built ${assetMap.size} assets to dist/.`);
+  console.log(packSummary);
   console.log(`Build hash: ${bundleHash}`);
   console.log(`Commit: ${commit}`);
 }

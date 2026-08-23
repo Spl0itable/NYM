@@ -1092,6 +1092,9 @@ Object.assign(NYM.prototype, {
 
         try {
             progress.classList.add('active');
+            // The quote/edit chips and the autocomplete stack are positioned
+            // off this panel's height, so they have to be told it appeared.
+            if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
             // Show local thumbnails immediately, before a single byte is up, so
             // the user can verify what they picked (rich-compose.js).
             if (typeof this.setComposerUploadPreviews === 'function') this.setComposerUploadPreviews(files);
@@ -1166,6 +1169,7 @@ Object.assign(NYM.prototype, {
             }
             setTimeout(() => {
                 progress.classList.remove('active');
+                if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
             }, 500);
         }
     },
@@ -1181,6 +1185,7 @@ Object.assign(NYM.prototype, {
         }
         const progress = document.getElementById('uploadProgress');
         if (progress) progress.classList.remove('active');
+        if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
     },
 
     getNymFromPubkey(pubkey) {

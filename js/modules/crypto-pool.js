@@ -25,13 +25,16 @@
             this._cryptoPool = null;
             this._cryptoPoolReady = new Promise((resolve) => {
                 const ntUrl = scriptUrl('nostr-tools'), ncUrl = scriptUrl('nym-crypto');
+                // ML-KEM is optional: without it the workers still handle every
+                // classical op and the PQ paths fall back to the main thread.
+                const mkUrl = scriptUrl('vendor/ml-kem');
                 if (typeof Worker === 'undefined' || typeof Blob === 'undefined' ||
                     typeof window.NymCrypto === 'undefined' || !ntUrl || !ncUrl ||
                     !window.URL || !URL.createObjectURL) { resolve(null); return; }
                 let blobUrl;
                 try { blobUrl = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })); }
                 catch (_) { resolve(null); return; }
-                const scripts = [ntUrl, ncUrl];
+                const scripts = mkUrl ? [ntUrl, mkUrl, ncUrl] : [ntUrl, ncUrl];
                 const n = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, MAX_WORKERS));
                 const pool = [];
                 let pendingInit = 0, settled = false;

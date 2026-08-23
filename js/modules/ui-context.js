@@ -1105,6 +1105,12 @@ Object.assign(NYM.prototype, {
                 } else if (e.key === 'Escape' && this.pendingQuote) {
                     e.preventDefault();
                     this.clearQuoteReply();
+                } else if (e.key === 'Backspace' || e.key === 'Delete') {
+                    // A hidden marker has no caret position of its own, so the
+                    // browser's own delete would eat it one invisible character
+                    // at a time. Take the whole marker (or the whole fence)
+                    // instead — see nymRichMarkerDelete.
+                    if (this._deleteRichMarker(input, e.key === 'Delete')) e.preventDefault();
                 } else if (e.key === 'ArrowUp' && input.value === '') {
                     e.preventDefault();
                     this.navigateHistory(-1);
@@ -1120,6 +1126,8 @@ Object.assign(NYM.prototype, {
             if (!e.target.value && e.target.innerHTML !== '') e.target.innerHTML = '';
             // Render a just-completed :shortcode: as its custom emoji image.
             this._maybeRenderTypedEmoji(e.target);
+            // ...and a just-completed **bold** / # heading / ``` fence.
+            this._maybeRenderRichFormat(e.target);
             this.handleInputChange(e.target.value);
             this.autoResizeTextarea(e.target);
             this.updateTranslateInputBtn();
@@ -1829,11 +1837,10 @@ Object.assign(NYM.prototype, {
         textarea.style.height = '';
         this._refreshComposerOffsets();
         // Every path that mutates the draft (typing, send, edit, upload, quote)
-        // ends up here, so it's the one hook the attachment strip and the
-        // formatting preview need (rich-compose.js).
+        // ends up here, so it's the one hook the attachment strip needs
+        // (rich-compose.js).
         if (textarea.id === 'messageInput') {
             if (typeof this.updateComposerMediaPreviews === 'function') this.updateComposerMediaPreviews();
-            if (typeof this.updateFormatPreview === 'function') this.updateFormatPreview();
         }
     },
 
@@ -1847,17 +1854,24 @@ Object.assign(NYM.prototype, {
         const expanded = !!(container && container.classList.contains('composer-popout'));
         const overhang = expanded ? Math.max(0, input.offsetHeight - base) : 0;
         wrapper.style.setProperty('--popout-overhang', overhang + 'px');
-        // The formatting toolbar / preview / attachment strip stack (rich-compose.js)
+        // The formatting toolbar / attachment strip stack (rich-compose.js)
         // sits between the field and the quote/edit chips, so everything anchored
         // at `bottom:100%` above it has to clear its height.
         const panels = document.getElementById('composerPanels');
         const panelsH = (panels && panels.offsetHeight > 0) ? panels.offsetHeight + 8 : 0;
         wrapper.style.setProperty('--composer-panels-h', panelsH + 'px');
+        // The upload panel sits in the same stack, between those and the
+        // quote/edit chip, so it both clears the panels and has to be cleared
+        // by whatever is above it.
+        const up = document.getElementById('uploadProgress');
+        const uploadH = (up && up.offsetHeight > 0) ? up.offsetHeight + 8 : 0;
+        wrapper.style.setProperty('--composer-upload-h', uploadH + 'px');
         const ep = document.getElementById('editPreview');
         const qp = document.getElementById('quotePreview');
         const preview = (ep && ep.offsetHeight > 0) ? ep : ((qp && qp.offsetHeight > 0) ? qp : null);
         const previewH = preview ? preview.offsetHeight : 0;
-        wrapper.style.setProperty('--ac-offset', (overhang + panelsH + (previewH ? previewH + 8 : 0)) + 'px');
+        wrapper.style.setProperty('--ac-offset',
+            (overhang + panelsH + uploadH + (previewH ? previewH + 8 : 0)) + 'px');
     },
 
     // Paint the context menu's full-key row plus the labels on its two buttons
@@ -1907,6 +1921,10 @@ Object.assign(NYM.prototype, {
         if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
         if (node.tagName === 'IMG') return this._emojiTokenForImg(node);
         if (node.dataset && typeof node.dataset.mention === 'string') return node.dataset.mention;
+        // A hidden markdown marker: it renders nothing, but still stands for the
+        // delimiter it replaced, so the draft round-trips and the caret offsets
+        // stay in the same coordinate system as the text the user sends.
+        if (node.dataset && typeof node.dataset.mark === 'string') return node.dataset.mark;
         return null;
     },
 
@@ -1976,14 +1994,10 @@ Object.assign(NYM.prototype, {
         return n;
     },
 
-    _renderRichInput(el, text) {
-        el.textContent = '';
-        if (!text) return;
-        const frag = document.createDocumentFragment();
+    // Leaf text: custom-emoji shortcodes and mentions become chips, everything
+    // else stays plain text so the caret model matches the serialized value.
+    _renderRichPlain(text, frag) {
         const pushText = (s) => { if (s) frag.appendChild(document.createTextNode(s)); };
-        // Match either a custom-emoji shortcode (:code:) or an @base#suffix
-        // mention. Mentions become an avatar+flair chip; everything else stays
-        // plain text so the caret model matches the serialized value.
         const re = /:([a-zA-Z0-9_]+):|@([^\s@#]+)#([0-9a-f]{4})/gi;
         let last = 0, m;
         while ((m = re.exec(text)) !== null) {
@@ -2012,7 +2026,126 @@ Object.assign(NYM.prototype, {
             }
         }
         pushText(text.slice(last));
+    },
+
+    // True when the caret/selection touches one of a node's reveal ranges — for
+    // an inline construct its whole span, for a heading or quote just its line
+    // prefix, for a fenced block just the two fences.
+    _richIsRevealed(node, sel) {
+        if (!sel || !node.reveal) return false;
+        const s = Math.min(sel.start, sel.end), e = Math.max(sel.start, sel.end);
+        for (let i = 0; i < node.reveal.length; i++) {
+            const r = node.reveal[i];
+            if (e >= r[0] && s <= r[1]) return true;
+        }
+        return false;
+    },
+
+    // A markdown delimiter. Hidden it carries its source text in data-mark and
+    // is atomic; revealed it holds the same text as real, dimmed content the
+    // caret can move through and delete. Both spellings have the same model
+    // length, so toggling one never moves the caret.
+    _richMarkNode(src, shown) {
+        const span = document.createElement('span');
+        span.className = shown ? 'rich-mark rich-mark-shown' : 'rich-mark';
+        if (shown) span.textContent = src;
+        else span.dataset.mark = src;
+        return span;
+    },
+
+    _renderRichNodes(nodes, text, parent, sel) {
+        for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i];
+            if (n.kind === 'text') {
+                this._renderRichPlain(text.slice(n.start, n.end), parent);
+                continue;
+            }
+            const shown = this._richIsRevealed(n, sel);
+            const wrap = document.createElement('span');
+            wrap.className = 'rich-md rich-md-' + n.type
+                + (shown ? ' rich-md-open' : '')
+                + (n.emptyBody ? ' rich-md-blank' : '');
+            if (n.open) wrap.appendChild(this._richMarkNode(n.open, shown));
+            this._renderRichNodes(n.children || [], text, wrap, sel);
+            if (n.close) wrap.appendChild(this._richMarkNode(n.close, shown));
+            parent.appendChild(wrap);
+        }
+    },
+
+    // A fingerprint of the rendered structure: the shape of the tree plus which
+    // markers are revealed, deliberately without offsets. Typing inside a run
+    // shifts every offset after it but changes nothing the DOM needs, so leaving
+    // them out is what keeps ordinary keystrokes from re-rendering the field.
+    _richTreeSig(nodes, sel) {
+        let out = '';
+        for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i];
+            if (n.kind === 'text') { out += '.'; continue; }
+            out += n.type + (this._richIsRevealed(n, sel) ? '!' : '')
+                + '(' + this._richTreeSig(n.children || [], sel) + ')';
+        }
+        return out;
+    },
+
+    _renderRichInput(el, text, sel) {
+        el.textContent = '';
+        el._richFormatSig = '';
+        if (!text) return;
+        let tree = null;
+        if (typeof this._richParseFormat === 'function') {
+            try { tree = this._richParseFormat(text); } catch (_) { tree = null; }
+        }
+        const frag = document.createDocumentFragment();
+        if (tree) {
+            this._renderRichNodes(tree, text, frag, sel);
+            el._richFormatSig = this._richTreeSig(tree, sel);
+        } else {
+            this._renderRichPlain(text, frag);
+        }
+        this._richPadBoundaries(frag);
         el.appendChild(frag);
+    },
+
+    // A caret at the end of a formatted run has two spellings — the last
+    // position inside the wrapper, and the first position after it — and the
+    // browser resolves the ambiguity by choosing INSIDE. That is the wrong one
+    // here: the wrapper ends with a hidden closing marker, so typing there put
+    // the new text between the body and the marker. Finishing "**bold**" and
+    // carrying on typing produced "**bold x**" — the run swallowed everything
+    // written after it, and the closing marker never moved.
+    //
+    // An empty text node after each wrapper gives that outside position a real
+    // home to land in. It renders as nothing, serializes as nothing and
+    // measures zero, so it changes what the caret does and not what the draft
+    // says.
+    _richPadBoundaries(frag) {
+        const kids = [...frag.childNodes];
+        for (const child of kids) {
+            if (child.nodeType !== Node.ELEMENT_NODE) continue;
+            if (this._richAtomicToken(child) != null) continue;
+            const next = child.nextSibling;
+            if (next && next.nodeType === Node.TEXT_NODE) continue;
+            frag.insertBefore(document.createTextNode(''), next);
+        }
+    },
+
+    // Re-render only when the formatting the field should show actually
+    // changed: a run was completed or broken, or the caret crossed into or out
+    // of one and its markers need to appear or disappear. The caret is restored
+    // by model offset, which the hidden markers preserve exactly.
+    _maybeRenderRichFormat(el) {
+        if (!el || el._richComposing) return;
+        if (typeof this._richParseFormat !== 'function') return;
+        const text = el.value;
+        const start = el.selectionStart, end = el.selectionEnd;
+        let tree;
+        try { tree = this._richParseFormat(text); } catch (_) { return; }
+        const sig = this._richTreeSig(tree, { start, end });
+        if (sig === (el._richFormatSig || '')) return;
+        this._renderRichInput(el, text, { start, end });
+        el._savedSelStart = start;
+        el._savedSelEnd = end;
+        this._setRichCaret(el, start, end);
     },
 
     _richSelectionOffset(el, container, offsetInContainer) {
@@ -2024,7 +2157,46 @@ Object.assign(NYM.prototype, {
         } catch (_) {
             return null;
         }
-        return this._richNodeLength(range.cloneContents());
+        return this._richNodeLength(range.cloneContents())
+            + this._richOutwardSkip(el, container, offsetInContainer);
+    },
+
+    // How many model characters sit between this DOM position and the outside
+    // of the run it ends.
+    //
+    // A hidden closing marker occupies no screen space, so "just before it" and
+    // "just after it" are the same pixel and the user cannot mean one rather
+    // than the other. They are different model offsets, though, and the browser
+    // always reports the inner one. Reading it literally puts the caret inside
+    // a run the user has already closed, so the next character typed lands
+    // between the text and its own closing marker.
+    //
+    // Resolving outward is the only choice that matches what was typed: writing
+    // "**bold**" ends the bold, so what follows is not bold.
+    _richOutwardSkip(el, container, offsetInContainer) {
+        let cur;
+        if (container.nodeType === Node.TEXT_NODE) {
+            // Only at the very end of the text — anywhere else is unambiguous.
+            if (offsetInContainer !== container.nodeValue.length) return 0;
+            cur = container;
+        } else if (container.nodeType === Node.ELEMENT_NODE) {
+            if (offsetInContainer === 0) return 0;
+            cur = container.childNodes[offsetInContainer - 1] || null;
+        } else {
+            return 0;
+        }
+        let add = 0;
+        while (cur && cur !== el) {
+            for (let sib = cur.nextSibling; sib; sib = sib.nextSibling) {
+                const tok = sib.nodeType === Node.ELEMENT_NODE
+                    ? this._richAtomicToken(sib) : null;
+                // Real content after us means this is not the end of a run.
+                if (tok == null) return add;
+                add += tok.length;
+            }
+            cur = cur.parentNode;
+        }
+        return add;
     },
 
     _richLocate(el, target) {
@@ -2091,11 +2263,59 @@ Object.assign(NYM.prototype, {
             const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
             if (s != null) el._savedSelStart = s;
             if (e != null) el._savedSelEnd = e;
+            // Moving the caret is also what reveals and re-hides the markdown
+            // markers around it, so the same hooks drive the live formatting.
+            self._maybeRenderRichFormat(el);
         };
         el.addEventListener('keyup', saveSel);
         el.addEventListener('mouseup', saveSel);
         el.addEventListener('input', saveSel);
         el.addEventListener('focus', saveSel);
+
+        // Typed text goes through the model, not through the browser's own
+        // insertion. Left to itself the browser puts a character typed at the
+        // end of a run INSIDE the run's wrapper — before the hidden closing
+        // marker — so "**bold**" followed by " x" became "**bold x**": the run
+        // silently swallowed everything written after it. Applying the edit to
+        // the draft and re-rendering means the model decides where a character
+        // lands, and the DOM only ever reflects it.
+        //
+        // IME composition is left alone: it needs to write into the live DOM,
+        // and compositionend re-renders once the word is committed.
+        el.addEventListener('beforeinput', (e) => {
+            if (el._richComposing) return;
+            const kind = e.inputType;
+            if (kind !== 'insertText' && kind !== 'insertLineBreak'
+                && kind !== 'insertParagraph') return;
+            const insert = kind === 'insertText' ? (e.data == null ? '' : e.data) : '\n';
+            if (!insert) return;
+            // Rebuilding the field costs time proportional to the whole draft
+            // — 26ms a keystroke on a 5000-character one — so a draft with no
+            // formatting in it at all takes the browser's own insertion
+            // instead. That is safe for exactly the reason it is fast: with no
+            // hidden marker anywhere in the field there is no ambiguous
+            // position for the caret to be in, so there is nothing for the
+            // browser to resolve the wrong way. Typing the marker that starts
+            // a run puts one there, and from that keystroke on this path is
+            // taken again.
+            //
+            // Narrower than testing the caret's own position, and deliberately
+            // so: "is the caret next to a hidden marker" turned out to have
+            // more spellings than it first appears — the browser reports the
+            // inner one, we place the outer one, and a line break sits next to
+            // a <br> that is neither. This condition has one.
+            if (kind === 'insertText' && !el.querySelector('.rich-mark')) return;
+            e.preventDefault();
+            self._insertTextAtCursor(el, insert);
+        });
+
+        // Never re-render mid-composition: replacing the nodes an IME is
+        // composing into cancels the composition on every platform.
+        el.addEventListener('compositionstart', () => { el._richComposing = true; });
+        el.addEventListener('compositionend', () => {
+            el._richComposing = false;
+            self._maybeRenderRichFormat(el);
+        });
 
         Object.defineProperty(el, 'value', {
             configurable: true,
@@ -2151,6 +2371,26 @@ Object.assign(NYM.prototype, {
             el._savedSelEnd = e;
             self._setRichCaret(el, s, e);
         };
+    },
+
+    // Applies the marker-aware delete when the caret is against a hidden block
+    // marker. Returns true when it handled the key.
+    _deleteRichMarker(el, forward) {
+        if (!el || el.disabled || typeof this._richMarkerDelete !== 'function') return false;
+        const start = el.selectionStart, end = el.selectionEnd;
+        // Only a collapsed caret: a selection deletes what it visibly covers.
+        if (start !== end) return false;
+        let edit;
+        try {
+            edit = this._richMarkerDelete(el.value, start, !!forward);
+        } catch (_) {
+            return false;
+        }
+        if (!edit) return false;
+        el.value = edit.text;
+        el.setSelectionRange(edit.caret, edit.caret);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
     },
 
     // When the caret sits just after a complete :shortcode: for a known custom

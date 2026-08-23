@@ -422,31 +422,26 @@ Object.assign(NYM.prototype, {
     // back to a direct Google Translate request on proxy failure.
     async _doTranslate(text, targetLang) {
         const base = this._getProxyBaseUrl();
-        if (base) {
-            try {
-                const resp = await fetch(`${base}?action=translate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, source: 'auto', target: targetLang }),
-                });
-                const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-                if (!contentType.includes('application/json')) {
-                    throw new Error(`Proxy returned non-JSON response (${resp.status})`);
-                }
-                const data = await resp.json();
-                if (data.error) throw new Error(data.error);
-                return {
-                    translatedText: data.translatedText || '',
-                    detectedLanguage: data.detectedLanguage || 'auto',
-                };
-            } catch (proxyErr) {
-                // Translate proxy failed for this request — try direct.
-                // Don't treat as a global API outage: translate can fail per-request
-                // (rate limit, upstream error) without the proxy being down.
-                return this._translateDirect(text, targetLang);
-            }
+        if (!base) throw new Error('Translation is unavailable: no API host configured');
+        const resp = await fetch(`${base}?action=translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, source: 'auto', target: targetLang }),
+        });
+        const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('application/json')) {
+            throw new Error(`Translation failed (${resp.status})`);
         }
-        return this._translateDirect(text, targetLang);
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        const translatedText = data.translatedText || '';
+        // An empty body with a 200 is a failure wearing a success's clothes: it
+        // would replace the message with nothing.
+        if (!translatedText.trim()) throw new Error('Translation failed: empty result');
+        return {
+            translatedText,
+            detectedLanguage: data.detectedLanguage || 'auto',
+        };
     },
 
     async translatePoll(pollId) {
@@ -525,37 +520,6 @@ Object.assign(NYM.prototype, {
         return clone.textContent.trim();
     },
 
-    async _translateDirect(text, targetLang) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
-        try {
-            const params = new URLSearchParams({
-                client: 'gtx',
-                sl: 'auto',
-                tl: targetLang,
-                dt: 't',
-                q: text.slice(0, 5000),
-            });
-            const resp = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`, {
-                signal: controller.signal,
-            });
-            clearTimeout(timer);
-            if (!resp.ok) throw new Error(`Google Translate returned ${resp.status}`);
-            const data = await resp.json();
-            let translatedText = '';
-            if (Array.isArray(data[0])) {
-                translatedText = data[0].map(seg => seg[0] || '').join('');
-            }
-            return {
-                translatedText,
-                detectedLanguage: data[2] || 'auto',
-            };
-        } catch (err) {
-            clearTimeout(timer);
-            throw new Error('Translation failed: ' + (err.name === 'AbortError' ? 'timeout' : err.message));
-        }
-    },
-
     // Translate text from the message input and replace it with the translation.
     async translateInputText(targetLang) {
         const input = document.getElementById('messageInput');
@@ -567,8 +531,9 @@ Object.assign(NYM.prototype, {
 
         try {
             const { translatedText } = await this._translatePreservingMentions(text, targetLang);
-            // Don't clobber the input if Google returned nothing or echoed the
-            // original (e.g. detected language already matches the target).
+            // Don't clobber the input if the translation came back empty or
+            // echoed the original (e.g. the detected language already matches
+            // the target).
             if (!translatedText || !translatedText.trim() || translatedText.trim() === text.trim()) {
                 this.displaySystemMessage('Nothing to translate (text may already be in the target language).');
                 return;

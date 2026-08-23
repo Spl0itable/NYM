@@ -1310,8 +1310,12 @@ body.light-mode .format-tool:hover {
     background: rgba(0, 0, 0, 0.06);
 }
 
+body.light-mode div.message-input .rich-md-code,
+body.light-mode div.message-input .rich-md-codeblock {
+    background: rgba(0, 0, 0, 0.06);
+}
+
 body.light-mode .format-toolbar,
-body.light-mode .format-preview,
 body.light-mode .media-preview-strip {
     background: rgba(255, 255, 255, 0.96);
     border-color: rgba(0, 0, 0, 0.12);
@@ -1638,6 +1642,7 @@ body.solid-ui .quick-context-menu,
 body.solid-ui .gif-picker,
 body.solid-ui .autocomplete-dropdown,
 body.solid-ui .emoji-autocomplete,
+body.solid-ui .format-toolbar,
 body.solid-ui .command-palette,
 body.solid-ui .reaction-picker,
 body.solid-ui .enhanced-emoji-modal,
@@ -1665,6 +1670,7 @@ body.solid-ui.light-mode .quick-context-menu,
 body.solid-ui.light-mode .gif-picker,
 body.solid-ui.light-mode .autocomplete-dropdown,
 body.solid-ui.light-mode .emoji-autocomplete,
+body.solid-ui.light-mode .format-toolbar,
 body.solid-ui.light-mode .command-palette,
 body.solid-ui.light-mode .reaction-picker,
 body.solid-ui.light-mode .enhanced-emoji-modal,

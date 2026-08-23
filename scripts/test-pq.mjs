@@ -1,0 +1,857 @@
+// Tests the hybrid post-quantum crypto in js/nym-crypto.js.
+//
+//   npm run test:pq
+//
+// Two halves:
+//   1. Behavioural — round-trips, negative cases, and regression checks that
+//      the classical NIP-44 and bitchat transports are untouched.
+//   2. Vectors — test/pq-vectors.json, the same file the Flutter port's tests
+//      read. If these pass in both repos the two implementations interoperate.
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { loadNym, root, hex, unhex } from './pq-harness.mjs';
+
+const { NostrTools: T, NymCrypto: NC } = loadNym();
+const kem = globalThis.NymMlKem.ml_kem768;
+
+let pass = 0, fail = 0;
+const eq = (a, b) => Buffer.from(a).equals(Buffer.from(b));
+function chk(name, cond) {
+    if (cond) { pass++; }
+    else { fail++; console.log(`  FAIL  ${name}`); }
+}
+function section(s) { console.log(`\n${s}`); }
+
+// ---------------------------------------------------------------- behavioural
+section('behavioural');
+chk('ML-KEM is available', NC.pqAvailable());
+
+const aliceSk = T.generateSecretKey(), alicePk = T.getPublicKey(aliceSk);
+const bobSk = T.generateSecretKey(), bobPk = T.getPublicKey(bobSk);
+const bobKem = NC.pqKeypairFromPrivkey(bobSk, 0);
+const self = { sk: bobSk, kemSk: bobKem.secretKey, kemPk: bobKem.publicKey };
+
+chk('nsec-derived key is identical across devices sharing an nsec',
+    eq(NC.pqKeypairFromPrivkey(bobSk, 0).publicKey, bobKem.publicKey));
+chk('epoch bump rotates the key',
+    !eq(NC.pqKeypairFromPrivkey(bobSk, 1).publicKey, bobKem.publicKey));
+chk('ML-KEM sizes are FIPS 203 ML-KEM-768',
+    bobKem.publicKey.length === 1184 && bobKem.secretKey.length === 2400);
+
+const msg = 'hello quantum world \u{1F510}';
+const ct = NC.pqEncrypt(msg, aliceSk, bobPk, bobKem.publicKey);
+chk('payload carries the pq1. prefix', NC.isPqPayload(ct));
+chk('round-trips', NC.pqDecrypt(ct, alicePk, self) === msg);
+chk('every message gets a fresh KEM encapsulation',
+    NC.pqEncrypt(msg, aliceSk, bobPk, bobKem.publicKey).split('.')[1] !== ct.split('.')[1]);
+
+const throws = (fn) => { try { fn(); return false; } catch (_) { return true; } };
+const malSk = T.generateSecretKey(), malKem = NC.pqKeypairFromPrivkey(malSk, 0);
+chk('wrong recipient cannot decrypt',
+    throws(() => NC.pqDecrypt(ct, alicePk, { sk: malSk, kemSk: malKem.secretKey, kemPk: malKem.publicKey })));
+chk('wrong claimed sender is rejected (classical leg is bound)',
+    throws(() => NC.pqDecrypt(ct, T.getPublicKey(malSk), self)));
+{
+    // Corrupting the KEM ciphertext yields a different decapsulated secret, so
+    // the derived conversation key differs and the NIP-44 HMAC must reject.
+    const parts = ct.split('.');
+    const raw = NC._b64uDecode(parts[1]);
+    raw[0] ^= 1;
+    chk('flipped KEM ciphertext bit is rejected',
+        throws(() => NC.pqDecrypt(`pq1.${NC._b64uEncode(raw)}.${parts[2]}`, alicePk, self)));
+}
+chk('a substituted recipient KEM key changes the transcript and fails',
+    throws(() => NC.pqDecrypt(ct, alicePk, { sk: bobSk, kemSk: bobKem.secretKey, kemPk: malKem.publicKey })));
+chk('malformed payloads are rejected, not crashed on',
+    throws(() => NC.pqDecrypt('pq1.', alicePk, self)) &&
+    throws(() => NC.pqDecrypt('pq1.zzz.zzz', alicePk, self)) &&
+    throws(() => NC.pqDecrypt('not-pq', alicePk, self)));
+
+section('gift wrap');
+const rumor = { kind: 14, created_at: 1700000000, tags: [['p', bobPk], ['x', 'ABC']], content: 'sealed pq message' };
+const wrap = NC.pqNip59Wrap(rumor, aliceSk, bobPk, bobKem.publicKey, null);
+chk('wrap is a valid signed kind 1059', wrap.kind === 1059 && T.verifyEvent(wrap));
+chk('wrap tags stay vanilla NIP-17 (p tag only, no PQ tag leaked)',
+    JSON.stringify(wrap.tags) === JSON.stringify([['p', bobPk]]));
+chk('wrap is authored by an ephemeral key, not the sender', wrap.pubkey !== alicePk);
+chk('expiration tag is honoured',
+    JSON.stringify(NC.pqNip59Wrap(rumor, aliceSk, bobPk, bobKem.publicKey, 1800000000).tags)
+    === JSON.stringify([['p', bobPk], ['expiration', '1800000000']]));
+
+const got = NC.unwrapGiftWrap(wrap, [{ sk: bobSk, bitchat: false, kemSk: bobKem.secretKey, kemPk: bobKem.publicKey }]);
+chk('unwrap succeeds and flags isPq', !!got && got.isPq === true);
+chk('rumor survives the round trip', got && got.rumor.content === 'sealed pq message');
+chk('seal is authored and signed by the real sender',
+    got && got.seal.pubkey === alicePk && T.verifyEvent(got.seal));
+chk('both layers are hybridized', got && NC.isPqPayload(got.seal.content));
+chk('a classical-only candidate skips a pq wrap cleanly (no throw)',
+    NC.unwrapGiftWrap(wrap, [{ sk: bobSk, bitchat: false }]) === null);
+chk('candidate ordering is reported',
+    NC.unwrapGiftWrap(wrap, [{ sk: malSk, bitchat: false, kemSk: malKem.secretKey, kemPk: malKem.publicKey },
+                             { sk: bobSk, bitchat: false, kemSk: bobKem.secretKey, kemPk: bobKem.publicKey }])?.idx === 1);
+
+section('regression: classical transports unchanged');
+{
+    const cw = NC.nip59Wrap(rumor, aliceSk, bobPk, null);
+    const cgot = NC.unwrapGiftWrap(cw, [{ sk: bobSk, bitchat: false }]);
+    chk('classical NIP-44 wrap still round-trips', !!cgot && cgot.rumor.content === rumor.content);
+    chk('classical wrap reports isPq false', cgot && cgot.isPq === false);
+    const bw = NC.bitchatWrap(rumor, aliceSk, bobPk);
+    const bgot = NC.unwrapGiftWrap(bw, [{ sk: bobSk, bitchat: true }]);
+    chk('bitchat wrap still round-trips', !!bgot && bgot.isBitchat === true);
+    chk('bitchat wrap reports isPq false', bgot && bgot.isPq === false);
+    // A PQ-capable candidate must not break the classical transports.
+    const both = [{ sk: bobSk, bitchat: true, kemSk: bobKem.secretKey, kemPk: bobKem.publicKey }];
+    chk('a PQ-capable candidate still decrypts classical wraps',
+        NC.unwrapGiftWrap(cw, both)?.rumor.content === rumor.content);
+    chk('a PQ-capable candidate still decrypts bitchat wraps',
+        NC.unwrapGiftWrap(bw, both)?.isBitchat === true);
+}
+
+section('wrap-only hybrid (the transport a signer login can build)');
+{
+    // What an extension / NIP-46 login produces: the seal is plain NIP-44 —
+    // the signer returns a finished payload — inside a hybrid wrap, whose
+    // ephemeral key we generated ourselves.
+    const eph = T.generateSecretKey();
+    const seal = T.finalizeEvent({
+        kind: 13,
+        content: T.nip44.encrypt(JSON.stringify(rumor), T.nip44.getConversationKey(aliceSk, bobPk)),
+        created_at: 1735689600,
+        tags: [],
+    }, aliceSk);
+    const wrap = T.finalizeEvent({
+        kind: 1059,
+        content: NC.pqEncrypt(JSON.stringify(seal), eph, bobPk, bobKem.publicKey),
+        created_at: 1735689600,
+        tags: [['p', bobPk]],
+    }, eph);
+
+    const got = NC.unwrapGiftWrap(wrap, [self]);
+    chk('a hybrid wrap around a classical seal opens', !!got);
+    chk('and yields the original rumor', got && got.rumor.content === rumor.content);
+    chk('and reports itself as post-quantum, which it is for the threat',
+        got && got.isPq === true);
+
+    // The point of the whole exercise: what a relay stores needs ML-KEM to
+    // open, so a recorder who breaks secp256k1 later gets nothing. The seal's
+    // classical layer is only reachable by someone already through the
+    // post-quantum one.
+    chk('the stored event is a pq payload', NC.isPqPayload(wrap.content));
+    chk('a classical-only holder of the recipient key cannot open it',
+        NC.unwrapGiftWrap(wrap, [{ sk: bobSk, bitchat: false }]) === null);
+    chk('nor can the wrong ml-kem key',
+        NC.unwrapGiftWrap(wrap, [{ sk: bobSk, bitchat: false, kemSk: malKem.secretKey, kemPk: malKem.publicKey }]) === null);
+}
+
+section('settings blob (self-encrypted, js/modules/settings.js)');
+{
+    // The D1 settings blob is encrypted to ourselves, so both halves use our
+    // own key. It carries the conversation list, the group keys and the history
+    // categories — left classical it would be the weakest thing we store.
+    const self = { sk: bobSk, kemSk: bobKem.secretKey, kemPk: bobKem.publicKey };
+    const plaintext = JSON.stringify({ theme: 'matrix', groupEphemeralKeys: { g1: { self: { prev: [] } } } });
+    const ct = NC.pqEncrypt(plaintext, bobSk, bobPk, bobKem.publicKey);
+    chk('a self-encrypted blob is a pq payload', NC.isPqPayload(ct));
+    chk('a self-encrypted blob round-trips', NC.pqDecrypt(ct, bobPk, self) === plaintext);
+    chk('another identity cannot read it',
+        (() => { try { NC.pqDecrypt(ct, bobPk, { sk: malSk, kemSk: malKem.secretKey, kemPk: malKem.publicKey }); return false; } catch (_) { return true; } })());
+    // Blobs written before this device had a PQ key stay readable: the prefix
+    // is what picks the path, so no migration is needed.
+    const legacy = T.nip44.encrypt(plaintext, T.nip44.getConversationKey(bobSk, bobPk));
+    chk('a legacy NIP-44 blob is not mistaken for a pq one', !NC.isPqPayload(legacy));
+    chk('a legacy NIP-44 blob still decrypts',
+        T.nip44.decrypt(legacy, T.nip44.getConversationKey(bobSk, bobPk)) === plaintext);
+    // The size headroom the settings publisher has to budget for.
+    chk('the hybrid costs under 2 KB a layer', ct.length - legacy.length < 2048);
+}
+
+// -------------------------------------------------------------------- vectors
+section('vectors (test/pq-vectors.json — shared with the Flutter port)');
+const V = JSON.parse(fs.readFileSync(path.join(root, 'test', 'pq-vectors.json'), 'utf8'));
+
+for (const [i, v] of V.seedDerivation.entries()) {
+    chk(`seedDerivation[${i}]`, hex(NC.pqDeriveSeed(unhex(v.privkey), v.epoch)) === v.seed);
+}
+for (const [i, v] of V.keygen.entries()) {
+    const kp = kem.keygen(unhex(v.seed));
+    chk(`keygen[${i}].publicKey`, hex(kp.publicKey) === v.publicKey);
+    chk(`keygen[${i}].secretKey`, hex(kp.secretKey) === v.secretKey);
+}
+for (const [i, v] of V.decapsulate.entries()) {
+    const kp = kem.keygen(unhex(v.keySeed));
+    chk(`decapsulate[${i}] (${v.note})`,
+        hex(kem.decapsulate(unhex(v.cipherText), kp.secretKey)) === v.sharedSecret);
+}
+for (const [i, v] of V.conversationKey.entries()) {
+    chk(`conversationKey[${i}]`, hex(NC.pqConversationKey(
+        unhex(v.ecdhSharedX), unhex(v.kemSharedSecret), unhex(v.kemCipherText),
+        unhex(v.recipKemPublicKey), v.senderSecpPubkey, v.recipSecpPubkey)) === v.conversationKey);
+}
+for (const [i, v] of V.endToEnd.entries()) {
+    const kp = kem.keygen(unhex(v.recipKemSeed));
+    chk(`endToEnd[${i}] decrypts`, NC.pqDecrypt(v.payload, v.senderPubkey,
+        { sk: unhex(v.recipPrivkey), kemSk: kp.secretKey, kemPk: kp.publicKey }) === v.plaintext);
+    // Re-derive the payload from the pinned randomness and require exact bytes.
+    const e = kem.encapsulate(kp.publicKey, unhex(v.encapsulationRandomness));
+    const ecdhX = T._secp256k1.getSharedSecret(unhex(v.senderPrivkey), '02' + v.recipPubkey).subarray(1, 33);
+    const ck = NC.pqConversationKey(ecdhX, e.sharedSecret, e.cipherText, kp.publicKey, v.senderPubkey, v.recipPubkey);
+    chk(`endToEnd[${i}] conversation key matches`, hex(ck) === v.conversationKey);
+    chk(`endToEnd[${i}] payload is byte-identical`,
+        `pq1.${NC._b64uEncode(e.cipherText)}.${T.nip44.encrypt(v.plaintext, ck, unhex(v.nip44Nonce))}` === v.payload);
+}
+
+section('gift wrap vector (the layering contract with the Flutter port)');
+{
+    const g = V.giftWrap;
+    const kp = kem.keygen(unhex(g.recipKemSeed));
+    chk('wrap event signature verifies', T.verifyEvent(g.wrap));
+    chk('wrap is kind 1059 with only a p tag',
+        g.wrap.kind === 1059 && JSON.stringify(g.wrap.tags) === JSON.stringify([['p', g.recipPubkey]]));
+    const r = NC.unwrapGiftWrap(g.wrap, [
+        { sk: unhex(g.recipPrivkey), bitchat: false, kemSk: kp.secretKey, kemPk: kp.publicKey },
+    ]);
+    chk('gift wrap unwraps', !!r && r.isPq === true);
+    chk('recovered rumor matches', r && JSON.stringify(r.rumor) === JSON.stringify(g.rumor));
+    chk('recovered seal matches', r && r.seal.id === g.seal.id && T.verifyEvent(r.seal));
+    chk('seal author is the sender', r && r.seal.pubkey === g.senderPubkey);
+    chk('wrap author is ephemeral', g.wrap.pubkey !== g.senderPubkey);
+}
+
+// -------------------------------------------------- announcement + discovery
+// js/modules/pq.js decides WHO gets post-quantum. Its validation and expiry
+// rules are security-relevant (a forged or stale announcement must never
+// attract PQ traffic), so exercise them against a minimal host object.
+section('announcement + discovery (js/modules/pq.js)');
+{
+    const store = new Map();
+    globalThis.localStorage = {
+        getItem: (k) => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => store.set(k, String(v)),
+        removeItem: (k) => store.delete(k),
+    };
+    globalThis.window = globalThis;
+    globalThis.NYM = function NYM() { };
+    vm.runInThisContext(fs.readFileSync(path.join(root, 'js/modules/pq.js'), 'utf8'),
+        { filename: 'js/modules/pq.js' });
+
+    const mkNym = (privkey) => {
+        const n = new globalThis.NYM();
+        n.privkey = privkey;
+        n.pubkey = T.getPublicKey(privkey);
+        n.connected = true;
+        n.pqKeys = new Map();
+        n.sent = [];
+        n.sendToRelay = (m) => n.sent.push(m);
+        n.signEvent = async (e) => T.finalizeEvent(e, privkey);
+        return n;
+    };
+
+    const skA = T.generateSecretKey();
+    const a = mkNym(skA);
+
+    chk('ML-KEM is detected as supported', a.pqSupported());
+    chk('a local key makes us capable', a.pqCapable());
+
+    // Sending and receiving are separate questions, and the difference is the
+    // whole of what an extension / NIP-46 login can and cannot do.
+    //
+    // A NIP-17 message is a SEAL under the identity key inside a WRAP under a
+    // throwaway key we generate ourselves. Only the seal needs the signer, so
+    // such a login can still hybridize the wrap — and the wrap is the layer a
+    // recorder stores, so that already defeats harvest-now-decrypt-later.
+    // Receiving is a different matter: the ML-KEM keypair derives from the
+    // nsec, and opening a message means decapsulating with its secret half.
+    {
+        const ext = mkNym(skA);
+        ext.privkey = null; // extension / NIP-46: signs, never reveals the key
+        chk('a signer login can send post-quantum', ext.pqSendCapable() && ext.pqEnabled());
+        chk('a signer login cannot receive it', !ext.pqCapable());
+        chk('and so announces no key of its own', !ext.pqSelfEnabled());
+        chk('and derives no keypair', ext.pqSelfKeys() === null);
+        chk('and offers no unwrap candidates', ext.pqUnwrapCandidates([skA]).length === 0);
+
+        // The lock-out hazard: a SECOND device holding the nsec may already
+        // have announced a key for this npub. Encapsulating our own settings
+        // and history to it from here would make them unreadable on this
+        // device, permanently — it cannot derive the secret half.
+        const selfKeys = window.NymCrypto.pqKeypairFromPrivkey(skA, 0);
+        ext.pqKeys.set(ext.pubkey, { pk: selfKeys.publicKey, exp: 2000000000, ts: 1700000000 });
+        chk('a peer key is still usable for sending', !!ext.pqKeyFor(ext.pubkey));
+        chk('but our own copies stay classical, so we can still read them',
+            ext.pqSelfKeyFor() === null);
+
+        const local = mkNym(skA);
+        local.pqKeys.set(local.pubkey, { pk: selfKeys.publicKey, exp: 2000000000, ts: 1700000000 });
+        chk('an nsec login does encrypt its own copies post-quantum',
+            !!local.pqSelfKeyFor());
+    }
+
+    // The escape hatch still turns everything off, on either kind of login.
+    store.set('nym_pq_mode', 'off');
+    {
+        const ext = mkNym(skA);
+        ext.privkey = null;
+        chk('the escape hatch disables sending too', !ext.pqEnabled());
+        chk('and self copies', !a.pqSelfEnabled());
+    }
+    store.delete('nym_pq_mode');
+
+    // Upgrade path: an existing install must default to OFF, because an older
+    // device on the same nsec would be locked out by a silent switch.
+    // No user setting: post-quantum is on for anyone who can do it.
+    store.delete('nym_pq_mode');
+    chk('post-quantum is on with no setting to enable', a.pqEnabled());
+
+    // Upgrades get a one-time notice; fresh installs have no older device on
+    // the same npub to strand, so they get none.
+    store.set('nym_last_online_ts', '1700000000');
+    store.delete('nym_pq_upgrade_notice');
+    store.delete('nym_pq_upgrade_seen');
+    {
+        const up = mkNym(skA);
+        up._pqMarkUpgradeIfNeeded();
+        chk('an upgrade raises a one-time notice, since an older device on the '
+            + 'same npub would stop receiving messages', up.pqUpgradeNoticePending());
+        chk('post-quantum is on regardless', up.pqEnabled());
+        up.dismissPqUpgradeNotice();
+        chk('the notice is dismissible and stays dismissed', !up.pqUpgradeNoticePending());
+        up._pqMarkUpgradeIfNeeded();
+        chk('the notice never comes back', !up.pqUpgradeNoticePending());
+    }
+    store.delete('nym_last_online_ts');
+    store.delete('nym_pq_upgrade_notice');
+    store.delete('nym_pq_upgrade_seen');
+    {
+        const fresh = mkNym(skA);
+        fresh._pqMarkUpgradeIfNeeded();
+        chk('a fresh install raises no notice', !fresh.pqUpgradeNoticePending());
+        chk('a fresh install still has post-quantum on', fresh.pqEnabled());
+    }
+
+    // The undocumented escape hatch, for defusing a field bug without an
+    // emergency release. Nothing in the app writes it.
+    store.set('nym_pq_mode', 'off');
+    chk('the storage escape hatch disables post-quantum', !mkNym(skA).pqEnabled());
+    store.delete('nym_pq_mode');
+    chk('and removing it restores the default', mkNym(skA).pqEnabled());
+
+    // Extension / NIP-46 logins have no local secret key, so they can wrap a
+    // hybrid message but never open one.
+    const ext = mkNym(skA);
+    ext.privkey = null;
+    chk('no local key means we cannot receive', !ext.pqCapable());
+    chk('but we can still send', ext.pqEnabled());
+
+    chk('self keys derive and are cached', (() => {
+        const k1 = a.pqSelfKeys(), k2 = a.pqSelfKeys();
+        return k1 && k1.publicKey.length === 1184 && k1 === k2;
+    })());
+
+    await a.publishPqAnnouncement();
+    const ann = a.sent.length ? a.sent[a.sent.length - 1][1] : null;
+    chk('announcement is published', !!ann && ann.kind === 30078);
+    chk('announcement signature verifies (binds the KEM key to the identity)',
+        ann && T.verifyEvent(ann));
+    chk('announcement carries d/t = nym-pq and a NIP-40 expiration', ann &&
+        ann.tags.some(t => t[0] === 'd' && t[1] === 'nym-pq') &&
+        ann.tags.some(t => t[0] === 't' && t[1] === 'nym-pq') &&
+        ann.tags.some(t => t[0] === 'expiration'));
+    chk('publishing records our own key for self-addressed wraps',
+        !!a.pqKeyFor(a.pubkey));
+
+    // A second identity ingesting the announcement.
+    const b = mkNym(T.generateSecretKey());
+    store.set('nym_pq_mode', 'on');
+    b.handlePqAnnouncement(ann);
+    chk('peer ingests the announced key', (() => {
+        const pk = b.pqKeyFor(a.pubkey);
+        return pk instanceof Uint8Array && pk.length === 1184;
+    })());
+    chk('the ingested key is the sender\'s real ML-KEM key',
+        Buffer.from(b.pqKeyFor(a.pubkey)).equals(Buffer.from(a.pqSelfKeys().publicKey)));
+
+    chk('an unknown peer yields null (falls back to classical)',
+        b.pqKeyFor(T.getPublicKey(T.generateSecretKey())) === null);
+
+    // Expiry and malformed input.
+    const mutate = (fn) => {
+        const p = JSON.parse(ann.content);
+        fn(p);
+        return T.finalizeEvent({ ...ann, content: JSON.stringify(p), id: undefined, sig: undefined }, skA);
+    };
+    const c = mkNym(T.generateSecretKey());
+    c.handlePqAnnouncement(mutate(p => { p.exp = Math.floor(Date.now() / 1000) - 1; }));
+    chk('an expired announcement is ignored', c.pqKeyFor(a.pubkey) === null);
+
+    const d = mkNym(T.generateSecretKey());
+    d.handlePqAnnouncement(mutate(p => { p.pk = NC._b64uEncode(new Uint8Array(32)); }));
+    chk('a wrong-length ML-KEM key is rejected', d.pqKeyFor(a.pubkey) === null);
+
+    const e2 = mkNym(T.generateSecretKey());
+    e2.handlePqAnnouncement(mutate(p => { p.alg = 'kyber512'; }));
+    chk('an unknown algorithm is rejected', e2.pqKeyFor(a.pubkey) === null);
+
+    const f = mkNym(T.generateSecretKey());
+    f.handlePqAnnouncement({ ...ann, content: 'not json' });
+    chk('malformed content is ignored, not thrown on', f.pqKeyFor(a.pubkey) === null);
+
+    // Retraction: a peer that turns PQ off must stop attracting PQ traffic.
+    b.handlePqAnnouncement(mutate(p => { p.retracted = true; delete p.pk; }));
+    chk('a retraction drops the peer key', b.pqKeyFor(a.pubkey) === null);
+
+    // Key rotation keeps older epochs decryptable.
+    chk('rotation changes the advertised key and keeps prior epochs openable', (() => {
+        const before = a.pqSelfKeys().publicKey;
+        store.set('nym_pq_epoch', '1');
+        a._pqSelfCache = null;
+        const after = a.pqSelfKeys().publicKey;
+        const cands = a.pqSelfCandidates();
+        const hasOld = cands.some(c2 => Buffer.from(c2.kemPk).equals(Buffer.from(before)));
+        const hasNew = cands.some(c2 => Buffer.from(c2.kemPk).equals(Buffer.from(after)));
+        return !Buffer.from(before).equals(Buffer.from(after)) && hasOld && hasNew;
+    })());
+
+    // Device roster.
+    store.set('nym_pq_epoch', '0');
+    a._pqSelfCache = null;
+    const roster = a.pqDeviceRoster();
+    chk('the device roster lists this device', roster.length >= 1 && roster.some(r => r.isSelf));
+
+    // --- send-path routing (pqPmPlan) ---------------------------------------
+    // The rule both PM send paths share. Getting this wrong is how a message
+    // ends up ALSO sent classically, silently voiding the post-quantum
+    // guarantee while the UI still claims it.
+    section('send-path routing (pqPmPlan)');
+    {
+        const n = mkNym(skA);
+        store.set('nym_pq_mode', 'on');
+        const peer = T.getPublicKey(T.generateSecretKey());
+        const kem2 = NC.pqKeypairFromPrivkey(T.generateSecretKey(), 0);
+        const withKey = () => { n._pqRecord(peer, kem2.publicKey, Math.floor(Date.now() / 1000) + 3600, 0); };
+        const reset = () => { n.pqKeys = new Map(); n.bitchatUsers = new Set(); n.nymUsers = new Set(); };
+
+        reset();
+        let p2 = n.pqPmPlan(peer);
+        chk('unknown peer, no PQ key: bitchat + classical nym (unchanged today)',
+            !p2.pq && p2.bitchat && p2.nym);
+
+        reset(); n.bitchatUsers.add(peer);
+        p2 = n.pqPmPlan(peer);
+        chk('known bitchat peer: bitchat only, never post-quantum',
+            !p2.pq && p2.bitchat && !p2.nym);
+
+        reset(); n.nymUsers.add(peer);
+        p2 = n.pqPmPlan(peer);
+        chk('known nym peer without a key: classical nym only',
+            !p2.pq && !p2.bitchat && p2.nym);
+
+        reset(); withKey();
+        p2 = n.pqPmPlan(peer);
+        chk('unknown peer WITH a key: post-quantum, and no bitchat copy',
+            p2.pq && p2.nym && !p2.bitchat);
+
+        reset(); n.nymUsers.add(peer); withKey();
+        p2 = n.pqPmPlan(peer);
+        chk('known nym peer with a key: post-quantum, no bitchat copy',
+            p2.pq && p2.nym && !p2.bitchat);
+
+        // The dangerous case: a peer we believe uses bitchat who has also
+        // announced. Sending both would leak the plaintext to the weaker copy.
+        reset(); n.bitchatUsers.add(peer); withKey();
+        p2 = n.pqPmPlan(peer);
+        chk('a bitchat-flagged peer WITH a key gets no classical copy alongside',
+            p2.pq && !p2.bitchat);
+
+        chk('the plan carries the recipient key it decided with',
+            p2.kemPk && Buffer.from(p2.kemPk).equals(Buffer.from(kem2.publicKey)));
+
+        // Turning post-quantum off stops PQ, but the peer is still a PROVEN
+        // Nymchat client, so Auto still has no reason to send them a Bitchat
+        // wrap. That is the point of splitting the two signals.
+        reset(); withKey();
+        store.set('nym_pq_mode', 'off');
+        p2 = n.pqPmPlan(peer);
+        chk('with PQ off, no post-quantum wrap is sent',
+            !p2.pq && p2.kemPk === null && p2.nym);
+        chk('with PQ off, a proven Nymchat peer still gets no Bitchat wrap',
+            !p2.bitchat && p2.provenNym);
+        store.set('nym_pq_mode', 'on');
+
+        // An expired announcement must fall back, not fail.
+        reset();
+        n._pqRecord(peer, kem2.publicKey, Math.floor(Date.now() / 1000) - 1, 0);
+        p2 = n.pqPmPlan(peer);
+        chk('an expired key falls back to the classical route',
+            !p2.pq && p2.bitchat && p2.nym);
+
+        // --- capability announcements without a key --------------------------
+        // The case that motivates splitting the signals: a Nymchat user who has
+        // post-quantum off, or is on an extension login that cannot do it at
+        // all. They are provably not on Bitchat, so the Bitchat wrap is waste.
+        const live = () => Math.floor(Date.now() / 1000) + 3600;
+        reset();
+        n._pqRecord(peer, null, live(), 0);
+        p2 = n.pqPmPlan(peer);
+        chk('a KEM-less announcement still proves the peer runs Nymchat', p2.provenNym);
+        chk('a KEM-less announcement suppresses the Bitchat wrap', !p2.bitchat);
+        chk('a KEM-less announcement does not claim post-quantum', !p2.pq && p2.nym);
+        chk('a KEM-less peer is not counted as a post-quantum peer',
+            !n.pqKnownPeers().includes(peer));
+
+        reset();
+        chk('no announcement means not proven, so dual-send is kept',
+            !n.pqPmPlan(peer).provenNym && n.pqPmPlan(peer).bitchat);
+
+        // --- Bitchat wrap suppression ---------------------------------------
+        // No setting: a live announcement proves the peer is not on Bitchat,
+        // so the extra copy is dropped. Anyone we cannot prove gets exactly
+        // what they got before post-quantum existed.
+        section('Bitchat wrap suppression');
+
+        reset(); n._pqRecord(peer, null, live(), 0);
+        chk('a proven Nymchat peer gets no Bitchat wrap', !n.pqPmPlan(peer).bitchat);
+
+        reset(); withKey();
+        p2 = n.pqPmPlan(peer);
+        chk('a post-quantum wrap is never paired with a Bitchat copy',
+            p2.pq && !p2.bitchat);
+
+        reset(); n.bitchatUsers.add(peer);
+        chk('a known Bitchat peer with no announcement still gets one',
+            n.pqPmPlan(peer).bitchat);
+
+        reset(); n.bitchatUsers.add(peer); n._pqRecord(peer, null, live(), 0);
+        chk('an announcement overrides a stale bitchat flag',
+            !n.pqPmPlan(peer).bitchat);
+
+        reset(); n.nymUsers.add(peer);
+        chk('a known nym peer gets no Bitchat wrap', !n.pqPmPlan(peer).bitchat);
+
+        reset();
+        chk("an unknown peer keeps the pre-existing dual-send",
+            n.pqPmPlan(peer).bitchat && n.pqPmPlan(peer).nym);
+
+        // A message must always leave in SOME format, whatever the peer state.
+        for (const setup of [
+            () => { reset(); },
+            () => { reset(); n.bitchatUsers.add(peer); },
+            () => { reset(); n.nymUsers.add(peer); },
+            () => { reset(); n._pqRecord(peer, null, live(), 0); },
+            () => { reset(); withKey(); },
+        ]) {
+            setup();
+            const pl = n.pqPmPlan(peer);
+            if (!(pl.bitchat || pl.nym)) chk('a message is always sent in some format', false);
+        }
+        chk('every peer state produces at least one transport', true);
+    }
+
+    // --- group fan-out ------------------------------------------------------
+    section('group fan-out');
+    {
+        const n = mkNym(skA);
+        store.set('nym_pq_mode', 'on');
+        n.pqKeys = new Map();
+
+        // Decrypt-candidate ordering. A group wrap's classical leg goes to a
+        // rotating EPHEMERAL key while its KEM leg uses the identity key, so a
+        // candidate pairs one of each. Ordering matters: mispaired candidates
+        // cost a full ML-KEM decapsulation each.
+        const ephSk = T.generateSecretKey();
+        const cands = n.pqUnwrapCandidates([ephSk, n.privkey]);
+        chk('candidates pair a secp key with our ML-KEM keypair',
+            cands.length > 0 && cands[0].kemSk && cands[0].kemPk && cands[0].sk);
+        chk('the first candidate uses the leading secp key (the p-tag match)',
+            Buffer.from(cands[0].sk).equals(Buffer.from(ephSk)));
+        chk('the first candidate uses the current ML-KEM epoch',
+            Buffer.from(cands[0].kemPk).equals(Buffer.from(n.pqSelfKeys().publicKey)));
+        chk('pairing is bounded so a group wrap costs one decapsulation, not dozens',
+            cands.length <= n.PQ_SK_PAIRING_LIMIT * n.pqSelfCandidates().length);
+        chk('a long ephemeral history does not blow up the candidate list',
+            n.pqUnwrapCandidates(new Array(30).fill(0).map(() => T.generateSecretKey())).length
+                <= n.PQ_SK_PAIRING_LIMIT * n.pqSelfCandidates().length);
+
+        // An end-to-end group-shaped wrap: classical leg to the ephemeral key,
+        // KEM leg to the identity key.
+        const ephPk = T.getPublicKey(ephSk);
+        const selfKem = n.pqSelfKeys();
+        const gWrap = NC.pqNip59Wrap(
+            { kind: 14, created_at: 1700000000, tags: [['g', 'grp']], content: 'group pq' },
+            T.generateSecretKey(), ephPk, selfKem.publicKey, null);
+        const got = NC.unwrapGiftWrap(gWrap, n.pqUnwrapCandidates([ephSk, n.privkey]));
+        chk('a group wrap (ephemeral secp + identity KEM) decrypts',
+            !!got && got.isPq === true && got.rumor.content === 'group pq');
+        chk('the winning candidate is the first one tried', got && got.idx === 0);
+
+        // Coverage: partial must NOT read as protected.
+        n._recordGroupPqCoverage('MSG1', 10, 10);
+        n._recordGroupPqCoverage('MSG2', 8, 10);
+        n._recordGroupPqCoverage('MSG3', 0, 10);
+        const cov = (id) => n.pqGroupCoverageFor(id);
+        chk('full coverage is recorded', cov('MSG1').pq === 10 && cov('MSG1').total === 10);
+        chk('partial coverage is recorded exactly', cov('MSG2').pq === 8 && cov('MSG2').total === 10);
+        const isProtected = (id) => { const c = cov(id); return !!c && c.total > 0 && c.pq === c.total; };
+        chk('only full coverage counts as post-quantum', isProtected('MSG1'));
+        chk('partial coverage does NOT count — one classical copy is enough for an attacker',
+            !isProtected('MSG2'));
+        chk('zero coverage does not count', !isProtected('MSG3'));
+        chk('an unknown message has no coverage', cov('NOPE') === null);
+        chk('coverage map is bounded', (() => {
+            for (let i = 0; i < 2100; i++) n._recordGroupPqCoverage('M' + i, 1, 1);
+            return n.pqGroupCoverage.size <= 2000;
+        })());
+
+        // Per-member routing: a mixed group must fan out both transports.
+        const m1 = T.getPublicKey(T.generateSecretKey());
+        const m2 = T.getPublicKey(T.generateSecretKey());
+        n.pqKeys = new Map();
+        n._pqRecord(m1, selfKem.publicKey, Math.floor(Date.now() / 1000) + 3600, 0);
+        chk('a member who announced resolves to a key', !!n.pqGroupKeyFor(m1));
+        chk('a member who did not stays classical', n.pqGroupKeyFor(m2) === null);
+    }
+
+    section('announcement + discovery (js/modules/pq.js), continued');
+    // Kind 30078 is addressable, so each publish REPLACES the last. Relays
+    // break a created_at tie by keeping the lexically-lower event id, so two
+    // publishes in the same second can silently lose one — a rotation landing
+    // right after a boot publish would leave peers on a stale key.
+    {
+        const m = mkNym(skA);
+        m.connected = true;
+        await m.publishPqAnnouncement();
+        await m.publishPqAnnouncement();
+        await m.publishPqAnnouncement();
+        const evs = m.sent.map(x => x[1]);
+        chk('every announcement targets the same replaceable address', evs.every(e =>
+            e.kind === 30078 && e.tags.some(t => t[0] === 'd' && t[1] === 'nym-pq')));
+        chk('rapid republishes never tie on created_at', (() => {
+            for (let i = 1; i < evs.length; i++) {
+                if (evs[i].created_at <= evs[i - 1].created_at) return false;
+            }
+            return true;
+        })());
+        chk('the expiration tracks the bumped timestamp', evs.every(e => {
+            const exp = parseInt(e.tags.find(t => t[0] === 'expiration')[1], 10);
+            return exp === e.created_at + 7 * 24 * 3600;
+        }));
+    }
+
+    // The escape hatch republishes without a key rather than retracting, so
+    // peers stop encapsulating to us immediately but keep knowing we are a
+    // Nymchat client — otherwise we would look like a Bitchat user again and
+    // start attracting pointless Bitchat wraps.
+    store.set('nym_pq_mode', 'off');
+    {
+        const off = mkNym(skA);
+        off.connected = true;
+        await off.publishPqAnnouncement();
+        const last = JSON.parse(off.sent[off.sent.length - 1][1].content);
+        chk('with post-quantum off, we still announce', last.nym === 1);
+        chk('with post-quantum off, we advertise no ML-KEM key', last.pk === undefined);
+        chk('with post-quantum off, we do not retract', last.retracted !== true);
+        chk('pqKeyFor returns null while off', off.pqKeyFor(off.pubkey) === null);
+        chk('but we still register as a Nymchat client',
+            off.isKnownNymchatClient(off.pubkey));
+    }
+    store.delete('nym_pq_mode');
+}
+
+// ------------------------------------------------------------------- badge
+// The badge must never overstate protection. Partial group coverage is the
+// case that matters: if even one member got a classical copy of the same
+// plaintext, breaking secp256k1 reveals the message, so it must not render as
+// protected.
+section('on-demand announcement discovery');
+{
+    // The gap this closes: the standing subscription for announcements is built
+    // once at connect, from the conversation list as it exists then. A peer we
+    // start talking to afterwards was never asked about, so we held no key for
+    // them and every message went classical with no shield — which on a fresh
+    // login, where the list starts empty, meant every peer.
+    const mkPeer = () => T.getPublicKey(T.generateSecretKey());
+    const live = () => Math.floor(Date.now() / 1000) + 3600;
+
+    // mkNym is scoped to the block above; the prototype itself is global.
+    const mkFetcher = () => {
+        const sk = T.generateSecretKey();
+        const n = new globalThis.NYM();
+        n.privkey = sk;
+        n.pubkey = T.getPublicKey(sk);
+        n.connected = true;
+        n.pqKeys = new Map();
+        n.reqs = [];
+        n._subscriptionHandlers = new Map();
+        n._isNostrHex64 = (v) => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+        n.closeFewRelaysSub = () => { };
+        n.sendRequestToFewRelays = (req) => n.reqs.push(req);
+        return n;
+    };
+
+    {
+        const n = mkFetcher();
+        const peer = mkPeer();
+        n.ensurePqAnnouncement(peer);
+        chk('a peer we hold no key for is asked about', n.reqs.length === 1);
+        const f = n.reqs[0][2];
+        chk('the lookup is scoped to that peer',
+            f.kinds[0] === 30078 && f['#t'][0] === 'nym-pq'
+            && f.authors.length === 1 && f.authors[0] === peer);
+    }
+
+    {
+        const n = mkFetcher();
+        const peer = mkPeer();
+        n._pqRecord(peer, null, live(), 0);
+        n.ensurePqAnnouncement(peer);
+        chk('a peer we already hold an entry for is not re-asked', n.reqs.length === 0);
+    }
+
+    {
+        // Two sends racing for the same new peer must not open two lookups.
+        const n = mkFetcher();
+        const peer = mkPeer();
+        const a = n.ensurePqAnnouncement(peer);
+        const b = n.ensurePqAnnouncement(peer);
+        chk('concurrent lookups share one subscription', n.reqs.length === 1);
+        chk('concurrent lookups share one promise', a === b);
+    }
+
+    {
+        // Answering resolves the wait and records the key, so the very first
+        // message to a new peer can still be post-quantum.
+        const n = mkFetcher();
+        const peerSk = T.generateSecretKey();
+        const peer = T.getPublicKey(peerSk);
+        const peerKem = NC.pqKeypairFromPrivkey(peerSk, 0);
+        const waiting = n.ensurePqAnnouncement(peer);
+        const subId = n.reqs[0][1];
+        const handler = n._subscriptionHandlers.get(subId);
+        chk('a handler is registered for the lookup', typeof handler === 'function');
+        const exp = live();
+        handler('EVENT', [subId, {
+            kind: 30078, pubkey: peer,
+            tags: [['d', 'nym-pq'], ['t', 'nym-pq'], ['expiration', String(exp)]],
+            content: JSON.stringify({
+                v: 1, alg: 'mlkem768', nym: 1, epoch: 0,
+                pk: NC._b64uEncode(peerKem.publicKey), exp
+            })
+        }]);
+        const got = await waiting;
+        chk('the answer resolves the wait', !!got);
+        chk('the key is recorded', !!n.pqKeyFor(peer));
+        chk('and it is the key that was announced',
+            eq(n.pqKeyFor(peer), peerKem.publicKey));
+        chk('the send plan now goes post-quantum', n.pqPmPlan(peer).pq === true);
+        chk('the lookup is closed out', !n._subscriptionHandlers.has(subId));
+    }
+
+    {
+        // A peer with no announcement is normal, not an error: resolve, and do
+        // not re-ask on every keystroke's worth of send-path checks.
+        const n = mkFetcher();
+        const peer = mkPeer();
+        const waiting = n.ensurePqAnnouncement(peer);
+        const subId = n.reqs[0][1];
+        n._subscriptionHandlers.get(subId)('EOSE', [subId]);
+        chk('an absent announcement resolves rather than hanging',
+            (await waiting) === null);
+        n.ensurePqAnnouncement(peer);
+        chk('a miss is not immediately re-asked', n.reqs.length === 1);
+    }
+
+    {
+        const n = mkFetcher();
+        n.prefetchPqAnnouncements([mkPeer(), mkPeer(), mkPeer()]);
+        chk('opening a conversation warms every member', n.reqs.length === 3);
+        const n2 = mkFetcher();
+        n2.prefetchPqAnnouncements(Array.from({ length: 200 }, mkPeer));
+        chk('a large group does not fire one subscription per member',
+            n2.reqs.length === 60);
+        const n3 = mkFetcher();
+        n3.prefetchPqAnnouncements(['not-a-pubkey', '', null]);
+        chk('junk pubkeys are skipped', n3.reqs.length === 0);
+    }
+}
+
+section('badge state');
+{
+    globalThis.NYM = globalThis.NYM || function NYM() { };
+    const M = {};
+    // Pull just the two pure helpers out of messages.js without loading the
+    // whole UI module (which needs a DOM).
+    const src = fs.readFileSync(path.join(root, 'js/modules/messages.js'), 'utf8');
+    const grab = (name) => {
+        const start = src.indexOf(`    ${name}(`);
+        if (start < 0) throw new Error('missing ' + name);
+        let depth = 0, i = src.indexOf('{', start);
+        const from = i;
+        for (; i < src.length; i++) {
+            if (src[i] === '{') depth++;
+            else if (src[i] === '}') { depth--; if (depth === 0) break; }
+        }
+        return src.slice(start, i + 1);
+    };
+    // eslint-disable-next-line no-new-func
+    const factory = new Function(`return { ${grab('_pqBadgeState')}, ${grab('_pqBadgeSpan')} };`);
+    Object.assign(M, factory());
+
+    // Every case carries isPM/isGroup, because whether the message is
+    // ENCRYPTED at all decides whether a shield belongs on it. The earlier
+    // version of these tests passed bare {pqEncrypted:...} objects, so it
+    // agreed with any answer the public-message branch happened to give.
+    const pm = (m) => ({ isPM: true, ...m });
+    const group = (m) => ({ isGroup: true, ...m });
+
+    chk('a classical PM says so rather than showing nothing',
+        M._pqBadgeState(pm({ pqEncrypted: false })) === 'classical');
+    chk('a post-quantum PM shows the full shield',
+        M._pqBadgeState(pm({ pqEncrypted: true })) === 'full');
+    chk('a fully covered group shows the full shield',
+        M._pqBadgeState(group({ pqCoverage: { pq: 10, total: 10 } })) === 'full');
+    chk('a partly covered group shows the PARTIAL shield, not the full one',
+        M._pqBadgeState(group({ pqCoverage: { pq: 8, total: 10 } })) === 'partial');
+    chk('a group no member could receive post-quantum says classical',
+        M._pqBadgeState(group({ pqCoverage: { pq: 0, total: 10 } })) === 'classical');
+    chk('coverage overrides an optimistic pqEncrypted flag',
+        M._pqBadgeState(group({ pqEncrypted: true, pqCoverage: { pq: 8, total: 10 } })) === 'partial');
+
+    // A public channel message is plaintext on the relay. A shield of any
+    // kind would imply an encryption it does not have.
+    chk('a public message shows no shield at all',
+        M._pqBadgeState({ pqEncrypted: false }) === '');
+    chk('...not even one claiming to be classical',
+        M._pqBadgeState({ pqCoverage: { pq: 0, total: 10 } }) === '');
+    chk('a null message is handled', M._pqBadgeState(null) === '');
+
+    chk('no markup when there is no state', M._pqBadgeSpan('', 'x') === '');
+    const full = M._pqBadgeSpan('full', 'crypto-lock-irc');
+    const part = M._pqBadgeSpan('partial', 'crypto-lock-irc');
+    const clas = M._pqBadgeSpan('classical', 'crypto-lock-irc');
+    chk('the shield is its own badge, not part of the verification lock',
+        full.includes('crypto-pq-badge') && !full.includes('crypto-verified-badge'));
+    chk('the badge is tappable for details', full.includes('data-action="showPqInfo"'));
+    chk('partial is visually distinct', part.includes('partial') && !full.includes(' partial'));
+    chk('classical is visually distinct from both',
+        clas.includes('classical') && !full.includes(' classical') && !part.includes(' classical'));
+    chk('all three are tappable', clas.includes('data-action="showPqInfo"')
+        && part.includes('data-action="showPqInfo"'));
+    chk('titles do not overstate partial coverage',
+        part.includes('Partly quantum-resistant') && full.includes('Quantum-resistant encryption'));
+    chk('the classical title says plainly that it is not',
+        clas.includes('Not quantum-resistant'));
+    // The orbit inside the shield IS the post-quantum part, so the classical
+    // badge must not carry one — the states have to be told apart at 12px.
+    chk('classical drops the orbit and takes a slash',
+        !clas.includes('<ellipse') && clas.includes('<line'));
+    chk('the protected states keep the orbit',
+        full.includes('<ellipse') && part.includes('<ellipse'));
+    chk('the glyph is language-neutral (no letterforms)',
+        !/>[A-Za-z]</.test(full) && !/>[A-Za-z]</.test(clas));
+    chk('the badge carries its layout class', full.includes('crypto-lock-irc')
+        && clas.includes('crypto-lock-irc'));
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

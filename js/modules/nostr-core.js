@@ -630,6 +630,8 @@ Object.assign(NYM.prototype, {
                 this.handlePollVoteEvent(event);
             } else if (tTag && tTag[1] === 'nym-vouches') {
                 this.handleVouchEvent(event);
+            } else if (tTag && tTag[1] === this.PQ_D_TAG) {
+                this.handlePqAnnouncement(event);
             }
         } else if (event.kind === 24420) {
             this.handleChannelTypingEvent(event);
@@ -1751,6 +1753,15 @@ Object.assign(NYM.prototype, {
     async nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
         return this._cryptoCall('nip59Wrap', [event, senderPrivateKey, recipientPublicKey, expirationTs ?? null],
             () => window.NymCrypto.nip59Wrap(event, senderPrivateKey, recipientPublicKey, expirationTs ?? null));
+    },
+
+    // Hybrid post-quantum gift wrap, offloaded like the classical ones. The
+    // ML-KEM encapsulation is ~1ms, but group fan-out does one per member, so
+    // it belongs off the UI thread for the same reason the others do.
+    async pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
+        return this._cryptoCall('pqNip59Wrap',
+            [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null],
+            () => window.NymCrypto.pqNip59Wrap(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null));
     },
 
     requestUserProfile(pubkey) {

@@ -710,7 +710,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Handle incoming group message (rumor with 'g' tag)
-    async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified) {
+    async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap = false) {
         const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
         if (!groupTag) return;
         const groupId = groupTag[1];
@@ -1300,6 +1300,7 @@ Object.assign(NYM.prototype, {
             dupGroupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
         }
         if (dupGroupMsg) {
+            if (isPqWrap && !dupGroupMsg.pqEncrypted) dupGroupMsg.pqEncrypted = true;
             if (senderVerified === true && dupGroupMsg.senderVerified !== true) {
                 dupGroupMsg.senderVerified = true;
                 this._setMessageVerifiedDOM(dupGroupMsg.nymMessageId || dupGroupMsg.id, true);
@@ -1338,6 +1339,8 @@ Object.assign(NYM.prototype, {
             eventKind: 1059,
             isHistorical: this._isGiftWrapBacklog(),
             senderVerified,
+            // Confidentiality, not authentication — see the Message model.
+            pqEncrypted: isPqWrap,
             nymMessageId: nymMsgId,
             isFileOffer: !!groupFileOffer,
             fileOffer: groupFileOffer,
@@ -1865,7 +1868,13 @@ Object.assign(NYM.prototype, {
             if (typeof this._pmArchiveAllowed !== 'function' || !this._pmArchiveAllowed()) return;
             let wrap = null;
             if (this.privkey) {
-                wrap = this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
+                // Post-quantum whenever we are: otherwise the archive is the
+                // weakest link, readable by anyone who breaks secp256k1
+                // regardless of how the outbound copies were sealed.
+                const selfKemPk = this.pqSelfKeyFor();
+                wrap = selfKemPk
+                    ? window.NymCrypto.pqNip59Wrap(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
+                    : this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
             } else {
                 // Extension / NIP-46: seal via the signer, wrap with a local ephemeral.
                 const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
@@ -1907,9 +1916,26 @@ Object.assign(NYM.prototype, {
         // worker pool so large groups don't block the UI thread.
         if (this.privkey) {
             const sharedId = this.getNymMessageId(rumor);
+            // Per-member post-quantum coverage. Because each member already
+            // gets an independent wrap, a group can mix post-quantum and
+            // classical recipients with no protocol change and no negotiation
+            // — which is what keeps mixed Nymchat/Bitchat groups working.
+            let pqCount = 0;
             const wrapLocal = async (pubkey) => {
                 const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
-                const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
+                // The two legs use different keys on purpose: the classical
+                // ECDH goes to the member's rotating ephemeral pubkey, keeping
+                // the metadata protection that rotation buys, while the KEM leg
+                // encapsulates to their long-lived identity ML-KEM key (which
+                // is what the announcement carries). Security is
+                // max(classical, PQ), so the rotation still delivers its
+                // forward secrecy against classical attackers while the KEM leg
+                // delivers harvest-now-decrypt-later protection.
+                const memberKemPk = this.pqGroupKeyFor(pubkey);
+                const wrapped = memberKemPk
+                    ? await this.pqNip59WrapEventAsync(rumor, this.privkey, encryptTo, memberKemPk, expirationTs)
+                    : await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
+                if (memberKemPk) pqCount++;
                 this.sendDMToRelays(['EVENT', wrapped]);
                 this._recordGiftWrapId(sharedId, wrapped.id);
                 if (depositToD1) this._depositPMEvent(wrapped);
@@ -1922,6 +1948,11 @@ Object.assign(NYM.prototype, {
                 while (queue.length) await wrapLocal(queue.shift());
             });
             await Promise.all(workers);
+            // Coverage for this message, so the badge can say "quantum-resistant
+            // to 8 of 10 members" rather than implying all-or-nothing.
+            if (groupId && sharedId) {
+                this._recordGroupPqCoverage(sharedId, pqCount, members.length);
+            }
             return;
         }
 
@@ -1951,9 +1982,16 @@ Object.assign(NYM.prototype, {
                     ? await window.nostr.signEvent(sealUnsigned)
                     : await _nip46SignEvent(sealUnsigned);
 
+                // The seal is out of reach through a signer, but the wrap's
+                // ephemeral key is ours, so it can still be hybridized. The KEM
+                // leg encapsulates to the member's long-lived identity key,
+                // exactly as it does on the local-key path — the rotating
+                // ephemeral pubkey the classical leg uses has no announcement.
+                const memberKemPk = this.pqGroupKeyFor(pubkey);
                 const ephSk = NT.generateSecretKey();
-                const ckWrap = NT.nip44.getConversationKey(ephSk, encryptTo);
-                const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+                const wrapContent = memberKemPk
+                    ? window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk)
+                    : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, encryptTo));
                 const wrapUnsigned = {
                     kind: 1059,
                     content: wrapContent,
@@ -2053,6 +2091,8 @@ Object.assign(NYM.prototype, {
             eventKind: 1059,
             nymMessageId,
             senderVerified: true,
+            // Filled in below once the fan-out reports per-member coverage.
+            pqEncrypted: false,
             isFileOffer: !!fileOffer,
             fileOffer,
             deliveryStatus: 'sent'
@@ -2074,6 +2114,18 @@ Object.assign(NYM.prototype, {
 
         // Send gift wraps using ephemeral recipient keys when available
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
+        // A group is post-quantum only if EVERY member got a post-quantum wrap:
+        // one classical copy of the same plaintext is enough for an attacker,
+        // so partial coverage must not read as protected. The exact counts drive
+        // the "8 of 10 members" detail in the badge popup.
+        const coverage = this.pqGroupCoverageFor(nymMessageId);
+        if (coverage) {
+            msg.pqEncrypted = coverage.total > 0 && coverage.pq === coverage.total;
+            msg.pqCoverage = coverage;
+            if (typeof this.refreshMessagePqBadge === 'function') {
+                this.refreshMessagePqBadge(nymMessageId);
+            }
+        }
         this._saveEphemeralKeys();
         this._debouncedNostrSettingsSave(2000);
 
@@ -3710,6 +3762,15 @@ Object.assign(NYM.prototype, {
     openGroup(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
+
+        // Warm every member's post-quantum announcement. A group joined since
+        // we connected is not in the standing subscription's author list, so
+        // without this the fan-out holds no keys and the whole group falls back
+        // to classical — reported as "partial" coverage at best, and no shield
+        // at all in the usual case where none of them resolve.
+        if (typeof this.prefetchPqAnnouncements === 'function') {
+            this.prefetchPqAnnouncements(group.members || []);
+        }
 
         if (this._cvActive) { this._cvOpenConversation({ type: 'group', groupId }); return; }
         this._saveCurrentDraft();

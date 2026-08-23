@@ -47,7 +47,209 @@ const NYM_FORMAT_TOOLS_BY_ID = NYM_FORMAT_TOOLS.reduce((m, t) => { m[t.id] = t; 
 const NYM_COMPOSER_MEDIA_RX = /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?[^\s]*)?)/gi;
 const NYM_COMPOSER_VIDEO_EXTS = ['mp4', 'webm', 'ogg', 'mov'];
 
+// live input formatting 
+const NYM_RICH_FENCE_RX = /```[\s\S]*?```|```[\s\S]*$/g;
+
+const NYM_RICH_LINE_PREFIXES = [
+    { type: 'h3', mark: '### ' },
+    { type: 'h2', mark: '## ' },
+    { type: 'h1', mark: '# ' },
+    { type: 'quote', mark: '> ' }
+];
+
+// Ordered by precedence: when two constructs start at the same offset the
+// earlier entry wins, which reproduces the sequential replace order the
+// message formatter uses.
+const NYM_RICH_INLINE = [
+    { type: 'code', rx: /`([^`]+?)`/g, open: '`', close: '`', leaf: true },
+    { type: 'bold', rx: /\*\*(.+?)\*\*/g, open: '**', close: '**' },
+    { type: 'bold', rx: /(?<!\w)__(.+?)__(?!\w)/g, open: '__', close: '__' },
+    { type: 'italic', rx: /(?<![:/])\*([^*\s][^*]*)\*/g, open: '*', close: '*' },
+    { type: 'italic', rx: /(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, open: '_', close: '_' },
+    { type: 'strike', rx: /~~(.+?)~~/g, open: '~~', close: '~~' }
+];
+
+// Nesting past this depth is left as plain text. Four covers every combination
+// the toolbar can produce and bounds the work done on every keystroke.
+const NYM_RICH_MAX_DEPTH = 4;
+
+// First match of `rx` lying wholly inside [from, to). Matching runs against the
+// whole draft rather than a slice so the lookbehinds above still see the real
+// preceding character.
+function nymRichFirstMatch(text, from, to, rx) {
+    rx.lastIndex = from;
+    let m;
+    while ((m = rx.exec(text)) !== null) {
+        if (m.index >= to) break;
+        if (m.index + m[0].length <= to) return m;
+        rx.lastIndex = m.index + 1;
+    }
+    return null;
+}
+
+function nymRichParseInline(text, from, to, depth) {
+    const out = [];
+    let pos = from;
+    while (pos < to) {
+        let best = null, spec = null;
+        if (depth < NYM_RICH_MAX_DEPTH) {
+            for (const s of NYM_RICH_INLINE) {
+                const m = nymRichFirstMatch(text, pos, to, s.rx);
+                if (m && (!best || m.index < best.index)) { best = m; spec = s; }
+            }
+        }
+        if (!best) {
+            out.push({ kind: 'text', start: pos, end: to });
+            break;
+        }
+        if (best.index > pos) out.push({ kind: 'text', start: pos, end: best.index });
+        const start = best.index;
+        const end = start + best[0].length;
+        const innerStart = start + spec.open.length;
+        const innerEnd = end - spec.close.length;
+        out.push({
+            kind: 'inline', type: spec.type, start, end,
+            open: spec.open, close: spec.close,
+            // Nothing reveals. Revealing the whole span put the markers back on
+            // screen for as long as the caret was anywhere inside the run —
+            // which, while you are typing it, is always.
+            reveal: [],
+            children: spec.leaf
+                ? (innerEnd > innerStart ? [{ kind: 'text', start: innerStart, end: innerEnd }] : [])
+                : nymRichParseInline(text, innerStart, innerEnd, depth + 1)
+        });
+        pos = end;
+    }
+    return out;
+}
+
+// Everything outside a fenced code block: line prefixes first (they only count
+// at a real line start), then inline constructs within each line.
+function nymRichParseFlow(text, from, to, out) {
+    let pos = from;
+    while (pos < to) {
+        let nl = text.indexOf('\n', pos);
+        if (nl === -1 || nl >= to) nl = to;
+        const lineStart = pos, lineEnd = nl;
+        let handled = false;
+        if (lineStart === 0 || text[lineStart - 1] === '\n') {
+            for (const p of NYM_RICH_LINE_PREFIXES) {
+                if (lineEnd - lineStart <= p.mark.length) continue;
+                if (!text.startsWith(p.mark, lineStart)) continue;
+                out.push({
+                    kind: 'line', type: p.type, start: lineStart, end: lineEnd,
+                    open: p.mark, close: '',
+                    // Block markers never reveal: what a heading or a quote is
+                    // reads off its own styling, and showing the prefix again
+                    // would shift the line every time the caret passed the
+                    // start of it. Backspace at the start of the body removes
+                    // the prefix instead (nymRichMarkerDelete).
+                    reveal: [],
+                    children: nymRichParseInline(text, lineStart + p.mark.length, lineEnd, 0)
+                });
+                handled = true;
+                break;
+            }
+        }
+        if (!handled && lineEnd > lineStart) {
+            const kids = nymRichParseInline(text, lineStart, lineEnd, 0);
+            for (let i = 0; i < kids.length; i++) out.push(kids[i]);
+        }
+        if (lineEnd < to) out.push({ kind: 'text', start: lineEnd, end: lineEnd + 1 });
+        pos = lineEnd + 1;
+    }
+}
+
+// The edit a Backspace/Delete next to a hidden marker should make.
+function nymRichMarkerDelete(text, caret, forward) {
+    if (!text || caret < 0 || caret > text.length) return null;
+    const cut = (ranges) => {
+        // Highest offset first so the earlier ranges keep their indices.
+        const sorted = ranges.slice().sort((a, b) => b[0] - a[0]);
+        let out = text;
+        for (const [a, b] of sorted) out = out.slice(0, a) + out.slice(b);
+        return out;
+    };
+
+    // Innermost first, so the tightest formatting at the caret is the one that
+    // comes off: in "***x***" a Backspace should drop one level, not both.
+    const nodes = [];
+    const walk = (list) => {
+        for (const n of list) {
+            if (n.children) walk(n.children);
+            nodes.push(n);
+        }
+    };
+    walk(nymRichParseFormat(text));
+
+    for (const n of nodes) {
+        if (n.kind === 'line') {
+            const markEnd = n.start + n.open.length;
+            const hit = forward ? caret === n.start : caret === markEnd;
+            if (hit) return { text: cut([[n.start, markEnd]]), caret: n.start };
+        } else if (n.kind === 'fence' || n.kind === 'inline') {
+            if (!n.open) continue;
+            const openEnd = n.start + n.open.length;
+            const closeStart = n.close ? n.end - n.close.length : n.end;
+            // The caret sits at one of the run's two inner edges (the only two
+            // places a hidden marker is adjacent to visible text), or just
+            // outside it.
+            const atEnd = forward ? caret === closeStart : caret === n.end;
+            const atStart = forward ? caret === n.start : caret === openEnd;
+            if (!atStart && !(n.close && atEnd)) continue;
+            const ranges = [[n.start, openEnd]];
+            if (n.close) ranges.push([closeStart, n.end]);
+            // Keep the caret where the text it was against ended up.
+            const caretOut = atEnd ? n.start + (closeStart - openEnd) : n.start;
+            return { text: cut(ranges), caret: caretOut };
+        }
+    }
+    return null;
+}
+
+function nymRichParseFormat(text) {
+    const out = [];
+    if (!text) return out;
+    NYM_RICH_FENCE_RX.lastIndex = 0;
+    let pos = 0, m;
+    while ((m = NYM_RICH_FENCE_RX.exec(text)) !== null) {
+        if (m.index > pos) nymRichParseFlow(text, pos, m.index, out);
+        const start = m.index, end = start + m[0].length;
+        // The formatter also renders an unterminated trailing fence, which has
+        // no closing marker to hide.
+        const closed = m[0].length >= 6 && m[0].endsWith('```');
+        const innerEnd = closed ? end - 3 : end;
+        out.push({
+            kind: 'fence', type: 'codeblock', start, end,
+            open: '```', close: closed ? '```' : '',
+            // Never revealed, like the line prefixes above — a code block is
+            // unmistakable from its own rendering, and revealing the fence the
+            // instant the caret reached it would undo the empty block the user
+            // just opened by typing it.
+            reveal: [],
+            // No body yet: the block still has to be visible, or three
+            // backticks would look like they did nothing.
+            emptyBody: innerEnd <= start + 3,
+            children: innerEnd > start + 3 ? [{ kind: 'text', start: start + 3, end: innerEnd }] : []
+        });
+        pos = end;
+    }
+    if (pos < text.length) nymRichParseFlow(text, pos, text.length, out);
+    return out;
+}
+
 Object.assign(NYM.prototype, {
+
+    // The parse tree for a draft, consumed by the input renderer in
+    // ui-context.js. Exposed on the prototype so the renderer can stay
+    // agnostic about the grammar.
+    _richParseFormat(text) {
+        return nymRichParseFormat(text);
+    },
+
+    _richMarkerDelete(text, caret, forward) {
+        return nymRichMarkerDelete(text, caret, forward);
+    },
 
     // formatting toolbar 
     // Build the toolbar once and wire the toggle button, tool clicks and the
@@ -58,14 +260,10 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         if (!btn || !toolbar || !input) return;
 
-        toolbar.innerHTML =
-            NYM_FORMAT_TOOLS.map(t =>
-                `<button type="button" class="format-tool" data-format-tool="${t.id}" title="${this.escapeHtml(t.title)}" aria-label="${this.escapeHtml(t.title)}">${t.html}</button>`
-            ).join('') +
-            '<span class="format-tool-sep" aria-hidden="true"></span>' +
-            '<button type="button" class="format-tool format-preview-toggle" data-format-tool="preview" title="Preview formatting" aria-label="Preview formatting" aria-pressed="false">' +
-            '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path><circle cx="12" cy="12" r="3"></circle></svg>' +
-            '</button>';
+        // No preview toggle: the input itself renders the formatting.
+        toolbar.innerHTML = NYM_FORMAT_TOOLS.map(t =>
+            `<button type="button" class="format-tool" data-format-tool="${t.id}" title="${this.escapeHtml(t.title)}" aria-label="${this.escapeHtml(t.title)}">${t.html}</button>`
+        ).join('');
 
         // mousedown (not click) so the caret/selection in the contenteditable is
         // still intact when the tool runs — clicking a button would otherwise
@@ -75,8 +273,7 @@ Object.assign(NYM.prototype, {
             if (!tool) return;
             e.preventDefault();
             e.stopPropagation();
-            if (tool.dataset.formatTool === 'preview') this.toggleFormatPreview();
-            else this.applyInputFormat(tool.dataset.formatTool);
+            this.applyInputFormat(tool.dataset.formatTool);
         });
         toolbar.addEventListener('click', (e) => e.preventDefault());
 
@@ -106,9 +303,6 @@ Object.assign(NYM.prototype, {
         try {
             this.formatToolbarOpen = localStorage.getItem('nym_format_toolbar') === 'true';
         } catch (_) { }
-        try {
-            this.formatPreviewOpen = localStorage.getItem('nym_format_preview') === 'true';
-        } catch (_) { }
         this._applyFormatToolbarState();
     },
 
@@ -122,59 +316,15 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    toggleFormatPreview() {
-        this.formatPreviewOpen = !this.formatPreviewOpen;
-        try { localStorage.setItem('nym_format_preview', String(this.formatPreviewOpen)); } catch (_) { }
-        this._applyFormatToolbarState();
-    },
-
     _applyFormatToolbarState() {
         const btn = document.getElementById('formatInputBtn');
         const toolbar = document.getElementById('formatToolbar');
-        const preview = document.getElementById('formatPreview');
         if (!btn || !toolbar) return;
         const open = !!this.formatToolbarOpen;
         toolbar.classList.toggle('nm-hidden', !open);
         btn.classList.toggle('active', open);
         btn.setAttribute('aria-pressed', open ? 'true' : 'false');
-        const previewBtn = toolbar.querySelector('.format-preview-toggle');
-        const previewOn = open && !!this.formatPreviewOpen;
-        if (previewBtn) {
-            previewBtn.classList.toggle('active', previewOn);
-            previewBtn.setAttribute('aria-pressed', previewOn ? 'true' : 'false');
-        }
-        if (preview) preview.classList.toggle('nm-hidden', !previewOn);
-        this.updateFormatPreview();
         this._refreshComposerOffsets();
-    },
-
-    // Render the composer draft through the very same formatter the message list
-    // uses, so the preview is a faithful "what you get".
-    updateFormatPreview() {
-        const preview = document.getElementById('formatPreview');
-        if (!preview) return;
-        if (!this.formatToolbarOpen || !this.formatPreviewOpen) {
-            if (preview.dataset.rendered) {
-                preview.textContent = '';
-                delete preview.dataset.rendered;
-            }
-            return;
-        }
-        const input = document.getElementById('messageInput');
-        const text = input ? (input.value || '') : '';
-        if (!text.trim()) {
-            preview.innerHTML = '<span class="format-preview-empty">Nothing to preview yet</span>';
-            preview.dataset.rendered = '1';
-            return;
-        }
-        let html;
-        try {
-            html = this.formatMessage(text);
-        } catch (_) {
-            html = this.escapeHtml(text);
-        }
-        preview.innerHTML = html;
-        preview.dataset.rendered = '1';
     },
 
     // Apply one toolbar tool to the current selection (or the word under the
@@ -189,7 +339,7 @@ Object.assign(NYM.prototype, {
         else if (tool.prefix != null) this._toggleInputLinePrefix(input, tool.prefix, tool.exclusive);
 
         // Same signal a keystroke sends: keeps autocomplete, the send button,
-        // auto-resize, the preview and the media strip in step.
+        // auto-resize, the live formatting and the media strip in step.
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.focus();
     },

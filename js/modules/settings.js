@@ -759,20 +759,58 @@ Object.assign(NYM.prototype, {
         const outerTags = [['p', this.pubkey], ['d', await this._syncOuterDTag(dTag)], ['k', 'nym-sync']];
 
         if (this.privkey) {
-            const ckSeal = NT.nip44.getConversationKey(this.privkey, this.pubkey);
-            const sealContent = NT.nip44.encrypt(rumorJson, ckSeal);
-            const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
-            const seal = NT.finalizeEvent(sealUnsigned, this.privkey);
-            const sealJson = JSON.stringify(seal);
-            if (enc.encode(sealJson).length > 65535) {
+            // Build the pair of layers with `seal`/`wrap`, whichever encryption
+            // is in play. Returns null when the sealed plaintext outgrows what
+            // NIP-44 can carry.
+            const build = (seal, wrap) => {
+                const sealUnsigned = { kind: 13, content: seal(rumorJson), created_at: this.randomNow(), tags: [] };
+                const sealed = NT.finalizeEvent(sealUnsigned, this.privkey);
+                const sealJson = JSON.stringify(sealed);
+                if (enc.encode(sealJson).length > 65535) return null;
+                const ephSk = NT.generateSecretKey();
+                const wrapUnsigned = {
+                    kind: 1059, content: wrap(sealJson, ephSk),
+                    created_at: this.randomNow(), tags: outerTags
+                };
+                return NT.finalizeEvent(wrapUnsigned, ephSk);
+            };
+            const classical = () => build(
+                (pt) => NT.nip44.encrypt(pt, NT.nip44.getConversationKey(this.privkey, this.pubkey)),
+                (pt, ephSk) => NT.nip44.encrypt(pt, NT.nip44.getConversationKey(ephSk, this.pubkey))
+            );
+
+            // Settings are a self-addressed gift wrap like any other, and they
+            // carry more about a user than most single messages do — the
+            // conversation list, the group keys, the history categories. Left
+            // classical they would be the weakest thing on the relay: readable
+            // by anyone who breaks secp256k1, regardless of how carefully the
+            // messages themselves were sealed.
+            const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
+            if (selfKemPk) {
+                const NC = window.NymCrypto;
+                const wrapped = build(
+                    (pt) => NC.pqEncrypt(pt, this.privkey, this.pubkey, selfKemPk),
+                    (pt, ephSk) => NC.pqEncrypt(pt, ephSk, this.pubkey, selfKemPk)
+                );
+                // The hybrid costs ~1.5 KB a layer for the KEM ciphertext, which
+                // a category already close to the relay cap cannot absorb.
+                // Losing the sync entirely would be a worse trade than losing
+                // the post-quantum layer, so an oversized one falls back rather
+                // than going unpublished.
+                if (wrapped && JSON.stringify(['EVENT', wrapped]).length <= 65000) {
+                    this.sendDMToRelays(['EVENT', wrapped]);
+                    return;
+                }
+                if (wrapped) {
+                    console.warn(`[NostrSync] ${dTag} too large for a post-quantum wrap; falling back to NIP-44`);
+                }
+            }
+
+            const wrapped = classical();
+            if (!wrapped) {
                 console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
                 return;
             }
-            const ephSk = NT.generateSecretKey();
-            const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
-            const wrapContent = NT.nip44.encrypt(sealJson, ckWrap);
-            const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: outerTags };
-            const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
             this._sendWrappedIfFits(wrapped, dTag);
             return;
         }
@@ -801,12 +839,28 @@ Object.assign(NYM.prototype, {
         this._sendWrappedIfFits(wrapped, dTag);
     },
 
-    // Encrypt a settings payload to the user themselves (NIP-44) using whichever
-    // signer is active: local nsec, NIP-07 extension, or NIP-46 remote signer.
+    // Encrypt a settings payload to the user themselves using whichever signer
+    // is active: local nsec, NIP-07 extension, or NIP-46 remote signer.
+    //
+    // With a local nsec this is post-quantum, for the same reason the settings
+    // gift wrap is: the D1 copy holds the same conversation list, group keys
+    // and history categories, so leaving it classical would put the whole of it
+    // behind secp256k1 alone. There is no size cap to work around here — D1
+    // takes the blob whatever it weighs.
+    //
+    // An extension or NIP-46 signer hands back a finished NIP-44 payload rather
+    // than a conversation key, so there is no hybrid one to derive: those
+    // logins stay classical by construction (PqPolicy.capable).
     async _encryptSettingsBlob(plaintext) {
         const NT = window.NostrTools;
         try {
             if (this.privkey) {
+                const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
+                if (selfKemPk) {
+                    try {
+                        return window.NymCrypto.pqEncrypt(plaintext, this.privkey, this.pubkey, selfKemPk);
+                    } catch (_) { /* fall through to NIP-44 */ }
+                }
                 const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
                 return NT.nip44.encrypt(plaintext, ck);
             }
@@ -820,10 +874,30 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    // Reads either form. A blob written before this device had a PQ key, or by
+    // a device signing with an extension, is still plain NIP-44 — the prefix
+    // says which, so both stay readable and no migration is needed.
     async _decryptSettingsBlob(ciphertext) {
         const NT = window.NostrTools;
+        const NC = window.NymCrypto;
         try {
             if (this.privkey) {
+                if (NC && NC.isPqPayload(ciphertext)) {
+                    // Try every epoch we still hold keys for: a blob written
+                    // before a key rotation is decrypted by the older keypair,
+                    // which stays derivable from the nsec.
+                    const keys = typeof this.pqSelfKeys === 'function' ? this.pqSelfKeys() : null;
+                    const candidates = typeof this.pqUnwrapCandidates === 'function'
+                        ? this.pqUnwrapCandidates([this.privkey])
+                        : (keys ? [{ sk: this.privkey, kemSk: keys.secretKey, kemPk: keys.publicKey }] : []);
+                    for (const c of candidates) {
+                        if (!c.kemSk) continue;
+                        try {
+                            return NC.pqDecrypt(ciphertext, this.pubkey, c);
+                        } catch (_) { }
+                    }
+                    return null;
+                }
                 const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
                 return NT.nip44.decrypt(ciphertext, ck);
             }

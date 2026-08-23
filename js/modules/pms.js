@@ -275,6 +275,19 @@ Object.assign(NYM.prototype, {
         // offline long enough that missed rotations may have expired off relays.
         this._dmCatchupReady.then(() => {
             try { this._maybeSendGroupKeyResyncs(); } catch (_) { }
+            // (Re)advertise our post-quantum key. Publishing here rather than
+            // at connect gives the catch-up window time to deliver our own
+            // existing announcement first, so the device roster is merged onto
+            // what is already published instead of clobbering it.
+            try {
+                // Every Nymchat client announces itself, post-quantum or not —
+                // that announcement is what tells peers they can skip the
+                // Bitchat wrap. So this is no longer gated on pqEnabled().
+                if (!this._pqLastPublishAt) this.publishPqAnnouncement();
+                else this.maybeRepublishPqAnnouncement();
+                this._pqMarkUpgradeIfNeeded();
+                this.maybeShowPqUpgradeNotice();
+            } catch (_) { }
         });
 
         if (this.pendingDMs.size === 0) return;
@@ -331,16 +344,26 @@ Object.assign(NYM.prototype, {
         // Local key available (ephemeral/nsec)
         if (this.privkey) {
             const NT = window.NostrTools;
-            const isKnownBitchat = this.bitchatUsers.has(recipientPubkey);
-            const isKnownNym = this.nymUsers.has(recipientPubkey);
-            const isUnknownPeer = !isKnownBitchat && !isKnownNym;
+            // Make sure we have looked for their announcement at least once
+            // before deciding. Opening the conversation already kicks this off,
+            // so this normally resolves instantly off the cache; it matters for
+            // the paths that send without opening anything (a reply from a
+            // notification, the first message of a brand new thread).
+            if (typeof this.ensurePqAnnouncement === 'function') {
+                try { await this.ensurePqAnnouncement(recipientPubkey); } catch (_) { }
+            }
+            // Which transports this recipient gets. See pqPmPlan (pq.js) for
+            // why post-quantum replaces rather than accompanies the others.
+            const plan = this.pqPmPlan(recipientPubkey);
+            const recipientKemPk = plan.kemPk;
             let wrapped;
             let bitchatMessageId = null;
+            let pqEncrypted = false;
             const sentWrappedEvents = []; // Track wrapped events for retry
 
             // For known bitchat users OR unknown peers, send bitchat-format wrap
             // This ensures bitchat app users can always decrypt our messages
-            if (isKnownBitchat || isUnknownPeer) {
+            if (plan.bitchat) {
                 const encoded = this.encodeBitchatMessage(content, recipientPubkey);
                 bitchatMessageId = encoded.messageId;
 
@@ -362,11 +385,14 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            if (isKnownNym || isUnknownPeer) {
-                const nymWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
+            if (plan.nym) {
+                const nymWrapped = recipientKemPk
+                    ? await this.pqNip59WrapEventAsync(rumor, this.privkey, recipientPubkey, recipientKemPk, expirationTs)
+                    : await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
+                pqEncrypted = !!recipientKemPk;
                 this._recordGiftWrapId(nymMessageId, nymWrapped.id);
                 this._depositPMEvent(nymWrapped);
 
@@ -376,7 +402,15 @@ Object.assign(NYM.prototype, {
             }
 
             if (recipientPubkey !== this.pubkey) {
-                const selfWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
+                // The self-addressed copy is post-quantum whenever we are,
+                // otherwise it would be the weakest link: an attacker who
+                // breaks secp256k1 could read the whole archive regardless of
+                // how the outbound copy was sealed. Our own ML-KEM key is
+                // nsec-derived, so every device sharing the nsec opens it.
+                const selfKemPk = this.pqSelfKeyFor();
+                const selfWrapped = selfKemPk
+                    ? await this.pqNip59WrapEventAsync(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
+                    : await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', selfWrapped]);
                 this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 // Archive our own self-addressed copy so sent messages also
@@ -404,6 +438,7 @@ Object.assign(NYM.prototype, {
                 bitchatMessageId,  // For tracking Bitchat delivery/read receipts
                 nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
                 senderVerified: true,
+                pqEncrypted,
                 isFileOffer: !!fileOffer,
                 fileOffer,
                 deliveryStatus: 'sent'  // sent -> delivered -> read
@@ -436,6 +471,14 @@ Object.assign(NYM.prototype, {
         const _useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
         if (_useExt || _useN46) {
             const NT = window.NostrTools;
+            // The seal is out of reach here — the signer returns a finished
+            // NIP-44 payload — but the WRAP is ours: we generate its ephemeral
+            // key on every send, so it can be hybridized even though the seal
+            // cannot. That is the layer that matters: the wrap is what a
+            // recorder stores, and reaching the seal means breaking it first.
+            // See pqSendCapable (pq.js).
+            const plan = this.pqPmPlan(recipientPubkey);
+            const recipientKemPk = plan.kemPk;
 
             rumor.id = NT.getEventHash(rumor);
 
@@ -452,8 +495,9 @@ Object.assign(NYM.prototype, {
 
             // GiftWrap (kind 1059) with local ephemeral
             const ephSk = NT.generateSecretKey();
-            const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPubkey);
-            const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+            const wrapContent = recipientKemPk
+                ? window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, recipientKemPk)
+                : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, recipientPubkey));
             const wrapUnsigned = {
                 kind: 1059,
                 content: wrapContent,
@@ -528,6 +572,7 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 nymMessageId,  // For tracking Nymchat delivery/read receipts
                 senderVerified: true,
+                pqEncrypted: !!recipientKemPk,
                 isFileOffer: !!fileOffer,
                 fileOffer,
                 deliveryStatus: 'sent'  // sent -> delivered -> read
@@ -774,14 +819,38 @@ Object.assign(NYM.prototype, {
             const remoteDecrypt = _extDecrypt || _n46Decrypt;
 
             let seal, rumor;
+            // Whether this wrap arrived over the hybrid post-quantum transport.
+            // Surfaced on the message so the UI can distinguish confidentiality
+            // (this) from authentication (senderVerified) — they are orthogonal.
+            let isPqWrap = false;
             if (this.privkey) {
                 // Real key (Bitchat + NIP-44) first, then ephemeral keys (NIP-44).
-                const candidates = [{ sk: this.privkey, bitchat: true, selfId: this.pubkey },
-                    ...this._ephemeralCandidateSks(event).map(sk => ({ sk, bitchat: false }))];
+                const ephSks = this._ephemeralCandidateSks(event);
+                // Post-quantum candidates first, ordered so the common case
+                // costs exactly one ML-KEM decapsulation: whichever secret key
+                // the wrap's `p` tag points at leads. A 1:1 PM or self-wrap is
+                // addressed to our identity pubkey; a group wrap is addressed
+                // to one of our rotating ephemeral keys, and
+                // _ephemeralCandidateSks already puts that match first.
+                //
+                // A classical wrap simply falls through these to the classical
+                // candidates below, because unwrapGiftWrap picks the transport
+                // by inspecting the payload rather than trusting a tag.
+                const pTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
+                const addressedToSelf = pTag && pTag[1] === this.pubkey;
+                const orderedSks = addressedToSelf
+                    ? [this.privkey, ...ephSks]
+                    : [...ephSks, this.privkey];
+                const candidates = [
+                    ...this.pqUnwrapCandidates(orderedSks),
+                    { sk: this.privkey, bitchat: true, selfId: this.pubkey },
+                    ...ephSks.map(sk => ({ sk, bitchat: false }))
+                ];
                 const res = await this._cryptoCall('unwrapGiftWrap', [event, candidates],
                     () => window.NymCrypto.unwrapGiftWrap(event, candidates));
                 if (!res) return;
                 ({ seal, rumor } = res);
+                isPqWrap = !!res.isPq;
             } else if (remoteDecrypt) {
                 try {
                     ({ seal, rumor } = await unwrapWithRemoteSigner(remoteDecrypt));
@@ -1045,7 +1114,7 @@ Object.assign(NYM.prototype, {
             const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && typeof t[1] === 'string');
             if (groupTag) {
                 if (!senderVerified) return;
-                await this.handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified);
+                await this.handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap);
                 return;
             }
 
@@ -1233,6 +1302,7 @@ Object.assign(NYM.prototype, {
                     dupMsg.content = messageContent;
                     needsRerender = true;
                 }
+                if (isPqWrap && !dupMsg.pqEncrypted) dupMsg.pqEncrypted = true;
                 if (senderVerified === true && dupMsg.senderVerified !== true) {
                     dupMsg.senderVerified = true;
                     // Flip the on-screen lock immediately so the verified copy
@@ -1302,6 +1372,10 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 isHistorical: this._isGiftWrapBacklog(),
                 senderVerified,
+                // Confidentiality, not authentication: orthogonal to
+                // senderVerified, so it gets its own badge rather than folding
+                // into that tri-state lock.
+                pqEncrypted: isPqWrap,
                 isFileOffer: !!pmFileOffer,
                 fileOffer: pmFileOffer,
                 thinking: botThinking || undefined,
@@ -3243,6 +3317,14 @@ Object.assign(NYM.prototype, {
     },
 
     openPM(nym, pubkey) {
+        // Before the column-view branch, so both layouts warm it. The standing
+        // subscription for these only covers contacts we already had when we
+        // connected, so without this a brand new conversation never learns the
+        // peer's ML-KEM key: every message to them falls back to classical and
+        // the shield never appears.
+        if (typeof this.ensurePqAnnouncement === 'function') {
+            this.ensurePqAnnouncement(pubkey);
+        }
         if (this._cvActive) { this._cvOpenConversation({ type: 'pm', pubkey, nym }); return; }
         this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
@@ -3268,6 +3350,7 @@ Object.assign(NYM.prototype, {
         if (typeof this.refreshUserProfileThrottled === 'function') {
             this.refreshUserProfileThrottled(pubkey);
         }
+
 
         // Track navigation history
         this._pushNavigation({ type: 'pm', nym, pubkey });
@@ -3463,19 +3546,24 @@ Object.assign(NYM.prototype, {
 
             if (this.privkey) {
                 const NT = window.NostrTools;
-                const isKnownBitchat = this.bitchatUsers.has(recipientPubkey);
-                const isKnownNym = this.nymUsers.has(recipientPubkey);
-                const isUnknownPeer = !isKnownBitchat && !isKnownNym;
+                // Same rule as the original send — see pqPmPlan (pq.js).
+                const plan = this.pqPmPlan(recipientPubkey);
+                const recipientKemPk = plan.kemPk;
 
-                if (isKnownNym || isUnknownPeer) {
-                    const nymWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
+                if (plan.nym) {
+                    const nymWrapped = recipientKemPk
+                        ? await this.pqNip59WrapEventAsync(rumor, this.privkey, recipientPubkey, recipientKemPk, expirationTs)
+                        : await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', nymWrapped]);
                     this._recordGiftWrapId(nymMessageId, nymWrapped.id);
                     this._depositPMEvent(nymWrapped);
                 }
 
                 if (recipientPubkey !== this.pubkey) {
-                    const selfWrapped = await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
+                    const selfKemPk = this.pqSelfKeyFor();
+                    const selfWrapped = selfKemPk
+                        ? await this.pqNip59WrapEventAsync(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
+                        : await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', selfWrapped]);
                     this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 }
@@ -3486,13 +3574,17 @@ Object.assign(NYM.prototype, {
                 const enc44 = (peer, text) => _useExt ? window.nostr.nip44.encrypt(peer, text) : _nip46Encrypt(peer, text);
                 const signEvt = (u) => _useExt ? window.nostr.signEvent(u) : _nip46SignEvent(u);
 
+                // Hybrid on the wrap, which is ours to build even here — the
+                // seal is not. See pqSendCapable (pq.js).
+                const editKemPk = this.pqPmPlan(recipientPubkey).kemPk;
                 const sealContent = await enc44(recipientPubkey, JSON.stringify(rumor));
                 const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
                 const seal = await signEvt(sealUnsigned);
                 const ephSk = NT.generateSecretKey();
                 const ephPk = NT.getPublicKey(ephSk);
-                const ckWrap = NT.nip44.getConversationKey(ephSk, recipientPubkey);
-                const wrapContent = NT.nip44.encrypt(JSON.stringify(seal), ckWrap);
+                const wrapContent = editKemPk
+                    ? window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk)
+                    : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, recipientPubkey));
                 const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: [['p', recipientPubkey]], pubkey: ephPk };
                 if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                 const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);

@@ -56,6 +56,33 @@ Object.assign(NYM.prototype, {
         return obj;
     },
 
+    // Seed the cache from the pre-translated pack shipped with the build
+    async _i18nPrimeFromPack(lang) {
+        if (!lang || lang === 'en') return;
+        this._i18nPacked = this._i18nPacked || new Set();
+        if (this._i18nPacked.has(lang)) return;
+        this._i18nPacked.add(lang);
+        try {
+            const res = await fetch(`/i18n/${encodeURIComponent(lang)}.json`, { cache: 'force-cache' });
+            // A build published without a cache simply has no pack. That is not
+            // an error — it is the old behaviour.
+            if (!res.ok) return;
+            const pack = await res.json();
+            if (!pack || typeof pack !== 'object') return;
+            const cache = this._i18nLoadCache(lang);
+            let added = 0;
+            for (const [source, translated] of Object.entries(pack)) {
+                if (typeof translated !== 'string' || !translated) continue;
+                if (typeof cache[source] === 'string') continue;
+                cache[source] = translated;
+                added++;
+            }
+            if (added) this._i18nSaveCache(lang);
+        } catch (_) {
+            // Offline, blocked, or malformed — fall back to translating live.
+        }
+    },
+
     _i18nSaveCache(lang) {
         if (this._i18nSaveTimer) clearTimeout(this._i18nSaveTimer);
         this._i18nSaveTimer = setTimeout(() => {
@@ -395,6 +422,10 @@ Object.assign(NYM.prototype, {
 
         document.documentElement.setAttribute('lang', lang);
         this._i18nLoadCache(lang);
+        // Before anything is collected: a pack that lands first turns the whole
+        // sweep into a cache hit, and one that is late would leave the queue
+        // already full of strings it was carrying.
+        await this._i18nPrimeFromPack(lang);
         this.cmdI18nEnsure();
         // Start the observer first so any UI rendered while we translate (e.g.
         // the tutorial) is captured and prioritized.

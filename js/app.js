@@ -632,6 +632,10 @@ class NYM {
         this.lastPMSyncTime = Math.floor(Date.now() / 1000) - 604800;
         this.bitchatUsers = new Set();
         this.nymUsers = new Set();
+        // pubkey -> { pk: Uint8Array, exp, epoch } from kind-30078 'nym-pq'
+        // announcements. Holding an entry is what makes a peer post-quantum
+        // capable; see js/modules/pq.js.
+        this.pqKeys = new Map();
         this.users = new Map();
         this.channelUsers = new Map();
         this.channels = new Map();
@@ -3598,6 +3602,38 @@ async function showSettings() {
         acceptCallsSel.value = nym.settings.acceptCalls || 'enabled';
     }
 
+    // Quantum-resistant encryption is automatic — no setting. This is a
+    // read-only status line so the security posture is still visible, and so
+    // an extension / NIP-46 login can be told WHY it is classical rather than
+    // being left to wonder.
+    const pqStatus = document.getElementById('pqStatus');
+    if (pqStatus) {
+        const capable = typeof nym.pqCapable === 'function' && nym.pqCapable();
+        const sendOnly = !capable && typeof nym.pqEnabled === 'function' && nym.pqEnabled();
+
+        const peers = typeof nym.pqKnownPeers === 'function' ? nym.pqKnownPeers().length : 0;
+        const reach = peers > 0
+            ? ` Currently in use with ${peers} contact${peers === 1 ? '' : 's'}.`
+            : ' No contact has published a post-quantum key yet, so messages are'
+              + ' still going out on standard encryption. This turns on by itself'
+              + ' as soon as one does.';
+        pqStatus.innerHTML = capable
+            ? '<strong>Active</strong> for messages with other Nymchat users.' + reach
+            : sendOnly
+                ? '<strong>Active for messages you send</strong> to other Nymchat users. Messages you receive, and your own synced settings and history, stay on standard encryption: your signer holds the key they would have to be derived from, and won\u2019t do the post-quantum half. Logging in with your nsec covers both directions.' + reach
+                : '<strong>Not available.</strong> Post-quantum encryption needs the ML-KEM implementation, which did not load.';
+        const roster = document.getElementById('pqDeviceRoster');
+        if (roster) {
+            const devices = (capable && typeof nym.pqDeviceRoster === 'function')
+                ? nym.pqDeviceRoster() : [];
+            roster.textContent = devices.length
+                ? 'Devices seen on a post-quantum-capable build: ' + devices.map(d =>
+                    (d.isSelf ? 'this device' : 'another device')
+                    + (d.ver ? ' (' + d.ver + ')' : '')).join(', ') + '.'
+                : '';
+        }
+    }
+
     // Fill in disappearing message controls
     const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
     const dmTtlSel = document.getElementById('dmTTLSelect');
@@ -4350,7 +4386,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.73.533';
+const NYMCHAT_VERSION = 'v3.74.533';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 

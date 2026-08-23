@@ -773,6 +773,17 @@ Object.assign(NYM.prototype, {
                 `<span class="crypto-verified-badge ${layoutClass}${_lockExtraClass}" data-action="showVerificationInfo" data-verified="${_lockVerified}" title="${_lockTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${_lockSvgInner}</svg></span>`;
             if (_lockVerified !== '') messageEl.dataset.senderVerified = _lockVerified;
 
+            // Post-quantum shield, rendered as a SEPARATE badge beside the lock
+            // rather than folded into it. The lock is about authentication (who
+            // signed this); the shield is about confidentiality (how hard the
+            // key exchange is to break). They are orthogonal — a message can be
+            // post-quantum encrypted yet unverified, or verified yet classical —
+            // so collapsing them into one tri-state glyph would say something
+            // false about one axis or the other.
+            const _pqState = this._pqBadgeState(message);
+            if (_pqState) messageEl.dataset.pqEncrypted = _pqState;
+            const mkPqBadge = (layoutClass) => this._pqBadgeSpan(_pqState, layoutClass);
+
             // Check if this is a valid event ID (not temporary PM ID)
             // PM messages use nymMessageId (UUID) as the shared reaction key, so accept those too
             const isValidEventId = (message.isPM && message.nymMessageId)
@@ -952,9 +963,9 @@ Object.assign(NYM.prototype, {
             const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited">(edited)</span>' : '';
 
             messageEl.innerHTML = `
-    ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}${mkLock('crypto-lock-irc')}</span>` : ''}
+    ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}${mkLock('crypto-lock-irc')}${mkPqBadge('crypto-lock-irc')}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span>${mkLock('crypto-lock-bubble')}</span>${hoverButtons}</span>
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span>${mkLock('crypto-lock-bubble')}${mkPqBadge('crypto-lock-bubble')}</span>${hoverButtons}</span>
     ${editedIRC}
     ${deliveryCheckmark}
 `;
@@ -3525,6 +3536,62 @@ Object.assign(NYM.prototype, {
         window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     },
 
+    /// The post-quantum info popup, reached by tapping the shield.
+    ///
+    /// The copy names the actual primitives and states the limit plainly: this
+    /// protects confidentiality, not authentication. Signatures are still
+    /// secp256k1, so an adversary who already had a quantum computer could
+    /// forge one and MITM in real time. What the hybrid key exchange defeats is
+    /// harvest-now-decrypt-later, which is the threat that actually exists
+    /// today — and overstating it in the UI would be worse than saying nothing.
+    showPqPopup(anchorEl, state) {
+        this.closeTimestampPopup();
+        if (!anchorEl) return;
+
+        const partial = state === 'partial';
+        const classical = state === 'classical';
+        let title = 'Quantum-resistant encryption';
+        let body = "This message's key exchange combined the standard NIP-44 secp256k1 ECDH with ML-KEM-768, a post-quantum key encapsulation mechanism. Both must be broken to recover the message, so it stays confidential against an adversary recording traffic today to decrypt with a future quantum computer. The sender's signature is still secp256k1 — this protects confidentiality, not authentication.";
+
+        if (classical) {
+            title = 'Not quantum-resistant';
+            body = "This message is end-to-end encrypted with the standard NIP-44 secp256k1 key exchange, and nobody but the participants can read it today. It has no post-quantum layer, so an adversary recording it now could decrypt it with a future quantum computer. Messages sent before either side upgraded stay this way permanently — the ciphertext already exists and cannot be re-sealed. New messages go quantum-resistant automatically once both sides have published a post-quantum key.";
+        }
+
+        if (partial) {
+            const row = anchorEl.closest ? anchorEl.closest('.message') : null;
+            const id = row && row.dataset ? row.dataset.messageId : null;
+            const msg = id && typeof this._findMessageById === 'function' ? this._findMessageById(id) : null;
+            const cov = (msg && msg.pqCoverage)
+                || (id && typeof this.pqGroupCoverageFor === 'function' ? this.pqGroupCoverageFor(id) : null);
+            const detail = cov ? `${cov.pq} of ${cov.total} members` : 'some members';
+            title = 'Partly quantum-resistant';
+            body = `This message was quantum-resistant to ${detail}. The rest haven't published a post-quantum key, so their copies used standard NIP-44 encryption only — and because those copies carry the same message, treat this one as classically encrypted overall.`;
+        }
+
+        const modal = document.createElement('div');
+        modal.className = `reactors-modal verification-popup pq-popup${partial ? ' partial' : ''}${classical ? ' classical' : ''}`;
+        modal.innerHTML = `<div class="verification-popup-title">${this.escapeHtml(title)}</div><div class="verification-popup-body">${this.escapeHtml(body)}</div>`;
+        document.body.appendChild(modal);
+        this.timestampPopup = modal;
+
+        const rect = anchorEl.getBoundingClientRect();
+        const approxHeight = 190;
+        const verticalDecl = (rect.top > approxHeight + 20)
+            ? `bottom:${window.innerHeight - rect.top + 6}px;`
+            : `top:${rect.bottom + 6}px;`;
+        modal.style.cssText += verticalDecl;
+        const width = modal.offsetWidth || 280;
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+        modal.style.left = `${left}px`;
+
+        const onScroll = () => this.closeTimestampPopup();
+        this._timestampPopupScrollHandler = onScroll;
+        const scroller = document.getElementById('messagesContainer');
+        if (scroller) scroller.addEventListener('scroll', onScroll, { passive: true, capture: true });
+        window.addEventListener('scroll', onScroll, { passive: true, capture: true });
+    },
+
     refreshMessageTimestamps() {
         // Update all visible timestamps to use new format
         document.querySelectorAll('.message-time').forEach(timeEl => {
@@ -3555,6 +3622,84 @@ Object.assign(NYM.prototype, {
         document.querySelectorAll('style[id^="bitchat-user-"]').forEach(style => {
             style.remove();
         });
+    },
+
+    // Post-quantum state for a message: 'full' when the whole conversation was
+    // hybrid-encrypted, 'partial' for a group where only some members could
+    // receive it, 'classical' for an encrypted message that was not, or '' when
+    // the badge should not render at all.
+    //
+    // Partial deliberately renders differently rather than counting as
+    // protected: if even one member got a classical copy of the same plaintext,
+    // an attacker who breaks secp256k1 reads the message.
+    //
+    // 'classical' exists because NO badge is ambiguous. A missing shield could
+    // mean the message is not quantum-resistant, or that the badge is broken,
+    // or that this build does not have the feature — and the reader cannot
+    // tell which. Saying so plainly is the whole point of a security
+    // indicator, and it is also what makes the shield's absence meaningful
+    // when it does appear.
+    //
+    // Only for messages that ARE encrypted. A public channel message is
+    // plaintext on the relay, so a shield of any kind there would imply an
+    // encryption it does not have — worse than saying nothing.
+    _pqBadgeState(message) {
+        if (!message) return '';
+        const encrypted = !!(message.isPM || message.isGroup);
+        const cov = message.pqCoverage
+            || (message.isGroup && message.nymMessageId && typeof this.pqGroupCoverageFor === 'function'
+                ? this.pqGroupCoverageFor(message.nymMessageId) : null);
+        if (cov && cov.total > 0) {
+            if (cov.pq === 0) return encrypted ? 'classical' : '';
+            return cov.pq === cov.total ? 'full' : 'partial';
+        }
+        if (message.pqEncrypted) return 'full';
+        return encrypted ? 'classical' : '';
+    },
+
+    // Markup for the post-quantum shield. A shield silhouette reads at 12px
+    // where interior detail would not; the single tilted orbit inside
+    // distinguishes it from the plain ✓ verified-badge without using a
+    // letterform (which would not survive translation).
+    _pqBadgeSpan(state, layoutClass) {
+        if (!state) return '';
+        const partial = state === 'partial';
+        const classical = state === 'classical';
+        const title = partial
+            ? 'Partly quantum-resistant — tap for details'
+            : classical
+                ? 'Not quantum-resistant — tap for details'
+                : 'Quantum-resistant encryption — tap for details';
+        const cls = partial ? ' partial' : (classical ? ' classical' : '');
+        // The classical shield keeps the same silhouette so the three states
+        // read as one scale rather than three unrelated icons, and drops the
+        // orbit for a slash: the orbit IS the post-quantum part.
+        const inner = classical
+            ? '<path d="M12 2.5 20 5.5v6c0 4.5-3.4 7.6-8 9.5-4.6-1.9-8-5-8-9.5v-6z"></path>'
+              + '<line x1="5.5" y1="5" x2="18.5" y2="18"></line>'
+            : '<path d="M12 2.5 20 5.5v6c0 4.5-3.4 7.6-8 9.5-4.6-1.9-8-5-8-9.5v-6z"></path>'
+              + '<ellipse cx="12" cy="12" rx="6.2" ry="2.6" transform="rotate(-32 12 12)"></ellipse>';
+        return `<span class="crypto-pq-badge ${layoutClass}${cls}" data-action="showPqInfo" data-pq="${state}" title="${title}">`
+            + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            + inner
+            + '</svg></span>';
+    },
+
+    // Refresh a group message's shield once the fan-out reports coverage (the
+    // wraps are built after the local echo is already on screen).
+    refreshMessagePqBadge(nymMessageId) {
+        if (!nymMessageId) return;
+        const row = document.querySelector(`.message[data-message-id="${CSS.escape(nymMessageId)}"]`);
+        if (!row) return;
+        const msg = typeof this._findMessageById === 'function' ? this._findMessageById(nymMessageId) : null;
+        const state = this._pqBadgeState(msg);
+        row.querySelectorAll('.crypto-pq-badge').forEach(el => el.remove());
+        if (!state) { delete row.dataset.pqEncrypted; return; }
+        row.dataset.pqEncrypted = state;
+        const timeEl = row.querySelector('.message-time');
+        if (timeEl) timeEl.insertAdjacentHTML('beforeend', this._pqBadgeSpan(state, 'crypto-lock-irc'));
+        const bubbleInner = row.querySelector('.bubble-time-inner');
+        if (bubbleInner) bubbleInner.insertAdjacentHTML('beforeend', this._pqBadgeSpan(state, 'crypto-lock-bubble'));
     },
 
     // Markup for the verification lock (green check / red X), scoped to a layout.

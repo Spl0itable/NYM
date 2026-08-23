@@ -159,6 +159,7 @@
                 && c.deliveryStatus === m.deliveryStatus
                 && c.nymMessageId === m.nymMessageId
                 && c.senderVerified === m.senderVerified
+                && c.pqEncrypted === m.pqEncrypted
                 && c.isHistorical === m.isHistorical) {
                 return c.ser;
             }
@@ -181,6 +182,11 @@
                 eventKind: m.eventKind,
                 isHistorical: m.isHistorical,
                 senderVerified: m.senderVerified,
+                // Confidentiality, separate from senderVerified's
+                // authentication. Group coverage rides along so a partly
+                // covered message doesn't restore looking fully protected.
+                pqEncrypted: m.pqEncrypted,
+                pqCoverage: m.pqCoverage,
                 bitchatMessageId: m.bitchatMessageId,
                 nymMessageId: m.nymMessageId,
                 deliveryStatus: m.deliveryStatus,
@@ -206,6 +212,7 @@
                     deliveryStatus: m.deliveryStatus,
                     nymMessageId: m.nymMessageId,
                     senderVerified: m.senderVerified,
+                    pqEncrypted: m.pqEncrypted,
                     isHistorical: m.isHistorical
                 },
                 writable: true,

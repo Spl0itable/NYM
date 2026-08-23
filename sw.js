@@ -101,6 +101,22 @@ self.addEventListener('fetch', (e) => {
         return;
     }
 
+    // Pre-translated UI packs (/i18n/<lang>.json). Unhashed, so served from
+    // cache first and refreshed in the background: a language already used once
+    // keeps working offline, and a newer pack lands on the next switch.
+    if (url.origin === self.location.origin && url.pathname.startsWith('/i18n/')) {
+        e.respondWith((async () => {
+            const cache = await caches.open(CACHE);
+            const cached = await cache.match(req);
+            const network = fetch(req).then((resp) => {
+                if (resp && resp.ok) cache.put(req, resp.clone());
+                return resp;
+            }).catch(() => cached || Response.error());
+            return cached || network;
+        })());
+        return;
+    }
+
     // Hashed assets are immutable, and the cache name rotates per build.
     if (ASSET_RE.test(url.pathname)) {
         e.respondWith((async () => {

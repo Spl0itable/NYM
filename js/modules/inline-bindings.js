@@ -470,6 +470,12 @@ window.nymHapticTap = function (ms) {
             nym().showVerificationPopup(t, t && t.dataset && t.dataset.verified);
             return false;
         },
+        'showPqInfo':                 function (e, t) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().showPqPopup(t, t && t.dataset && t.dataset.pq);
+            return false;
+        },
         'codeBlockCopy':              function (_e, t) {
             try {
                 var code = t.dataset.code;

@@ -2640,6 +2640,34 @@ Object.assign(NYM.prototype, {
         if (channelMode) {
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: chSince, limit: lim(100) });
         }
+        // Post-quantum key announcements. Unlike the vouch list — a broadcast
+        // web of trust — these are only needed for peers we actually message,
+        // so the filter is scoped to our conversation partners, group members
+        // and ourselves rather than fetched wholesale.
+        // Announcements are needed to SEND post-quantum, which an extension or
+        // NIP-46 login can now do (pqSendCapable), so this follows the send
+        // gate rather than the receive one — without a peer's announcement
+        // there is no key to encapsulate to.
+        if (this.pubkey && typeof this.pqEnabled === 'function' && this.pqEnabled()) {
+            const pqAuthors = new Set([this.pubkey]);
+            if (this.pmConversations) {
+                for (const pk of this.pmConversations.keys()) {
+                    if (this._isNostrHex64(pk)) pqAuthors.add(pk);
+                }
+            }
+            if (this.groupConversations) {
+                for (const [, group] of this.groupConversations) {
+                    for (const pk of (group.members || [])) {
+                        if (this._isNostrHex64(pk)) pqAuthors.add(pk);
+                    }
+                }
+            }
+            const authors = [...pqAuthors].slice(0, 500);
+            filters.push({
+                kinds: [30078], "#t": [this.PQ_D_TAG], authors,
+                limit: authors.length
+            });
+        }
         if (d1Available) {
             filters.push({ kinds: [30078], "#t": ["nym-vouches"], since: nowSec, limit: 1 });
         } else {

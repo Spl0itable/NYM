@@ -47,6 +47,7 @@ The web app is served as static files plus a set of Cloudflare Pages Functions u
 - **Group History Sharing**: Owner-controlled option ("Share history with new members", off by default) to give newly added members the group's recent chat history. The member who adds someone forwards up to the last 50 messages in a single encrypted blob to the new member only; forwarded messages are marked as unverified since the original authors' signatures cannot be re-checked.
 - **Group Key Resync**: A client returning after a multi-day offline gap automatically re-exchanges current ephemeral keys with each group (rate-limited), so missed key rotations that expired off relays can't leave members unable to decrypt each other.
 - **Group Invite Links**: Optional shareable invite links for group chats. Joining via link is off by default; the owner turns on "Allow joining via invite link" from the group context menu, after which the link appears there for the owner (and for members too when "allow members to add others" is on). A brand-new user who opens a link is prompted to pick a nym or log in first, then the join resumes automatically. The owner can "Reset Invite Link" to revoke every link shared so far.
+- **Quantum-Resistant Encryption**: Hybrid post-quantum key agreement for PMs, group chats and synced settings between Nymchat users. Automatic, with no setting. Every message's key exchange combines the standard NIP-44 secp256k1 ECDH with [ML-KEM-768](https://csrc.nist.gov/pubs/fips/203/final) (FIPS 203), so both would have to be broken to read it. This defeats "harvest now, decrypt later" — traffic recorded today cannot be decrypted by a future quantum computer. Bitchat users and other Nostr clients are unaffected and keep receiving standard NIP-17.
 - **Forward Secrecy and Disappearing Messages**: Optional per-message forward secrecy for DMs and a configurable message time-to-live.
 - **Read Receipts and Typing Indicators**: Optional, with per-scope control (everyone, friends only, or off).
 - **Rich Text**: Markdown for bold, italic, strikethrough, code blocks, and quotes.
@@ -106,6 +107,26 @@ The web app is served as static files plus a set of Cloudflare Pages Functions u
 - NIP-17 `kind 14` rumor (message content and metadata) sealed inside NIP-59 `kind 1059` gift wraps.
 - Each gift wrap uses a one-time ephemeral sender key. The `created_at` timestamp is randomized by up to two hours using a cryptographically secure RNG so relays cannot correlate senders, recipients, or timing.
 - Group chats send one gift wrap per member, each individually encrypted to that member's public key.
+
+#### Hybrid Post-Quantum Encryption
+
+NIP-44 v2's symmetric layer (ChaCha20 + HMAC-SHA256 + HKDF-SHA256) has adequate post-quantum margins, but the secp256k1 ECDH that produces its 32-byte conversation key does not — Shor's algorithm solves the elliptic-curve discrete logarithm outright, which would expose every message ever encrypted under a recovered key. Nymchat therefore leaves the NIP-44 payload format untouched and replaces only that derivation.
+
+- **Hybrid key agreement**: the conversation key becomes `HKDF-Extract(salt = "nymchat-pq-v1", ecdh_x || mlkem_shared_secret || mlkem_ciphertext || recipient_mlkem_pubkey || sender_pubkey || recipient_pubkey)`. Folding the KEM ciphertext and both public keys into the input — rather than just concatenating the two shared secrets — makes the combiner transcript-binding in the style of X-Wing and Signal's PQXDH, which blocks KEM re-encapsulation attacks. Security is `max(classical, PQ)`: as strong as today's NIP-44 even if ML-KEM is later broken, and quantum-safe if secp256k1 is.
+- **Wire format**: `pq1.<base64url(kem_ciphertext)>.<standard NIP-44 v2 payload>`, used identically at both the seal (`kind 13`) and gift wrap (`kind 1059`) layers. The ciphertext rides in the content rather than a tag, so the event's tag surface stays byte-identical to vanilla NIP-17 and relay filters are unaffected.
+- **Capability announcement**: every Nymchat client publishes a signed, replaceable `kind 30078` event tagged `nym-pq` with a NIP-40 expiration, carrying an ML-KEM-768 public key only when post-quantum is possible and enabled. Its *presence* is unforgeable proof the pubkey runs Nymchat; the key's presence separately signals post-quantum. Holding a peer's valid announcement *is* the negotiation — there is no in-band capability exchange and therefore no downgrade surface. Turning post-quantum off republishes without a key rather than retracting, so peers stop encapsulating immediately but still know the client is Nymchat.
+- **Bitchat wrap suppression**: the Bitchat-format wrap exists to reach a peer who might be running Bitchat. A live announcement proves they are not, so it is dropped and only the post-quantum message is sent. A peer with **no** announcement receives both formats exactly as before, so no send can become undeliverable on an inference — which is why this keys on the signed announcement rather than inferring the client from public channel activity, where being wrong means sending someone a message their app cannot open, with no error and no retry. This is automatic and has no setting.
+- **Deterministic keys**: the ML-KEM keypair derives from the `nsec` via HKDF, so there is nothing new to back up and every device sharing an identity derives the same key — which is what makes a single replaceable announcement per identity correct.
+- **Group chats**: because fan-out already builds an independent wrap per member, a group can mix post-quantum and classical recipients with no protocol change. The classical leg still encrypts to the member's rotating ephemeral pubkey (preserving the metadata protection below) while the KEM leg encapsulates to their identity key, so no new per-message tags are added. A group message is only reported as quantum-resistant when *every* member received a post-quantum wrap.
+- **Self-addressed copies**: on an nsec login, the copy of every message kept for your own other devices is post-quantum too, as is the D1 archive behind it — otherwise the archive would be the weakest link, readable by anyone who breaks secp256k1 regardless of how the outbound copy was sealed. The same applies to synced settings, which travel as self-addressed gift wraps of the same shape and carry the conversation list, the group ephemeral keys and the history categories. A settings category close to the 65000-byte relay frame limit falls back to NIP-44 rather than going unpublished, since losing the sync would be a worse trade than losing the post-quantum layer.
+- **Fallback**: a post-quantum wrap *replaces* the classical one rather than accompanying it — sending both would hand an attacker the weaker copy. Peers without an announcement (Bitchat, other Nostr clients, older Nymchat builds) receive standard NIP-17, unchanged.
+- **Scope**: this protects **confidentiality, not authentication**. Event signatures are still secp256k1/Schnorr, so an adversary who already possessed a cryptographically relevant quantum computer could forge one. What the hybrid exchange defeats is harvest-now-decrypt-later, which is the threat that exists today. This is the same posture as Signal's PQXDH.
+- **Requirements**: sending and receiving have different requirements, and the difference is what browser-extension (NIP-07) and remote-signer (NIP-46) logins can do. A NIP-17 message is a *seal* under the identity key inside a *wrap* under a throwaway key the client generates on every send. Only the seal needs the signer, so those logins hybridize the **wrap** — which is the layer that matters, because the wrap is what a recorder stores and reaching the seal means breaking it first. **Receiving** is another matter: the ML-KEM keypair derives from the nsec and opening a message means decapsulating with its secret half, which a signer will not do. So a signer login sends post-quantum, receives classical, and announces no key of its own.
+- **Copies addressed to yourself are the exception**: self-wraps, the D1 archive and synced settings are addressed to *us*, so encrypting them post-quantum from a login that cannot decapsulate would lock that device out of its own history. The sharp edge is that a second device holding the nsec may already have announced a key for the same npub — so the key exists and looks usable. The self-key accessor asks the receive-side question rather than the key-exists one.
+- **Migration**: unconditional — there is no user setting, only a read-only status line under Privacy & Security. It is all-or-nothing per identity, since once a key is announced other clients encrypt to it, so a second device on the same npub running an older build stops receiving messages until it updates. That device publishes no announcement and is therefore undetectable, so upgrades show a one-time informational notice. `nym_pq_mode` remains an undocumented storage escape hatch, never written by the app, so a field bug can be defused without an emergency release.
+- **Cost**: a post-quantum wrap is ~3.6 KB larger per recipient than a classical one, so a 100-member group send grows by roughly 360 KB.
+
+The implementation is verified against the official NIST ACVP vectors for ML-KEM-768, and the PWA and Flutter apps are held to a shared, committed test fixture so the two can never silently diverge.
 
 #### Enhanced Group Chat Security
 Nymchat group chats go beyond standard NIP-17 with rotating ephemeral recipient keys to reduce timing-based metadata attacks.
@@ -244,9 +265,43 @@ Quote-reply to any Nymbot response to continue the conversation. The bot carries
 
 Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory. The Android APK can be downloaded directly from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).
 
+## Interface Translations
+
+The interface is available in 132 languages. Both clients used to translate it at runtime — a request per string, around 1500 of them — so every user who picked a language watched the UI fill in over tens of seconds, and paid for the same translations everyone before them had already paid for.
+
+They are now translated once, here, and committed:
+
+Run from **this repository** — it holds the Node toolchain, the cache, and the web app's own markup:
+
+```sh
+npm run i18n            # fill i18n/cache/<lang>.json for anything not already cached
+npm run i18n -- --list  # coverage report, no network
+```
+
+Strings go to the app's own backend (`/api/proxy?action=translate`), which runs the translation models on Workers AI — nothing is sent to a third party. Batched 20 per request; the backend still runs one inference per string, so what that saves is the round trip. Override the host with `NYM_TRANSLATE_PROXY` to point at a local `wrangler pages dev`. The run only ever sends what the cache is missing.
+
+Three engines, tried in order and falling through on any refusal ([`functions/api/_translate.js`](functions/api/_translate.js)): a purpose-built English→Indic translator for the 22 scheduled Indic languages, a general many-to-many translator for 79 more, and an instruct model for the 32 with no machine-translation coverage anywhere (Hawaiian, Krio, Akan, Esperanto and the like). Because the source here is always English, the sync takes the fast dedicated paths for 100 of the 132 languages.
+
+The source strings come from two places, because the two clients express their interface differently: the Flutter app's `kAppStringsCatalog`, which names every string explicitly and covers what both clients show, and the static markup in `index.html`. The PWA generates most of its text in JavaScript, which cannot be read statically — those strings are covered by the Flutter catalog, and anything missed falls back to translating on demand.
+
+The catalog is read from a checkout of the `flutter-app` repository beside this one (`../flutter-app/lib/features/i18n/app_strings_catalog.dart`; override with `NYM_FLUTTER_CATALOG`). It is deliberately **not** read from [`android-ios-app/`](android-ios-app/), which is a read-only mirror synced at release time — packs built from it would be a release behind the copy the app actually shows. Without that checkout the extraction tests skip rather than fail.
+
+The two clients then take the same cache by different routes, because a browser and a phone want opposite things:
+
+```sh
+npm run build                                        # web: dist/i18n/<lang>.json, fetched on demand
+npm run i18n:export -- --out ../flutter-app/assets/i18n   # app: bundled into the APK/IPA
+```
+
+The web app fetches one ~100 KB pack when a language is selected; downloading all 132 would be absurd. The app bundles the whole directory instead, so the interface is translated the instant a language is chosen — no request, no latency, and no dependency on being online, which matters for a client that is expected to work over a Bluetooth mesh with the network down. Commit the exported packs in the `flutter-app` repository; the export prunes languages that are no longer offered so a removed one does not linger in the bundle.
+
+Anything a pack does not carry — a string added since the last sync, or one the extractor could not see — still goes through the old on-demand path, so a missing, stale or unreachable pack costs nothing but the previous behaviour.
+
+Only strings still present in the app are shipped, so removing copy shrinks the packs rather than leaving a translation behind for text nobody can reach. The packs are deliberately **not** part of `build-manifest.json` or the `bundleHash`: those describe the running code, and a build with half-finished translations must produce the same hash as one with finished translations for "reproducible from source" to stay true.
+
 ## Verify Build
 
-The deployed web app is built deterministically, so anyone can confirm that the code running at the live site and in the iOS and Android apps is exactly what is published in this repository.
+The deployed web app is built deterministically, so anyone can confirm that the code running at the live site is exactly what is published in this repository.
 
 How it works:
 
@@ -269,6 +324,27 @@ The printed `bundleHash` should match both the hash shown in the app's About dia
 ```sh
 gh attestation verify dist/build-manifest.json --repo Spl0itable/NYM
 ```
+
+### Android
+
+The Android app cannot check itself the way the web app does. What runs on the device is AOT-compiled machine code, not the Dart in [`android-ios-app/`](android-ios-app/), and no computation available on the device relates one to the other.
+
+What Android *does* expose is the installed APK itself, at `ApplicationInfo.sourceDir`. That makes the same shape of proof available — hash the artifact locally, compare against a hash the developer published and signed — and the published half already exists: the [Zapstore listing](https://zapstore.dev/apps/com.nym.bar). Publishing with `zsp` emits a NIP-82 **kind 3063 Software Asset** event per release, signed with the publisher's Nostr key, carrying the APK's SHA-256 in its `x` tag and the signing certificate's SHA-256 in `apk_certificate_hash`.
+
+So the app's **About** dialog reads that event rather than a manifest of its own:
+
+- It hashes the APK it is running from, opens a one-shot connection to `wss://relay.zapstore.dev`, asks for the kind-3063 assets for `com.nym.bar`, and keeps only those whose Schnorr signature checks out against the **pinned publisher pubkey**. That pin is load-bearing: the relay is public, so anyone can publish an event claiming any hash, and an unpinned lookup would accept whatever was written last.
+- It compares the local hash against every published asset — a release built with `--split-per-abi` publishes one per ABI and any of them is a legitimate install. The hash decides, not the version string: a publisher's `version` tag is what they typed, while the hash is what the bytes are.
+- It shows **Verified official build** on a match, and **Unrecognised build** only when the publisher *did* release this version and the bytes differ. A version with no published asset yet — the ordinary case for a build newer than the listing — reads as **No published hash yet**, not as a fault.
+- The panel prints the APK hash and the signing certificate hash so a reader can repeat both halves off-device.
+
+There is nothing extra to publish: releasing through Zapstore is what arms the check. To verify a release yourself, download the published APK, run `sha256sum` on it, and compare against the `x` tag of that version's asset event on `relay.zapstore.dev`; `keytool -printcert -jarfile <apk>` gives the certificate hash the same event carries.
+
+**Google Play installs cannot be checked this way, and that is not a failure.** Play App Signing re-signs the upload with Google's key and generates a separate set of split APKs for each device, so the bytes installed from Play are not the file the developer built and their hash matches nothing publishable. The app detects a Play install — by the installer package, or by the presence of split APKs, since the installer is missing on restored backups — and says so rather than reporting a mismatch. To check a build yourself, install the APK published directly.
+
+### iOS
+
+iOS cannot do this at all. App Store binaries are FairPlay-encrypted per download and re-signed per install, so a hash computed on the device is device-specific and matches nothing that could be published. The About dialog says so plainly rather than implying a check it never ran. To verify Nymchat's code on Apple hardware, use the web app, which does re-hash everything it is running.
 
 ## Warrant Canary
 
