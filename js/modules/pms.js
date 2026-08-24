@@ -651,6 +651,26 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    /// Records that `id` was decrypted in THIS session, so a second delivery of
+    /// the same wrap skips the unwrap. Only ever set after a decrypt actually
+    /// succeeded — marking on entry would make one failure permanent for the
+    /// session, and a wrap that failed under a signer that was not ready yet
+    /// has to stay retryable.
+    _noteWrapDecrypted(id) {
+        if (!id) return;
+        if (!this._decryptedWrapIds) this._decryptedWrapIds = new Set();
+        this._decryptedWrapIds.add(id);
+        // Bounded well above processedPMEventIds' 5000, because this set is
+        // also seeded with the whole cached PM history on boot
+        // (_seedDecryptedWrapIds) and a cap that evicted most of that would
+        // give the archive replay its redundant decrypts straight back.
+        // Dropping an id costs one redundant decrypt, so the cheap halving is
+        // the right trade at the ceiling.
+        if (this._decryptedWrapIds.size > 50000) {
+            this._decryptedWrapIds = new Set(Array.from(this._decryptedWrapIds).slice(-25000));
+        }
+    },
+
     async handleGiftWrapDM(event, opts) {
         try {
             const NT = window.NostrTools;
@@ -658,6 +678,13 @@ Object.assign(NYM.prototype, {
             if (!this._giftWrapIsForMe(event)) return;
 
             const fromD1 = !!(opts && opts.fromD1);
+
+            // Already decrypted this wrap THIS RUN, so whatever it carries is
+            // in memory and the message store already. Re-running the unwrap
+            // would repeat an ML-KEM decapsulation and a NIP-44 decrypt to
+            // arrive at bytes we are holding.
+            if (!this._decryptedWrapIds) this._decryptedWrapIds = new Set();
+            if (this._decryptedWrapIds.has(event.id)) return;
 
             // Early deduplication before expensive decryption
             if (!fromD1 && this.processedPMEventIds.has(event.id)) {
@@ -842,6 +869,7 @@ Object.assign(NYM.prototype, {
                 if (!res) return;
                 ({ seal, rumor } = res);
                 isPqWrap = !!res.isPq;
+                this._noteWrapDecrypted(event.id);
             } else if (remoteDecrypt) {
                 try {
                     ({ seal, rumor } = await unwrapWithRemoteSigner(remoteDecrypt));
@@ -855,6 +883,7 @@ Object.assign(NYM.prototype, {
                         throw _remErr;
                     }
                 }
+                this._noteWrapDecrypted(event.id);
             } else {
                 return; // no way to decrypt
             }

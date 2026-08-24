@@ -357,22 +357,6 @@
         },
 
         /// Restores peers' post-quantum keys from the last session.
-        ///
-        /// A cached entry is a HINT, never the final word, and the difference
-        /// matters more here than for the other caches: this is a key we
-        /// ENCRYPT TO. A wrong one does not degrade the message to classical,
-        /// it makes it unreadable — the recipient has no secret half to
-        /// decapsulate with and the text never opens for them.
-        ///
-        /// Two bounds keep that from happening. Entries past the
-        /// announcement's own expiry are dropped rather than restored, and any
-        /// fresher announcement — pushed by the standing subscription, or
-        /// fetched from D1 — replaces what is here. Key ROTATION is survivable
-        /// even so: a recipient derives the current epoch and three before it,
-        /// so a slightly stale key still opens. What is not survivable is a
-        /// peer who moved from an nsec to a browser extension, because they
-        /// then hold no ML-KEM secret at all; that is what the expiry bound is
-        /// really protecting against.
         async _hydratePqKeys(meta) {
             if (!this.pqKeys) this.pqKeys = new Map();
             const nowSec = Math.floor(Date.now() / 1000);
@@ -417,6 +401,18 @@
                     }
                 }
             } catch (_) { }
+        },
+
+        /// Marks every PM restored from disk as already unwrapped.
+        _seedDecryptedWrapIds() {
+            if (!this.pmMessages) return;
+            if (!this._decryptedWrapIds) this._decryptedWrapIds = new Set();
+            for (const msgs of this.pmMessages.values()) {
+                if (!Array.isArray(msgs)) continue;
+                for (const m of msgs) {
+                    if (m && typeof m.id === 'string' && m.id) this._decryptedWrapIds.add(m.id);
+                }
+            }
         },
 
         // Hydrate in-memory Maps from IndexedDB
@@ -633,6 +629,7 @@
                 }
 
                 await this._hydrateDedupSets();
+                this._seedDecryptedWrapIds();
 
                 this._populateSidebarFromHydration();
             } catch (_) {

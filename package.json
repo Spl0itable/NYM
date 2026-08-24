@@ -14,7 +14,9 @@
     "pq:vectors": "node scripts/emit-pq-vectors.mjs",
     "pq:mlkem": "node scripts/build-mlkem.mjs",
     "test:translate": "node scripts/test-translate.mjs",
-    "test:media": "node scripts/test-media-strip.mjs"
+    "test:media": "node scripts/test-media-strip.mjs",
+    "test:settings": "node scripts/test-settings.mjs",
+    "test:wrap": "node scripts/test-wrap-dedup.mjs"
   },
   "devDependencies": {
     "@noble/post-quantum": "^0.7.0",

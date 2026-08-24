@@ -1147,8 +1147,11 @@ section('the key we seal our own copies to');
     const pqSrc = fs.readFileSync(path.join(root, 'js/modules/pq.js'), 'utf8');
     const settingsSrc = fs.readFileSync(path.join(root, 'js/modules/settings.js'), 'utf8');
 
-    const selfFn = pqSrc.slice(pqSrc.indexOf('pqSelfKeyFor() {'),
-        pqSrc.indexOf('pqSelfKeyFor() {') + 1200);
+    // Slice to the function's real end rather than a fixed byte count, so
+    // adding a comment or a guard cannot silently move the body out of view and
+    // turn these into assertions about nothing.
+    const selfStart = pqSrc.indexOf('pqSelfKeyFor() {');
+    const selfFn = pqSrc.slice(selfStart, pqSrc.indexOf('\n        },', selfStart));
     chk('it is DERIVED from our own epoch, not read from the registry',
         selfFn.includes('this.pqSelfKeys()') && !/return this\.pqKeyFor\(this\.pubkey\)/.test(selfFn));
     chk('and still refuses when we cannot decapsulate',
@@ -1340,6 +1343,110 @@ section('extension and remote-signer logins stay classical');
     // device had a key, or by a signer login, is plain NIP-44.
     chk('the reader dispatches on the payload, not the login type',
         /isPqPayload\(ciphertext\)/.test(settingsSrc));
+}
+
+// --- Group badge must never claim full coverage on our own copy alone -------
+// pqEncrypted describes ONE wrap out of the fan-out. The same plaintext went to
+// every member, so a classical copy anywhere defeats it; only a count that
+// reaches every member can support "quantum-resistant".
+{
+    const src = fs.readFileSync(new URL('../js/modules/messages.js', import.meta.url), 'utf8');
+    const m = src.match(/_pqBadgeState\(message\) \{[\s\S]*?\n    \},/);
+    if (!m) throw new Error('could not extract _pqBadgeState');
+    const fn = new Function(`return function(message) { const self = this; ${
+        m[0].replace(/^_pqBadgeState\(message\) \{/, '').replace(/\},$/, '')
+            .replace(/this\./g, 'self.')
+    } }`)();
+    const nym = { pqGroupCoverageFor: () => null };
+    const state = (msg) => fn.call(nym, msg);
+
+    const cases = [
+        ['a PM on our post-quantum copy is full',
+            { isPM: true, pqEncrypted: true }, 'full'],
+        ['a group message on our copy alone is only partial',
+            { isGroup: true, pqEncrypted: true, nymMessageId: 'a' }, 'partial'],
+        ['a group message with full coverage is full',
+            { isGroup: true, pqEncrypted: true, nymMessageId: 'b', pqCoverage: { pq: 8, total: 8 } }, 'full'],
+        ['a group message with partial coverage is partial',
+            { isGroup: true, pqEncrypted: true, nymMessageId: 'c', pqCoverage: { pq: 3, total: 8 } }, 'partial'],
+        ['a group message with zero coverage is classical',
+            { isGroup: true, pqEncrypted: true, nymMessageId: 'd', pqCoverage: { pq: 0, total: 8 } }, 'classical'],
+        ['a classical PM is classical',
+            { isPM: true, pqEncrypted: false }, 'classical'],
+        ['a public channel message has no badge',
+            { pqEncrypted: false }, ''],
+    ];
+    section('group badge coverage');
+    for (const [name, msg, want] of cases) {
+        chk(name, state(msg) === want);
+    }
+}
+
+// --- All-devices gate --------------------------------------------------------
+// A self-addressed blob is encapsulated to a key derived from the nsec. A device
+// signed in with an extension or a NIP-46 signer holds no secret to derive from,
+// so a hybrid blob locks it out of its own settings -- silently and for good.
+section('all-devices gate');
+{
+    const settingsSrc = fs.readFileSync(path.join(root, 'js/modules/settings.js'), 'utf8');
+    // pq.js is already on the prototype from the announcement section; the blob
+    // methods live in settings.js, so bring those in too.
+    vm.runInThisContext(settingsSrc, { filename: 'js/modules/settings.js' });
+    const gsk = T.generateSecretKey(), gpk = T.getPublicKey(gsk);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const gPayload = JSON.stringify({ v: 2, theme: 'midnight' });
+
+    const mkA = (roster) => {
+        const A = new globalThis.NYM();
+        A.privkey = gsk; A.pubkey = gpk; A.pqKeys = new Map();
+        if (roster) A._pqSelfAnnouncement = { devices: roster };
+        return A;
+    };
+    // Same npub, but the key lives behind a signer -- no privkey on the object,
+    // exactly how the app models a NIP-07 login.
+    const B = new globalThis.NYM();
+    B.privkey = null; B.pubkey = gpk; B.pqKeys = new Map();
+    globalThis.window.nostr = {
+        nip44: {
+            encrypt: async (peer, pt) => T.nip44.encrypt(pt, T.nip44.getConversationKey(gsk, peer)),
+            decrypt: async (peer, ct) => T.nip44.decrypt(ct, T.nip44.getConversationKey(gsk, peer)),
+        },
+    };
+    const isPq = async (A) => NC.isPqPayload(await A._encryptSettingsBlob(gPayload));
+
+    chk('a single-device account still seals hybrid', await isPq(mkA(null)));
+    chk('an all-capable account still seals hybrid',
+        await isPq(mkA([{ id: 'other', ts: nowSec, pq: 1 }])));
+
+    const mixed = mkA([{ id: 'extension-device', ts: nowSec, pq: 0 }]);
+    const mixedBlob = await mixed._encryptSettingsBlob(gPayload);
+    chk('a signer-only device on the account forces classical', !NC.isPqPayload(mixedBlob));
+    chk('the signer-only device can then read it',
+        (await B._decryptSettingsBlob(mixedBlob)) === gPayload);
+    chk('the nsec device can still read it',
+        (await mixed._decryptSettingsBlob(mixedBlob)) === gPayload);
+
+    // Builds predating the flag carry no `pq`. Guessing "capable" is what locks
+    // a device out, so unknown must not read as capable.
+    chk('a device on a build without the flag counts as incapable',
+        !(await isPq(mkA([{ id: 'old-build', ts: nowSec, ver: 'v3.74.500' }]))));
+    chk('a stale device stops holding the account back',
+        await isPq(mkA([{ id: 'long-gone', ts: nowSec - 60 * 24 * 3600, pq: 0 }])));
+
+    const selfOnly = mkA(null);
+    selfOnly._pqSelfAnnouncement = { devices: [{ id: selfOnly._pqDeviceId(), ts: nowSec, pq: 0 }] };
+    chk('our own roster entry never gates us', await isPq(selfOnly));
+
+    // Gating writes must not touch reads, or the flip strands what came before.
+    const pre = await mkA(null)._encryptSettingsBlob(gPayload);
+    chk('blobs sealed before the flip stay readable',
+        (await mkA([{ id: 'extension-device', ts: nowSec, pq: 0 }])._decryptSettingsBlob(pre)) === gPayload);
+
+    // The content hash gates the D1 write. If it ignored the mode, a row
+    // stranded under the old policy would keep matching and never be rewritten
+    // in the form the other device can read.
+    chk('the content hash tracks the encryption mode',
+        /_sha256Hex\(`\$\{this\.pubkey\}\|\$\{mode\}\|/.test(settingsSrc));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -192,16 +192,22 @@
         },
 
         /// Merges this device into the roster carried by our announcement,
-        /// dropping entries not seen for PQ_DEVICE_STALE_SEC. The roster is
-        /// informational only — it never gates decryption — but it is what lets
-        /// the settings screen say which devices have actually been seen
-        /// running a PQ-capable build.
+        /// dropping entries not seen for PQ_DEVICE_STALE_SEC.
+        ///
+        /// The roster lets the settings screen say which devices have actually
+        /// been seen running a PQ-capable build, and its `pq` flag decides
+        /// whether copies addressed to the account may be sealed hybrid at all
+        /// (pqAllDevicesCapable). It never gates DECRYPTION — anything already
+        /// sealed stays readable.
         _pqMergeDeviceRoster(nowSec) {
             const id = this._pqDeviceId();
             const prev = (this._pqSelfAnnouncement && Array.isArray(this._pqSelfAnnouncement.devices))
                 ? this._pqSelfAnnouncement.devices : [];
             const out = prev.filter(d => d && d.id !== id && (nowSec - (d.ts || 0)) < PQ_DEVICE_STALE_SEC);
-            out.push({ id, ver: this._pqAppVersion(), ts: nowSec });
+            // `pq` says whether this device can DECAPSULATE, which decides
+            // whether copies addressed to the account can go hybrid at all —
+            // see pqAllDevicesCapable.
+            out.push({ id, ver: this._pqAppVersion(), ts: nowSec, pq: this.pqCapable() ? 1 : 0 });
             out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
             return out.slice(0, 16);
         },
@@ -593,8 +599,46 @@
         /// or NIP-46 login — which cannot derive its secret half — would lock
         /// THIS device out of its own history. Outbound messages have no such
         /// hazard, because the recipient is the one who decapsulates.
+        /// Whether EVERY device on this account can open a hybrid copy
+        /// addressed to the account.
+        ///
+        /// A self-addressed blob is encapsulated to an ML-KEM key derived from
+        /// the nsec. A device signed in with an extension or a NIP-46 remote
+        /// signer holds no secret to derive from — it can only ask the signer
+        /// for NIP-44 — so it can open neither the settings blob nor the sync
+        /// ping, and it silently runs on defaults forever.
+        ///
+        /// An unknown device counts as incapable. Entries from builds before
+        /// the flag existed carry no `pq`, and one of those may well be a
+        /// signer login; guessing capable is what locks a device out, and the
+        /// cost of guessing the other way is a temporary fall back to the
+        /// encryption these blobs had before the hybrid, which heals itself as
+        /// the devices update.
+        ///
+        /// An empty roster means no evidence of a second device, not a missing
+        /// answer — a single-device account is the common case and must not be
+        /// downgraded by it.
+        pqAllDevicesCapable() {
+            const devices = (this._pqSelfAnnouncement && Array.isArray(this._pqSelfAnnouncement.devices))
+                ? this._pqSelfAnnouncement.devices : [];
+            if (devices.length === 0) return true;
+            const nowSec = Math.floor(Date.now() / 1000);
+            const selfId = this._pqDeviceId();
+            for (const d of devices) {
+                if (!d || d.id === selfId) continue;
+                if ((nowSec - (d.ts || 0)) >= PQ_DEVICE_STALE_SEC) continue;
+                if (d.pq !== 1) return false;
+            }
+            return true;
+        },
+
         pqSelfKeyFor() {
             if (!this.pqSelfEnabled()) return null;
+            // Sealing to a key another of our own devices cannot derive locks
+            // that device out of its own settings, and the failure is silent
+            // and total. Better to protect the account's copies with what all
+            // of it can read.
+            if (!this.pqAllDevicesCapable()) return null;
             // DERIVED, not read from the registry. The registry entry is
             // whatever epoch was last announced — possibly by another device on
             // this nsec, at an epoch this one has never held — while decryption

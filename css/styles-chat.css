@@ -522,6 +522,15 @@
     color: #9aa0a6;
 }
 
+.verification-popup.pq-popup .verification-popup-title {
+    color: #8b7cf6;
+}
+
+.verification-popup.pq-popup.partial .verification-popup-title,
+.verification-popup.pq-popup.classical .verification-popup-title {
+    color: #9aa0a6;
+}
+
 .verification-popup-body {
     font-size: 12px;
     line-height: 1.45;

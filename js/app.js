@@ -620,6 +620,9 @@ class NYM {
         this._scrollRAF = null;
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
+        // Session-scoped, and deliberately never persisted — see
+        // _noteWrapDecrypted.
+        this._decryptedWrapIds = new Set();
         this.deletedEventIds = new Set();
         this._pendingDeletions = new Map();
         this.editedMessages = new Map();
@@ -4179,6 +4182,11 @@ async function clearLocalStorageCache() {
         if (nym.userBios && typeof nym.userBios.clear === 'function') nym.userBios.clear();
         if (nym.channelDOMCache && typeof nym.channelDOMCache.clear === 'function') nym.channelDOMCache.clear();
         if (nym.processedPMEventIds && typeof nym.processedPMEventIds.clear === 'function') nym.processedPMEventIds.clear();
+        // The store is now empty, so the "already decrypted this run" set is
+        // claiming something that is no longer true. Left standing it would
+        // suppress the unwrap of every wrap re-fetched after this, and the
+        // messages the user just cleared would never come back.
+        if (nym._decryptedWrapIds && typeof nym._decryptedWrapIds.clear === 'function') nym._decryptedWrapIds.clear();
         if (nym.deletedEventIds && typeof nym.deletedEventIds.clear === 'function') nym.deletedEventIds.clear();
     } catch (_) { }
 
@@ -4386,7 +4394,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.74.535';
+const NYMCHAT_VERSION = 'v3.74.537';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6093,12 +6101,33 @@ async function nostrSettingsSave() {
 
 // Load settings from D1 first, falling back to the Nostr
 // gift-wrap load only when D1 can't be read or has no record yet.
-async function settingsLoad() {
-    let loaded = false;
+// How many times a D1 settings read is retried before the session gives up,
+// and the backoff between attempts (2s, 4s, 8s, 16s).
+const SETTINGS_LOAD_MAX_RETRIES = 4;
+
+async function settingsLoad(attempt = 0) {
+    let status = 'failed';
     if (nym && typeof nym.settingsLoadFromD1 === 'function') {
-        try { loaded = await nym.settingsLoadFromD1(); } catch (_) { loaded = false; }
+        try { status = await nym.settingsLoadFromD1(); } catch (_) { status = 'failed'; }
     }
-    if (!loaded) nostrSettingsLoad();
+    if (status !== 'loaded') nostrSettingsLoad();
+
+    // Under the relay proxy, D1 is the only source — nostrSettingsLoad returns
+    // immediately. So a read that never answered leaves memory holding
+    // DEFAULTS, and arming the hydration net on that would declare those
+    // defaults loaded and let the next save write them over the rows we never
+    // read. Retry instead; saving stays blocked in the meantime.
+    if (status === 'failed' && nym && nym.useRelayProxy) {
+        if (attempt < SETTINGS_LOAD_MAX_RETRIES) {
+            setTimeout(() => settingsLoad(attempt + 1), 2000 * Math.pow(2, attempt));
+            return;
+        }
+        // Out of retries. The session runs on defaults, which is survivable —
+        // persisting them is not.
+        nym._settingsRestoreUnreadable = true;
+        return;
+    }
+
     // Safety net: never block saves indefinitely if neither source responds.
     if (nym && typeof nym._markSettingsHydrated === 'function') {
         setTimeout(() => nym._markSettingsHydrated(), 10000);

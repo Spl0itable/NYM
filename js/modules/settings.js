@@ -997,7 +997,13 @@ Object.assign(NYM.prototype, {
             } catch (_) { }
 
             const category = await this._d1Category(dTag);
-            const hash = await this._sha256Hex(`${this.pubkey}|${toStore}`);
+            // The mode rides in the hash basis so a policy flip is a content
+            // change. Without it, a row stranded under the old policy — sealed
+            // hybrid while another device cannot open it — would keep matching
+            // the stored hash and never be rewritten in the form that device
+            // can read.
+            const mode = (typeof this.pqSelfKeyFor === 'function' && this.pqSelfKeyFor()) ? 'pq' : 'c';
+            const hash = await this._sha256Hex(`${this.pubkey}|${mode}|${toStore}`);
             const hashKey = `nym_settings_hash_${this.pubkey}_${category}`;
             if (hash) {
                 let lastHash = null;
@@ -1049,23 +1055,33 @@ Object.assign(NYM.prototype, {
         this._readStateSyncTimer = setTimeout(flush, 5000);
     },
 
-    // Load encrypted settings categories from D1 and apply them. Returns true
-    // when core settings were applied; false (e.g. fetch error, no record) tells
-    // the caller to fall back to the Nostr gift-wrap load.
+    // Load encrypted settings categories from D1 and apply them.
+    //
+    // Returns a STATUS, not a boolean, because "the account has no settings"
+    // and "we could not read the settings" need opposite handling and used to
+    // be the same `false`. Under the relay proxy D1 is the only source, so a
+    // load that never answered left the session running on defaults — and the
+    // next save wrote those defaults over the rows it had failed to read. The
+    // user's settings were gone, and every device then read the defaults back.
+    //
+    //   'loaded'  — rows read and applied.
+    //   'empty'   — the API answered and the account genuinely has no rows.
+    //   'failed'  — no answer, or rows we could not open. Saving must stay off
+    //               until a later attempt succeeds.
     async settingsLoadFromD1() {
         const pubkey = (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn())
             ? localStorage.getItem('nym_nostr_login_pubkey')
             : this.pubkey;
-        if (!pubkey) return false;
+        if (!pubkey) return 'failed';
 
         let data;
         try {
             data = await this._storageApiRequest('settings-get', {});
         } catch (_) {
-            return false;
+            return 'failed';
         }
         const cats = data && data.categories;
-        if (!cats || typeof cats !== 'object') return false;
+        if (!cats || typeof cats !== 'object') return 'failed';
 
         // Decrypt each category once. The real category name rides inside the
         // encrypted blob as __cat (the D1 column is an opaque per-account hash);
@@ -1091,12 +1107,39 @@ Object.assign(NYM.prototype, {
             } catch (_) { }
         }
 
-        if (storedBlobs > 0 && decoded.length === 0) {
+        if (storedBlobs === 0) {
+            // The API answered and there is nothing stored. A fresh account has
+            // to be able to save, so this is not a failure.
+            this._settingsRestoreUnreadable = false;
+            return 'empty';
+        }
+
+        if (decoded.length === 0) {
+            // Rows exist and not one opened. With a local nsec that verdict is
+            // final: decryption is pure computation over keys derived from that
+            // nsec, and every epoch we can still derive has been tried. Rows we
+            // can never open protect nothing, so refusing to overwrite them
+            // only strands the account — the user changes a setting, nothing is
+            // written, and it reverts on the next launch, forever. Let the next
+            // save replace them.
+            if (this.privkey) {
+                this._settingsRestoreUnreadable = false;
+                this._clearSettingsContentHashes(Object.keys(cats));
+                console.warn(`[NostrSync] ${storedBlobs} stored settings categories cannot be decrypted `
+                    + 'with this identity; they will be replaced on the next save');
+                return 'empty';
+            }
+            // Without a local key the signer answers for us, and a signer that
+            // is slow, locked or briefly unavailable looks exactly like this.
+            // That is transient, so keep saving off and let the caller retry.
             this._settingsRestoreUnreadable = true;
             console.warn(`[NostrSync] ${storedBlobs} stored settings categories could not be decrypted; `
-                + 'saving is disabled this session so they are not overwritten');
-            return false;
+                + 'saving is disabled until a load succeeds so they are not overwritten');
+            return 'failed';
         }
+
+        // Something opened, so whatever blocked an earlier attempt is over.
+        this._settingsRestoreUnreadable = false;
 
         const isCore = (c) => c === 'nymchat-settings' || c.startsWith('nymchat-settings-');
 
@@ -1142,14 +1185,30 @@ Object.assign(NYM.prototype, {
             try { await applyNostrSettings(merged); } catch (_) { coreApplied = 0; }
         }
 
-        if (coreApplied === 0) return false;
+        // Non-core categories loaded but no core section — an older account, or
+        // one that only ever synced lists. We still READ the rows, so a save
+        // carries them forward rather than dropping them.
+        if (coreApplied === 0) return 'empty';
         if (newestCoreTs > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = newestCoreTs;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(newestCoreTs)); } catch (_) { }
         }
         // D1 had real settings and we applied them — safe to save from here.
         this._markSettingsHydrated();
-        return true;
+        return 'loaded';
+    },
+
+    /// Drops the local "this category is already written" content hashes.
+    ///
+    /// The hash gate skips a D1 write whose plaintext matches the last one this
+    /// device wrote. When the stored rows turn out to be unreadable that gate
+    /// is working from a record of a row we can no longer verify, so it could
+    /// skip the very write that recovers the account.
+    _clearSettingsContentHashes(categories) {
+        if (!this.pubkey || !Array.isArray(categories)) return;
+        for (const category of categories) {
+            try { localStorage.removeItem(`nym_settings_hash_${this.pubkey}_${category}`); } catch (_) { }
+        }
     },
 
     toggleNotificationsEnabled(enabled) {

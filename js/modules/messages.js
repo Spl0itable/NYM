@@ -3678,7 +3678,7 @@ Object.assign(NYM.prototype, {
             if (cov.pq === 0) return encrypted ? 'classical' : '';
             return cov.pq === cov.total ? 'full' : 'partial';
         }
-        if (message.pqEncrypted) return 'full';
+        if (message.pqEncrypted) return message.isGroup ? 'partial' : 'full';
         return encrypted ? 'classical' : '';
     },
 
