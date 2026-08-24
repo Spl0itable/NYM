@@ -1226,5 +1226,121 @@ section('the shield updates in place');
         /pqGroupCoverageFor\(nymMessageId\)[\s\S]{0,500}refreshMessagePqBadge/.test(groupsSrc));
 }
 
+// ------------------------------------------------------ settings durability
+// "Change a setting, reload, it reverts" had three independent causes, all of
+// them silent. Each is a data-loss bug: the user's change is simply gone.
+section('a saved setting stays saved');
+{
+    const settingsSrc = fs.readFileSync(path.join(root, 'js/modules/settings.js'), 'utf8');
+    const dartSrc = fs.readFileSync(
+        '/home/user/flutter-app/lib/services/api/storage_sync.dart', 'utf8');
+
+    // 1. The section was marked published BEFORE the write, and never rolled
+    //    back — so a failed write counted as done and every later save in the
+    //    session short-circuited on it, never retrying.
+    const gate = settingsSrc.slice(
+        settingsSrc.indexOf('async _publishCategoryWrap('),
+        settingsSrc.indexOf('async _publishEncryptedSettings('));
+    chk('a section is marked published only after the write succeeds',
+        /const ok = await this\._publishWrappedNostrEvent[\s\S]{0,200}if \(!ok\)/.test(gate));
+    chk('and a failed write leaves it dirty so the next save retries',
+        /delete this\._publishedSectionJson\[dTag\]/.test(gate));
+
+    // 2. The publish has to REPORT whether it landed, and "landed" means the
+    //    source the restore reads back from — D1 under the proxy pool.
+    chk('the publisher reports durability', /const durable = \(\) =>/.test(settingsSrc));
+    chk('and the D1 write is awaited rather than fire-and-forget',
+        /d1Ok = await this\._saveSettingsBlobToD1/.test(settingsSrc));
+
+    // 3. A write replaces the whole category, so keys the OTHER client owns
+    //    have to be carried forward or they are deleted.
+    chk('unknown keys are carried forward on write (PWA)',
+        settingsSrc.includes('_mergeUnknownSectionKeys'));
+    chk('unknown keys are carried forward on write (Flutter)',
+        dartSrc.includes('_mergeUnknownSectionKeys'));
+    chk('and the inbound payload is stashed to carry them from',
+        /_lastInboundSections\[realCat\]/.test(settingsSrc));
+
+    // The two clients must file the same key in the same category, or the same
+    // setting lives in two rows and whichever was written last wins.
+    const secMap = (src, start) => {
+        const block = src.slice(start, src.indexOf('};', start));
+        const out = {};
+        for (const m of block.matchAll(/'?([\w-]+)'?\s*:\s*\[([^\]]*)\]/g)) {
+            out[m[1]] = [...m[2].matchAll(/'([\w-]+)'/g)].map(x => x[1]);
+        }
+        return out;
+    };
+    const appSrc = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+    const pwaMap = secMap(appSrc, appSrc.indexOf('NYM_SETTINGS_SECTION_KEYS'));
+    const dartMap = secMap(dartSrc, dartSrc.indexOf('syncedSectionKeys = {'));
+    const drift = [];
+    for (const [sec, keys] of Object.entries(pwaMap)) {
+        for (const k of keys) {
+            for (const [ds, dk] of Object.entries(dartMap)) {
+                if (dk.includes(k) && ds !== sec) drift.push(`${k}: ${sec} vs ${ds}`);
+            }
+        }
+    }
+    chk('the two clients file every key in the same section', drift.length === 0, drift.join('; '));
+    const allDart = new Set(Object.values(dartMap).flat());
+    const unmapped = Object.values(pwaMap).flat().filter(k => !allDart.has(k));
+    chk('and Flutter knows every section key the PWA does', unmapped.length === 0,
+        unmapped.join(', '));
+}
+
+// -------------------------------------------- what each login type gets
+// An extension or remote signer holds the nsec and will not do ML-KEM, so it
+// cannot derive the secret half and cannot decapsulate. Its self-addressed
+// copies -- settings, the archive -- MUST stay classical NIP-44, or they become
+// permanently unreadable to the device that wrote them.
+section('extension and remote-signer logins stay classical');
+{
+    const settingsSrc = fs.readFileSync(path.join(root, 'js/modules/settings.js'), 'utf8');
+    const dartSync = fs.readFileSync(
+        '/home/user/flutter-app/lib/services/api/storage_sync.dart', 'utf8');
+
+    const withKey = (privkey) => {
+        const a = new NYM();
+        a.pubkey = bobPk;
+        a.privkey = privkey;
+        a.pqKeys = new Map();
+        a._persistDedupSets = () => { };
+        // The tempting case: ANOTHER device on this nsec announced a key.
+        a._pqRecord(bobPk, NC.pqKeypairFromPrivkey(bobSk, 0).publicKey,
+            Math.floor(Date.now() / 1000) + 604800, 0);
+        return a;
+    };
+    const local = withKey(bobSk);
+    const remote = withKey(null);
+
+    chk('a local key can receive post-quantum', local.pqCapable() === true);
+    chk('a signer login cannot', remote.pqCapable() === false);
+    chk('a local key seals its own copies post-quantum', !!local.pqSelfKeyFor());
+    chk('a signer login gets NO self key, even with one announced for this npub',
+        remote.pqSelfKeyFor() === null);
+
+    // Sending is the weaker requirement and stays available to both: only the
+    // seal needs the signer, and the recipient is the one who decapsulates.
+    chk('both can still SEND post-quantum to peers',
+        local.pqSendCapable() === true && remote.pqSendCapable() === true);
+
+    // The encrypt paths must be gated on holding the key, not on the policy
+    // flag alone.
+    chk('the PWA settings blob only goes hybrid with a local key',
+        /if \(this\.privkey\) \{[\s\S]{0,300}pqSelfKeyFor/.test(settingsSrc));
+    chk('and the gift wrap does too',
+        /if \(this\.privkey\) \{[\s\S]{0,2000}const selfKemPk/.test(settingsSrc));
+    chk('Flutter gates on the signer being a local key',
+        /signer is LocalSigner && selfKem != null/.test(dartSync));
+    chk('and otherwise falls through to NIP-44',
+        /return await signer\.nip44Encrypt\(_pubkey, plaintext\)/.test(dartSync));
+
+    // Reading must accept both shapes forever: a blob written before this
+    // device had a key, or by a signer login, is plain NIP-44.
+    chk('the reader dispatches on the payload, not the login type',
+        /isPqPayload\(ciphertext\)/.test(settingsSrc));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

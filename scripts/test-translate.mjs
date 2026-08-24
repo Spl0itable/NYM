@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   translateText, mtSupports, indicSupports, cleanLlmOutput, langName,
-  detectSourceLang, llmMaxTokens,
+  detectSourceLang, llmMaxTokens, takeSourceTag,
   MT_MODEL, LLM_MODEL, INDIC_MODEL, MAX_CHARS,
 } from '../functions/api/_translate.js';
 
@@ -498,6 +498,57 @@ section('when the instruct model answers with nothing');
   catch (e) { e3 = e; }
   chk('tokens generated but nothing extracted is visible in the log',
     /completion_tokens=7/.test(e3.message) && /choices=0/.test(e3.message), e3.message);
+}
+
+// ------------------------------------------------ reporting the source
+// "Translated from X" only ever appeared for scripts the detector could name.
+// Latin-script and mixed messages go to the instruct model, which reported
+// `auto` — so the line silently vanished and the feature looked intermittent.
+section('always reporting what it translated from');
+{
+  chk('a well-formed tag is taken off the front',
+    JSON.stringify(takeSourceTag('[[es]]\nHola')) === JSON.stringify({ lang: 'es', text: 'Hola' }));
+  chk('a region subtag is kept',
+    takeSourceTag('[[zh-TW]]\n\u4f60\u597d').lang === 'zh-tw');
+  chk('leading spaces before the tag are tolerated',
+    takeSourceTag('  [[fr]]\nBonjour').lang === 'fr');
+  chk('a tag-only reply leaves empty text', takeSourceTag('[[de]]').text === '');
+
+  // Strict: anything that is not a bare code alone on line one is TRANSLATION,
+  // left exactly where it is. A model that ignores the instruction costs us the
+  // detection, never a mangled message.
+  const untouched = [
+    '[[not a code]]\nHola',
+    '[[es]] Hola',                 // same line as the text
+    'Hola [[es]]',
+    '[es]\nHola',
+    'Hola\n[[es]]',
+  ];
+  for (const t of untouched) {
+    const r = takeSourceTag(t);
+    chk(`untouched: ${JSON.stringify(t)}`, r.lang === '' && r.text === t);
+  }
+
+  // End to end: an unknown source comes back named.
+  const ai = mockAi({ [LLM_MODEL]: { response: '[[pt]]\nOla mundo' } });
+  const r = await translateText(ai, { text: 'hello world', source: 'auto', target: 'ay' });
+  chk('the reply is the translation, tag stripped', r.translatedText === 'Ola mundo');
+  chk('and the source is reported', r.detectedLanguage === 'pt');
+  chk('the prompt asked for it', /BCP-47/.test(ai.calls[0].body.messages[0].content));
+
+  // A KNOWN source is never overridden by the model, and is not asked for.
+  const ai2 = mockAi({ [LLM_MODEL]: { response: '[[xx]]\nCiao' } });
+  const r2 = await translateText(ai2, { text: 'hello', source: 'en', target: 'ay' });
+  chk('a known source stays authoritative', r2.detectedLanguage === 'en');
+  chk('and is not asked for', !/BCP-47/.test(ai2.calls[0].body.messages[0].content));
+
+  // The detector still wins where it can answer, without spending a token.
+  const ai3 = mockAi({ ...mtOk('hola') });
+  const r3 = await translateText(ai3, {
+    text: '\u3053\u3093\u306b\u3061\u306f\u3001\u4eca\u65e5\u306f\u3044\u3044\u5929\u6c17', source: 'auto', target: 'es',
+  });
+  chk('a script the detector knows is reported without the LLM',
+    r3.detectedLanguage === 'ja' && r3.engine === 'mt');
 }
 
 section(`\n${pass} passed, ${fail} failed`);

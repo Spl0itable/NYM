@@ -679,7 +679,10 @@ Object.assign(NYM.prototype, {
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk = this._safePubkey(message.pubkey);
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${this.escapeHtml(cleanAuthor)}#${this.getPubkeySuffix(message.pubkey)}${authorFlairHtml}`;
+            // The suffix is dimmed here exactly as it is everywhere else a nym
+            // is shown — it was the one place emitting it as bare text, so the
+            // actor of a `/me` read louder than the people mentioned inside it.
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${this.escapeHtml(cleanAuthor)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${authorFlairHtml}`;
 
             // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);

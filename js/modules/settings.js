@@ -426,12 +426,42 @@ Object.assign(NYM.prototype, {
         if (!this._publishedSectionJson) this._publishedSectionJson = {};
         const finalJson = JSON.stringify(payload);
         if (this._publishedSectionJson[dTag] === finalJson) return false;
-        this._publishedSectionJson[dTag] = finalJson;
 
-        await this._publishWrappedNostrEvent(payload, dTag, createdAt);
+        // Record it as published only AFTER it actually is. Marking first meant
+        // a write that failed — a network blip, an oversized wrap, an encrypt
+        // that returned null — still counted as done, and because the marker
+        // lives for the whole session every later save short-circuited on it.
+        // The section was then never retried, so the change survived until the
+        // next reload and then reverted to whatever D1 still held.
+        const ok = await this._publishWrappedNostrEvent(payload, dTag, createdAt);
+        if (!ok) {
+            delete this._publishedSectionJson[dTag];
+            return false;
+        }
+        this._publishedSectionJson[dTag] = finalJson;
         // Reports whether anything actually changed, so the caller only pings
         // our other devices when there is something for them to re-read.
         return true;
+    },
+
+    /// Overlays this client's own section payload onto the last one we read
+    /// for that category, so keys we do not know about survive our write.
+    ///
+    /// A write REPLACES the whole category row. The two clients do not build an
+    /// identical key set — each has settings the other has no concept of — so
+    /// whichever wrote last silently deleted the other's keys, and that setting
+    /// reverted to its default on the next launch. Only keys absent from our
+    /// own payload are carried forward; anything we own we overwrite, so this
+    /// can never resurrect a value the user just changed.
+    _mergeUnknownSectionKeys(dTag, payload) {
+        const prev = this._lastInboundSections && this._lastInboundSections[dTag];
+        if (!prev || typeof prev !== 'object') return payload;
+        const out = { ...payload };
+        for (const [k, v] of Object.entries(prev)) {
+            if (k === 'v' || k === '__cat') continue;
+            if (!(k in out)) out[k] = v;
+        }
+        return out;
     },
 
     async _publishEncryptedSettings(settingsData) {
@@ -615,8 +645,9 @@ Object.assign(NYM.prototype, {
 
         const sections = this._splitSettingsBySection(settingsData);
         const changed = [];
-        for (const [section, payload] of Object.entries(sections)) {
+        for (const [section, rawPayload] of Object.entries(sections)) {
             const dTag = `nymchat-settings-${section}`;
+            const payload = this._mergeUnknownSectionKeys(dTag, rawPayload);
             // Bound: the trimmer reads channelLastActivity to decide what to drop.
             const trimFns = section === 'channels'
                 ? [this._trimChannelsReadState.bind(this)]
@@ -737,12 +768,33 @@ Object.assign(NYM.prototype, {
     },
 
     // Persist to D1 and publish a NIP-59 nym-sync gift wrap to relays.
+    // Returns whether the settings actually got somewhere durable — the D1 row
+    // or, in direct mode, the relay wrap. The caller uses it to decide whether
+    // this section may be marked published; a false answer must leave it dirty
+    // so the next save retries it.
     async _publishWrappedNostrEvent(payload, dTag, createdAt, opts = {}) {
         const NT = window.NostrTools;
         const now = createdAt || Math.floor(Date.now() / 1000);
         // The sync ping is a notification, not a settings category — writing it
         // to D1 would add a row every save that no reader ever wants.
-        if (!opts.skipD1) this._saveSettingsBlobToD1(dTag, JSON.stringify(payload));
+        //
+        // AWAITED: this is the authoritative copy in proxy-pool mode (the relay
+        // wrap is a courtesy for direct-mode clients), so its outcome is what
+        // decides whether the section is durable.
+        let d1Ok = false;
+        if (!opts.skipD1) {
+            try { d1Ok = await this._saveSettingsBlobToD1(dTag, JSON.stringify(payload)); }
+            catch (_) { d1Ok = false; }
+        } else {
+            d1Ok = true;
+        }
+        // Durable means "reached the source this client reads back from", not
+        // "reached something". Under D1 the restore reads D1 only
+        // (nostrSettingsLoad returns immediately in proxy mode), so a relay wrap
+        // that landed while the row failed is not a saved setting. In direct
+        // mode the relay wrap IS that source.
+        const d1Available = !!(this._getApiHost && this._getApiHost());
+        const durable = () => (d1Available ? d1Ok : true);
 
         const rumor = {
             kind: 30078,
@@ -757,7 +809,7 @@ Object.assign(NYM.prototype, {
         const rumorJson = JSON.stringify(rumor);
         if (enc.encode(rumorJson).length > 65535) {
             console.warn(`[NostrSync] ${dTag} payload exceeds NIP-44 plaintext limit; skipping publish`);
-            return;
+            return d1Ok;
         }
 
         const outerTags = [['p', this.pubkey], ['d', await this._syncOuterDTag(dTag)], ['k', 'nym-sync']];
@@ -803,7 +855,7 @@ Object.assign(NYM.prototype, {
                 // than going unpublished.
                 if (wrapped && JSON.stringify(['EVENT', wrapped]).length <= 65000) {
                     this.sendDMToRelays(['EVENT', wrapped]);
-                    return;
+                    return durable();
                 }
                 if (wrapped) {
                     console.warn(`[NostrSync] ${dTag} too large for a post-quantum wrap; falling back to NIP-44`);
@@ -813,15 +865,17 @@ Object.assign(NYM.prototype, {
             const wrapped = classical();
             if (!wrapped) {
                 console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
-                return;
+                return d1Ok;
             }
             this._sendWrappedIfFits(wrapped, dTag);
-            return;
+            return durable();
         }
 
         const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
         const useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
-        if (!useExt && !useN46) return;
+        // No signer that can seal a relay wrap. The D1 row is still the
+        // authoritative copy, so its result decides.
+        if (!useExt && !useN46) return d1Ok;
 
         const sealContent = useExt
             ? await window.nostr.nip44.encrypt(this.pubkey, rumorJson)
@@ -833,7 +887,7 @@ Object.assign(NYM.prototype, {
         const sealJson = JSON.stringify(seal);
         if (enc.encode(sealJson).length > 65535) {
             console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
-            return;
+            return d1Ok;
         }
         const ephSk = NT.generateSecretKey();
         const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
@@ -841,6 +895,7 @@ Object.assign(NYM.prototype, {
         const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: outerTags };
         const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
         this._sendWrappedIfFits(wrapped, dTag);
+        return durable();
     },
 
     // Encrypt a settings payload to the user themselves using whichever signer
@@ -1027,6 +1082,11 @@ Object.assign(NYM.prototype, {
                 if (!payload || typeof payload !== 'object') continue;
                 const realCat = typeof payload.__cat === 'string' ? payload.__cat : cat;
                 delete payload.__cat;
+                // Keep the raw inbound payload so a later write can carry
+                // forward keys THIS client does not know about — see
+                // _mergeUnknownSectionKeys.
+                if (!this._lastInboundSections) this._lastInboundSections = {};
+                this._lastInboundSections[realCat] = { ...payload };
                 decoded.push({ realCat, payload, updatedAt: entry.updatedAt || 0 });
             } catch (_) { }
         }

@@ -265,6 +265,19 @@ export function mtSupports(source, target) {
   return MT_LANGS.has(source);
 }
 
+/// Splits a leading `[[xx]]` source-language tag off a reply.
+///
+/// Strict on purpose: only a well-formed BCP-47-ish code alone on the first
+/// line counts. Anything else is treated as part of the translation and left
+/// exactly where it is, so a model that ignores the instruction costs us the
+/// detection but never a mangled message.
+export function takeSourceTag(raw) {
+  const text = String(raw == null ? '' : raw);
+  const m = /^[ \t]*\[\[([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)\]\][ \t]*(?:\r?\n|$)/.exec(text);
+  if (!m) return { lang: '', text };
+  return { lang: m[1].toLowerCase(), text: text.slice(m[0].length) };
+}
+
 /// An instruct model asked to translate will sometimes answer a question, add
 /// "Sure, here you go", or wrap the result in quotes. Strip the shapes that
 /// actually occur; leave anything else alone rather than mangling a real
@@ -465,7 +478,17 @@ export async function translateText(ai, { text, source, target }) {
     // to input and report "nothing to translate", and the user would read a
     // refusal as a failure.
     + ' Keep a fragment as-is only when it genuinely has no translation — a '
-    + 'name, a URL, a code. Never return the whole message unchanged.';
+    + 'name, a URL, a code. Never return the whole message unchanged.'
+    // Only worth asking when we could not work it out ourselves. The model is
+    // the only part of the chain that can name a Latin-script source, and
+    // without it the client had nothing to show and silently omitted the
+    // "translated from" line — which read as the feature working only
+    // sometimes.
+    + (sl === 'auto'
+      ? ' Begin your reply with the BCP-47 code of the language the message is '
+        + 'written in, on its own first line, in double square brackets, like '
+        + '[[es]]. Then the translation on the following lines.'
+      : '');
 
   // Two attempts, and the second is DIFFERENT. Repeating an identical request
   // cannot help: an empty answer to a deterministic call is empty again, which
@@ -484,8 +507,16 @@ export async function translateText(ai, { text, source, target }) {
         ],
         max_tokens: llmMaxTokens(q, attempt),
       });
-      const out = cleanLlmOutput(pickLlmText(res), q);
-      if (out) return { translatedText: out, detectedLanguage: sl, engine: 'llm' };
+      const raw = pickLlmText(res);
+      const tagged = takeSourceTag(raw);
+      const out = cleanLlmOutput(tagged.text, q);
+      if (out) {
+        return {
+          translatedText: out,
+          detectedLanguage: (sl === 'auto' && tagged.lang) ? tagged.lang : sl,
+          engine: 'llm',
+        };
+      }
       failures.push(`${LLM_MODEL}: empty response (${describeResponse(res)})`);
     } catch (err) {
       failures.push(`${LLM_MODEL}: ${err && err.message ? err.message : String(err)}`);
