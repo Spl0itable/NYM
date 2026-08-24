@@ -13,7 +13,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
-        'acceptCalls', 'showStatus', 'powDifficulty', 'encryptAtRestPreferred', 'keypairMode'],
+        'acceptCalls', 'showStatus', 'powDifficulty', 'encryptAtRestPreferred'],
     messaging: ['groupChatPMOnlyMode', 'translateLanguage', 'translateFavoriteLanguages',
         'autoTranslate', 'autoTranslateChannels', 'autoTranslatePMs', 'autoTranslateGroups',
         'emojiPackFavorites', 'emojiCategoryFavorites', 'favoriteGifs', 'recentEmojis',
@@ -167,7 +167,6 @@ Object.assign(NYM.prototype, {
             tutorialSeen: localStorage.getItem('nym_tutorial_seen') === 'true',
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
             botPmClearedAt: this._getBotPmClearedAt() || 0,
-            keypairMode: localStorage.getItem('nym_keypair_mode') || 'persistent',
             encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1'
         };
     },
