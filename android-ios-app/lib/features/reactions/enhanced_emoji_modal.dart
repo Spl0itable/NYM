@@ -327,7 +327,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
   /// `.emoji-search-input` (styles-components.css:1245-1255): white@0.05 fill,
   /// 1px glass border, radius-xs, 12px `--text-bright` (light mode overrides
   /// the color to `--text`, styles-themes-responsive.css:1063-1068), padding
-  /// 7px 10px, placeholder "Search emoji by name...". The global
+  /// 7px 10px, placeholder "Search emoji...". The global
   /// `body.light-mode input` rule forces a black@0.04 fill and black@0.1
   /// border (styles-themes-responsive.css:561-568).
   Widget _search(NymColors c) {
@@ -343,7 +343,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       cursorColor: c.isLight ? Colors.black : Colors.white,
       decoration: InputDecoration(
         isDense: true,
-        hintText: tr('Search emoji by name...'),
+        hintText: tr('Search emoji...'),
         hintStyle: TextStyle(color: c.textDim, fontSize: 12),
         filled: true,
         fillColor: fill,

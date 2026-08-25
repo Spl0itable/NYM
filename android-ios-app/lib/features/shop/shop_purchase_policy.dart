@@ -37,7 +37,8 @@ bool get shopPurchasesDisabled {
 /// separate getter only so the two surfaces read for themselves, and so
 /// changing one platform's answer later does not silently change the other's.
 ///
-/// On iOS this both hides the Buy chip in the Nymbot control bar and turns the
-/// credits sheet into a statement: no button, no tappable link, no call to
-/// action pointing anywhere. Credits already on the account keep working.
+/// On iOS this turns the credits sheet into a statement: no button, no tappable
+/// link, no call to action pointing anywhere. The Nymbot control bar's Buy chip
+/// stays — it opens that same sheet, so it leads to the statement rather than to
+/// a purchasing mechanism. Credits already on the account keep working.
 bool get botCreditPurchasesDisabled => shopPurchasesDisabled;

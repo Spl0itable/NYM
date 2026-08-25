@@ -36,6 +36,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
+
 import 'keys.dart';
 import 'ml_kem.dart';
 import 'nip44.dart' as nip44;
@@ -189,3 +191,203 @@ Uint8List pqDeriveSeed(Uint8List privkey, int epoch) {
 /// The ML-KEM identity keypair for [privkey] at [epoch].
 MlKemKeyPair pqKeypairFromPrivkey(Uint8List privkey, int epoch) =>
     mlKem768.keygen(pqDeriveSeed(privkey, epoch));
+
+// v2: the independently-seeded root secret. See docs/PQ-ROOT-SPEC.md.
+//
+// v1 seeds ML-KEM from the nsec, so breaking secp256k1 also yields the
+// post-quantum key. v2 seeds from 32 CSPRNG bytes instead. The v1 path stays
+// forever: everything sealed under it must remain readable (spec §4).
+
+/// Domain separator for deriving the ML-KEM seed from a root secret. Differs
+/// from [pqSeedSalt] so a root and an nsec can never derive the same keypair.
+const String pqRootSeedSalt = 'nym-pq-root-v2';
+
+/// Length of the root secret, in bytes.
+const int pqRootLength = 32;
+
+/// A fresh root secret. Generated once per identity.
+Uint8List pqGenerateRoot() => randomBytes(pqRootLength);
+
+/// Deterministic ML-KEM seed from a root secret.
+Uint8List pqRootDeriveSeed(Uint8List root, int epoch) {
+  if (root.length != pqRootLength) {
+    throw ArgumentError('pq root must be $pqRootLength bytes');
+  }
+  final prk = nip44.hkdfExtract(
+      Uint8List.fromList(utf8.encode(pqRootSeedSalt)), root);
+  return nip44.hkdfExpand(
+      prk, Uint8List.fromList(utf8.encode('mlkem768/epoch/$epoch')), 64);
+}
+
+/// The ML-KEM identity keypair for [root] at [epoch].
+MlKemKeyPair pqKeypairFromRoot(Uint8List root, int epoch) =>
+    mlKem768.keygen(pqRootDeriveSeed(root, epoch));
+
+/// Domain separator for the root fingerprint.
+const String pqRootFpSalt = 'nym-pq-root-fp-v1';
+
+/// Fingerprint length, in bytes.
+const int pqRootFpLength = 8;
+
+/// A short public fingerprint of [root], as lowercase hex.
+///
+/// Goes in the settings record so a device can tell "this is the root I hold"
+/// from "this is a different one" without either side revealing the secret.
+/// Must stay byte-identical to the PWA's `pqRootFingerprint` — a record
+/// without a matching one reads as no record at all, and a device that
+/// believes there is no record generates a second root.
+String pqRootFingerprint(Uint8List root) {
+  if (root.length != pqRootLength) {
+    throw ArgumentError('pq root must be $pqRootLength bytes');
+  }
+  final prk = nip44.hkdfExtract(
+      Uint8List.fromList(utf8.encode(pqRootFpSalt)), root);
+  final out = nip44.hkdfExpand(
+      prk, Uint8List.fromList(utf8.encode('fp')), pqRootFpLength);
+  return [for (final b in out) b.toRadixString(16).padLeft(2, '0')].join();
+}
+
+// ---- pq2: layered, so a signer login can take part -------------------------
+//
+// pq1 mixes the ECDH secret and the KEM secret into one key, and a NIP-07 or
+// NIP-46 signer never returns the raw ECDH x. Here NIP-44 is the inner layer
+// (any signer does it) and the KEM keys an outer AEAD. See PQ-ROOT-SPEC A2.
+
+const String pq2Prefix = 'pq2.';
+const String _pq2Salt = 'nymchat-pq2-v1';
+const String _pq2Label = 'nymchat-pq2';
+
+bool isPq2Payload(String? content) =>
+    content != null && content.startsWith(pq2Prefix);
+
+final _pq2Aead = Chacha20.poly1305Aead();
+
+class Pq2LayerKeys {
+  const Pq2LayerKeys(this.key, this.nonce, this.aad);
+  final Uint8List key;
+  final Uint8List nonce;
+  final Uint8List aad;
+}
+
+/// Outer-layer key, nonce and AAD. The shared secret is fresh per message, so
+/// the key is never reused and a derived nonce is safe.
+Pq2LayerKeys pq2LayerKeys({
+  required Uint8List kemSharedSecret,
+  required Uint8List kemCipherText,
+  required Uint8List recipKemPublicKey,
+  required String senderSecpPubkey,
+  required String recipSecpPubkey,
+}) {
+  final info = _concat([
+    Uint8List.fromList(utf8.encode(_pq2Label)),
+    hexToBytes(senderSecpPubkey),
+    hexToBytes(recipSecpPubkey),
+    kemCipherText,
+    recipKemPublicKey,
+  ]);
+  final prk = nip44.hkdfExtract(
+      Uint8List.fromList(utf8.encode(_pq2Salt)), kemSharedSecret);
+  return Pq2LayerKeys(
+    nip44.hkdfExpand(
+        prk, _concat([info, Uint8List.fromList(utf8.encode('key'))]), 32),
+    nip44.hkdfExpand(
+        prk, _concat([info, Uint8List.fromList(utf8.encode('nonce'))]), 12),
+    info,
+  );
+}
+
+/// Wraps an already-encrypted NIP-44 payload in the post-quantum layer. The
+/// caller produced [inner] however it can — local key or signer.
+Future<String> pq2Seal(
+  String inner,
+  String senderSecpPubkey,
+  String recipSecpPubkey,
+  Uint8List recipKemPublicKey, {
+  Uint8List? encapsulationRandomness,
+}) async {
+  if (recipKemPublicKey.length != mlKemPublicKeyLength) {
+    throw ArgumentError('bad ml-kem public key');
+  }
+  if (inner.isEmpty) throw ArgumentError('bad inner payload');
+  final enc = mlKem768.encapsulate(
+      recipKemPublicKey, encapsulationRandomness ?? randomBytes(32));
+  final k = pq2LayerKeys(
+    kemSharedSecret: enc.sharedSecret,
+    kemCipherText: enc.cipherText,
+    recipKemPublicKey: recipKemPublicKey,
+    senderSecpPubkey: senderSecpPubkey,
+    recipSecpPubkey: recipSecpPubkey,
+  );
+  final box = await _pq2Aead.encrypt(
+    utf8.encode(inner),
+    secretKey: SecretKey(k.key),
+    nonce: k.nonce,
+    aad: k.aad,
+  );
+  final outer = Uint8List.fromList([...box.cipherText, ...box.mac.bytes]);
+  return '$pq2Prefix${b64uEncode(enc.cipherText)}.${b64uEncode(outer)}';
+}
+
+/// Strips the post-quantum layer, returning the NIP-44 payload inside. No secp
+/// key is needed here, which is what lets a signer login participate.
+Future<String> pq2Open(
+  String content,
+  String senderSecpPubkey,
+  String recipSecpPubkey,
+  Uint8List kemSecretKey,
+  Uint8List kemPublicKey,
+) async {
+  if (!isPq2Payload(content)) throw ArgumentError('not a pq2 payload');
+  final dot = content.indexOf('.', pq2Prefix.length);
+  if (dot < 0) throw ArgumentError('malformed pq2 payload');
+  final cipherText = b64uDecode(content.substring(pq2Prefix.length, dot));
+  if (cipherText.length != mlKemCipherTextLength) {
+    throw ArgumentError('bad ml-kem ciphertext');
+  }
+  final sharedSecret = mlKem768.decapsulate(cipherText, kemSecretKey);
+  final k = pq2LayerKeys(
+    kemSharedSecret: sharedSecret,
+    kemCipherText: cipherText,
+    recipKemPublicKey: kemPublicKey,
+    senderSecpPubkey: senderSecpPubkey,
+    recipSecpPubkey: recipSecpPubkey,
+  );
+  final outer = b64uDecode(content.substring(dot + 1));
+  if (outer.length < 16) throw ArgumentError('malformed pq2 payload');
+  final clear = await _pq2Aead.decrypt(
+    SecretBox(
+      outer.sublist(0, outer.length - 16),
+      nonce: k.nonce,
+      mac: Mac(outer.sublist(outer.length - 16)),
+    ),
+    secretKey: SecretKey(k.key),
+    aad: k.aad,
+  );
+  return utf8.decode(clear);
+}
+
+/// Local-key convenience: both layers here.
+Future<String> pq2Encrypt(
+  String plaintext,
+  Uint8List senderPrivkey,
+  String recipSecpPubkey,
+  Uint8List recipKemPublicKey, {
+  Uint8List? encapsulationRandomness,
+  Uint8List? nonce,
+}) async {
+  final inner = nip44.encrypt(
+      plaintext, nip44.getConversationKey(senderPrivkey, recipSecpPubkey),
+      nonce: nonce);
+  return pq2Seal(inner, getPublicKeyHex(senderPrivkey), recipSecpPubkey,
+      recipKemPublicKey,
+      encapsulationRandomness: encapsulationRandomness);
+}
+
+Future<String> pq2Decrypt(
+    String content, String senderSecpPubkey, PqIdentity self) async {
+  final recipPk = getPublicKeyHex(self.privkey);
+  final inner = await pq2Open(
+      content, senderSecpPubkey, recipPk, self.kemSecretKey, self.kemPublicKey);
+  return nip44.decrypt(
+      inner, nip44.getConversationKey(self.privkey, senderSecpPubkey));
+}

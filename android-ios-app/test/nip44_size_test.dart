@@ -45,4 +45,42 @@ void main() {
           lessThan(StorageSync.maxRumorBytesForWrap()));
     });
   });
+
+  // The bug this models: budgeting with the classical size and then publishing
+  // post-quantum. The layer adds ~1.5 KB of KEM ciphertext and inflates what
+  // it wraps by a third, on BOTH layers.
+  group('the post-quantum layer moves the ceiling', () {
+    test('the pq2 frame is exact: prefix + b64(1088) + dot + b64(inner+16)',
+        () {
+      int b64(int n) => (n * 4 + 2) ~/ 3;
+      for (final inner in [1456, 6916, 13744, 27396]) {
+        expect(StorageSync.pq2PayloadLen(inner),
+            4 + b64(1088) + 1 + b64(inner + 16));
+      }
+    });
+
+    test('a rumor at the classical ceiling overflows if published pq2', () {
+      final clsMax = StorageSync.maxRumorBytesForWrap();
+      expect(StorageSync.wrappedSizeForRumor(clsMax), lessThanOrEqualTo(65000));
+      expect(StorageSync.wrappedSizeForRumor(clsMax, pq2: true),
+          greaterThan(65000),
+          reason: 'this is exactly what was falling back to NIP-44');
+    });
+
+    test('the pq2 ceiling is lower, and tight', () {
+      final pqMax = StorageSync.maxRumorBytesForWrap(65000, true);
+      expect(pqMax, lessThan(StorageSync.maxRumorBytesForWrap()));
+      expect(StorageSync.wrappedSizeForRumor(pqMax, pq2: true),
+          lessThanOrEqualTo(65000));
+      expect(StorageSync.wrappedSizeForRumor(pqMax + 1, pq2: true),
+          greaterThan(65000));
+    });
+
+    test('and it agrees with the PWA, which shares the format', () {
+      // Both apps must shard identically or a device re-publishes the other's
+      // history under different boundaries on every save.
+      expect(StorageSync.maxRumorBytesForWrap(), 28672);
+      expect(StorageSync.maxRumorBytesForWrap(65000, true), 16384);
+    });
+  });
 }

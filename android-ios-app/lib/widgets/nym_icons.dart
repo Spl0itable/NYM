@@ -313,6 +313,13 @@ class NymIcons {
       '<path d="M 9 6 C 9 4.5 10 3 12 3 C 12 4.5 11 5 10 5.5 C 9.5 5.8 9 6.3 9 7 L 9 9 L 12 9 L 12 6 Z"/></svg>';
 
   /// `#ctxCopyMessage` — two stacked sheets (copy).
+  /// The npub/hex swap arrows, matching the PWA's context-menu row
+  /// (`#ctxTogglePubkeyFormat`, index.html).
+  static const String ctxSwapFormat =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+      '<path d="M 2 6 L 12 6 M 9.5 3.5 L 12 6 L 9.5 8.5" stroke-linecap="round" stroke-linejoin="round"/>'
+      '<path d="M 14 10 L 4 10 M 6.5 7.5 L 4 10 L 6.5 12.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
   static const String ctxCopy =
       '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
       '<rect x="5" y="5" width="8" height="9" rx="1"/>'

@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Each released version corresponds to a tag on
 [github.com/Spl0itable/NYM](https://github.com/Spl0itable/NYM/releases).
 
+## [3.74.542] - 2026-08-25
+
+### Added
+- Quantum-resistant messaging now works with browser-extension and remote-signer
+  logins in both directions, not only when sending. Synced settings and archived
+  history are covered too.
+- A post-quantum recovery code (`nympq1...`) that a second device is linked with,
+  shown beside the nsec in View or Edit Nym's Details.
+
+### Changed
+- The Nym details modal opens on your full public key, with the nickname below
+  it, and explains that the `#` suffix is the last four characters of the key's
+  hex spelling.
+- The shield no longer claims full quantum resistance on a message that only got
+  part of it.
+
+### Fixed
+- A manually translated message is no longer cleared when a new message arrives.
+- The pop-out composer keeps its rounded corners, and the formatting toolbar is
+  no longer hidden behind it.
+
+## [3.74.535] - 2026-08-24
+
+### Fixed
+- Settings changes now stick. A save that failed for any reason was still
+  recorded as done, so it was never retried and the change reverted the next
+  time the app opened.
+- A setting one app knows about and the other does not is no longer wiped when
+  the other app saves the section it lives in.
+- The app language and the auto-translate options are stored in the same place
+  the web app stores them, instead of a second location the two kept
+  overwriting.
+
 ## [3.74.534] - 2026-08-23
 
 ### Fixed

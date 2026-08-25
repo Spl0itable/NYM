@@ -64,17 +64,47 @@ const int pqPreviousEpochs = 3;
 /// emergency release. Nothing in the app writes it.
 enum PqMode { on, off }
 
-/// One device listed in our own announcement. Informational only — it never
-/// gates decryption; it exists so the settings screen can say which devices
-/// have actually been seen running a post-quantum-capable build.
+/// One device listed in our own announcement. It lets the settings screen say
+/// which devices have actually been seen running a post-quantum-capable build,
+/// and its [PqDevice.postQuantumCapable] flag decides whether copies addressed
+/// to the account may be sealed hybrid at all ([PqPolicy.allDevicesCapable]).
+/// It never gates DECRYPTION — anything already sealed stays readable.
 class PqDevice {
-  const PqDevice({required this.id, required this.version, required this.seenAt});
+  const PqDevice({
+    required this.id,
+    required this.version,
+    required this.seenAt,
+    this.postQuantumCapable = false,
+    this.layeredCapable = false,
+  });
 
   final String id;
   final String version;
   final int seenAt;
 
-  Map<String, dynamic> toJson() => {'id': id, 'ver': version, 'ts': seenAt};
+  /// Whether this device can DECAPSULATE — i.e. holds a local nsec rather than
+  /// delegating to an extension or a NIP-46 signer. Decides whether copies
+  /// addressed to the account may go hybrid at all; see
+  /// [PqPolicy.allDevicesCapable].
+  ///
+  /// Defaults false, which is also what an entry from a build before the flag
+  /// existed decodes to: unknown must not read as capable, because guessing
+  /// that way is what locks a device out of its own settings.
+  final bool postQuantumCapable;
+
+  /// Whether this device can open the LAYERED format. Separate from
+  /// [postQuantumCapable] because a device predating the split can open only
+  /// the combined one, and a self-copy sealed layered would lock it out of its
+  /// own settings.
+  final bool layeredCapable;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'ver': version,
+        'ts': seenAt,
+        'pq': postQuantumCapable ? 1 : 0,
+        'pq2': layeredCapable ? 1 : 0,
+      };
 
   static PqDevice? fromJson(dynamic raw) {
     if (raw is! Map) return null;
@@ -84,6 +114,10 @@ class PqDevice {
       id: id,
       version: raw['ver'] is String ? raw['ver'] as String : '',
       seenAt: raw['ts'] is int ? raw['ts'] as int : 0,
+      postQuantumCapable: raw['pq'] == 1,
+      // Absent on builds predating the split: those open the combined format
+      // only, which is what they actually do.
+      layeredCapable: raw['pq2'] == 1,
     );
   }
 }
@@ -96,6 +130,11 @@ class PqAnnouncement {
     required this.epoch,
     this.devices = const [],
     this.retracted = false,
+    this.version = 1,
+    this.src,
+    // Defaults describe a pre-split announcement: the combined format only.
+    this.acceptsLegacy = true,
+    this.acceptsLayered = false,
   });
 
   /// Null when [retracted], and also null for a Nymchat client that cannot or
@@ -110,6 +149,24 @@ class PqAnnouncement {
   /// A replaceable event cannot be unpublished, so turning post-quantum off
   /// supersedes the announcement with a retracted, already-expired one.
   final bool retracted;
+
+  /// Payload version: 1 is nsec-derived, 2 carries [src].
+  final int version;
+
+  /// Where the announced key was seeded from; only `"root"` means the identity
+  /// root secret. Null for v1 and for anything unrecognised.
+  final String? src;
+
+  /// Which payload formats this peer can open. A peer advertising only
+  /// [acceptsLayered] is a signer login: sealing it the combined format would
+  /// produce a message it can never open.
+  final bool acceptsLegacy;
+  final bool acceptsLayered;
+
+  /// Whether the announced key is root-seeded, i.e. real HNDL protection.
+  /// Needs BOTH `v:2` and `src == "root"` — spec §3 requires an unknown `src`
+  /// to read as legacy.
+  bool get rootSeeded => version >= 2 && src == 'root';
 
   /// Parses an announcement's `content`. Returns null for anything malformed,
   /// wrong-algorithm, or carrying a wrong-length key — a bad announcement must
@@ -142,17 +199,25 @@ class PqAnnouncement {
     // No `pk` is a valid announcement, not a retraction: a Nymchat client
     // without post-quantum. Recording it is what stops us sending a pointless
     // Bitchat wrap.
-    Uint8List? pk;
-    if (decoded['pk'] != null) {
-      final pkRaw = decoded['pk'];
-      if (pkRaw is! String) return null;
+    Uint8List? readKey(dynamic raw) {
+      if (raw is! String) return null;
+      Uint8List k;
       try {
-        pk = pq.b64uDecode(pkRaw);
+        k = pq.b64uDecode(raw);
       } catch (_) {
         return null;
       }
-      if (pk.length != mlKemPublicKeyLength) return null;
+      return k.length == mlKemPublicKeyLength ? k : null;
     }
+
+    final hasPk1 = decoded['pk'] != null;
+    final hasPk2 = decoded['pk2'] != null;
+    final pk1 = hasPk1 ? readKey(decoded['pk']) : null;
+    final pk2 = hasPk2 ? readKey(decoded['pk2']) : null;
+    // A malformed key is a malformed announcement: leave the peer classical
+    // rather than half-configured.
+    if ((hasPk1 && pk1 == null) || (hasPk2 && pk2 == null)) return null;
+    final pk = pk2 ?? pk1;
 
     final devices = <PqDevice>[];
     final rawDevices = decoded['devices'];
@@ -163,11 +228,16 @@ class PqAnnouncement {
       }
     }
 
+    final rawSrc = decoded['src'];
     return PqAnnouncement(
       publicKey: pk,
       expiresAt: exp,
       epoch: decoded['epoch'] is int ? decoded['epoch'] as int : 0,
       devices: devices,
+      version: decoded['v'] is int ? decoded['v'] as int : 1,
+      src: rawSrc is String ? rawSrc : null,
+      acceptsLegacy: hasPk1,
+      acceptsLayered: hasPk2,
     );
   }
 
@@ -175,22 +245,36 @@ class PqAnnouncement {
   /// Builds the `content` payload for our own announcement. [publicKey] is
   /// null when we cannot or will not do post-quantum — the announcement still
   /// goes out, because its presence is what tells peers we run Nymchat.
+  ///
+  /// [rootSeeded] promotes the payload to `v:2` + `src:"root"`; without it the
+  /// v1 payload stays byte-identical to what earlier builds emitted.
   static String encode({
     required Uint8List? publicKey,
     required int expiresAt,
     required int epoch,
     required List<PqDevice> devices,
+    bool rootSeeded = false,
+    // Whether we can open the COMBINED format, i.e. whether this login holds
+    // an nsec. Decides `pk`, which is the claim an older peer acts on.
+    bool legacyCapable = true,
   }) =>
       jsonEncode({
-        'v': 1,
+        'v': rootSeeded ? 2 : 1,
         'alg': pqAlgorithm,
         // Marks this as a Nymchat client regardless of whether a KEM key is
         // present, so "Nymchat without post-quantum" stays distinguishable
         // from a retraction.
         'nym': 1,
         'epoch': epoch,
-        if (publicKey != null) 'pk': pq.b64uEncode(publicKey),
+        // Two claims, not one. `pk` means "either format"; only a login
+        // holding the nsec can say it. `pk2` means "the layered format only".
+        // A signer login says just pk2, and an older peer — which has never
+        // heard of it — reads that as a Nymchat client with no post-quantum
+        // key and sends plain NIP-44, which a signer CAN read.
+        if (publicKey != null && legacyCapable) 'pk': pq.b64uEncode(publicKey),
+        if (publicKey != null) 'pk2': pq.b64uEncode(publicKey),
         'exp': expiresAt,
+        if (rootSeeded) 'src': 'root',
         'devices': [for (final d in devices) d.toJson()],
       });
 
@@ -213,7 +297,9 @@ class PqRegistry {
   PqRegistry({this.maxEntries = 5000});
 
   final int maxEntries;
-  final Map<String, ({Uint8List? pk, int exp, int epoch})> _keys = {};
+  final Map<String,
+      ({Uint8List? pk, int exp, int epoch, bool root, bool pq1, bool pq2})>
+      _keys = {};
 
   /// Ingests a peer's announcement. [content] is the event content; [pubkey]
   /// its (already signature-verified) author.
@@ -228,7 +314,10 @@ class PqRegistry {
       _keys.remove(pubkey);
       return;
     }
-    record(pubkey, ann.publicKey, ann.expiresAt, ann.epoch);
+    record(pubkey, ann.publicKey, ann.expiresAt, ann.epoch,
+        rootSeeded: ann.rootSeeded,
+        acceptsLegacy: ann.acceptsLegacy,
+        acceptsLayered: ann.acceptsLayered);
   }
 
   /// Records a key. Also the path our own key takes, so self-addressed wraps
@@ -237,8 +326,18 @@ class PqRegistry {
   /// The cap is enforced here rather than in [ingest] so every write goes
   /// through one bound (Dart's Map preserves insertion order, so the evicted
   /// entry is the earliest-recorded one).
-  void record(String pubkey, Uint8List? pk, int exp, int epoch) {
-    _keys[pubkey] = (pk: pk, exp: exp, epoch: epoch);
+  void record(String pubkey, Uint8List? pk, int exp, int epoch,
+      {bool rootSeeded = false,
+      bool acceptsLegacy = true,
+      bool acceptsLayered = false}) {
+    _keys[pubkey] = (
+      pk: pk,
+      exp: exp,
+      epoch: epoch,
+      root: rootSeeded,
+      pq1: acceptsLegacy,
+      pq2: acceptsLayered
+    );
     while (_keys.length > maxEntries) {
       _keys.remove(_keys.keys.first);
     }
@@ -250,7 +349,8 @@ class PqRegistry {
 
   /// The live entry for a peer, or null. Shared by both lookups so expiry is
   /// enforced in exactly one place.
-  ({Uint8List? pk, int exp, int epoch})? _entry(String pubkey, int nowSec) {
+  ({Uint8List? pk, int exp, int epoch, bool root, bool pq1, bool pq2})? _entry(
+      String pubkey, int nowSec) {
     final rec = _keys[pubkey];
     if (rec == null) return null;
     if (rec.exp <= nowSec) {
@@ -265,6 +365,24 @@ class PqRegistry {
   Uint8List? keyFor(String pubkey, {required int nowSec, required bool enabled}) {
     if (!enabled) return null;
     return _entry(pubkey, nowSec)?.pk;
+  }
+
+  /// Whether a peer's live announcement is root-seeded (spec §3), for the
+  /// badge. A KEM-less entry is never root-seeded: there is no key to protect.
+  bool isRootSeeded(String pubkey,
+      {required int nowSec, required bool enabled}) {
+    if (!enabled) return false;
+    final e = _entry(pubkey, nowSec);
+    return e != null && e.pk != null && e.root;
+  }
+
+  /// Whether a peer accepts the layered format — the only one a signer login
+  /// on either end can open.
+  bool acceptsLayered(String pubkey,
+      {required int nowSec, required bool enabled}) {
+    if (!enabled) return false;
+    final e = _entry(pubkey, nowSec);
+    return e != null && e.pk != null && e.pq2;
   }
 
   /// Whether a peer has published a live capability announcement, i.e. whether
@@ -295,6 +413,9 @@ class PqRegistry {
               e.value.pk == null ? null : pq.b64uEncode(e.value.pk!),
               e.value.exp,
               e.value.epoch,
+              e.value.root ? 1 : 0,
+              e.value.pq1 ? 1 : 0,
+              e.value.pq2 ? 1 : 0,
             ],
       };
 
@@ -336,7 +457,13 @@ class PqRegistry {
         }
         if (pk.length != mlKemPublicKeyLength) continue;
       }
-      record(entry.key, pk, exp, epoch);
+      // Absent on rows written before the root existed — those peers were
+      // legacy, so the default is the truth rather than a guess.
+      record(entry.key, pk, exp, epoch,
+          rootSeeded: v.length > 3 && v[3] == 1,
+          // Rows written before the split carried the combined format only.
+          acceptsLegacy: v.length > 4 ? v[4] == 1 : true,
+          acceptsLayered: v.length > 5 && v[5] == 1);
     }
   }
 }
@@ -349,10 +476,16 @@ class PqPolicy {
   /// Whether we can RECEIVE post-quantum messages, and therefore whether we
   /// announce an ML-KEM key for peers to encapsulate to.
   ///
-  /// Needs the nsec: the ML-KEM keypair derives from it, and opening a message
-  /// means decapsulating with its secret half. An extension or NIP-46 signer
-  /// holds the nsec and will not do ML-KEM, so those logins cannot receive.
-  static bool capable({required Uint8List? privkey}) => privkey != null;
+  /// The root alone suffices: the layered format derives the decapsulation key
+  /// from it and leaves the inner NIP-44 to whatever holds the identity key, a
+  /// signer included. An nsec alone also suffices, for the keys derived from
+  /// it. Either way this is the RECEIVE question, not the login question.
+  static bool capable({required Uint8List? privkey, Uint8List? root}) =>
+      privkey != null || root != null;
+
+  /// Whether we can open the COMBINED format. It mixes the raw ECDH output
+  /// into the key, which no signer returns, so this one needs the nsec.
+  static bool legacyCapable({required Uint8List? privkey}) => privkey != null;
 
   /// Whether we can SEND post-quantum, which is a weaker requirement.
   ///
@@ -375,8 +508,11 @@ class PqPolicy {
   /// settings — can be post-quantum. They are addressed to us, so this is the
   /// receive-side question: encapsulating to a key we cannot decapsulate with
   /// would lock this device out of its own history.
-  static bool selfEnabled({required Uint8List? privkey, required PqMode mode}) =>
-      capable(privkey: privkey) && mode == PqMode.on;
+  static bool selfEnabled(
+          {required Uint8List? privkey,
+          Uint8List? root,
+          required PqMode mode}) =>
+      capable(privkey: privkey, root: root) && mode == PqMode.on;
 
   /// Post-quantum is on for anyone who can do it. Kept as a function so the
   /// escape hatch has somewhere to live.
@@ -394,15 +530,57 @@ class PqPolicy {
     String deviceId,
     String version, {
     required int nowSec,
+    bool capable = false,
+    bool layered = false,
     int max = 16,
   }) {
     final out = [
       for (final d in previous)
         if (d.id != deviceId && (nowSec - d.seenAt) < pqDeviceStale.inSeconds) d,
-      PqDevice(id: deviceId, version: version, seenAt: nowSec),
+      PqDevice(
+          id: deviceId,
+          version: version,
+          seenAt: nowSec,
+          postQuantumCapable: capable,
+          layeredCapable: layered),
     ];
     out.sort((a, b) => b.seenAt.compareTo(a.seenAt));
     return out.length > max ? out.sublist(0, max) : out;
+  }
+
+  /// Whether EVERY device on this account can open a hybrid copy addressed to
+  /// the account. One that cannot runs on defaults forever, silently.
+  ///
+  /// An empty roster means no second device, not a missing answer. Stale
+  /// entries stop counting, so a device that is gone does not hold the
+  /// account back for good.
+  static bool allDevicesCapable(
+    List<PqDevice> devices,
+    String selfDeviceId, {
+    required int nowSec,
+  }) {
+    for (final d in devices) {
+      if (d.id == selfDeviceId) continue;
+      if ((nowSec - d.seenAt) >= pqDeviceStale.inSeconds) continue;
+      if (!d.postQuantumCapable) return false;
+    }
+    return true;
+  }
+
+  /// Whether copies addressed to OURSELVES may use the layered format. False
+  /// as soon as one live device on the account can open only the combined one,
+  /// since a self-copy has to be readable by all of them.
+  static bool allDevicesLayered(
+    List<PqDevice> devices,
+    String selfDeviceId, {
+    required int nowSec,
+  }) {
+    for (final d in devices) {
+      if (d.id == selfDeviceId) continue;
+      if ((nowSec - d.seenAt) >= pqDeviceStale.inSeconds) continue;
+      if (!d.layeredCapable) return false;
+    }
+    return true;
   }
 }
 
@@ -415,6 +593,7 @@ class PqPmPlan {
     required this.bitchat,
     required this.nym,
     this.provenNym = false,
+    this.layered = false,
   });
 
   /// Non-null when the recipient has a live announced ML-KEM key, which is
@@ -432,29 +611,29 @@ class PqPmPlan {
   /// provably running Nymchat. Surfaced for tests and diagnostics.
   final bool provenNym;
 
+  /// Build the layered wrap rather than the combined one. Comes from the
+  /// recipient's announcement, never from a guess: sealing a format they
+  /// cannot open produces a message that is silently lost.
+  final bool layered;
+
   bool get pq => kemPublicKey != null;
 
   /// Decides the transports for a recipient.
   ///
-  /// There is no setting. Nymchat-to-Nymchat is post-quantum; anyone we cannot
-  /// prove is on Nymchat gets exactly what they got before post-quantum
-  /// existed. The whole rule is one question — has this peer published a
-  /// capability announcement ([provenNymchat])? — because that announcement is
-  /// signed and cannot be faked, whereas inferring the client from public
-  /// activity would occasionally be wrong, and being wrong here means sending
-  /// someone a message their app cannot open, with no error and no retry.
+  /// No setting. The whole rule is one question — has this peer published a
+  /// signed capability announcement ([provenNymchat])? — because inferring the
+  /// client from public activity would sometimes be wrong, and wrong here
+  /// means a message their app cannot open, silently.
   ///
-  /// A post-quantum wrap is never accompanied by a Bitchat copy of the same
-  /// plaintext: it would hand a future quantum attacker the easier target and
-  /// make the shield badge a lie, and it buys no reach, because a peer with an
-  /// ML-KEM key is demonstrably not on Bitchat. That falls out of the rule
-  /// rather than being a special case — holding a key implies holding the
-  /// announcement.
+  /// A post-quantum wrap never carries a Bitchat copy of the same plaintext:
+  /// that would hand a quantum attacker the easier target and buys no reach.
+  /// It falls out of the rule rather than being a special case.
   static PqPmPlan decide({
     required Uint8List? recipientKemKey,
     required bool knownBitchat,
     required bool knownNym,
     bool provenNymchat = false,
+    bool recipientAcceptsLayered = false,
   }) {
     final unknown = !knownBitchat && !knownNym;
     // Holding a KEM key means we hold their announcement, so it always implies
@@ -474,6 +653,7 @@ class PqPmPlan {
       // the guard stays.
       nym: !bitchat || knownNym || unknown || proven,
       provenNym: proven,
+      layered: recipientKemKey != null && recipientAcceptsLayered,
     );
   }
 }
@@ -481,9 +661,22 @@ class PqPmPlan {
 /// Our own ML-KEM keys for the current epoch plus a bounded window of previous
 /// ones, so a wrap sent just before a rotation still opens. Ordered
 /// newest-first, matching the PWA's `pqSelfCandidates`.
+///
+/// With a [root], root-derived epochs come first (new writes use those), then
+/// the nsec-derived ones. The nsec-derived tail is PERMANENT, not a migration
+/// window — spec §4; dropping it is data loss.
 List<({Uint8List kemSk, Uint8List kemPk})> pqSelfCandidates(
-    Uint8List privkey, int epoch) {
+  Uint8List privkey,
+  int epoch, {
+  Uint8List? root,
+}) {
   final out = <({Uint8List kemSk, Uint8List kemPk})>[];
+  if (root != null) {
+    for (var e = epoch; e >= 0 && e > epoch - 1 - pqPreviousEpochs; e--) {
+      final kp = pq.pqKeypairFromRoot(root, e);
+      out.add((kemSk: kp.secretKey, kemPk: kp.publicKey));
+    }
+  }
   for (var e = epoch; e >= 0 && e > epoch - 1 - pqPreviousEpochs; e--) {
     final kp = pq.pqKeypairFromPrivkey(privkey, e);
     out.add((kemSk: kp.secretKey, kemPk: kp.publicKey));

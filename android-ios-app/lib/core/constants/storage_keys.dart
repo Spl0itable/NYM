@@ -13,6 +13,18 @@ class StorageKeys {
   static const pqUpgradeNotice = 'nym_pq_upgrade_notice';
   static const pqUpgradeSeen = 'nym_pq_upgrade_seen';
 
+  /// The post-quantum ROOT SECRET (docs/PQ-ROOT-SPEC.md §5.3). Lives in SECURE
+  /// storage beside the identity key, not in the key/value store: it is key
+  /// material of the same weight as the nsec. Held locally so linking a device
+  /// happens once, not once per launch. Listed in [SecretKeys.all], which is
+  /// what puts it inside the at-rest vault and inside every path that clears
+  /// the identity.
+  static const pqRoot = 'nym_pq_root';
+
+  /// Set once after a root is generated, so the app can show the user their
+  /// `nympq1…` code exactly once and stop.
+  static const pqRootBackupNotice = 'nym_pq_root_backup_notice';
+
   // Identity / login
   static const nostrLoginMethod = 'nym_nostr_login_method';
   static const nostrLoginPubkey = 'nym_nostr_login_pubkey';
@@ -204,10 +216,19 @@ class SecretKeys {
   static const nostrLoginNsec = 'nym_nostr_login_nsec';
   static const nip46ClientSecret = 'nym_nip46_client_secret';
 
+  /// The post-quantum root secret. In this list — and therefore inside the
+  /// at-rest vault's protected set and every identity-clearing sweep — because
+  /// a user who asked for their key material to be encrypted at rest did not
+  /// ask for an encrypted nsec sitting next to a plaintext root, and a root
+  /// that outlives the identity it belongs to is a liability with no owner
+  /// (docs/PQ-ROOT-SPEC.md §5.3).
+  static const pqRoot = StorageKeys.pqRoot;
+
   static const List<String> all = [
     sessionNsec,
     devNsec,
     nostrLoginNsec,
     nip46ClientSecret,
+    pqRoot,
   ];
 }

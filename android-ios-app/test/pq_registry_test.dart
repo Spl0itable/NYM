@@ -15,6 +15,7 @@ import 'package:nym_bar/core/crypto/keys.dart';
 import 'package:nym_bar/core/crypto/ml_kem.dart';
 import 'package:nym_bar/core/crypto/pq.dart' as pq;
 import 'package:nym_bar/features/identity/pq_registry.dart';
+import 'package:nym_bar/features/identity/pq_root.dart';
 
 Uint8List unhex(String h) {
   final out = Uint8List(h.length ~/ 2);
@@ -49,7 +50,12 @@ void main() {
       final ann = PqAnnouncement.parse(a['content'] as String)!;
       expect(ann.devices.length, 2);
       expect(ann.devices.first.id, 'a1b2c3d4');
-      expect(ann.devices.first.version, 'v3.73.533');
+      // From the fixture, not pinned here: the emitter stamps the current
+      // app version, so a hardcoded copy goes stale on every release.
+      final roster = (jsonDecode(a['content'] as String)
+          as Map<String, dynamic>)['devices'] as List<dynamic>;
+      expect(ann.devices.first.version,
+          (roster.first as Map<String, dynamic>)['ver']);
     });
 
     test('a retraction parses as retracted with no key', () {
@@ -265,6 +271,75 @@ void main() {
         roster = PqPolicy.mergeDeviceRoster(roster, 'd$i', 'v', nowSec: now + i);
       }
       expect(roster.length, lessThanOrEqualTo(16));
+    });
+  });
+
+  // A self-addressed blob is encapsulated to a key derived from the nsec. A
+  // device signed in with an extension or a NIP-46 signer holds no secret to
+  // derive from, so a hybrid blob locks it out of its own settings and the sync
+  // ping -- silently, and for good.
+  group('all-devices gate', () {
+    const now = 1800000000;
+    PqDevice dev(String id, {required bool pq, int? seenAt}) => PqDevice(
+        id: id, version: 'v1', seenAt: seenAt ?? now, postQuantumCapable: pq);
+
+    test('an empty roster is no evidence of a second device', () {
+      // The single-device account is the common case and must not be
+      // downgraded by the absence of an answer.
+      expect(PqPolicy.allDevicesCapable(const [], 'me', nowSec: now), isTrue);
+    });
+
+    test('all-capable devices allow the hybrid', () {
+      expect(
+          PqPolicy.allDevicesCapable(
+              [dev('me', pq: true), dev('other', pq: true)], 'me',
+              nowSec: now),
+          isTrue);
+    });
+
+    test('one signer-only device closes the gate', () {
+      expect(
+          PqPolicy.allDevicesCapable(
+              [dev('me', pq: true), dev('extension', pq: false)], 'me',
+              nowSec: now),
+          isFalse);
+    });
+
+    test('our own entry never gates us', () {
+      expect(PqPolicy.allDevicesCapable([dev('me', pq: false)], 'me', nowSec: now),
+          isTrue);
+    });
+
+    test('a stale device stops holding the account back', () {
+      expect(
+          PqPolicy.allDevicesCapable(
+              [dev('gone', pq: false, seenAt: now - pqDeviceStale.inSeconds - 1)],
+              'me',
+              nowSec: now),
+          isTrue);
+    });
+
+    test('a device from a build without the flag counts as incapable', () {
+      // Guessing "capable" is what locks a device out of its own settings; the
+      // cost of guessing the other way is the encryption these blobs had
+      // before the hybrid, and it heals as devices update.
+      final old = PqDevice.fromJson({'id': 'old', 'ver': 'v3.74.500', 'ts': now});
+      expect(old!.postQuantumCapable, isFalse);
+      expect(PqPolicy.allDevicesCapable([old], 'me', nowSec: now), isFalse);
+    });
+
+    test('the capability flag survives a roster round-trip', () {
+      final roster = PqPolicy.mergeDeviceRoster([], 'me', 'v3',
+          nowSec: now, capable: true);
+      final back = PqDevice.fromJson(roster.single.toJson());
+      expect(back!.postQuantumCapable, isTrue);
+      expect(
+          PqDevice.fromJson(
+                  PqPolicy.mergeDeviceRoster([], 'me', 'v3', nowSec: now)
+                      .single
+                      .toJson())!
+              .postQuantumCapable,
+          isFalse);
     });
   });
 
@@ -549,6 +624,252 @@ void main() {
       expect(PqPolicy.enabled(privkey: nsec, mode: PqMode.off), isFalse);
       expect(PqPolicy.enabled(privkey: null, mode: PqMode.off), isFalse);
       expect(PqPolicy.selfEnabled(privkey: nsec, mode: PqMode.off), isFalse);
+    });
+  });
+
+  // PQ-ROOT-SPEC §3. `src` is the only thing separating a key an adversary can
+  // reconstruct from the npub from one they cannot, so leniency here is a bug.
+  group('announcement v2 (src)', () {
+    final pk = pq.pqKeypairFromRoot(unhex('5a' * 32), 0).publicKey;
+
+    String encoded({required bool rootSeeded}) => PqAnnouncement.encode(
+          publicKey: pk,
+          expiresAt: 2000000000,
+          epoch: 0,
+          devices: const [],
+          rootSeeded: rootSeeded,
+        );
+
+    test('a root-seeded announcement is v:2 with src:"root"', () {
+      final json =
+          jsonDecode(encoded(rootSeeded: true)) as Map<String, dynamic>;
+      expect(json['v'], 2);
+      expect(json['src'], 'root');
+      expect(json['alg'], 'mlkem768');
+      expect(json['nym'], 1);
+      final ann = PqAnnouncement.parse(encoded(rootSeeded: true))!;
+      expect(ann.rootSeeded, isTrue);
+      expect(hex(ann.publicKey!), hex(pk));
+    });
+
+    // An unlinked device must keep emitting exactly what it emitted before.
+    test('a legacy announcement stays v:1 and carries no src', () {
+      final json =
+          jsonDecode(encoded(rootSeeded: false)) as Map<String, dynamic>;
+      expect(json['v'], 1);
+      expect(json.containsKey('src'), isFalse);
+      expect(PqAnnouncement.parse(encoded(rootSeeded: false))!.rootSeeded,
+          isFalse);
+    });
+
+    test('the PWA fixture, which predates v2, reads as legacy', () {
+      expect(PqAnnouncement.parse(a['content'] as String)!.rootSeeded, isFalse);
+    });
+
+    // "Parsers MUST treat an unknown `src` as legacy, never as root."
+    for (final variant in <String, dynamic>{
+      'src omitted': null,
+      'src is another word': 'nsec',
+      'src is a future value': 'kyber-root-v3',
+      'src is the empty string': '',
+      'src is not a string': 1,
+      'src is a list': ['root'],
+      'src is capitalised': 'Root',
+      'src has whitespace': ' root',
+    }.entries) {
+      test('v:2 but ${variant.key} → legacy', () {
+        final content = jsonEncode({
+          'v': 2,
+          'alg': 'mlkem768',
+          'nym': 1,
+          'epoch': 0,
+          'pk': pq.b64uEncode(pk),
+          'exp': 2000000000,
+          if (variant.value != null) 'src': variant.value,
+          'devices': const [],
+        });
+        final ann = PqAnnouncement.parse(content);
+        expect(ann, isNotNull, reason: 'it is still a valid announcement');
+        expect(ann!.rootSeeded, isFalse, reason: variant.key);
+      });
+    }
+
+    test('v:1 claiming src:"root" is still legacy', () {
+      final content = jsonEncode({
+        'v': 1,
+        'alg': 'mlkem768',
+        'nym': 1,
+        'epoch': 0,
+        'pk': pq.b64uEncode(pk),
+        'exp': 2000000000,
+        'src': 'root',
+        'devices': const [],
+      });
+      expect(PqAnnouncement.parse(content)!.rootSeeded, isFalse,
+          reason: 'both halves are required: v:2 AND src=="root"');
+    });
+
+    test('a v:2 announcement keeps parsing everything v:1 did', () {
+      final content = PqAnnouncement.encode(
+        publicKey: pk,
+        expiresAt: 2000000000,
+        epoch: 4,
+        devices: const [
+          PqDevice(id: 'aa11bb22', version: 'v9', seenAt: 1700000000,
+              postQuantumCapable: true)
+        ],
+        rootSeeded: true,
+      );
+      final ann = PqAnnouncement.parse(content)!;
+      expect(ann.epoch, 4);
+      expect(ann.expiresAt, 2000000000);
+      expect(ann.devices.single.id, 'aa11bb22');
+      expect(ann.devices.single.postQuantumCapable, isTrue);
+      expect(ann.rootSeeded, isTrue);
+    });
+
+    test('a retraction is never root-seeded', () {
+      final ann = PqAnnouncement.parse(PqAnnouncement.encodeRetraction(1))!;
+      expect(ann.retracted, isTrue);
+      expect(ann.rootSeeded, isFalse);
+    });
+  });
+
+  // A record whose fingerprint the other app cannot reproduce reads there as
+  // NO record — and a device that believes there is no record generates a
+  // second root, splitting the account.
+  group('root fingerprint parity with the PWA', () {
+    final vectors = (jsonDecode(File('test/pq-vectors.json').readAsStringSync())
+        as Map<String, dynamic>)['v2']['rootFingerprint'] as List<dynamic>;
+
+    test('every vector reproduces byte for byte', () {
+      expect(vectors, isNotEmpty);
+      for (final v in vectors) {
+        final m = v as Map<String, dynamic>;
+        expect(pq.pqRootFingerprint(unhex(m['root'] as String)), m['fp'],
+            reason: m['root'] as String);
+      }
+    });
+
+    test('different roots do not collide', () {
+      final seen = <String>{};
+      for (final v in vectors) {
+        seen.add(pq.pqRootFingerprint(unhex((v as Map)['root'] as String)));
+      }
+      expect(seen.length, vectors.length);
+    });
+
+    test('a wrong-length root is refused rather than fingerprinted', () {
+      expect(() => pq.pqRootFingerprint(Uint8List(31)), throwsArgumentError);
+    });
+
+    test('a published record carries the fingerprint', () {
+      final root = unhex((vectors.first as Map)['root'] as String);
+      final json = PqRootRecord.forRoot(root).toJson();
+      expect(json['fp'], (vectors.first as Map)['fp']);
+      expect(json['v'], 2);
+      expect(json['ts'], isA<int>());
+    });
+
+    test('and the round trip keeps it', () {
+      final root = unhex((vectors.first as Map)['root'] as String);
+      final back = PqRootRecord.fromJson(PqRootRecord.forRoot(root).toJson())!;
+      expect(back.isValid, isTrue);
+      expect(back.matches(root), isTrue);
+      expect(back.matches(unhex((vectors[1] as Map)['root'] as String)),
+          isFalse);
+    });
+
+    test('adding a wrap does not drop the fingerprint', () {
+      final root = unhex((vectors.first as Map)['root'] as String);
+      final rec = PqRootRecord.forRoot(root)
+          .withWrap(const PqRootWrap(type: pqRootWrapPasskey, blob: 'enc:v1:aa:bb'));
+      expect(rec.fp, (vectors.first as Map)['fp']);
+      expect(rec.isValid, isTrue);
+    });
+
+    // This is the shape the PWA rejects outright.
+    test('a record with no fingerprint is not valid', () {
+      expect(const PqRootRecord().isValid, isFalse);
+      expect(PqRootRecord.fromJson({'v': 2, 'wraps': []})!.isValid, isFalse);
+    });
+  });
+
+  // The badge is only as honest as what the registry remembers. Losing the
+  // flag anywhere along here turns a legacy key into a full shield, or a
+  // root-seeded one into a needless downgrade.
+  group('the registry carries root-seeded through', () {
+    final pk = pq.pqKeypairFromRoot(unhex('5a' * 32), 0).publicKey;
+    final peer = 'ab' * 32;
+    const now = 1700000000;
+    const exp = 2000000000;
+
+    String content({required bool rootSeeded}) => PqAnnouncement.encode(
+          publicKey: pk,
+          expiresAt: exp,
+          epoch: 0,
+          devices: const [],
+          rootSeeded: rootSeeded,
+        );
+
+    test('ingest keeps the flag rather than dropping it at the door', () {
+      final r = PqRegistry()
+        ..ingest(peer, content(rootSeeded: true), nowSec: now);
+      expect(r.isRootSeeded(peer, nowSec: now, enabled: true), isTrue);
+    });
+
+    test('a legacy announcement stays legacy', () {
+      final r = PqRegistry()
+        ..ingest(peer, content(rootSeeded: false), nowSec: now);
+      expect(r.isRootSeeded(peer, nowSec: now, enabled: true), isFalse);
+    });
+
+    test('an unknown peer is not root-seeded', () {
+      expect(PqRegistry().isRootSeeded(peer, nowSec: now, enabled: true),
+          isFalse);
+    });
+
+    test('an expired entry is not root-seeded', () {
+      final r = PqRegistry()
+        ..ingest(peer, content(rootSeeded: true), nowSec: now);
+      expect(r.isRootSeeded(peer, nowSec: exp + 1, enabled: true), isFalse);
+    });
+
+    test('post-quantum off answers no, like keyFor', () {
+      final r = PqRegistry()
+        ..ingest(peer, content(rootSeeded: true), nowSec: now);
+      expect(r.isRootSeeded(peer, nowSec: now, enabled: false), isFalse);
+    });
+
+    test('a KEM-less entry is never root-seeded', () {
+      final r = PqRegistry()..record(peer, null, exp, 0, rootSeeded: true);
+      expect(r.isRootSeeded(peer, nowSec: now, enabled: true), isFalse,
+          reason: 'there is no key to protect');
+    });
+
+    // Without this a restart reads every peer as legacy and downgrades their
+    // shields until a fresh announcement lands.
+    test('the flag survives the cache round trip', () {
+      final r = PqRegistry()
+        ..ingest(peer, content(rootSeeded: true), nowSec: now);
+      final back = PqRegistry()..hydrate(r.toJson(nowSec: now), nowSec: now);
+      expect(back.isRootSeeded(peer, nowSec: now, enabled: true), isTrue);
+    });
+
+    test('and a legacy peer is not resurrected as root-seeded', () {
+      final r = PqRegistry()
+        ..ingest(peer, content(rootSeeded: false), nowSec: now);
+      final back = PqRegistry()..hydrate(r.toJson(nowSec: now), nowSec: now);
+      expect(back.isRootSeeded(peer, nowSec: now, enabled: true), isFalse);
+    });
+
+    test('a row written before the flag existed reads as legacy', () {
+      final legacyRow = {
+        peer: [pq.b64uEncode(pk), exp, 0]
+      };
+      final back = PqRegistry()..hydrate(legacyRow, nowSec: now);
+      expect(back.keyFor(peer, nowSec: now, enabled: true), isNotNull);
+      expect(back.isRootSeeded(peer, nowSec: now, enabled: true), isFalse);
     });
   });
 }

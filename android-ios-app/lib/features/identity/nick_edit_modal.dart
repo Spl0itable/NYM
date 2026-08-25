@@ -83,7 +83,10 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
 
   bool _revealOpen = false;
   bool _nsecVisible = false;
-  bool _pubkeyOpen = false; // full-hex pubkey slideout
+  bool _pqRootVisible = false;
+  final TextEditingController _pqRootLink = TextEditingController();
+  String? _pqRootLinkStatus;
+  bool _pqRootLinking = false;
   bool _saving = false;
 
   /// Per-surface upload caps, mirroring the PWA nick-edit avatar/banner guards
@@ -145,6 +148,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     _nick.dispose();
     _bio.dispose();
     _lightning.dispose();
+    _pqRootLink.dispose();
     super.dispose();
   }
 
@@ -198,6 +202,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
+                                _pubkeySlideout(c),
+                                const SizedBox(height: 18),
                                 _nicknameGroup(c),
                                 const SizedBox(height: 18),
                                 _avatarGroup(c),
@@ -236,7 +242,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
           border: Border(bottom: BorderSide(color: c.glassBorder)),
         ),
         child: Text(
-          tr("Change Nym's Details").toUpperCase(),
+          tr("View or Edit Nym's Details").toUpperCase(),
           style: TextStyle(
             color: c.primary,
             fontSize: 22,
@@ -301,24 +307,16 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               ),
             ),
             const SizedBox(width: 8),
-            // `.nym-suffix-clickable` (index.html:1159) — tap to view the full
-            // hex pubkey.
-            Tooltip(
-              message: tr('Click to view full pubkey'),
-              child: InkWell(
-                onTap: () => setState(() => _pubkeyOpen = !_pubkeyOpen),
-                borderRadius: NymRadius.rxs,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                  child: Text(
-                    _suffix,
-                    style: TextStyle(
-                      color: c.primary,
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                    ),
-                  ),
+            // The tail of the pubkey, shown in full in the panel above —
+            // nothing to tap for, so nothing that looks tappable.
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text(
+                _suffix,
+                style: TextStyle(
+                  color: c.primary,
+                  fontFamily: 'monospace',
+                  fontSize: 13,
                 ),
               ),
             ),
@@ -331,25 +329,19 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             style: TextStyle(color: c.textDim, fontSize: 11),
           ),
         ),
-        if (_pubkeyOpen) _pubkeySlideout(c),
-        _hint(
-          c,
-          tr('Your ephemeral pseudonym nickname for this session. The # and four '
-              'characters identify this Nym\'s pubkey.'),
-        ),
       ],
     );
   }
 
-  /// The full-hex pubkey panel (`#pubkeySlideout`, index.html:1159-1169): a
-  /// title, an explanatory paragraph, the full pubkey, and a Copy button.
+  /// The full pubkey panel (`#pubkeySlideout` in the PWA): a title, an
+  /// explanatory paragraph, the full pubkey, and a Copy button. It sits above
+  /// the nickname field, which is where the `#suffix` it explains comes from.
   Widget _pubkeySlideout(NymColors c) {
     // npub by default, one tap from hex — the same app-wide preference the
     // user context menu writes (`nym_pubkey_format`, key_format.dart).
     final isNpub = _pubkeyFormat == PubkeyFormat.npub;
     final pk = formatPubkeyForDisplay(_pubkey, _pubkeyFormat);
     return Container(
-      margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.04),
@@ -367,28 +359,33 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                   color: c.text, fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           Text(
-            tr('This is your public key — a unique identifier derived from your '
-                'keypair. Share it so others can find and verify this Nym. It is '
-                'safe to share (unlike your private key).'),
+            tr('A "pubkey" aka "public key" is one half of a keypair: your '
+                'public key identifies you to everyone, like a username, while '
+                'your private key proves you are really you, like a password. '
+                'Others use this pubkey to find you on Nymchat, and you use '
+                'theirs to find them. The same key has two spellings — npub '
+                'and hex — and they are interchangeable. The four characters '
+                'after the # in a nickname are the last four of the hex '
+                'spelling.'),
             style: TextStyle(color: c.textDim, fontSize: 11, height: 1.4),
           ),
           const SizedBox(height: 8),
+          // The key gets the full width; the controls sit under it. Beside it
+          // they squeezed a 64-character string into a third of the row.
+          SelectableText(
+            pk,
+            style: TextStyle(
+              color: c.text,
+              fontFamily: 'monospace',
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 10),
           Row(
             children: [
-              Expanded(
-                child: SelectableText(
-                  pk,
-                  style: TextStyle(
-                    color: c.text,
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
               _smallButton(
                 c,
-                tr('Copy'),
+                isNpub ? tr('Copy npub') : tr('Copy hex pubkey'),
                 () => _copyToClipboard(
                     pk, isNpub ? tr('npub copied') : tr('Pubkey copied')),
               ),
@@ -397,6 +394,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 c,
                 isNpub ? tr('Show hex') : tr('Show npub'),
                 _togglePubkeyFormat,
+                icon: NymIcons.ctxSwapFormat,
               ),
             ],
           ),
@@ -641,16 +639,21 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               // `#revealPrivkeyArrow` (app.js:2959) — a filled triangle that
               // swaps down/right with the slideout (the PWA rewrites the SVG,
               // no CSS rotation).
+              // Secondary, not dim: this is the one row in the modal that
+              // leads to key material, and it should not read as a caption.
               NymSvgIcon(
                 _revealOpen
                     ? NymIcons.revealArrowDown
                     : NymIcons.revealArrowRight,
                 size: 18,
-                color: c.textDim,
+                color: c.secondary,
               ),
               Text(
-                tr("Reveal this nym's private key"),
-                style: TextStyle(color: c.textDim, fontSize: 13),
+                tr("Reveal this nym's private key and recovery code"),
+                style: TextStyle(
+                    color: c.secondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -688,12 +691,146 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 // The PWA reveals the nsec on a plain click toggle — no hold
                 // gate (toggleRevealPrivkey, app.js:2959). Populate immediately.
                 _nsecRow(c),
+                const SizedBox(height: 16),
+                _pqRootRow(c),
               ],
             ),
           ),
         ],
       ],
     );
+  }
+
+  /// The recovery code, beside the nsec. It is the OTHER half of what a device
+  /// needs: without it a second device reads new messages but not the
+  /// quantum-resistant ones, and losing every device holding it loses that
+  /// history for good.
+  Widget _pqRootRow(NymColors c) {
+    final ctrl = ref.read(nostrControllerProvider);
+    final code = ctrl.pqRootCode;
+    return code == null ? _pqRootLinkRow(c) : _pqRootCodeRow(c, code);
+  }
+
+  Widget _pqRootCodeRow(NymColors c, String code) {
+    final display = _pqRootVisible ? code : '•' * code.length.clamp(8, 24);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(tr('Post-quantum recovery code'),
+            style: TextStyle(color: c.text, fontSize: 12)),
+        const SizedBox(height: 4),
+        Text(
+          tr('This code, not your nsec, is what makes your messages '
+              'quantum-resistant. Copy it to any other device you use this '
+              'account on. Store it with your nsec and never share it.'),
+          style: TextStyle(color: c.textDim, fontSize: 11),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: NymRadius.rxs,
+                  border: Border.all(color: c.glassBorder),
+                ),
+                child: Text(
+                  display,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: c.text, fontFamily: 'monospace', fontSize: 12),
+                ),
+              ),
+            ),
+            IconButton(
+              icon: NymSvgIcon(NymIcons.nsecEye, size: 18, color: c.textDim),
+              onPressed: () =>
+                  setState(() => _pqRootVisible = !_pqRootVisible),
+            ),
+            IconButton(
+              tooltip: tr('Copy'),
+              icon: NymSvgIcon(NymIcons.ctxCopy, size: 16, color: c.textDim),
+              onPressed: () => _copyToClipboard(
+                  code, tr('Post-quantum recovery code copied')),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _pqRootLinkRow(NymColors c) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(tr('Post-quantum recovery code'),
+            style: TextStyle(color: c.text, fontSize: 12)),
+        const SizedBox(height: 4),
+        Text(
+          tr('This device has no recovery code yet. Paste the one from a '
+              'device that already has it — you will find it in this same '
+              'panel there — so both can read the same quantum-resistant '
+              'messages.'),
+          style: TextStyle(color: c.textDim, fontSize: 11),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _pqRootLink,
+                autocorrect: false,
+                enableSuggestions: false,
+                style: TextStyle(
+                    color: c.text, fontFamily: 'monospace', fontSize: 12),
+                decoration: InputDecoration(
+                  hintText: 'nympq1…',
+                  hintStyle: TextStyle(color: c.textDim, fontSize: 12),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  enabledBorder: _inputBorder(c, c.glassBorder),
+                  focusedBorder: _inputBorder(c, c.primaryA(0.3)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: _pqRootLinking ? null : _linkPqRoot,
+              child: Text(tr('Link'),
+                  style: TextStyle(color: c.primary, fontSize: 12)),
+            ),
+          ],
+        ),
+        if (_pqRootLinkStatus != null) ...[
+          const SizedBox(height: 4),
+          Text(_pqRootLinkStatus!,
+              style: TextStyle(color: c.textDim, fontSize: 11)),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _linkPqRoot() async {
+    final code = _pqRootLink.text.trim();
+    if (code.isEmpty) return;
+    setState(() => _pqRootLinking = true);
+    final ok =
+        await ref.read(nostrControllerProvider).linkPqRootFromCode(code);
+    if (!mounted) return;
+    setState(() {
+      _pqRootLinking = false;
+      _pqRootLinkStatus = ok
+          ? tr('Linked. This device can now read your quantum-resistant '
+              'messages.')
+          : tr('That code does not match this account. Check it and try '
+              'again.');
+      if (ok) _pqRootLink.clear();
+    });
   }
 
   Widget _nsecRow(NymColors c) {
@@ -793,7 +930,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   }
 
   Widget _smallButton(NymColors c, String label, VoidCallback onTap,
-      {bool danger = false}) {
+      {bool danger = false, String? icon}) {
+    final fg = danger ? c.danger : c.text;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -805,12 +943,15 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             color: danger ? c.danger.withValues(alpha: 0.4) : c.glassBorder,
           ),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: danger ? c.danger : c.text,
-            fontSize: 12,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              NymSvgIcon(icon, size: 12, color: fg),
+              const SizedBox(width: 5),
+            ],
+            Text(label, style: TextStyle(color: fg, fontSize: 12)),
+          ],
         ),
       ),
     );

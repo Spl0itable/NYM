@@ -90,6 +90,7 @@ class Message {
     this.isHistorical = false,
     this.senderVerified,
     this.pqEncrypted = false,
+    this.pqRoot = false,
     this.pqCoverage,
     this.bitchatMessageId,
     this.nymMessageId,
@@ -164,6 +165,14 @@ class Message {
   /// verified yet classically encrypted. Drives the `.crypto-pq-badge` shield
   /// rendered beside the verification lock.
   bool pqEncrypted;
+
+  /// Whether every ML-KEM key involved was seeded from an identity root
+  /// rather than derived from a Nostr identity key. Only this earns the full
+  /// shield: a legacy key falls with the nsec it came from.
+  ///
+  /// Defaults false, which is what history deserves — messages sent before
+  /// the root existed were sealed to nsec-derived keys.
+  bool pqRoot;
 
   /// For a group message we sent: how many of the members got a post-quantum
   /// wrap, out of how many. Lets the badge say "8 of 10 members" instead of
@@ -270,6 +279,7 @@ class Message {
         'isHistorical': isHistorical,
         'senderVerified': senderVerified,
         'pqEncrypted': pqEncrypted,
+        'pqRoot': pqRoot,
         if (pqCoverage != null) 'pqCoverPq': pqCoverage!.pq,
         if (pqCoverage != null) 'pqCoverTotal': pqCoverage!.total,
         'bitchatMessageId': bitchatMessageId,
@@ -350,6 +360,7 @@ class Message {
           j['senderVerified'] is bool ? j['senderVerified'] as bool : null,
       // Absent in messages persisted before post-quantum shipped.
       pqEncrypted: j['pqEncrypted'] is bool ? j['pqEncrypted'] as bool : false,
+      pqRoot: j['pqRoot'] is bool ? j['pqRoot'] as bool : false,
       pqCoverage: (j['pqCoverPq'] is int && j['pqCoverTotal'] is int)
           ? (pq: j['pqCoverPq'] as int, total: j['pqCoverTotal'] as int)
           : null,

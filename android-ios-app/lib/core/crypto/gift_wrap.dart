@@ -142,6 +142,47 @@ NostrEvent pqNip59Wrap({
   );
 }
 
+/// pq2 gift wrap: both NIP-59 layers, layered rather than combined.
+Future<NostrEvent> pq2Nip59Wrap({
+  required UnsignedEvent rumor,
+  required Uint8List senderPrivkey,
+  required String recipientPubkey,
+  required Uint8List recipientKemPublicKey,
+  int? expiration,
+}) async {
+  final senderPub = getPublicKeyHex(senderPrivkey);
+  final rumorMap = _buildRumorMap(rumor, senderPub);
+
+  final seal = finalizeEvent(
+    UnsignedEvent(
+      pubkey: senderPub,
+      createdAt: randomNow(),
+      kind: 13,
+      tags: const [],
+      content: await pq.pq2Encrypt(jsonEncode(rumorMap), senderPrivkey,
+          recipientPubkey, recipientKemPublicKey),
+    ),
+    senderPrivkey,
+  );
+
+  final ephSk = generatePrivateKey();
+  final tags = <List<String>>[
+    ['p', recipientPubkey],
+    if (expiration != null && expiration != 0) ['expiration', '$expiration'],
+  ];
+  return finalizeEvent(
+    UnsignedEvent(
+      pubkey: getPublicKeyHex(ephSk),
+      createdAt: randomNow(),
+      kind: 1059,
+      tags: tags,
+      content: await pq.pq2Encrypt(jsonEncode(seal.toJson()), ephSk,
+          recipientPubkey, recipientKemPublicKey),
+    ),
+    ephSk,
+  );
+}
+
 /// Async, signer-driven NIP-59 wrap. The **seal (kind 13)** is signed by
 /// [senderSigner] and its content encrypted via `senderSigner.nip44Encrypt`
 /// (so it works for a NIP-46 *remote* signer, not just a local key); the
@@ -344,7 +385,22 @@ Future<
       var isBitchat = false;
       var isPq = false;
 
-      if (pq.isPqPayload(wrap.content)) {
+      if (pq.isPq2Payload(wrap.content)) {
+        final kemSk = cand.kemSk, kemPk = cand.kemPk;
+        if (kemSk == null || kemPk == null) continue;
+        final self =
+            pq.PqIdentity(privkey: sk, kemSecretKey: kemSk, kemPublicKey: kemPk);
+        seal = NostrEvent.fromJson(
+            jsonDecode(await pq.pq2Decrypt(wrap.content, wrap.pubkey, self))
+                as Map<String, dynamic>);
+        // A NIP-44 seal stays readable, as in the pq1 branch.
+        final rumorJson = pq.isPq2Payload(seal.content)
+            ? await pq.pq2Decrypt(seal.content, seal.pubkey, self)
+            : nip44.decrypt(
+                seal.content, nip44.getConversationKey(sk, seal.pubkey));
+        rumor = jsonDecode(rumorJson) as Map<String, dynamic>;
+        isPq = true;
+      } else if (pq.isPqPayload(wrap.content)) {
         final kemSk = cand.kemSk, kemPk = cand.kemPk;
         if (kemSk == null || kemPk == null) continue;
         final self =

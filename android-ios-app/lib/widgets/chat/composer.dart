@@ -1678,8 +1678,11 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget _inputWithChips(BuildContext context, bool inputEnabled) {
     final block = _popout ? null : _chipBlock();
     // Attachments / preview / toolbar stack between the chip and the field, the
-    // same order as the PWA's `#composerPanels` (rich-compose.js).
-    final panels = _formatPanels(context);
+    // same order as the PWA's `#composerPanels` (rich-compose.js). They ride
+    // into the overlay with the chip while the field floats — left in flow,
+    // the format toolbar sits behind the grown field, which is where it was
+    // hiding.
+    final panels = _popout ? null : _formatPanels(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -1808,6 +1811,7 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget _popoutOverlay(BuildContext context, Widget field) {
     if (!_popout) return const SizedBox.shrink();
     final chipBlock = _chipBlock();
+    final panels = _formatPanels(context);
     return CompositedTransformFollower(
       link: _acAnchor,
       targetAnchor: Alignment.bottomLeft,
@@ -1824,6 +1828,7 @@ class _ComposerState extends ConsumerState<Composer> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (chipBlock != null) chipBlock,
+                if (panels != null) panels,
                 // [_popoutFieldKey] wraps ONLY the field: `--ac-offset`'s
                 // overhang term measures the field's growth past the base row
                 // (the chip carries its own `+ chipH + 8` term).
@@ -1960,12 +1965,10 @@ class _ComposerState extends ConsumerState<Composer> {
         ? Colors.black.withValues(alpha: focused ? 0.02 : 0.04)
         : Colors.white.withValues(alpha: focused ? 0.07 : 0.05);
     final fill = _popout ? c.bgTertiary : flatFill;
-    // `.message-input` rounds ONLY the bottom corners when flat (chips/dropdowns
-    // sit `bottom:100%` flush above it — styles-chat.css:1666); the popout box
-    // uses full radius-md (styles-chat.css:1737).
-    final radius = _popout
-        ? NymRadius.rmd
-        : const BorderRadius.vertical(bottom: Radius.circular(NymRadius.md));
+    // Bottom corners only, popout or not: the field grows out of the one-line
+    // input, and rounding its top made it read as a detached panel. Chips and
+    // dropdowns sit `bottom:100%` flush above it either way.
+    const radius = BorderRadius.vertical(bottom: Radius.circular(NymRadius.md));
     final border = OutlineInputBorder(
       borderRadius: radius,
       borderSide: BorderSide(color: _popout ? c.primaryA(0.30) : c.glassBorder),

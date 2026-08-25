@@ -415,12 +415,56 @@ void main() {
       expect(res.newestTs, 2000);
     });
 
-    test('null on empty / non-object categories', () async {
+    test('non-object categories is a failure', () async {
+      final sync = _syncWith(
+        (_) {},
+        respond: (_) => (200, jsonEncode({'categories': 'nope'}), const {}),
+      );
+      expect(await sync.settingsGet(), isNull);
+    });
+
+    // Null is how a load reports FAILURE, and the caller keeps the outbound-save
+    // gate shut on it so this device cannot publish defaults over rows it never
+    // read. An account with nothing stored is not that: returning null for it
+    // left the gate shut for the whole session, so a fresh device's first
+    // settings change was never written and reverted on the next launch.
+    test('an account with nothing stored is empty, not failed', () async {
       final sync = _syncWith(
         (_) {},
         respond: (_) => (200, jsonEncode({'categories': {}}), const {}),
       );
-      expect(await sync.settingsGet(), isNull);
+      final res = await sync.settingsGet();
+      expect(res, isNotNull);
+      expect(res!.payload, isEmpty);
+      expect(res.newestTs, 0);
+    });
+
+    // Rows a local nsec cannot open can never be opened: decryption is pure
+    // computation over keys derived from it. Guarding them strands the account
+    // instead of protecting anything, so the next save is allowed to replace
+    // them.
+    test('rows unreadable by a local key are empty, not failed', () async {
+      final foreign = LocalSigner(
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 90)));
+      final blob = await foreign.nip44Encrypt(
+        foreign.pubkey,
+        jsonEncode({'v': 2, 'theme': 'ghost', '__cat': 'nymchat-settings-appearance'}),
+      );
+      final sync = _syncWith(
+        (_) {},
+        respond: (_) => (
+          200,
+          jsonEncode({
+            'categories': {
+              'opaque': {'blob': blob, 'updatedAt': 1000},
+            }
+          }),
+          const {},
+        ),
+      );
+      final res = await sync.settingsGet();
+      expect(res, isNotNull);
+      expect(res!.payload, isEmpty);
     });
 
     test('settings-get body carries action, pubkey, auth', () async {

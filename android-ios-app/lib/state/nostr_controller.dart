@@ -22,6 +22,7 @@ import '../services/api/api_config.dart';
 import '../features/calls/call_providers.dart';
 import '../features/commands/action_rate_limit.dart';
 import '../features/identity/pq_registry.dart';
+import '../features/identity/pq_root.dart';
 import '../features/mesh/ghost_mode.dart';
 import '../features/mesh/mesh_controller.dart';
 import '../features/commands/command_handler.dart';
@@ -392,6 +393,11 @@ class NostrController {
       _identity = identity;
       _signer = signer;
 
+      // The post-quantum root (PQ-ROOT-SPEC §5.3), before anything derives a
+      // key or seals a blob. Vault-encrypted at rest, so it arrives via
+      // [unlockedSecrets] exactly as the nsec does.
+      await _loadPqRoot(unlockedSecrets: unlockedSecrets);
+
       // Durable login (nsec/NIP-46): never surface the boot chain's leftover
       // auto-ephemeral / derived nick as the account's name — the PWA seeds
       // the header from the CACHED kind-0 profile name
@@ -575,6 +581,10 @@ class NostrController {
       // (loginMethod != null, the PWA's `isNostrLoggedIn()`); ephemeral
       // identities skip the durable PM archive. All calls are best-effort.
       _initStorageSync(identity, signer);
+      // Resolve the seal policy before anything can save: it defaults to
+      // "don't seal hybrid", and a single-device account (the common case)
+      // must not be left on that default.
+      unawaited(_pqDeviceId().then((_) => _refreshPqSealPolicy()));
       unawaited(_bootStorageSync());
 
       // PWA `applyNostrLogin` → `fetchProfileDirect(self)` (app.js:5531): restore
@@ -1346,6 +1356,14 @@ class NostrController {
     // Allow a fresh identity to boot again on this provider instance.
     _started = false;
 
+    // The root dies with the identity (spec §5.3). [PanicWipe] sweeps the
+    // stored copy; this drops the in-memory one.
+    _pqRoot = null;
+    _pqRootLocked = false;
+    try {
+      await SecureStore().remove(SecretKeys.pqRoot);
+    } catch (_) {}
+
     // Reset the visible store + identity-scoped UI state to the empty shell.
     _ref.read(appStateProvider.notifier).reset();
     try {
@@ -1431,6 +1449,9 @@ class NostrController {
         await secure.remove(s);
       } catch (_) {}
     }
+    // The loop above removed the stored root; drop the in-memory copy too.
+    _pqRoot = null;
+    _pqRootLocked = false;
 
     // 3) Reset the in-memory store + identity-scoped UI state.
     _ref.read(appStateProvider.notifier).reset();
@@ -3096,8 +3117,13 @@ class NostrController {
       selfPubkey: self,
       senderVerified: u.senderVerified,
       pqEncrypted: u.isPq,
+      pqRootFor: (peer) => pqSealRootVerdict(peer) == true,
     );
     if (m == null) return;
+    // The announcement may still be in flight; fill the verdict in rather
+    // than leaving the opening message of a conversation marked legacy.
+    if (u.isPq) _resolvePqRootVerdict(m.conversationPubkey ?? m.pubkey,
+        m.nymMessageId);
     // Resolve the display author against the users map — the PWA's
     // `author: isOwn ? this.nym : this.getNymFromPubkey(senderPubkey)`
     // (pms.js:1258 via the `peerName` resolution at :1321). `mapPmRumor` is
@@ -3175,6 +3201,7 @@ class NostrController {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final createdAt = createdAtRaw > nowSec + 60 ? nowSec : createdAtRaw;
     final isOwn = senderPubkey == self;
+    if (u.isPq) _resolvePqRootVerdict(senderPubkey, nymMessageId);
     return Message(
       id: u.wrapId.isNotEmpty ? u.wrapId : (nymMessageId ?? ''),
       author: _nymFor(senderPubkey),
@@ -3191,6 +3218,7 @@ class NostrController {
       nymMessageId: nymMessageId,
       senderVerified: u.senderVerified,
       pqEncrypted: u.isPq,
+      pqRoot: u.isPq && pqSealRootVerdict(senderPubkey) == true,
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,
     );
   }
@@ -4316,14 +4344,16 @@ class NostrController {
   bool get pqEnabled =>
       PqPolicy.enabled(privkey: _identity?.privkey, mode: _pqMode);
 
-  /// Whether we can RECEIVE post-quantum — needs the nsec, since the ML-KEM
-  /// keypair derives from it. Extension and NIP-46 logins can send but not
-  /// receive; see PqPolicy.
-  bool get pqCapable => PqPolicy.capable(privkey: _identity?.privkey);
+  /// Whether we can RECEIVE post-quantum. True once this device holds the
+  /// root — including on an extension or NIP-46 login, where the root is what
+  /// opens the outer layer and the signer finishes the inner one. See
+  /// PqPolicy.
+  bool get pqCapable => PqPolicy.capable(privkey: _identity?.privkey, root: _pqRoot);
 
   /// Whether copies addressed to ourselves can be post-quantum.
   bool get pqSelfEnabled =>
-      PqPolicy.selfEnabled(privkey: _identity?.privkey, mode: _pqMode);
+      PqPolicy.selfEnabled(
+          privkey: _identity?.privkey, root: _pqRoot, mode: _pqMode);
 
   /// Our own ML-KEM key, for copies addressed to OURSELVES.
   ///
@@ -4355,6 +4385,52 @@ class NostrController {
         enabled: pqEnabled,
       );
 
+  /// Whether copies addressed to OURSELVES may use the layered format. False
+  /// as soon as one live device on the account can open only the combined one.
+  bool pqSelfUsesLayered() => PqPolicy.allDevicesLayered(
+        _pqDevices,
+        _pqDeviceIdCached ?? '',
+        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+
+  /// Whether a peer's announced key is root-seeded (spec §3), for the badge.
+  bool pqPeerIsRootSeeded(String pubkey) => _pqRegistry.isRootSeeded(
+        pubkey,
+        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        enabled: pqEnabled,
+      );
+
+  /// A seal is fully post-quantum only when BOTH ends' ML-KEM keys are
+  /// root-seeded. The same plaintext exists in a copy under each, so one
+  /// nsec-derived key is enough for an adversary who breaks secp256k1.
+  bool pqSealIsRootSeeded(String peerPubkey) =>
+      _pqRoot != null && pqPeerIsRootSeeded(peerPubkey);
+
+  /// Same question, able to answer "not yet known".
+  ///
+  /// The first message from a new peer arrives before their announcement does,
+  /// and treating that absence as legacy marked the opening message of every
+  /// conversation legacy until a second one arrived. Unknown is not legacy.
+  bool? pqSealRootVerdict(String peerPubkey) {
+    if (_pqRoot == null) return false; // our own half settles it
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (!_pqRegistry.isKnownNymchatClient(peerPubkey, nowSec: nowSec)) {
+      return null;
+    }
+    return pqPeerIsRootSeeded(peerPubkey);
+  }
+
+  /// Fills a pending verdict in once the announcement lands, then repaints
+  /// that row. No-op when we already know.
+  void _resolvePqRootVerdict(String peerPubkey, String? nymMessageId) {
+    if (nymMessageId == null) return;
+    if (pqSealRootVerdict(peerPubkey) != null) return;
+    unawaited(ensurePqAnnouncement(peerPubkey).then((_) {
+      if (pqSealRootVerdict(peerPubkey) != true) return;
+      _ref.read(appStateProvider.notifier).markMessagePqRoot(nymMessageId);
+    }));
+  }
+
   /// Whose post-quantum announcements we watch: our conversation partners,
   /// group members and ourselves. Unlike the vouch list — a broadcast web of
   /// trust — post-quantum keys are only needed for peers we actually message,
@@ -4380,7 +4456,12 @@ class NostrController {
     _pqRegistry.ingest(event.pubkey, event.content, nowSec: nowSec);
     if (event.pubkey == _identity?.pubkey) {
       final ann = PqAnnouncement.parse(event.content);
-      if (ann != null && !ann.retracted) _pqDevices = ann.devices;
+      if (ann != null && !ann.retracted) {
+        // This is how we learn another device is on the account at all, so the
+        // seal policy has to be re-evaluated the moment its roster lands.
+        _pqDevices = ann.devices;
+        _refreshPqSealPolicy();
+      }
     }
     _schedulePersistPqKeys();
   }
@@ -4408,8 +4489,14 @@ class NostrController {
     });
   }
 
-  /// Our ML-KEM keypair for the current epoch, or null when we can't derive one.
+  /// Our ML-KEM keypair for the current epoch, root-seeded when we hold a root
+  /// and nsec-seeded otherwise (an unlinked device, and all v1 data).
   MlKemKeyPair? _pqSelfKeys() {
+    // The root derives the key on its own, which is what lets a signer login
+    // hold one at all. Falling back to the nsec keeps the legacy keys a v1
+    // peer may still be sealing to.
+    final root = _pqRoot;
+    if (root != null) return pq.pqKeypairFromRoot(root, _pqEpoch);
     final privkey = _identity?.privkey;
     if (privkey == null) return null;
     return pq.pqKeypairFromPrivkey(privkey, _pqEpoch);
@@ -4446,12 +4533,17 @@ class NostrController {
   Future<String> _pqDeviceId() async {
     final kv = _ref.read(keyValueStoreProvider);
     final existing = kv.getString(StorageKeys.pqDeviceId);
-    if (existing != null && existing.isNotEmpty) return existing;
+    if (existing != null && existing.isNotEmpty) {
+      return _pqDeviceIdCached = existing;
+    }
     final bytes = keys.randomBytes(4);
     final id = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     await kv.setString(StorageKeys.pqDeviceId, id);
-    return id;
+    return _pqDeviceIdCached = id;
   }
+
+  /// [_pqDeviceId]'s answer, kept for the synchronous seal-policy check.
+  String? _pqDeviceIdCached;
 
   /// Publishes (or republishes) our announcement, merging this device into the
   /// roster. No-op when post-quantum is off — turning it off retracts instead.
@@ -4465,24 +4557,44 @@ class NostrController {
     final service = _service;
     final identity = _identity;
     if (service == null || identity == null) return;
+    // Spec §7: a device that cannot open the account's root publishes nothing.
+    // The announcement is replaceable, so a v1 republish would clobber the v2
+    // one and send every peer back to a key the other devices no longer use.
+    if (_pqRootLocked) return;
     if (!force &&
         _pqLastPublishMs != 0 &&
         DateTime.now().millisecondsSinceEpoch - _pqLastPublishMs <
             pqRepublishInterval.inMilliseconds) {
       return;
     }
-    // A KEM key only when we can actually use one.
-    final keys = pqEnabled ? _pqSelfKeys() : null;
+    // A KEM key only once §6 has decided where it comes from.
+    //
+    // On a fresh account the settings load that generates the root has not
+    // finished when this first fires. Announcing anyway published an
+    // nsec-derived key that peers cached for the whole TTL, so two accounts
+    // created minutes apart genuinely exchanged legacy-sealed messages.
+    // `nym: 1` still goes out, so peers still skip the Bitchat wrap.
+    final keys = (pqEnabled && _pqRootSettled) ? _pqSelfKeys() : null;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final selfDeviceId = await _pqDeviceId();
     final devices = PqPolicy.mergeDeviceRoster(
-        _pqDevices, await _pqDeviceId(), ApiConfig.appVersion, nowSec: nowSec);
+        _pqDevices, selfDeviceId, ApiConfig.appVersion,
+        nowSec: nowSec,
+        capable: PqPolicy.capable(privkey: _identity?.privkey, root: _pqRoot),
+        layered: PqPolicy.capable(privkey: _identity?.privkey, root: _pqRoot));
     final signed = await service.publishPqAnnouncement(
       kemPublicKey: keys?.publicKey,
+      // `pk` is the claim an older peer acts on, and only a login holding the
+      // nsec can honour it.
+      legacyCapable: PqPolicy.legacyCapable(privkey: identity.privkey),
       epoch: _pqEpoch,
       devices: devices,
+      // Only a genuinely root-seeded key may claim `src:"root"`.
+      rootSeeded: keys != null && _pqRoot != null,
     );
     if (signed == null) return;
     _pqDevices = devices;
+    _refreshPqSealPolicy();
     _pqLastPublishMs = DateTime.now().millisecondsSinceEpoch;
     // Record our own entry so self-addressed wraps resolve through the same
     // lookup as everyone else's.
@@ -4491,12 +4603,240 @@ class NostrController {
     _schedulePersistPqKeys();
   }
 
+  /// Tells the storage layer whether new self-addressed blobs may go hybrid.
+  ///
+  /// A blob is encapsulated to a key derived from the nsec, so a device signed
+  /// in with an extension or a NIP-46 signer cannot open one — it would run on
+  /// defaults forever, and never see the settings-changed ping either. Sealing
+  /// classical while such a device is on the account is exactly the encryption
+  /// these blobs had before the hybrid, so nothing is lost that was ever there.
+  ///
+  /// Gates writes only: blobs already sealed hybrid keep opening, because the
+  /// decrypt candidates are untouched.
+  void _refreshPqSealPolicy() {
+    final capable = _identity?.privkey != null &&
+        PqPolicy.allDevicesCapable(
+          _pqDevices,
+          _pqDeviceIdCached ?? '',
+          nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        );
+    _storageSync?.setPqSealToSelf(capable);
+  }
+
   /// Our own ML-KEM decrypt candidates: current epoch first, then a bounded
   /// window of previous ones so a wrap sent just before a rotation still opens.
   List<({Uint8List kemSk, Uint8List kemPk})> pqSelfCandidateKeys() {
     final privkey = _identity?.privkey;
     if (privkey == null) return const [];
-    return pqSelfCandidates(privkey, _pqEpoch);
+    // Root-derived first; the nsec-derived half is permanent (spec §4).
+    return pqSelfCandidates(privkey, _pqEpoch, root: _pqRoot);
+  }
+
+  // ===========================================================================
+  // The post-quantum root secret (docs/PQ-ROOT-SPEC.md §1, §5, §6, §7). Not
+  // derivable, so it has to be carried: held locally and moved to the user's
+  // other devices by code.
+
+  /// This identity's root secret, or null when this device holds none.
+  Uint8List? _pqRoot;
+
+  /// The account has a root and this device cannot open it. Fully usable, and
+  /// completely silent (§7).
+  bool _pqRootLocked = false;
+
+  /// Whether this device holds the root.
+  bool get pqRootHeld => _pqRoot != null;
+
+  /// Whether this device must be linked before it can take part.
+  bool get pqRootLinkNeeded => _pqRootLocked;
+
+  /// Whether §6 has run. Until it has, this device does not know whether the
+  /// account has a root, so any key it could announce is nsec-derived by
+  /// default rather than by decision.
+  bool _pqRootSettled = false;
+
+  /// The root as its `nympq1…` code, shown beside the nsec.
+  String? get pqRootCode {
+    final root = _pqRoot;
+    return root == null ? null : pqRootToCode(root);
+  }
+
+  /// A root was generated here and the user has not seen the code yet (§6.4).
+  bool get pqRootBackupPending =>
+      _ref.read(keyValueStoreProvider).getString(StorageKeys.pqRootBackupNotice) ==
+      'pending';
+
+  Future<void> dismissPqRootBackupNotice() async =>
+      _ref.read(keyValueStoreProvider).remove(StorageKeys.pqRootBackupNotice);
+
+  /// Reads the locally-held root (§5.3), so linking is once per device rather
+  /// than once per launch. With the vault on, the plaintext arrives in
+  /// [unlockedSecrets]; a blob we cannot open reads as no root, i.e. silence.
+  Future<Uint8List?> _loadPqRoot({Map<String, String>? unlockedSecrets}) async {
+    final cached = _pqRoot;
+    if (cached != null) return cached;
+    String? raw = unlockedSecrets?[SecretKeys.pqRoot];
+    if (raw == null || raw.isEmpty) {
+      try {
+        raw = await SecureStore().get(SecretKeys.pqRoot);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (raw == null || raw.isEmpty) return null;
+    final root = pqRootFromCode(raw);
+    if (root == null) return null;
+    return _pqRoot = root;
+  }
+
+  /// Persists the root through the vault, so it is encrypted at rest exactly
+  /// as the nsec is. False when the write failed; do not treat that as adopted.
+  Future<bool> _persistPqRoot(Uint8List root) async {
+    try {
+      await _ref.read(identityVaultProvider).secretSet(
+            SecretKeys.pqRoot,
+            pqRootToCode(root),
+          );
+      _pqRoot = root;
+      _pqRootLocked = false;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Generation and adoption (spec §6), once the boot settings read settled.
+  Future<void> _ensurePqRoot() async {
+    final sync = _storageSync;
+    if (sync == null || _identity == null) return;
+    if (PanicWipe.inProgress) return;
+    // Settled means the question is answered for this session: we hold a root,
+    // or we know we must be linked. Anything else — an offline launch, a flaky
+    // /api/storage — left it unanswered, and it has to be asked again on the
+    // next read that succeeds. Running once at boot meant a device that could
+    // not reach D1 at launch spent the whole session with no root, announcing
+    // an nsec-derived key.
+    if (_pqRootSettled && (_pqRoot != null || _pqRootLocked)) return;
+    // One at a time. The settings restore starts this without awaiting it, so
+    // two overlapping runs could each reach §6.4 and mint a rival root for the
+    // same account — the single failure the ordering exists to prevent.
+    if (_pqRootInFlight) return;
+    _pqRootInFlight = true;
+    try {
+      await _ensurePqRootLocked(sync);
+    } finally {
+      _pqRootInFlight = false;
+    }
+  }
+
+  bool _pqRootInFlight = false;
+
+  Future<void> _ensurePqRootLocked(StorageSync sync) async {
+
+    // The order of these questions is the safety property; it lives in one
+    // pure, tested function rather than in this method's control flow.
+    // A record we can parse tells us WHICH root it belongs to; one we could
+    // only see the row of does not, and a row is still proof a root exists.
+    final record = sync.pqRootRecord;
+    final held = _pqRoot;
+    final matches = record == null || held == null || !record.isValid
+        ? held != null
+        : record.matches(held);
+
+    final action = pqRootDecide(
+      throwawayKeypair: _ref
+          .read(keyValueStoreProvider)
+          .getBool(StorageKeys.randomKeypairPerSession, defaultValue: false),
+      recordLoadSucceeded: sync.pqRootLoadSucceeded,
+      recordPresent: sync.pqRootRowPresent,
+      holdRoot: held != null,
+      recordMatchesHeldRoot: matches,
+    );
+
+    if (action != PqRootAction.wait) _pqRootSettled = true;
+
+    switch (action) {
+      case PqRootAction.wait:
+        return;
+      case PqRootAction.ready:
+        // The boot announcement went out without a key, because until now we
+        // did not know whether one existed. Publish the real one.
+        await publishPqAnnouncement(force: true);
+        return;
+
+      case PqRootAction.publishRecord:
+        // A previous launch generated the root but could not publish the
+        // record; without it another device generates a rival root.
+        final held = _pqRoot;
+        if (held == null) return;
+        await sync.pqRootRecordSet(PqRootRecord.forRoot(held));
+        return;
+
+      case PqRootAction.awaitLink:
+        // §6.3 — do NOT generate, do NOT announce; prompt the user to link.
+        // A root that does not open this account's record is not this
+        // account's root: keeping it in play would announce a key no peer
+        // could reach us on.
+        if (!matches) _pqRoot = null;
+        _pqRootLocked = true;
+        return;
+
+      case PqRootAction.generate:
+        // §6.4. Persist FIRST, publish second — the order the PWA uses.
+        //
+        // This used to publish the record first and throw the root away if
+        // that write failed, on the reasoning that an unpublished root is
+        // worse than none. It is not: a settings-set that fails on a
+        // minutes-old account (offline, a NIP-98 round trip, a rate limit)
+        // left the account with no root at all and nothing to retry, so it
+        // kept announcing an nsec-derived key. A root we kept but could not
+        // publish is exactly the publishRecord case above, and the next boot
+        // finishes the job.
+        final root = pq.pqGenerateRoot();
+        if (!await _persistPqRoot(root)) return;
+        // Best-effort: a failure here is recovered by publishRecord, so it
+        // must not cost us the root we just persisted.
+        await sync.pqRootRecordSet(PqRootRecord.forRoot(root));
+        try {
+          await _ref
+              .read(keyValueStoreProvider)
+              .setString(StorageKeys.pqRootBackupNotice, 'pending');
+        } catch (_) {}
+        _pushPqKeysToPeers();
+        await publishPqAnnouncement(force: true);
+        return;
+    }
+  }
+
+  /// Adopts a pasted `nympq1…` code (§5's manual path, and the way out of §7
+  /// silence). Rejected when it does not reproduce our announced key.
+  Future<bool> linkPqRootFromCode(String code) async {
+    final root = pqRootFromCode(code);
+    if (root == null) return false;
+    final self = _identity?.pubkey;
+    if (self != null) {
+      final announced = _pqRegistry.keyFor(
+        self,
+        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        enabled: true,
+      );
+      if (announced != null &&
+          !pqRootMatchesAnnouncedKey(root, announced, _pqEpoch)) {
+        return false;
+      }
+    }
+    if (!await _persistPqRoot(root)) return false;
+    _pushPqKeysToPeers();
+    await publishPqAnnouncement(force: true);
+    return true;
+  }
+
+  /// Re-pushes our ML-KEM keys, so a link taking effect mid-session does not
+  /// leave the send and storage paths on the old nsec-derived key.
+  void _pushPqKeysToPeers() {
+    final candidates = pqCapable ? pqSelfCandidateKeys() : const <({Uint8List kemSk, Uint8List kemPk})>[];
+    _service?.setPqSelfKeys(candidates);
+    _storageSync?.setPqSelfKeys(candidates);
   }
 
   /// Publishes a 1:1 PM in the transport(s) the peer understands (PWA
@@ -4533,6 +4873,8 @@ class NostrController {
       knownNym: _nymUsers.contains(recipientPubkey),
       provenNymchat:
           _pqRegistry.isKnownNymchatClient(recipientPubkey, nowSec: nowSec),
+      recipientAcceptsLayered: _pqRegistry.acceptsLayered(recipientPubkey,
+          nowSec: nowSec, enabled: pqOn),
     );
 
     UnsignedEvent? bitchatRumor;
@@ -4568,7 +4910,9 @@ class NostrController {
     for (final t in rumor.tags) {
       if (t.length > 1 && t[0] == 'x') {
         _ref.read(appStateProvider.notifier)
-            .markOwnMessagePq(t[1], pqEncrypted: plan.pq);
+            .markOwnMessagePq(t[1],
+                pqEncrypted: plan.pq,
+                pqRoot: plan.pq && pqSealIsRootSeeded(recipientPubkey));
         break;
       }
     }
@@ -4582,6 +4926,10 @@ class NostrController {
       sendNymWrap: plan.nym,
       recipientKemPublicKey: plan.kemPublicKey,
       selfKemPublicKey: pqSelfKey(),
+      recipientLayered: plan.layered,
+      // Our own copy: layered unless a live device on this account can only
+      // open the combined format.
+      selfLayered: pqSelfUsesLayered(),
     );
   }
 
@@ -4878,8 +5226,12 @@ class NostrController {
         // must not read as protected -- one classical copy of the same
         // plaintext is all an attacker needs -- so the badge carries the count
         // rather than a yes/no.
-        onCoverage: (pq, total) => appState.markOwnMessagePq(
-            nymMessageId, coverage: (pq: pq, total: total)),
+        rootSeededFor: pqPeerIsRootSeeded,
+        onCoverage: (pq, total, root) => appState.markOwnMessagePq(
+            nymMessageId,
+            coverage: (pq: pq, total: total),
+            // Our own root matters too: the self-archive copy is sealed to it.
+            pqRoot: total > 0 && pq == total && root == total && _pqRoot != null),
       );
     }
   }
@@ -8286,6 +8638,9 @@ class NostrController {
           url: StorageSync.storageUrl(),
           signer: signer,
         ));
+    // The root must reach the FIRST settings read of a launch, so it is pulled
+    // rather than handed over — same reason _pqSelfKeyCandidates derives.
+    sync.setPqRootProvider(_loadPqRoot);
 
     // Activate the WS-first storage transport (the PWA's persistent `/api`
     // socket). Reads in [StorageSync] now try `wss://<host>/api` FIRST and fall
@@ -9040,7 +9395,10 @@ class NostrController {
     _settingsHydratedFallback ??=
         Timer(const Duration(seconds: 10), _releaseOnboardingGate);
     // `_mergeRemoteSettings` marks hydration in its own `finally`.
-    await _mergeRemoteSettings(sync);
+    await _mergeRemoteSettingsWithRetry(sync);
+    // Root generation / adoption. Needs the settings read to have settled:
+    // only a completed read distinguishes "no record" from "could not look".
+    await _ensurePqRoot();
     await _restorePmArchive(sync);
     // Profile-zap backfill for ourselves (relays.js:2819-2820:
     // `_backfillZapReceiptsFromD1([this.pubkey], 'profile')`) — profile
@@ -9183,6 +9541,31 @@ class NostrController {
   /// idempotent and heals any local KV drift — and the stored sync ts only
   /// ADVANCES monotonically. Marks settings hydration complete afterwards so
   /// deferred outbound saves may flush (see [_markSettingsHydrated]).
+  /// How many times a failed boot `settings-get` is retried, and the backoff
+  /// between attempts (2s, 4s, 8s, 16s).
+  static const int _settingsLoadMaxRetries = 4;
+
+  /// Boot settings restore with a bounded retry.
+  ///
+  /// A failed load keeps the outbound-save gate shut, which is right — this
+  /// device must not publish its defaults over rows it never read — but it also
+  /// means every settings change the user makes is silently dropped until a
+  /// load succeeds. The only retry was the reconnect edge, which never arrives
+  /// in a session that connects once and stays up, so a single flaky request at
+  /// launch cost the user every change they made afterwards.
+  Future<void> _mergeRemoteSettingsWithRetry(StorageSync sync) async {
+    for (var attempt = 0; attempt <= _settingsLoadMaxRetries; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(Duration(milliseconds: 2000 << (attempt - 1)));
+        // Logout or an identity switch replaces the sync client; drop out
+        // rather than restoring the previous account's settings over it.
+        if (_storageSync != sync) return;
+      }
+      await _mergeRemoteSettings(sync);
+      if (!_settingsGetFailed) return;
+    }
+  }
+
   Future<void> _mergeRemoteSettings(StorageSync sync) async {
     try {
       final result = await sync.settingsGet();
@@ -9199,6 +9582,9 @@ class NostrController {
         return;
       }
       _settingsGetFailed = false;
+      // Every completed read re-asks the §6 question, exactly as the PWA runs
+      // `pqRootEnsure` inside each settings restore. Cheap once settled.
+      unawaited(_ensurePqRoot());
       // N26 inbound: merge the cross-device notification read-state additively
       // (idempotent) BEFORE the settings ts gate — a notification read on another
       // device clears its badge here even if no settings section changed
@@ -9411,6 +9797,18 @@ class NostrController {
       if (key == null) unawaited(ensurePqAnnouncement(memberPubkey));
       return key;
     };
+    groups.rootSeededFor = pqPeerIsRootSeeded;
+    // A signer login strips the layered format's outer layer itself, using the
+    // key the root derives — that is what lets it receive at all.
+    _service?.selfKemForUnwrap = () {
+      final k = _pqSelfKeys();
+      return k == null ? null : (kemSk: k.secretKey, kemPk: k.publicKey);
+    };
+    groups.layeredFor = (memberPubkey) => _pqRegistry.acceptsLayered(
+          memberPubkey,
+          nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          enabled: pqEnabled,
+        );
   }
 
   void _refreshEphemeralSubscriptions() {
@@ -9487,6 +9885,11 @@ class NostrController {
                   : const <String>[],
               closedTimes,
             );
+        // The merge lands in app state, but the OUTBOUND payload reads these
+        // from KV. Without this the next save republishes the pre-merge set —
+        // usually empty — over the D1 row, reopening on every device the
+        // conversations the user closed on this one.
+        _persistClosedPMs();
       } catch (_) {}
     }
     // Left-group state (app.js:6549-6561) — KV union + live-store merge.
@@ -9608,10 +10011,65 @@ class NostrController {
   /// echo but a deliberate "give me their settings" action, so the fields that
   /// otherwise defend a local choice against a stale blob (the Quick React
   /// emoji) apply unconditionally.
+  /// Keys the user changed locally that have not reached D1 yet.
+  ///
+  /// The D1 apply is deliberately unconditional — it heals local KV drift — but
+  /// the boot read can take many seconds (it retries with backoff), and the user
+  /// can change a setting inside that window. Applying the older stored blob
+  /// then undoes the change they just made, and the pending publish afterwards
+  /// carries the OVERWRITTEN value, so it is lost on this device and on every
+  /// other one: "I changed it, it showed, I reloaded, it was gone".
+  ///
+  /// A local edit that predates nothing cannot be healed by a blob it predates,
+  /// so those keys are skipped for one apply and cleared once published.
+  final Set<String> _locallyDirtySections = {};
+
+  /// Records that a local settings edit is outstanding. Called from the same
+  /// hook that schedules the publish, so the two can never drift apart.
+  void _markSettingsDirty() {
+    // Section-level rather than key-level: the publish is per section, so a
+    // section is clean again exactly when its write lands.
+    _locallyDirtySections.addAll(StorageSync.syncedSectionKeys.keys);
+  }
+
+  @visibleForTesting
+  void markSettingsDirtyForTest() => _markSettingsDirty();
+
+  /// Test seam for the cross-device round trip: apply an inbound payload the
+  /// way a real settings-get would, so a test can then rebuild the outbound
+  /// payload and prove nothing was dropped or reset. A key this device
+  /// publishes but cannot apply is a key it overwrites on every other device.
+  @visibleForTesting
+  void applySyncedSettingsForTest(Map<String, dynamic> p) {
+    _applySyncedSettingsAdditive(p);
+    _applySyncedSettings(p);
+  }
+
+  /// Strips the keys of any section with an unpublished local edit, so a stored
+  /// blob that predates the user's change cannot undo it. Additive categories
+  /// (lists, read state, group data) are untouched: those merge rather than
+  /// replace, so they cannot lose a local change.
+  Map<String, dynamic> _withoutLocallyDirtyKeys(Map<String, dynamic> p) {
+    if (_locallyDirtySections.isEmpty) return p;
+    final drop = <String>{
+      for (final section in _locallyDirtySections)
+        ...?StorageSync.syncedSectionKeys[section],
+    };
+    if (drop.isEmpty) return p;
+    return {
+      for (final e in p.entries)
+        if (!drop.contains(e.key)) e.key: e.value,
+    };
+  }
+
   void _applySyncedSettings(
-    Map<String, dynamic> p, {
+    Map<String, dynamic> pRaw, {
     bool userAcceptedTransfer = false,
   }) {
+    // A transfer the user explicitly accepted is a deliberate overwrite, so it
+    // outranks anything pending locally. Everything else must not undo an edit
+    // it predates — see [_locallyDirtySections].
+    final p = userAcceptedTransfer ? pRaw : _withoutLocallyDirtyKeys(pRaw);
     final c = _ref.read(settingsProvider.notifier);
     void str(String key, void Function(String) set) {
       final v = p[key];
@@ -10113,6 +10571,9 @@ class NostrController {
           closedPMs is List ? closedPMs.whereType<String>() : const <String>[],
           closedTimes,
         );
+        // See the additive twin: app state is not what the outbound payload
+        // reads, so an unpersisted merge is republished away on the next save.
+        _persistClosedPMs();
       } catch (_) {}
     }
 
@@ -10295,6 +10756,10 @@ class NostrController {
   /// "Settings will not sync across devices"). Deferred (one pending flush)
   /// until the boot settings restore has landed — see [_settingsHydrated].
   void syncSettings() {
+    // Recorded before any early return: the edit is already in local KV by the
+    // time this runs, so a blob that predates it must not win even when the
+    // publish itself is deferred or skipped.
+    _markSettingsDirty();
     final sync = _storageSync;
     if (sync == null) return;
     if (!_settingsHydrated) {
@@ -10342,6 +10807,10 @@ class NostrController {
       // thread it in explicitly so it rides the `channels` section like the PWA
       // (`pinnedLandingChannel`, settings.js:21,116). SETTINGS-SYNC seam.
       final appState = _ref.read(appStateProvider.notifier);
+      // The local edits are on their way to D1, so the next inbound blob is no
+      // longer older than they are. Cleared BEFORE the write so an edit made
+      // while it is in flight re-marks and survives the following apply.
+      _locallyDirtySections.clear();
       await sync.settingsSet(
         _ref.read(settingsProvider),
         pinnedLandingChannelJson:

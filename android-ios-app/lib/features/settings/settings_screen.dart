@@ -55,9 +55,15 @@ import 'settings_widgets.dart';
 const String kPqStatusFull = 'Active for messages with other Nymchat users.';
 const String kPqStatusSendOnly =
     'Active for messages you send to other Nymchat users. Messages you receive, '
-    'and your own synced settings and history, stay on standard encryption: '
-    'your signer holds the key they would have to be derived from, and won\'t '
-    'do the post-quantum half. Logging in with your nsec covers both directions.';
+    'and your own synced settings and history, stay on standard encryption '
+    'until this device has your nympq1\u2026 recovery code.';
+/// Capable, but on the nsec-derived key because this device has no recovery
+/// code yet. Saying plain "Active" here contradicts the panel that says there
+/// is no code, and overstates what is actually protecting the messages.
+const String kPqStatusNoRoot =
+    'Active, but on the older key: this device has no nympq1… recovery code '
+    'yet. It is set up automatically the first time this account reaches the '
+    'network — until then, messages use a key derived from your nsec.';
 const String kPqStatusUnavailable =
     'Not available. Post-quantum encryption needs the ML-KEM implementation, '
     'which did not load.';
@@ -77,6 +83,7 @@ const String kPqReachOne = 'Currently in use with 1 contact.';
 /// Every literal the post-quantum status line can show.
 const List<String> kPqStatusStrings = [
   kPqStatusFull,
+  kPqStatusNoRoot,
   kPqStatusSendOnly,
   kPqStatusUnavailable,
   kPqReachNone,
@@ -1503,10 +1510,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         '⚠ Audio/video calls and P2P file sharing connect peers directly over '
         'WebRTC, which can reveal your true IP address to the other party. '
         'Use a VPN or Tor to help conceal it.');
-    // Post-quantum: what is possible is decided by the login type, not a
-    // preference — and sending and receiving are different questions. A signer
-    // login can hybridize the WRAP it builds itself, but cannot decapsulate,
-    // so it sends post-quantum and receives classical. See PqPolicy.
+    // Post-quantum: sending and receiving are different questions. Sending
+    // needs only the peer's announced key, so any login can do it; receiving
+    // needs this device's own root, which is what the nympq1 code carries. A
+    // device without one therefore sends post-quantum and receives classical,
+    // whatever the login type. See PqPolicy.
     final nostrCtrl = ref.read(nostrControllerProvider);
     final pqCapable = nostrCtrl.pqCapable;
     final pqSendOnly = !pqCapable && nostrCtrl.pqEnabled;
@@ -1516,11 +1524,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         : pqPeers == 1
             ? tr(kPqReachOne)
             : tr(kPqReachSome, {'count': '$pqPeers'});
-    final pqStatus = pqCapable
+    // Root-seeded is the only state that gets the unqualified "Active".
+    final pqRootHeld = nostrCtrl.pqRootHeld;
+    final pqStatus = pqCapable && pqRootHeld
         ? '${tr(kPqStatusFull)} $pqReach'
-        : pqSendOnly
-            ? '${tr(kPqStatusSendOnly)} $pqReach'
-            : tr(kPqStatusUnavailable);
+        : pqCapable
+            ? '${tr(kPqStatusNoRoot)} $pqReach'
+            : pqSendOnly
+                ? '${tr(kPqStatusSendOnly)} $pqReach'
+                : tr(kPqStatusUnavailable);
     final dmTtlItems = <({int value, String label})>[
       (value: 3600, label: tr('1 hour')),
       (value: 21600, label: tr('6 hours')),
@@ -1675,10 +1687,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'by a future quantum computer. This is automatic and has no '
               'setting. Bitchat users and other Nostr clients keep receiving '
               'standard NIP‑17 exactly as before.'),
+          // Green only when it is genuinely on end to end. The send-only and
+          // unavailable states keep the ordinary colour, so the green means
+          // one thing — the same rule the PWA's status line follows.
           child: Text(
             pqStatus,
             style: TextStyle(
-              color: context.nym.text.withValues(alpha: 0.85),
+              color: pqCapable && pqRootHeld
+                  ? context.nym.primary
+                  : context.nym.text.withValues(alpha: 0.85),
               fontSize: 13,
             ),
           ),

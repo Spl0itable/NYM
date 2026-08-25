@@ -93,11 +93,17 @@ Future<AppConfirmResult> showAppConfirmWithCheckbox(
 }
 
 /// Shows an alert with a single OK button (the PWA's `showAppAlert`).
+/// [copyValue] renders a selectable monospace row with a Copy button under the
+/// message — for a value the dialog is ABOUT rather than asking for, so the
+/// user is never told to go and find something they are looking at.
 Future<void> showAppAlert(
   BuildContext context,
   String message, {
   String? title,
   String? okLabel,
+  String? copyValue,
+  String? copyLabel,
+  String? copiedMessage,
 }) {
   return showDialog<void>(
     context: context,
@@ -107,6 +113,9 @@ Future<void> showAppAlert(
       title: title ?? tr('Notice'),
       okLabel: okLabel ?? tr('OK'),
       alertOnly: true,
+      copyValue: copyValue,
+      copyLabel: copyLabel,
+      copiedMessage: copiedMessage,
     ),
   );
 }
@@ -175,6 +184,9 @@ class _AppDialog extends StatefulWidget {
     this.placeholder = '',
     this.maxLength,
     this.multiline = false,
+    this.copyValue,
+    this.copyLabel,
+    this.copiedMessage,
   });
 
   final String message;
@@ -189,6 +201,9 @@ class _AppDialog extends StatefulWidget {
   final String placeholder;
   final int? maxLength;
   final bool multiline;
+  final String? copyValue;
+  final String? copyLabel;
+  final String? copiedMessage;
 
   @override
   State<_AppDialog> createState() => _AppDialogState();
@@ -332,6 +347,7 @@ class _AppDialogState extends State<_AppDialog> {
                                   height: 1.45,
                                 ),
                               ),
+                              if (widget.copyValue != null) _copyRow(c),
                               if (widget.checkboxLabel != null) _checkboxRow(c),
                               if (widget.isPrompt) _promptField(c),
                             ],
@@ -362,6 +378,57 @@ class _AppDialogState extends State<_AppDialog> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// `.app-dialog-copy` — the value the dialog is about, selectable, with
+  /// one-tap copy beside it.
+  Widget _copyRow(NymColors c) {
+    final value = widget.copyValue ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: c.glassBorder),
+              ),
+              child: SelectableText(
+                value,
+                style: TextStyle(
+                  color: c.primary,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: value));
+              final msg = widget.copiedMessage;
+              if (msg != null) {
+                ScaffoldMessenger.maybeOf(context)
+                    ?.showSnackBar(SnackBar(content: Text(msg)));
+              }
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: c.secondary,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Text(widget.copyLabel ?? tr('Copy'),
+                style: const TextStyle(fontSize: 12)),
+          ),
+        ],
       ),
     );
   }

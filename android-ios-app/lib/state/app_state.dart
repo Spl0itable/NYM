@@ -2545,6 +2545,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
       // Nymchat one was sealed.
       if (m.pqEncrypted && !dup.pqEncrypted) {
         dup.pqEncrypted = true;
+        // Carried with it, or the upgrade would jump straight to the full
+        // shield on a legacy key.
+        dup.pqRoot = m.pqRoot;
         changed = true;
       }
       if (m.pqCoverage != null && dup.pqCoverage == null) {
@@ -4804,13 +4807,27 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// wraps. Without this the badge waits for our own self-copy to round-trip
   /// and be unwrapped, so a sent message reads as classical until the app is
   /// restarted and the conversation reopened.
+  /// Upgrades a message's root verdict once the peer's announcement lands.
+  /// Only ever upgrades: a definite legacy verdict is never revisited.
+  void markMessagePqRoot(String nymMessageId) {
+    for (final list in state.messages.values) {
+      final idx = list.indexWhere((m) => m.nymMessageId == nymMessageId);
+      if (idx < 0) continue;
+      if (list[idx].pqRoot) return;
+      list[idx].pqRoot = true;
+      _scheduleEmit();
+      return;
+    }
+  }
+
   void markOwnMessagePq(String nymMessageId,
-      {bool? pqEncrypted, ({int pq, int total})? coverage}) {
+      {bool? pqEncrypted, bool? pqRoot, ({int pq, int total})? coverage}) {
     for (final list in state.messages.values) {
       final idx = list.indexWhere(
           (m) => m.isOwn && m.nymMessageId == nymMessageId);
       if (idx < 0) continue;
       if (pqEncrypted != null) list[idx].pqEncrypted = pqEncrypted;
+      if (pqRoot != null) list[idx].pqRoot = pqRoot;
       if (coverage != null) list[idx].pqCoverage = coverage;
       _scheduleEmit();
       return;

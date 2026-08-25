@@ -12,8 +12,15 @@ import 'crypto_verified_badge.dart' show showAnchoredInfoPopup;
 /// encrypted — so collapsing them into one glyph would say something false
 /// about one axis or the other.
 enum PqBadgeState {
-  /// Every copy of this message used the hybrid ECDH + ML-KEM-768 exchange.
+  /// Every copy of this message used the hybrid ECDH + ML-KEM-768 exchange,
+  /// under ML-KEM keys seeded from identity roots on both sides.
   full,
+
+  /// Hybrid on the wire, but an ML-KEM key on one side or the other was
+  /// derived from its Nostr identity key. Recovering that identity key
+  /// reproduces the ML-KEM key with it, so the message does not survive the
+  /// attack the shield would otherwise claim.
+  legacy,
 
   /// A group message where only some members could receive a post-quantum
   /// copy. Rendered distinctly rather than as protected: if even one member got
@@ -21,38 +28,41 @@ enum PqBadgeState {
   /// message.
   partial,
 
-  /// Encrypted, but with no post-quantum layer at all.
-  ///
-  /// Shown rather than omitted because NO badge is ambiguous: a missing shield
-  /// could equally mean the message is not quantum-resistant, that the
-  /// indicator is broken, or that this build lacks the feature, and the reader
-  /// cannot tell which. Saying so plainly is the point of a security
-  /// indicator, and it is what makes the shield's absence meaningful when it
-  /// does appear.
+  /// Encrypted, but with no post-quantum layer at all. Shown rather than
+  /// omitted: a missing shield is ambiguous between "unprotected", "broken",
+  /// and "this build lacks the feature".
   classical,
 }
 
-/// Resolves the shield state for a message.
+/// Resolves the shield state for a message. Never null for an encrypted one.
 ///
-/// Never null for an encrypted message: one of the three states always
-/// applies. Callers decide whether the message is encrypted at all — a public
-/// channel message is plaintext on the relay, and a shield of any kind there
-/// would imply an encryption it does not have (see `_pqState` in
-/// message_row.dart).
+/// Callers decide whether a shield belongs at all — a public channel message
+/// is plaintext on the relay (see `_pqState` in message_row.dart).
 ///
-/// [pqCoverage] is the group fan-out's (post-quantum, total) member counts;
-/// when present it OVERRIDES [pqEncrypted], because an optimistic per-message
-/// flag must never outrank what actually went on the wire.
+/// [pqCoverage] is the fan-out's (post-quantum, total) member counts and
+/// OVERRIDES [pqEncrypted]: an optimistic send-time flag must never outrank
+/// what went on the wire. [pqRoot] caps the result at [PqBadgeState.legacy].
 PqBadgeState pqBadgeStateFor({
   required bool pqEncrypted,
+  bool pqRoot = false,
   ({int pq, int total})? pqCoverage,
+  bool isGroup = false,
 }) {
   final cov = pqCoverage;
   if (cov != null && cov.total > 0) {
     if (cov.pq == 0) return PqBadgeState.classical;
-    return cov.pq == cov.total ? PqBadgeState.full : PqBadgeState.partial;
+    if (cov.pq != cov.total) return PqBadgeState.partial;
+    return pqRoot ? PqBadgeState.full : PqBadgeState.legacy;
   }
-  return pqEncrypted ? PqBadgeState.full : PqBadgeState.classical;
+  // In a group, `pqEncrypted` is one wrap out of many, and the same plaintext
+  // went to every member. Without a coverage count the honest answer is
+  // "partly": a received group message never carries one, and a sent one can
+  // render before it lands.
+  if (pqEncrypted) {
+    if (isGroup) return PqBadgeState.partial;
+    return pqRoot ? PqBadgeState.full : PqBadgeState.legacy;
+  }
+  return PqBadgeState.classical;
 }
 
 /// The `.crypto-pq-badge` shield shown next to the verification lock.
@@ -84,6 +94,7 @@ class CryptoPqBadge extends StatelessWidget {
   Color get _color => switch (state) {
         PqBadgeState.full => const Color(0xFF8B7CF6),
         PqBadgeState.partial => const Color(0xFF9AA0A6),
+        PqBadgeState.legacy => const Color(0xFF9AA0A6),
         PqBadgeState.classical => const Color(0xFF9AA0A6).withValues(alpha: 0.65),
       };
 
@@ -153,7 +164,7 @@ class _ShieldPainter extends CustomPainter {
             Matrix4.translationValues(-rotateAbout, -rotateAbout, 0.0))
         .storage);
 
-    if (state == PqBadgeState.partial) {
+    if (state == PqBadgeState.partial || state == PqBadgeState.legacy) {
       // `stroke-dasharray: 3 2` — reads as "not fully closed" at a glance.
       _strokeDashed(canvas, shield, paint);
       _strokeDashed(canvas, rotated, paint);
@@ -190,18 +201,12 @@ class _ShieldPainter extends CustomPainter {
       old.state != state || old.color != color;
 }
 
-/// The post-quantum info popup, reached by tapping the shield.
+/// The post-quantum info popup's copy. Names the primitives and states the
+/// limit: confidentiality, not authentication — signatures are still
+/// secp256k1.
 ///
-/// The copy names the actual primitives and states the limit plainly: this
-/// protects confidentiality, not authentication. Signatures are still
-/// secp256k1, so an adversary who already had a quantum computer could forge
-/// one and MITM in real time. What the hybrid key exchange defeats is
-/// harvest-now-decrypt-later, which is the threat that actually exists today —
-/// and overstating it in the UI would be worse than saying nothing.
-/// The popup's copy, named so `kPqPopupStrings` can be checked against the
-/// background-sweep catalog — a string the catalog doesn't carry never gets
-/// translated, and a wording change that silently drops out of it is invisible
-/// until someone reads the popup in another language.
+/// Each string is named so `kPqPopupStrings` can be checked against the
+/// sweep catalog; one the catalog does not carry is never translated.
 const String kPqFullTitle = 'Quantum-resistant encryption';
 const String kPqFullBody =
     "This message's key exchange combined the standard NIP-44 secp256k1 "
@@ -215,6 +220,12 @@ const String kPqPartialTitle = 'Partly quantum-resistant';
 const String kPqPartialLead = 'This message was quantum-resistant to ';
 const String kPqPartialCount = '%d of %d members';
 const String kPqPartialSome = 'some members';
+const String kPqLegacyTitle = 'Quantum-resistant, legacy key';
+const String kPqLegacyBody =
+    "The hybrid exchange ran, but one side's ML-KEM key came from its Nostr "
+    "identity key rather than from a recovery code. A quantum computer that "
+    "recovers the identity key recovers this one with it. New messages "
+    "upgrade automatically once both sides hold a code.";
 const String kPqClassicalTitle = 'Not quantum-resistant';
 const String kPqClassicalBody =
     'This message is end-to-end encrypted with the standard NIP-44 secp256k1 '
@@ -239,6 +250,8 @@ const List<String> kPqPopupStrings = [
   kPqPartialCount,
   kPqPartialSome,
   kPqPartialTail,
+  kPqLegacyTitle,
+  kPqLegacyBody,
   kPqClassicalTitle,
   kPqClassicalBody,
 ];
@@ -264,6 +277,11 @@ void showPqPopup(
                     .replaceFirst('%d', '${coverage.total}')
                 : tr(kPqPartialSome)) +
             tr(kPqPartialTail),
+      ),
+    PqBadgeState.legacy => (
+        tr(kPqLegacyTitle),
+        const Color(0xFF9AA0A6),
+        tr(kPqLegacyBody),
       ),
     PqBadgeState.classical => (
         tr(kPqClassicalTitle),

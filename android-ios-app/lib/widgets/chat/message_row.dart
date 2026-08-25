@@ -27,6 +27,7 @@ import 'relative_time_ticker.dart';
 import '../../features/reactions/reactors_modal.dart';
 import '../../features/translate/auto_translate.dart';
 import '../../features/translate/message_translation.dart';
+import '../../features/translate/translated_messages.dart';
 import '../../features/translate/translate_languages.dart';
 import '../../features/zaps/zap_badge.dart';
 import '../../features/zaps/zap_modal.dart';
@@ -304,8 +305,21 @@ class MessageRow extends ConsumerStatefulWidget {
 }
 
 class _MessageRowState extends ConsumerState<MessageRow> {
-  bool _showTranslation = false;
-  String? _translateLangOverride;
+  /// Whether the user asked to translate THIS message. Held in app state
+  /// rather than here: the list is lazy and rebuilds keyed children on insert,
+  /// so row State does not survive scrolling away or a new message arriving.
+  String get _translateKey =>
+      widget.message.nymMessageId ?? widget.message.id;
+
+  bool get _showTranslation =>
+      ref.watch(translatedMessagesProvider).containsKey(_translateKey);
+
+  String? get _translateLangOverride =>
+      ref.watch(translatedMessagesProvider)[_translateKey];
+
+  void _showTranslated({String? lang}) => ref
+      .read(translatedMessagesProvider.notifier)
+      .show(_translateKey, lang: lang);
 
   /// Auto-translate: when the message has been auto-translated in place, this is
   /// the toggle for the "show original" reveal (default hidden ⇒ translated text
@@ -396,7 +410,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (!message.isPM && !message.isGroup) return null;
     return pqBadgeStateFor(
       pqEncrypted: message.pqEncrypted,
+      pqRoot: message.pqRoot,
       pqCoverage: message.pqCoverage,
+      isGroup: message.isGroup,
     );
   }
 
@@ -785,7 +801,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                     onReact: widget.onReactionPicker == null
                         ? null
                         : () => widget.onReactionPicker!.call(message),
-                    onTranslate: () => setState(() => _showTranslation = true),
+                    onTranslate: _showTranslated,
                     // `body.columns-mode .msg-hover-buttons { flex-direction:
                     // column }` (styles-columns.css:80-82) — the pair stacks
                     // vertically to fit the 360px column.
@@ -2448,7 +2464,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         context,
         ref,
         message,
-        onTranslate: () => setState(() => _showTranslation = true),
+        onTranslate: _showTranslated,
         onEdit: () => ref.read(pendingEditProvider.notifier).request(
               messageId: message.id,
               content: message.content,
@@ -2511,7 +2527,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         return;
       case 'translate':
         if (message.content.isEmpty) return;
-        setState(() => _showTranslation = true);
+        _showTranslated();
         return;
       case 'copy':
         if (message.content.isEmpty) return;
@@ -2609,10 +2625,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       target: target,
       message: message,
       onReact: () => widget.onReactionPicker?.call(message),
-      onTranslateInline: (lang) => setState(() {
-        _translateLangOverride = lang;
-        _showTranslation = true;
-      }),
+      onTranslateInline: (lang) => _showTranslated(lang: lang),
     );
   }
 
@@ -2803,7 +2816,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // translated in the language chosen at signup, cached across launches, and
     // following a later language change. The stored message keeps the English
     // source, so nothing is frozen into the conversation.
-    displayContent = localizeBotWelcome(message.id, displayContent);
+    // Scoped at the call site as well as inside: only the synthetic
+    // `nymbot-welcome…` row is app copy. Every other message is something a
+    // person wrote and must render byte-for-byte as authored.
+    if (message.id.startsWith(kNymbotWelcomeIdPrefix)) {
+      displayContent = localizeBotWelcome(message.id, displayContent);
+    }
     // Nymbot answers with canonical command names; show them in the vocabulary
     // this device actually accepts.
     if (message.isBot ||

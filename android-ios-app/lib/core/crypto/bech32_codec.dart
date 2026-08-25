@@ -116,3 +116,19 @@ String decodeNote(String note) {
   }
   return bytesToHex(r.data);
 }
+
+/// HRP for a post-quantum root secret (PQ-ROOT-SPEC §1), matching the PWA's
+/// `nip19.encodeBytes('nympq', bytes)`.
+const String nymPqHrp = 'nympq';
+
+/// Encodes a 32-byte post-quantum root secret as `nympq1…`.
+String encodeNymPq(Uint8List root) => _encode(nymPqHrp, root);
+
+/// Decodes a `nympq1…` string. Throws on a wrong HRP or checksum failure.
+Uint8List decodeNymPq(String code) {
+  final r = _decode(code.trim());
+  if (r.hrp != nymPqHrp) {
+    throw FormatException('Expected $nymPqHrp, got ${r.hrp}');
+  }
+  return r.data;
+}

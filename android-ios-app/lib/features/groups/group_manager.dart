@@ -21,6 +21,16 @@ class GroupManager {
   /// identity, not by the rotating ephemeral key the classical leg encrypts to.
   Uint8List? Function(String memberPubkey)? kemKeyFor;
 
+  /// Whether a member's announced key is root-seeded. Same injection as
+  /// [kemKeyFor]; null leaves every send reading as legacy, which is the safe
+  /// default for a badge.
+  bool Function(String memberPubkey)? rootSeededFor;
+
+  /// Whether a member accepts the layered format. Same injection; null leaves
+  /// the fan-out on the combined one, which is what every peer understood
+  /// before the split.
+  bool Function(String memberPubkey)? layeredFor;
+
   /// Post-quantum coverage of the last message sent per group message id, so
   /// the UI can say "quantum-resistant to 8 of 10 members" rather than implying
   /// all-or-nothing. A group message counts as protected only when EVERY member
@@ -32,9 +42,17 @@ class GroupManager {
   ({int pq, int total})? pqCoverageFor(String nymMessageId) =>
       _pqCoverage[nymMessageId];
 
-  void _recordCoverage(String nymMessageId, int pq, int total) {
+  /// Whether the whole fan-out went to root-seeded keys. Kept apart from
+  /// [pqCoverageFor] because the popup counts members, not key provenance.
+  final Map<String, bool> _pqAllRoot = {};
+
+  bool pqAllRootFor(String nymMessageId) => _pqAllRoot[nymMessageId] ?? false;
+
+  void _recordCoverage(String nymMessageId, int pq, int total, int root) {
     _pqCoverage[nymMessageId] = (pq: pq, total: total);
+    _pqAllRoot[nymMessageId] = total > 0 && pq == total && root == total;
     while (_pqCoverage.length > 2000) {
+      _pqAllRoot.remove(_pqCoverage.keys.first);
       _pqCoverage.remove(_pqCoverage.keys.first);
     }
   }
@@ -166,6 +184,8 @@ class GroupManager {
       encryptTo: (pk) => pk,
       settings: settings,
       kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
     );
     return group;
   }
@@ -209,7 +229,10 @@ class GroupManager {
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
       kemKeyFor: kemKeyFor,
-      onCoverage: (pq, total) => _recordCoverage(nymMessageId, pq, total),
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
+      onCoverage: (pq, total, root) =>
+          _recordCoverage(nymMessageId, pq, total, root),
     );
     return ok ? nymMessageId : null;
   }
@@ -240,6 +263,8 @@ class GroupManager {
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
       kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
     );
   }
 
@@ -271,6 +296,8 @@ class GroupManager {
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
       kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
     );
   }
 
@@ -303,6 +330,8 @@ class GroupManager {
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
       kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
     );
   }
 
@@ -338,6 +367,8 @@ class GroupManager {
       encryptTo: (pk) => pk,
       settings: settings,
       kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
     );
   }
 
@@ -371,6 +402,8 @@ class GroupManager {
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
       kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
     );
   }
 
@@ -401,6 +434,8 @@ class GroupManager {
       recipients: to,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
     );
   }
 }

@@ -440,7 +440,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         decoration: InputDecoration(
           isDense: true,
           // reactions.js:709.
-          hintText: tr('Search emoji by name...'),
+          hintText: tr('Search emoji...'),
           hintStyle: TextStyle(color: c.textDim, fontSize: 12),
           filled: true,
           fillColor: c.isLight

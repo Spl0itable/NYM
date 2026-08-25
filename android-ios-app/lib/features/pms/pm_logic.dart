@@ -81,6 +81,9 @@ class PmLogic {
     required String selfPubkey,
     required bool senderVerified,
     bool pqEncrypted = false,
+    // Applied to the resolved peer, which for our own copy is the `p` tag
+    // rather than the rumor's author.
+    bool Function(String peerPubkey)? pqRootFor,
   }) {
     if ((rumor['kind'] as num?)?.toInt() != EventKind.dmRumor) return null;
     final senderPubkey = rumor['pubkey'] as String?;
@@ -132,6 +135,7 @@ class PmLogic {
       nymMessageId: nymMessageId,
       senderVerified: senderVerified,
       pqEncrypted: pqEncrypted,
+      pqRoot: pqEncrypted && (pqRootFor?.call(peer) ?? false),
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer?.toJson(),
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,

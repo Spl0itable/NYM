@@ -100,7 +100,9 @@ void main() {
     });
 
     test('the group path takes coverage from the fan-out', () {
-      expect(controller.contains('onCoverage: (pq, total) => appState'), isTrue,
+      expect(
+          controller.contains('onCoverage: (pq, total, root) => appState'),
+          isTrue,
           reason: 'publishGroupMessage counts coverage as it builds the wraps; '
               'the controller has to pass onCoverage to receive it');
     });

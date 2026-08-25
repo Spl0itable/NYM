@@ -133,11 +133,14 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
   /// Delay timers (PWA's `setTimeout`s), cancelled on dispose so a torn-down
   /// shell never leaves them pending.
   Timer? _tutorialDelay;
+  Timer? _pqNoticeDelay;
+  bool _pqNoticeShown = false;
   Timer? _encryptPromptDelay;
 
   @override
   void dispose() {
     _tutorialDelay?.cancel();
+    _pqNoticeDelay?.cancel();
     _encryptPromptDelay?.cancel();
     super.dispose();
   }
@@ -183,6 +186,87 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
     _encryptPromptDelay = Timer(const Duration(milliseconds: 2500), () {
       if (mounted) unawaited(_maybePromptEncryptAtRest());
     });
+
+    // The post-quantum notice. Suppressed when the tutorial is still ahead —
+    // the tour covers the same ground beside the nsec, and two explanations of
+    // the same thing back to back is worse than one. Dismissed rather than
+    // deferred, so taking the tour never means seeing it twice.
+    if (!seen) {
+      unawaited(ref.read(nostrControllerProvider).dismissPqUpgradeNotice());
+    } else {
+      _pqNoticeDelay = Timer(const Duration(milliseconds: 3500), () {
+        if (mounted) unawaited(_maybeShowPqNotice());
+      });
+    }
+  }
+
+  /// The one-time post-quantum notice.
+  ///
+  /// The copy branches on what this device actually needs: one that holds the
+  /// root is told to save the code, one that does not is told to link, because
+  /// for that device nothing is protected until it does and saying "you're
+  /// covered" would be false.
+  Future<void> _maybeShowPqNotice() async {
+    if (_pqNoticeShown) return;
+    final ctrl = ref.read(nostrControllerProvider);
+    if (!ctrl.pqUpgradeNoticePending) return;
+    _pqNoticeShown = true;
+    await ctrl.dismissPqUpgradeNotice();
+    if (!mounted) return;
+    final linkNeeded = ctrl.pqRootLinkNeeded;
+    if (linkNeeded) {
+      // A device that needs the code can paste it here. Telling it where to go
+      // and then making it navigate is a step for no reason — the notice
+      // already has the user's attention.
+      final pasted = await showAppPrompt(
+        context,
+        tr('This account already has a post-quantum recovery code, and this '
+            'device does not have it yet.\n\nUntil you add it, this device '
+            'keeps working normally but cannot read the quantum-resistant '
+            'messages your other devices can.\n\nPaste the nympq1… code from '
+            'a device that has it — you will find it there under View or Edit '
+            'Nym\u2019s Details. You can also do this later, in that same '
+            'panel.'),
+        title: tr('Add your post-quantum recovery code'),
+        okLabel: tr('Link this device'),
+        cancelLabel: tr('Later'),
+        placeholder: 'nympq1…',
+      );
+      final code = (pasted ?? '').trim();
+      if (code.isEmpty || !mounted) return;
+      final ok = await ctrl.linkPqRootFromCode(code);
+      if (!mounted) return;
+      await showAppAlert(
+        context,
+        ok
+            ? tr('Linked. This device can now read your quantum-resistant '
+                'messages.')
+            : tr('That code does not match this account. Check it and try '
+                'again — you can also paste it in View or Edit Nym\u2019s '
+                'Details.'),
+        title: ok ? tr('Linked') : tr('That code did not match'),
+        okLabel: tr('Got it'),
+      );
+      return;
+    }
+    await showAppAlert(
+      context,
+      tr('Your private messages and group chats with other Nymchat '
+          'users are now encrypted with an added post-quantum key '
+          'exchange (ML-KEM-768), so traffic recorded today can\u2019t be '
+          'decrypted later by a quantum computer.\n\nThis uses a recovery '
+          'code, not your nsec. Save the code below alongside your '
+          'nsec — you will need it to read these messages on another '
+          'device, and if every device holding it is lost, they cannot be '
+          'recovered. It is always available in your Nym\u2019s details.'),
+      title: tr('Quantum-resistant encryption is on'),
+      okLabel: tr('Got it'),
+      // The one moment the code is explained is the moment to let the user
+      // copy it, rather than sending them off to find it and hoping they do.
+      copyValue: ctrl.pqRootCode,
+      copyLabel: tr('Copy code'),
+      copiedMessage: tr('Post-quantum recovery code copied'),
+    );
   }
 
   /// Shows the "Protect your identity here too?" prompt when

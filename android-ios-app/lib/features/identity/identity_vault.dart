@@ -50,7 +50,13 @@ class IdentityVault {
   static const int _iterations = 310000;
   static const String _checkPlaintext = 'nymchat-vault-ok';
 
-  /// The four identity secrets protected by the vault (matches the PWA).
+  /// The identity secrets protected by the vault (matches the PWA's
+  /// `_VAULT_KEYS`).
+  ///
+  /// Includes the post-quantum root (docs/PQ-ROOT-SPEC.md §5.3): a user who
+  /// turned identity encryption on asked for their key material to be
+  /// encrypted at rest, and an encrypted nsec sitting next to a plaintext root
+  /// would defeat that on exactly the device where they asked for it.
   static const List<String> vaultKeys = SecretKeys.all;
 
   bool get isEnabled => _kv.getBool(StorageKeys.vaultEnabled);

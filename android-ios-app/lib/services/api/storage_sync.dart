@@ -8,6 +8,8 @@ import 'package:crypto/crypto.dart' show sha256;
 import '../../core/constants/storage_keys.dart';
 import '../../models/settings.dart';
 import '../../core/crypto/pq.dart' as pq;
+import '../../features/identity/pq_registry.dart' show pqSelfCandidates;
+import '../../features/identity/pq_root.dart';
 import '../nostr/event_signer.dart';
 import '../storage/key_value_store.dart';
 import 'api_client.dart';
@@ -120,6 +122,10 @@ class StorageSync {
       'transparencyEnabled',
       'columnsWallpaper',
       'sidebarSectionOrder',
+      // The PWA files this under `appearance`. Absent here it landed in
+      // `misc`, so the same setting lived in two categories and whichever was
+      // written last won -- which is a change reverting for no visible reason.
+      'uiLanguage',
     ],
     'privacy': [
       'blockedUsers',
@@ -139,7 +145,6 @@ class StorageSync {
       'showStatus',
       'powDifficulty',
       'encryptAtRestPreferred',
-      'keypairMode',
     ],
     'messaging': [
       'groupChatPMOnlyMode',
@@ -160,6 +165,11 @@ class StorageSync {
       'notifyFriendsOnly',
       'syncMLSHistory',
       'seenCalls',
+      // As with uiLanguage above: the PWA files these under `messaging`.
+      'autoTranslate',
+      'autoTranslateChannels',
+      'autoTranslatePMs',
+      'autoTranslateGroups',
     ],
     'channels': [
       'pinnedChannels',
@@ -321,13 +331,22 @@ class StorageSync {
       flat['leftGroupTimes'] = _kvJsonMap(kv, StorageKeys.leftGroupTimes);
       // Lightning address is cached per-pubkey (`nym_lightning_address_<pk>`,
       // zaps.js:234); the PWA syncs `this.lightningAddress` (null when unset).
+      // Falls back to the global key, the same order the boot read uses
+      // (nostr_controller.dart:185-186). Reading only the per-pubkey one meant
+      // that whenever it was missing but the global was set, this published a
+      // null over the address another device had saved.
       flat['lightningAddress'] = selfPubkey == null
-          ? null
-          : kv.getString(StorageKeys.lightningAddressFor(selfPubkey));
+          ? kv.getString(StorageKeys.lightningAddressGlobal)
+          : kv.getString(StorageKeys.lightningAddressFor(selfPubkey)) ??
+              kv.getString(StorageKeys.lightningAddressGlobal);
       flat['powDifficulty'] =
           kv.getInt(StorageKeys.powDifficulty, defaultValue: 0);
-      flat['keypairMode'] =
-          kv.getString(StorageKeys.keypairMode) ?? 'persistent';
+      // keypairMode is deliberately NOT synced: it says whether THIS device
+      // regenerates its keypair each session, which is a property of this
+      // device's identity handling rather than a preference to carry across
+      // them -- sendSettingsTransfer already strips it for that reason.
+      // Neither client ever applied an inbound value, so syncing it only meant
+      // each device rewrote the other's into the shared row on every save.
       // Non-sensitive "I protect my identity key at rest" hint — no key
       // material ever syncs (settings.js:160-164).
       flat['encryptAtRestPreferred'] =
@@ -656,21 +675,44 @@ class StorageSync {
     return ((raw + 2) ~/ 3) * 4;
   }
 
+  /// pq2 framing: `pq2.` plus a fixed 1088-byte ML-KEM ciphertext and the
+  /// AEAD output, both base64url. Exact — the ciphertext is a constant size
+  /// and base64url is a pure function of length.
+  static const int _pq2PrefixLen = 4;
+  static const int _mlKemCipherTextBytes = 1088;
+
+  static int _b64uLen(int n) => (n * 4 + 2) ~/ 3;
+
+  static int pq2PayloadLen(int innerLen) =>
+      _pq2PrefixLen +
+      _b64uLen(_mlKemCipherTextBytes) +
+      1 +
+      _b64uLen(innerLen + 16);
+
   /// Size of the final `["EVENT", wrapped]` frame for a rumor of this size.
-  static int wrappedSizeForRumor(int rumorBytes) {
+  ///
+  /// [pq2] is not a rounding error: the layer adds ~1.5 KB of KEM ciphertext
+  /// AND inflates what it wraps by a third, on BOTH layers, so a rumor the
+  /// classical model says fits in 65 KB can produce an event of nearly 120 KB.
+  /// Budgeting classically and then publishing post-quantum is what made every
+  /// packed history shard overflow and fall back to NIP-44.
+  static int wrappedSizeForRumor(int rumorBytes, {bool pq2 = false}) {
     const sealOverhead = 200; // kind/created_at/tags/pubkey/id/sig
     const wrapOverhead = 320; // same, plus the p/d/k tags
-    final sealJson = nip44PayloadLen(rumorBytes) + sealOverhead;
-    return nip44PayloadLen(sealJson) + wrapOverhead + 10;
+    int layer(int n) =>
+        pq2 ? pq2PayloadLen(nip44PayloadLen(n)) : nip44PayloadLen(n);
+    final sealJson = layer(rumorBytes) + sealOverhead;
+    return layer(sealJson) + wrapOverhead + 10;
   }
 
   /// Largest rumor whose wrapped event still clears the relay gate. Derived
   /// rather than hardcoded so it stays correct if the gate moves.
-  static int maxRumorBytesForWrap([int limit = _relayEventLimit]) {
+  static int maxRumorBytesForWrap(
+      [int limit = _relayEventLimit, bool pq2 = false]) {
     var lo = 32, hi = 64 * 1024, best = 32;
     while (lo <= hi) {
       final mid = (lo + hi) >> 1;
-      if (wrappedSizeForRumor(mid) <= limit) {
+      if (wrappedSizeForRumor(mid, pq2: pq2) <= limit) {
         best = mid;
         lo = mid + 1;
       } else {
@@ -680,7 +722,13 @@ class StorageSync {
     return best;
   }
 
-  static final int _maxRumorBytes = maxRumorBytesForWrap();
+  static final int _maxRumorBytesClassical = maxRumorBytesForWrap();
+  static final int _maxRumorBytesPq2 =
+      maxRumorBytesForWrap(_relayEventLimit, true);
+
+  /// The ceiling for the encryption a self-addressed wrap will actually use.
+  int get _maxRumorBytes =>
+      _pqSealToSelf ? _maxRumorBytesPq2 : _maxRumorBytesClassical;
 
   /// Approximate rumor byte size: UTF-8 length of the double-JSON-stringified
   /// payload plus the fixed rumor overhead (settings.js:359-363).
@@ -864,16 +912,28 @@ class StorageSync {
     }
     if (_rumorByteSize(payload) > _maxRumorBytes) return false;
 
+    payload = _mergeUnknownSectionKeys(dTag, payload);
     final json = jsonEncode(payload);
     if (_publishedSectionJson[dTag] == json) return false; // unchanged
-    _publishedSectionJson[dTag] = json;
 
     final ok = await _setSettingsCategory(
       d1Category(dTag),
       jsonEncode(_withCat(payload, dTag)),
     );
-    // Relay wrap is best-effort and independent of the D1 result (the PWA
-    // fire-and-forgets `_saveSettingsBlobToD1` before wrapping).
+    // Recorded as published only AFTER it actually is. Marking first meant a
+    // write that failed -- a network blip, an oversized row, a signer that
+    // could not authenticate -- still counted as done, and because the marker
+    // lives as long as this StorageSync, every later save short-circuited on
+    // it. The section was then never retried, so the change survived until the
+    // next launch and reverted to whatever D1 still held.
+    if (!ok) {
+      _publishedSectionJson.remove(dTag);
+      return false;
+    }
+    _publishedSectionJson[dTag] = json;
+
+    // Relay wrap is best-effort and independent of the D1 result: D1 is the
+    // source the restore reads back from.
     final wrapPublisher = _syncWrapPublisher;
     if (wrapPublisher != null) {
       try {
@@ -885,6 +945,30 @@ class StorageSync {
     return ok;
   }
 
+  /// The most recent inbound payload per settings category.
+  final Map<String, Map<String, dynamic>> _lastInboundSections = {};
+
+  /// Overlays this client's own section payload onto the last one we read for
+  /// that category, so keys we do not know about survive our write.
+  ///
+  /// A write REPLACES the whole category row, and the two clients do not build
+  /// an identical key set -- each has settings the other has no concept of --
+  /// so whichever wrote last silently deleted the other's keys and that setting
+  /// reverted to its default on the next launch. Only keys absent from our own
+  /// payload are carried forward, so this can never resurrect a value the user
+  /// just changed.
+  Map<String, dynamic> _mergeUnknownSectionKeys(
+      String dTag, Map<String, dynamic> payload) {
+    final prev = _lastInboundSections[dTag];
+    if (prev == null || prev.isEmpty) return payload;
+    final out = Map<String, dynamic>.from(payload);
+    for (final e in prev.entries) {
+      if (e.key == 'v' || e.key == '__cat') continue;
+      out.putIfAbsent(e.key, () => e.value);
+    }
+    return out;
+  }
+
   /// The most recent inbound `nymchat-notifications` payload decoded by
   /// [settingsGet] / [settingsTransfersSince]. Both clients write the SAME
   /// hashed D1 row for this category, so an outbound write must carry the
@@ -892,6 +976,63 @@ class StorageSync {
   /// `notificationLastReadTime`, which the PWA syncs — settings.js:534-557)
   /// forward instead of zeroing another device's synced bell state.
   Map<String, dynamic>? _lastInboundNotifications;
+
+  // The post-quantum root record (docs/PQ-ROOT-SPEC.md §5.1, §6).
+
+  /// The decrypted `nymchat-pq-root` payload from the last settings read.
+  Map<String, dynamic>? _lastInboundPqRoot;
+
+  /// Whether a settings read has actually COMPLETED this session. "No record"
+  /// and "could not look" mean opposite things to spec §6.
+  bool _pqRootLoadSucceeded = false;
+
+  /// Whether the account HAS a root record, decided from the D1 column list —
+  /// a row we cannot decrypt is still proof a root exists.
+  bool _pqRootRowPresent = false;
+
+  bool get pqRootLoadSucceeded => _pqRootLoadSucceeded;
+
+  /// True when the account is known to have a root record already.
+  bool get pqRootRowPresent => _pqRootRowPresent;
+
+  /// The parsed record, or null when there is none / it did not open.
+  PqRootRecord? get pqRootRecord {
+    final raw = _lastInboundPqRoot;
+    return raw == null ? null : PqRootRecord.fromJson(raw);
+  }
+
+  /// Notes the pq-root row's presence from the cleartext D1 column list, under
+  /// either the hashed column or the bare routing name.
+  void _notePqRootColumns(Map<dynamic, dynamic> cats) {
+    _pqRootLoadSucceeded = true;
+    final hashed = d1Category(pqRootCategory);
+    for (final k in cats.keys) {
+      final name = k.toString();
+      if (name != hashed && name != pqRootCategory) continue;
+      final entry = cats[k];
+      if (entry is! Map) continue;
+      final blob = entry['blob'];
+      if (blob is String && blob.isNotEmpty) {
+        _pqRootRowPresent = true;
+        return;
+      }
+    }
+  }
+
+  /// Publishes the root record. Forced classical: sealing this row to a key
+  /// derived from the root it carries is a circular lock (spec §5.1).
+  Future<bool> pqRootRecordSet(PqRootRecord record) async {
+    final ok = await _setSettingsCategory(
+      d1Category(pqRootCategory),
+      jsonEncode(_withCat(record.toJson(), pqRootCategory)),
+      allowPq: false,
+    );
+    if (ok) {
+      _lastInboundPqRoot = record.toJson();
+      _pqRootRowPresent = true;
+    }
+    return ok;
+  }
 
   /// Publishes the cross-device notification wrap — the PWA's
   /// `nymchat-notifications` category, byte-shaped like the PWA payload
@@ -1086,12 +1227,13 @@ class StorageSync {
 
     // Group message history → nymchat-history-<gid>-<YYYYMM>-<shard>.
     // Message JSON per shard. The rumor carries this as an ESCAPED string,
-    // which inflates it, and the escaped total has to stay under
-    // maxRumorBytesForWrap() (28,672). Budgeting 18 KB of raw message JSON
-    // leaves room for that escaping plus the rumor scaffolding; the previous
-    // 30,000 exceeded the wrap cliff on its own, so every shard it produced was
-    // silently dropped at publish time (settings.js:497).
-    const shardBudget = 18000;
+    // which inflates it, and the escaped total has to stay under the rumor
+    // ceiling for the encryption actually in play. Derived, not hardcoded:
+    // post-quantum lowers that ceiling from 28,672 to 16,384, and a fixed
+    // 18 KB budget overflowed EVERY packed shard — which is what sent the
+    // whole history back to NIP-44. 0.628 is the share of the ceiling the raw
+    // JSON may occupy, leaving the rest for escaping and scaffolding.
+    final shardBudget = (_maxRumorBytes * 0.628).floor();
     for (final e in historyByConvKey.entries) {
       final convKey = e.key;
       final msgs = e.value;
@@ -1241,13 +1383,15 @@ class StorageSync {
   /// (the PWA persists this in localStorage as `nym_settings_hash_*`).
   final Map<String, String> _lastSettingsHash = {};
 
-  Future<bool> _setSettingsCategory(String category, String plaintext) async {
+  /// [allowPq] false forces the classical seal. Only [pqRootCategory] needs it.
+  Future<bool> _setSettingsCategory(String category, String plaintext,
+      {bool allowPq = true}) async {
     try {
       final hash = _sha256Hex('$_pubkey|$plaintext');
       final hashKey = '${_pubkey}_$category';
       if (_lastSettingsHash[hashKey] == hash) return false; // unchanged
 
-      final blob = await _encryptToSelf(plaintext);
+      final blob = await _encryptToSelf(plaintext, allowPq: allowPq);
       if (blob == null) return false;
 
       final body = <String, dynamic>{
@@ -1271,8 +1415,12 @@ class StorageSync {
   ///
   /// Mirrors `settingsLoadFromD1`: each category's blob is decrypted, the real
   /// category recovered from `__cat`, the section blobs applied oldest-to-newest
-  /// (newest values win). Returns null on any failure / no record so the caller
-  /// keeps the device-local settings. The caller is responsible for honoring
+  /// (newest values win). Returns null ONLY when the load genuinely failed —
+  /// the request threw, or rows exist that a signer we do not control could not
+  /// open — so the caller keeps the outbound-save gate shut. An account with
+  /// nothing stored, or with rows unreadable by a local nsec, comes back as an
+  /// empty result: there is nothing to clobber, and the device must be able to
+  /// save. The caller is responsible for honoring
   /// `nym_last_settings_sync_ts` (only apply when [SettingsLoadResult.newestTs]
   /// exceeds the stored sync ts).
   Future<SettingsLoadResult?> settingsGet() async {
@@ -1288,13 +1436,16 @@ class StorageSync {
     }
     final cats = data['categories'];
     if (cats is! Map) return null;
+    _notePqRootColumns(cats);
 
     final decoded = <_DecodedCategory>[];
+    var storedBlobs = 0;
     for (final e in cats.entries) {
       final entry = e.value;
       if (entry is! Map) continue;
       final blob = entry['blob'];
       if (blob is! String || blob.isEmpty) continue;
+      storedBlobs++;
       final updatedAt = (entry['updatedAt'] as num?)?.toInt() ?? 0;
       try {
         final plain = await _decryptFromSelf(blob);
@@ -1305,6 +1456,13 @@ class StorageSync {
             ? payload['__cat'] as String
             : e.key.toString();
         payload.remove('__cat');
+        // Keep the raw inbound payload so a later write can carry forward keys
+        // THIS client does not know about — see _mergeUnknownSectionKeys.
+        _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
+        if (realCat == pqRootCategory) {
+          _lastInboundPqRoot = Map<String, dynamic>.of(payload);
+          _pqRootRowPresent = true;
+        }
         decoded.add(_DecodedCategory(
           category: realCat,
           payload: payload,
@@ -1314,7 +1472,29 @@ class StorageSync {
         // Skip an undecryptable/corrupt category.
       }
     }
-    if (decoded.isEmpty) return null;
+    if (decoded.isEmpty) {
+      // Null means "the load FAILED", and the caller keeps the outbound-save
+      // gate shut on it so this device cannot publish its defaults over rows it
+      // never read. Two of the three ways to arrive here are not failures, and
+      // returning null for them left the gate shut for the whole session: the
+      // user changed a setting, nothing was written, and it came back as the
+      // default on the next launch.
+      //
+      //  * Nothing stored at all — a fresh account, which MUST be able to save.
+      //  * Rows that exist but do not open. With a local nsec that is final:
+      //    decryption is pure computation over keys derived from it and every
+      //    epoch we can still derive has been tried. Rows we can never read
+      //    protect nothing, so guarding them only strands the account; let the
+      //    next save replace them.
+      //
+      // Only an undecryptable row under a signer we do not control is genuinely
+      // transient — a locked or briefly unavailable signer looks exactly like
+      // this — so that one still reports failure and is retried on reconnect.
+      if (storedBlobs == 0 || _signer is LocalSigner) {
+        return const SettingsLoadResult(payload: {}, newestTs: 0);
+      }
+      return null;
+    }
 
     // N26: pull the cross-device notification read-state wrap (a separate
     // category from the settings sections) so the caller can merge its seen-keys.
@@ -1447,6 +1627,7 @@ class StorageSync {
     }
     final cats = data['categories'];
     if (cats is! Map) return const [];
+    _notePqRootColumns(cats);
 
     final decoded = <_DecodedCategory>[];
     for (final e in cats.entries) {
@@ -1464,10 +1645,17 @@ class StorageSync {
             ? payload['__cat'] as String
             : e.key.toString();
         payload.remove('__cat');
+        // Keep the raw inbound payload so a later write can carry forward keys
+        // THIS client does not know about — see _mergeUnknownSectionKeys.
+        _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
         if (realCat == 'nymchat-notifications') {
           // Cache for carry-forward in [notificationsWrapSet], same as
           // [settingsGet] — this refresh path sees the shared row too.
           _lastInboundNotifications = Map<String, dynamic>.of(payload);
+        }
+        if (realCat == pqRootCategory) {
+          _lastInboundPqRoot = Map<String, dynamic>.of(payload);
+          _pqRootRowPresent = true;
         }
         decoded.add(_DecodedCategory(
           category: realCat,
@@ -2281,22 +2469,108 @@ class StorageSync {
     _pqSelfKeys = List.unmodifiable(keys);
   }
 
+  /// The ML-KEM keypairs to try, DERIVING them when the controller has not
+  /// handed any over yet.
+  ///
+  /// The hand-off is not ordered against the boot settings read: its only
+  /// caller runs inside the group-sync apply, which happens after settingsGet
+  /// has already returned. So the first read of a launch saw an empty list,
+  /// every post-quantum row failed to open, and the session carried on with
+  /// defaults -- which the next save then published over those rows.
+  ///
+  /// Deriving removes the ordering question rather than re-answering it: the
+  /// keypair is a pure function of the nsec and the epoch, which is exactly how
+  /// the web client gets its own (`pqSelfKeys()`), so there is no window in
+  /// which we hold the nsec but cannot open our own blob.
+  ///
+  /// The ROOT has the same ordering hazard, so it is pulled through
+  /// [_pqRootProvider] (a secure-storage read, not a hand-off) rather than
+  /// handed over late. Order is root-derived then nsec-derived; the
+  /// nsec-derived tail is permanent (spec §4).
+  Future<List<({Uint8List kemSk, Uint8List kemPk})>>
+      _pqSelfKeyCandidates() async {
+    final root = await _pqRoot();
+    if (_pqSelfKeys.isNotEmpty) return _pqSelfKeys;
+    final signer = _signer;
+    if (signer is! LocalSigner) return const [];
+    final cached = _derivedPqSelfKeys;
+    if (cached != null) return cached;
+    try {
+      return _derivedPqSelfKeys =
+          pqSelfCandidates(signer.privkey, 0, root: root);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Reads the identity's root secret, once per instance. Null means the
+  /// nsec-derived candidates are the whole list, i.e. v1 behaviour.
+  Future<Uint8List?> Function()? _pqRootProvider;
+  Future<Uint8List?>? _pqRootFuture;
+
+  /// Supplies the root lazily. A provider, not a setter: a setter would have
+  /// to be called before the boot settings read, which is what broke before.
+  void setPqRootProvider(Future<Uint8List?> Function() provider) {
+    _pqRootProvider = provider;
+    _pqRootFuture = null;
+    _derivedPqSelfKeys = null;
+  }
+
+  Future<Uint8List?> _pqRoot() {
+    final provider = _pqRootProvider;
+    if (provider == null) return Future.value(null);
+    return _pqRootFuture ??= provider().catchError((_) => null);
+  }
+
+  /// Cache for [_pqSelfKeyCandidates] — ML-KEM keygen is not free, and the
+  /// decrypt path runs once per stored category.
+  List<({Uint8List kemSk, Uint8List kemPk})>? _derivedPqSelfKeys;
+
+  /// Whether NEW self-addressed blobs may be sealed hybrid, i.e. whether every
+  /// device on this account can decapsulate (PqPolicy.allDevicesCapable).
+  ///
+  /// Separate from [_pqSelfKeys] because it gates only writes: the keys stay in
+  /// place so blobs already written hybrid keep opening. Defaults false so a
+  /// boot that has not yet resolved the roster cannot seal a blob another
+  /// device would be locked out of.
+  bool _pqSealToSelf = false;
+
+  void setPqSealToSelf(bool enabled) {
+    _pqSealToSelf = enabled;
+  }
+
   /// The D1 blob holds the same conversation list, group keys and history
   /// categories as the relay gift wrap beside it, so protecting one without the
   /// other protects neither. With a local nsec this is the hybrid; there is no
   /// size cap to work around, since D1 takes the blob whatever it weighs.
   ///
-  /// An extension or NIP-46 signer returns a finished NIP-44 payload rather
-  /// than a conversation key, so there is no hybrid one to derive — those
-  /// logins stay classical by construction (PqPolicy.capable).
-  Future<String?> _encryptToSelf(String plaintext) async {
+  /// A signer login is not excluded: the layered format seals the outer layer
+  /// from the root and leaves the inner NIP-44 to whatever holds the identity
+  /// key, so it participates once this device has a recovery code
+  /// (PqPolicy.selfEnabled, which reads the root as well as the nsec).
+  ///
+  /// It also stays classical when ANOTHER device on the account is one of those
+  /// logins ([setPqSealToSelf]): that device holds no secret to derive from, so
+  /// a hybrid blob would lock it out of its own settings silently and for good.
+  ///
+  /// [allowPq] false is the [pqRootCategory] escape hatch — spec §5.1.
+  Future<String?> _encryptToSelf(String plaintext,
+      {bool allowPq = true}) async {
     try {
       final signer = _signer;
-      final selfKem = _pqSelfKeys.isEmpty ? null : _pqSelfKeys.first;
-      if (signer is LocalSigner && selfKem != null) {
+      final candidates = allowPq
+          ? await _pqSelfKeyCandidates()
+          : const <({Uint8List kemSk, Uint8List kemPk})>[];
+      final selfKem = candidates.isEmpty ? null : candidates.first;
+      if (allowPq && _pqSealToSelf && selfKem != null) {
         try {
-          return pq.pqEncrypt(
-              plaintext, signer.privkey, _pubkey, selfKem.kemPk);
+          // Layered, not combined: the outer layer is keyed from the KEM
+          // secret alone, so the inner NIP-44 can come from a signer. The
+          // combined format needed the raw ECDH output and therefore a local
+          // nsec, which left every extension and NIP-46 account's settings
+          // classical — and wrote a blob the PWA does not produce.
+          final inner = await signer.nip44Encrypt(_pubkey, plaintext);
+          return await pq.pq2Seal(inner, _pubkey, _pubkey, selfKem.kemPk);
         } catch (_) {
           // Fall through to NIP-44 rather than losing the write.
         }
@@ -2315,9 +2589,24 @@ class StorageSync {
   Future<String?> _decryptFromSelf(String ciphertext) async {
     try {
       final signer = _signer;
+      // Layered first: it is what both apps write now, and it opens with the
+      // KEM secret plus whatever holds the identity key — a signer included.
+      if (pq.isPq2Payload(ciphertext)) {
+        for (final k in await _pqSelfKeyCandidates()) {
+          try {
+            final inner = await pq.pq2Open(
+                ciphertext, _pubkey, _pubkey, k.kemSk, k.kemPk);
+            return await signer.nip44Decrypt(_pubkey, inner);
+          } catch (_) {
+            // Wrong epoch — try the next.
+          }
+        }
+        return null;
+      }
+      // The combined form: only a local nsec can open it, by construction.
       if (pq.isPqPayload(ciphertext)) {
         if (signer is! LocalSigner) return null;
-        for (final k in _pqSelfKeys) {
+        for (final k in await _pqSelfKeyCandidates()) {
           try {
             return pq.pqDecrypt(
               ciphertext,

@@ -35,14 +35,35 @@ void main() {
       expect(pqBadgeStateFor(pqEncrypted: false), PqBadgeState.classical);
     });
 
-    test('a post-quantum PM shows the full shield', () {
-      expect(pqBadgeStateFor(pqEncrypted: true), PqBadgeState.full);
+    test('a root-seeded post-quantum PM shows the full shield', () {
+      expect(pqBadgeStateFor(pqEncrypted: true, pqRoot: true),
+          PqBadgeState.full);
     });
 
-    test('a fully covered group shows the full shield', () {
+    // The v1 overclaim: an ML-KEM key derived from the nsec falls with the
+    // nsec, so a quantum computer that recovers one recovers both.
+    test('a post-quantum PM under a legacy key is NOT full', () {
+      expect(pqBadgeStateFor(pqEncrypted: true), PqBadgeState.legacy);
+    });
+
+    test('legacy still outranks classical -- it IS hybrid on the wire', () {
+      expect(pqBadgeStateFor(pqEncrypted: true),
+          isNot(PqBadgeState.classical));
+    });
+
+    test('a fully covered root-seeded group shows the full shield', () {
+      expect(
+          pqBadgeStateFor(
+              pqEncrypted: true,
+              pqRoot: true,
+              pqCoverage: (pq: 10, total: 10)),
+          PqBadgeState.full);
+    });
+
+    test('a fully covered group under legacy keys is not full', () {
       expect(
           pqBadgeStateFor(pqEncrypted: true, pqCoverage: (pq: 10, total: 10)),
-          PqBadgeState.full);
+          PqBadgeState.legacy);
     });
 
     test('a partly covered group shows PARTIAL, not full', () {
@@ -54,6 +75,38 @@ void main() {
     test('a group no member could receive post-quantum says classical', () {
       expect(
           pqBadgeStateFor(pqEncrypted: true, pqCoverage: (pq: 0, total: 10)),
+          PqBadgeState.classical);
+    });
+
+    // The badge is a claim about the MESSAGE, and a group message is a fan-out
+    // of the same plaintext: one classical copy anywhere defeats it. Our own
+    // copy's transport is one wrap out of many and cannot support "full".
+    // Received group messages never carry a count -- only the sender counts the
+    // fan-out -- and a sent one can render before its count lands, so this is
+    // the ordinary case, not an edge one.
+    test('a group message with NO coverage count is partial, never full', () {
+      expect(pqBadgeStateFor(pqEncrypted: true, isGroup: true),
+          PqBadgeState.partial);
+    });
+
+    test('a PM is still full on our own copy, having no fan-out', () {
+      expect(
+          pqBadgeStateFor(
+              pqEncrypted: true, pqRoot: true, isGroup: false),
+          PqBadgeState.full);
+    });
+
+    // Partial is about fan-out coverage, and outranks key provenance: a
+    // classical copy is a worse leak than a legacy-sealed one.
+    test('partial coverage outranks a root-seeded flag', () {
+      expect(
+          pqBadgeStateFor(
+              pqEncrypted: true, pqRoot: true, pqCoverage: (pq: 8, total: 10)),
+          PqBadgeState.partial);
+    });
+
+    test('a classical group message is still classical, not partial', () {
+      expect(pqBadgeStateFor(pqEncrypted: false, isGroup: true),
           PqBadgeState.classical);
     });
 
@@ -85,7 +138,9 @@ void main() {
     });
 
     test('an empty group is not protected', () {
-      expect(pqBadgeStateFor(pqEncrypted: true, pqCoverage: (pq: 0, total: 0)),
+      expect(
+          pqBadgeStateFor(
+              pqEncrypted: true, pqRoot: true, pqCoverage: (pq: 0, total: 0)),
           PqBadgeState.full,
           reason: 'total == 0 falls back to the flag; no members means no '
               'classical copy exists to weaken it');
@@ -108,6 +163,22 @@ void main() {
     testWidgets('partial renders too', (tester) async {
       await pump(tester, PqBadgeState.partial);
       expect(find.byType(CryptoPqBadge), findsOneWidget);
+    });
+
+    testWidgets('legacy renders too', (tester) async {
+      await pump(tester, PqBadgeState.legacy);
+      expect(find.byType(CryptoPqBadge), findsOneWidget);
+    });
+
+    testWidgets('the legacy popup names the key, not a failed exchange',
+        (tester) async {
+      await pump(tester, PqBadgeState.legacy);
+      await tester.tap(find.byType(CryptoPqBadge));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('legacy key'), findsOneWidget);
+      expect(find.textContaining('Nostr identity key'), findsOneWidget);
+      // It IS hybrid on the wire, so it must not read as no protection.
+      expect(find.textContaining('Not quantum-resistant'), findsNothing);
     });
 
     testWidgets('is tappable', (tester) async {
@@ -133,6 +204,25 @@ void main() {
   });
 
   group('message model round-trip', () {
+    test('pqRoot survives serialization, and defaults false', () {
+      Message base({bool? root}) => Message(
+            id: 'x',
+            author: 'a',
+            pubkey: 'b',
+            content: 'hi',
+            createdAt: 1,
+            timestamp: 1000,
+            pqEncrypted: true,
+            pqRoot: root ?? false,
+          );
+      expect(Message.fromJson(base(root: true).toJson()).pqRoot, isTrue);
+      expect(Message.fromJson(base().toJson()).pqRoot, isFalse);
+      // History predates the root: a row without the field is legacy, and
+      // reading it as full would resurrect the overclaim on every restart.
+      final legacy = base(root: true).toJson()..remove('pqRoot');
+      expect(Message.fromJson(legacy).pqRoot, isFalse);
+    });
+
     test('pqEncrypted and coverage survive serialization', () {
       final m = Message(
         id: 'x',

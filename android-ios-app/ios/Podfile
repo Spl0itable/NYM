@@ -33,7 +33,53 @@ target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
 
+# App Store review rejects any reference to `RPSystemBroadcastPickerView`'s
+# private `buttonPressed:` selector, which flutter_webrtc uses to open the
+# broadcast picker programmatically (ios/Classes/FlutterRTCDesktopCapturer.m).
+#
+# The block only runs when a caller asks for the broadcast extension, and
+# Nymchat never does — `_startScreenShare` requests plain
+# `getDisplayMedia({video:true})`, which takes the in-app ReplayKit path. So
+# removing it costs us nothing, while leaving it in costs us the submission:
+# the scan looks for the symbol in the binary, not for a reachable call.
+#
+# Idempotent, and re-applied on every `pod install` because `flutter pub get`
+# restores the pristine plugin source.
+def strip_private_broadcast_picker(installer)
+  root = File.realpath(File.join(__dir__, '.symlinks', 'plugins', 'flutter_webrtc'))
+  target = File.join(root, 'ios', 'Classes', 'FlutterRTCDesktopCapturer.m')
+  return unless File.exist?(target)
+
+  src = File.read(target)
+  return if src.include?('NYM_PRIVATE_PICKER_STRIPPED')
+
+  needle = <<~OBJC
+    SEL selector = NSSelectorFromString(@"buttonPressed:");
+    if ([picker respondsToSelector:selector]) {
+      [picker performSelector:selector withObject:nil];
+    }
+  OBJC
+  replacement = <<~OBJC
+    // NYM_PRIVATE_PICKER_STRIPPED — see ios/Podfile. `buttonPressed:` is
+    // private API and fails App Store review; the picker is left for the
+    // user to present. Unreachable here: Nymchat never requests the
+    // broadcast extension.
+  OBJC
+
+  # Match the block regardless of leading indentation.
+  pattern = /^[ \t]*SEL selector = NSSelectorFromString\(@"buttonPressed:"\);\n[ \t]*if \(\[picker respondsToSelector:selector\]\) \{\n[ \t]*\[picker performSelector:selector withObject:nil\];\n[ \t]*\}\n/
+  unless src =~ pattern
+    raise "flutter_webrtc: could not find the buttonPressed: block to strip. " \
+          "Check whether the plugin fixed it upstream, then drop this patch."
+  end
+
+  File.write(target, src.sub(pattern, replacement))
+  Pod::UI.puts '[nym] stripped private buttonPressed: from flutter_webrtc'.green
+end
+
 post_install do |installer|
+  strip_private_broadcast_picker(installer)
+
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|

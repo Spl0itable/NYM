@@ -104,12 +104,16 @@ Map<String, dynamic> _encodeWrapJob({
   required String recipientPubkey,
   int? expiration,
   Uint8List? recipientKemPk,
+  bool layered = false,
 }) =>
     {
       'rumor': rumor.toJson(),
       'sk': keys.bytesToHex(senderPrivkey),
       'rcpt': recipientPubkey,
       if (expiration != null) 'exp': expiration,
+      // Which payload format this recipient can open, from their announcement.
+      // Per-job like `rkem`, so one fan-out can mix both.
+      if (layered) 'l2': 1,
       // Present only when this recipient has announced an ML-KEM key; its
       // presence is what selects the hybrid post-quantum wrap inside the
       // isolate. Per-job rather than per-batch so one group fan-out can mix
@@ -161,9 +165,11 @@ Future<List<Map<String, dynamic>?>> unwrapBatchIsolate(
 /// recipient list shipped in one hop). Returns one signed kind-1059 wrap JSON
 /// per job, positionally aligned with the input. A job that throws yields a
 /// `null` slot so the caller can skip exactly that recipient.
-List<Map<String, dynamic>?> wrapBatchIsolate(
+// Async because the layered format's ChaCha20-Poly1305 is: `compute` accepts a
+// Future-returning entry point, so this stays one isolate hop either way.
+Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
   List<Map<String, dynamic>> jobs,
-) {
+) async {
   final out = List<Map<String, dynamic>?>.filled(jobs.length, null);
   for (var i = 0; i < jobs.length; i++) {
     try {
@@ -182,20 +188,31 @@ List<Map<String, dynamic>?> wrapBatchIsolate(
       final recipientPubkey = job['rcpt'] as String;
       final expiration = job['exp'] as int?;
       final rkem = job['rkem'] as String?;
-      final wrap = rkem == null
-          ? giftwrap.nip59Wrap(
-              rumor: rumor,
-              senderPrivkey: senderPrivkey,
-              recipientPubkey: recipientPubkey,
-              expiration: expiration,
-            )
-          : giftwrap.pqNip59Wrap(
-              rumor: rumor,
-              senderPrivkey: senderPrivkey,
-              recipientPubkey: recipientPubkey,
-              recipientKemPublicKey: keys.hexToBytes(rkem),
-              expiration: expiration,
-            );
+      final NostrEvent wrap;
+      if (rkem == null) {
+        wrap = giftwrap.nip59Wrap(
+          rumor: rumor,
+          senderPrivkey: senderPrivkey,
+          recipientPubkey: recipientPubkey,
+          expiration: expiration,
+        );
+      } else if (job['l2'] == 1) {
+        wrap = await giftwrap.pq2Nip59Wrap(
+          rumor: rumor,
+          senderPrivkey: senderPrivkey,
+          recipientPubkey: recipientPubkey,
+          recipientKemPublicKey: keys.hexToBytes(rkem),
+          expiration: expiration,
+        );
+      } else {
+        wrap = giftwrap.pqNip59Wrap(
+          rumor: rumor,
+          senderPrivkey: senderPrivkey,
+          recipientPubkey: recipientPubkey,
+          recipientKemPublicKey: keys.hexToBytes(rkem),
+          expiration: expiration,
+        );
+      }
       out[i] = wrap.toJson();
     } catch (_) {
       out[i] = null;
@@ -337,6 +354,7 @@ class CryptoWorker {
     required List<String> recipientPubkeys,
     int? expiration,
     Map<String, Uint8List>? recipientKemPks,
+    Set<String>? layeredPubkeys,
   }) async {
     if (recipientPubkeys.isEmpty) return const <NostrEvent?>[];
     final jobs = <Map<String, dynamic>>[
@@ -347,19 +365,20 @@ class CryptoWorker {
           recipientPubkey: pk,
           expiration: expiration,
           recipientKemPk: recipientKemPks?[pk],
+          layered: layeredPubkeys?.contains(pk) ?? false,
         ),
     ];
 
     List<Map<String, dynamic>?> results;
     if (kIsWeb) {
       // No real isolate on web: run the same entrypoint inline.
-      results = wrapBatchIsolate(jobs);
+      results = await wrapBatchIsolate(jobs);
     } else {
       try {
         results = await compute(wrapBatchIsolate, jobs);
       } catch (_) {
         // Isolate failure: produce the wraps inline (same pure function).
-        results = wrapBatchIsolate(jobs);
+        results = await wrapBatchIsolate(jobs);
       }
     }
     return [
@@ -374,6 +393,7 @@ class CryptoWorker {
     required String recipientPubkey,
     int? expiration,
     Uint8List? recipientKemPk,
+    bool layered = false,
   }) async {
     final out = await wrapMany(
       rumor: rumor,
@@ -382,6 +402,7 @@ class CryptoWorker {
       expiration: expiration,
       recipientKemPks:
           recipientKemPk == null ? null : {recipientPubkey: recipientKemPk},
+      layeredPubkeys: layered ? {recipientPubkey} : null,
     );
     return out.isEmpty ? null : out.first;
   }

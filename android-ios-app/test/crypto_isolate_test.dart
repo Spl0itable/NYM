@@ -64,7 +64,7 @@ void main() {
         content: 'isolate round-trip secret',
       );
 
-      final wraps = wrapBatchIsolate([
+      final wraps = await wrapBatchIsolate([
         wrapJob(
           rumor: rumor,
           senderPrivkey: senderSk,
@@ -92,10 +92,10 @@ void main() {
       expect(res['isBitchat'], isFalse);
     });
 
-    test('expiration tag is carried through the wrap entrypoint', () {
+    test('expiration tag is carried through the wrap entrypoint', () async {
       final senderSk = generatePrivateKey();
       final recipientPub = getPublicKeyHex(generatePrivateKey());
-      final wraps = wrapBatchIsolate([
+      final wraps = await wrapBatchIsolate([
         wrapJob(
           rumor: UnsignedEvent(
             pubkey: getPublicKeyHex(senderSk),
@@ -131,7 +131,7 @@ void main() {
         kind: 14,
         content: 'group fan-out',
       );
-      final wraps = wrapBatchIsolate([
+      final wraps = await wrapBatchIsolate([
         for (final pk in pubs)
           wrapJob(rumor: rumor, senderPrivkey: senderSk, recipientPubkey: pk),
       ]);
