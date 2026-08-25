@@ -3097,6 +3097,12 @@ function linkPqRoot() {
     if (typeof nym.publishPqAnnouncement === 'function') {
         try { nym.publishPqAnnouncement(); } catch (_) { }
     }
+    // The categories sealed to the root-derived key could not be opened until
+    // now, so this session is running on whatever defaults it fell back to.
+    // Re-read them, or the link appears to work and the settings stay stuck.
+    if (typeof nym.reloadSettingsAfterPqLink === 'function') {
+        nym.reloadSettingsAfterPqLink();
+    }
 }
 
 function toggleNsecVisibility() {

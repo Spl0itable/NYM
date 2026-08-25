@@ -1129,6 +1129,12 @@ Object.assign(NYM.prototype, {
             }
         }
         const status = this.pqRootEnsure(record, rowPresent);
+        // A device that cannot open the record has to be told, and this is the
+        // moment we learn it — the boot notice fired long before the settings
+        // read came back.
+        if (status === 'locked' && typeof this.maybeShowPqUpgradeNotice === 'function') {
+            try { this.maybeShowPqUpgradeNotice(); } catch (_) { }
+        }
         // Only §6.4 writes. A locked device must never publish a record.
         if (status === 'generated') {
             try { await this.pqRootPublishRecord(); } catch (_) { }
@@ -1198,6 +1204,26 @@ Object.assign(NYM.prototype, {
         if (!this.pqRootAdopt(bytes)) return false;
         this._settingsRestoreUnreadable = false;
         return true;
+    },
+
+    /// Re-reads the encrypted settings after a link. Until the root arrived,
+    /// every root-sealed row failed to open and the session fell back to
+    /// defaults; nothing re-reads them on its own until a reconnect, so a user
+    /// who links sees the code accepted and the settings stay wrong.
+    ///
+    /// The per-category content hashes are dropped first: a row we publish
+    /// after linking can be byte-identical to what we last wrote under the
+    /// wrong key, and the "unchanged" short-circuit would skip it.
+    async reloadSettingsAfterPqLink() {
+        try {
+            for (const k of Object.keys(localStorage)) {
+                if (k.startsWith(`nym_settings_hash_${this.pubkey}_`)) {
+                    try { localStorage.removeItem(k); } catch (_) { }
+                }
+            }
+        } catch (_) { }
+        this._settingsRestoreUnreadable = false;
+        try { await this.settingsLoadFromD1(); } catch (_) { }
     },
 
     async _saveSettingsBlobToD1(dTag, plaintext) {

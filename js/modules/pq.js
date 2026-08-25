@@ -120,6 +120,27 @@
             try { localStorage.removeItem('nym_pq_upgrade_notice'); } catch (_) { }
         },
 
+        /// Whether this device still needs to be told to paste the code.
+        ///
+        /// Separate from the upgrade notice, and deliberately so: that one is
+        /// armed only for an UPGRADE, because only an upgrade can strand an
+        /// older device. But the device that most needs the prompt is a fresh
+        /// install joining an account that already has a root — no upgrade, no
+        /// notice, and the one screen telling it to link never appeared.
+        ///
+        /// Keyed per account so switching identities asks again, and cleared
+        /// once shown so it is a prompt rather than a nag.
+        pqRootLinkPromptPending() {
+            if (!this.pqRootLinkNeeded()) return false;
+            try {
+                return localStorage.getItem(`nym_pq_link_prompt_${this.pubkey}`) !== 'shown';
+            } catch (_) { return false; }
+        },
+
+        dismissPqRootLinkPrompt() {
+            try { localStorage.setItem(`nym_pq_link_prompt_${this.pubkey}`, 'shown'); } catch (_) { }
+        },
+
         /// Marks an upgrade so the one-time notice fires once. Called at boot.
         ///
         /// `nym_last_online_ts` is written by every prior version, so its
@@ -1142,11 +1163,17 @@
         /// to link, because for that device nothing is protected until it
         /// does, and saying "you're covered" would be false.
         async maybeShowPqUpgradeNotice() {
-            if (!this.pqUpgradeNoticePending()) return;
-            if (!this.pqCapable()) { this.dismissPqUpgradeNotice(); return; }
+            // Either signal opens this: an upgrade that should save its code,
+            // or a device that cannot read the account until it pastes one.
+            const linkPending = this.pqRootLinkPromptPending();
+            if (!this.pqUpgradeNoticePending() && !linkPending) return;
+            // A locked device is not `pqCapable` — that is the whole problem —
+            // so the capability gate must not swallow its prompt.
+            if (!linkPending && !this.pqCapable()) { this.dismissPqUpgradeNotice(); return; }
             if (this._pqTutorialPending()) { this.dismissPqUpgradeNotice(); return; }
             this.dismissPqUpgradeNotice();
             const linkNeeded = this.pqRootLinkNeeded();
+            if (linkNeeded) this.dismissPqRootLinkPrompt();
             const body = linkNeeded
                 ? 'This account already has a post-quantum recovery code, and this '
                   + 'device does not have it yet.\n\nUntil you add it, this device '
