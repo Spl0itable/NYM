@@ -134,6 +134,7 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
   /// shell never leaves them pending.
   Timer? _tutorialDelay;
   Timer? _pqNoticeDelay;
+  Timer? _pqNoticeRetry;
   bool _pqNoticeShown = false;
   Timer? _encryptPromptDelay;
 
@@ -141,6 +142,7 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
   void dispose() {
     _tutorialDelay?.cancel();
     _pqNoticeDelay?.cancel();
+    _pqNoticeRetry?.cancel();
     _encryptPromptDelay?.cancel();
     super.dispose();
   }
@@ -194,8 +196,20 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
     if (!seen) {
       unawaited(ref.read(nostrControllerProvider).dismissPqUpgradeNotice());
     } else {
+      // Twice: once for the upgrade case, and again once the settings read
+      // has had time to come back — the lock that makes a fresh device need
+      // the code is only known after §6 settles, long after 3.5s.
       _pqNoticeDelay = Timer(const Duration(milliseconds: 3500), () {
         if (mounted) unawaited(_maybeShowPqNotice());
+        _pqNoticeRetry = Timer(const Duration(seconds: 12), () {
+          if (!mounted) return;
+          unawaited(_maybeShowPqNotice());
+          // And the encrypt-at-rest offer, which needs the synced
+          // `encryptAtRestPreferred` flag — that flag lives in the settings a
+          // locked device cannot read, so on a second device it is not there
+          // at the 2.5s mark and the prompt never fired at all.
+          unawaited(_maybePromptEncryptAtRest());
+        });
       });
     }
   }
@@ -209,9 +223,13 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
   Future<void> _maybeShowPqNotice() async {
     if (_pqNoticeShown) return;
     final ctrl = ref.read(nostrControllerProvider);
-    if (!ctrl.pqUpgradeNoticePending) return;
+    // Either signal opens this: an upgrade that should save its code, or a
+    // device that cannot read the account until it pastes one.
+    final linkPending = ctrl.pqRootLinkPromptPending;
+    if (!ctrl.pqUpgradeNoticePending && !linkPending) return;
     _pqNoticeShown = true;
     await ctrl.dismissPqUpgradeNotice();
+    if (linkPending) await ctrl.dismissPqRootLinkPrompt();
     if (!mounted) return;
     final linkNeeded = ctrl.pqRootLinkNeeded;
     if (linkNeeded) {

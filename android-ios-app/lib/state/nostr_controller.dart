@@ -4340,6 +4340,30 @@ class NostrController {
   Future<void> dismissPqUpgradeNotice() async =>
       _ref.read(keyValueStoreProvider).remove(StorageKeys.pqUpgradeNotice);
 
+  /// Whether this device still needs to be told to paste the code.
+  ///
+  /// Separate from the upgrade notice, and deliberately so: that one is armed
+  /// only for an UPGRADE, because only an upgrade can strand an older device.
+  /// But the device that most needs the prompt is a FRESH install joining an
+  /// account that already has a root — no upgrade, no notice, and the one
+  /// screen telling it to link never appeared.
+  ///
+  /// Keyed per account so switching identities asks again, and cleared once
+  /// shown so it is a prompt rather than a nag.
+  bool get pqRootLinkPromptPending {
+    if (!pqRootLinkNeeded) return false;
+    final self = _identity?.pubkey ?? '';
+    return _ref.read(keyValueStoreProvider).getString('nym_pq_link_prompt_$self') !=
+        'shown';
+  }
+
+  Future<void> dismissPqRootLinkPrompt() async {
+    final self = _identity?.pubkey ?? '';
+    await _ref
+        .read(keyValueStoreProvider)
+        .setString('nym_pq_link_prompt_$self', 'shown');
+  }
+
   /// True when post-quantum is both possible and switched on.
   bool get pqEnabled =>
       PqPolicy.enabled(privkey: _identity?.privkey, mode: _pqMode);
@@ -4754,6 +4778,11 @@ class NostrController {
     );
 
     if (action != PqRootAction.wait) _pqRootSettled = true;
+    // Anything but awaitLink means this device holds, or is about to hold, the
+    // account's root, so nothing is unreadable-pending-a-link.
+    if (action != PqRootAction.awaitLink && action != PqRootAction.wait) {
+      sync.pqRootLocked = false;
+    }
 
     switch (action) {
       case PqRootAction.wait:
@@ -4773,6 +4802,10 @@ class NostrController {
         return;
 
       case PqRootAction.awaitLink:
+        // The decode path needs this to tell "cannot read these rows" from
+        // "cannot read them YET" — without it a locked device treats the
+        // account's settings as unreadable-forever and republishes defaults.
+        sync.pqRootLocked = true;
         // §6.3 — do NOT generate, do NOT announce; prompt the user to link.
         // A root that does not open this account's record is not this
         // account's root: keeping it in play would announce a key no peer
@@ -4813,22 +4846,56 @@ class NostrController {
   Future<bool> linkPqRootFromCode(String code) async {
     final root = pqRootFromCode(code);
     if (root == null) return false;
-    final self = _identity?.pubkey;
-    if (self != null) {
-      final announced = _pqRegistry.keyFor(
-        self,
-        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        enabled: true,
-      );
-      if (announced != null &&
-          !pqRootMatchesAnnouncedKey(root, announced, _pqEpoch)) {
-        return false;
+
+    // Against the RECORD's fingerprint, as the PWA does. The record is the
+    // account's own statement of which root it uses: exact, epoch-free, and
+    // always present on a device that needs linking — being unable to open it
+    // is the reason this device is locked in the first place.
+    //
+    // This used to compare against the announced ML-KEM key, walking four
+    // epochs from OUR epoch counter. That counter belongs to this device, not
+    // to the one that published the announcement, so a correct code was
+    // rejected whenever the two had drifted apart.
+    final record = _storageSync?.pqRootRecord;
+    if (record != null && record.isValid) {
+      if (!record.matches(root)) return false;
+    } else {
+      // No record to check against — fall back to the announced key, using the
+      // epoch the announcement itself carries.
+      final self = _identity?.pubkey;
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final announced =
+          self == null ? null : _pqRegistry.keyFor(self, nowSec: nowSec, enabled: true);
+      if (announced != null) {
+        final epoch = _pqRegistry.epochFor(self!) ?? _pqEpoch;
+        if (!pqRootMatchesAnnouncedKey(root, announced, epoch)) return false;
       }
     }
+
     if (!await _persistPqRoot(root)) return false;
+    _pqRootLocked = false;
+    _pqRootSettled = true;
     _pushPqKeysToPeers();
     await publishPqAnnouncement(force: true);
+    // The categories sealed to the root-derived key could not be opened until
+    // now, so the session is running on whatever defaults it fell back to.
+    // Re-read them, or the link appears to work and the settings stay stuck.
+    await _reloadSettingsAfterLink();
     return true;
+  }
+
+  /// Re-runs the settings restore after a link, so rows this device could not
+  /// open are applied instead of being left to a later reconnect.
+  Future<void> _reloadSettingsAfterLink() async {
+    final sync = _storageSync;
+    if (sync == null) return;
+    try {
+      sync.pqRootLocked = false;
+      sync.clearSettingsHashes();
+      await _mergeRemoteSettings(sync);
+    } catch (_) {
+      // A failed re-read leaves the next scheduled pull to catch up.
+    }
   }
 
   /// Re-pushes our ML-KEM keys, so a link taking effect mid-session does not

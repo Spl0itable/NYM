@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'pq_root.dart';
+import '../../core/crypto/pq.dart' as pq;
 import '../../core/crypto/bech32_codec.dart';
 import '../../core/crypto/key_format.dart';
 import '../../core/theme/nym_colors.dart';
@@ -759,8 +761,27 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             ),
           ],
         ),
+        // The fingerprint, as the PWA shows it: it lets two devices be
+        // compared without either revealing the code itself, and it is the
+        // only visible confirmation that a paste actually took.
+        if (_pqRootFingerprint != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            tr('Fingerprint: {fp}', {'fp': _pqRootFingerprint!}),
+            style: TextStyle(
+                color: c.textDim, fontFamily: 'monospace', fontSize: 11),
+          ),
+        ],
       ],
     );
+  }
+
+  /// Short public fingerprint of the held root, or null without one.
+  String? get _pqRootFingerprint {
+    final code = ref.read(nostrControllerProvider).pqRootCode;
+    if (code == null) return null;
+    final bytes = pqRootFromCode(code);
+    return bytes == null ? null : pq.pqRootFingerprint(bytes);
   }
 
   Widget _pqRootLinkRow(NymColors c) {

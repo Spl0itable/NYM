@@ -367,6 +367,11 @@ class PqRegistry {
     return _entry(pubkey, nowSec)?.pk;
   }
 
+  /// The epoch a peer's live announcement was published at, or null. Needed
+  /// when checking a pasted root against an announced key: the epoch belongs
+  /// to the device that published it, not to whoever is checking.
+  int? epochFor(String pubkey) => _keys[pubkey]?.epoch;
+
   /// Whether a peer's live announcement is root-seeded (spec §3), for the
   /// badge. A KEM-less entry is never root-seeded: there is no key to protect.
   bool isRootSeeded(String pubkey,

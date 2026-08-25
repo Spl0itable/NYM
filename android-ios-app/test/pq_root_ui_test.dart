@@ -334,6 +334,130 @@ void main() {
     });
   });
 
+  // The device that most needs the prompt is a FRESH install joining an
+  // account that already has a root: no upgrade, so the upgrade notice is
+  // never armed, and the screen telling it to link never appeared.
+  group('a locked device is prompted even without an upgrade', () {
+    final ctrl = File('lib/state/nostr_controller.dart').readAsStringSync();
+    final gate = File('lib/features/onboarding/boot_gate.dart').readAsStringSync();
+
+    test('the link prompt is its own signal, not the upgrade one', () {
+      expect(ctrl.contains('bool get pqRootLinkPromptPending'), isTrue);
+      expect(ctrl.contains('if (!pqRootLinkNeeded) return false;'), isTrue);
+      expect(ctrl.contains('nym_pq_link_prompt_\$self'), isTrue,
+          reason: 'keyed per account, so switching identities asks again');
+    });
+
+    test('and either signal opens the notice', () {
+      expect(
+          gate.contains(
+              'if (!ctrl.pqUpgradeNoticePending && !linkPending) return;'),
+          isTrue);
+      expect(gate.contains('await ctrl.dismissPqRootLinkPrompt();'), isTrue);
+    });
+
+    test('it re-checks after the settings read could have settled', () {
+      expect(gate.contains('_pqNoticeRetry'), isTrue,
+          reason: 'the lock is only known once section 6 settles');
+      expect(gate.contains('_pqNoticeRetry?.cancel();'), isTrue);
+    });
+  });
+
+  group('linking verifies against the record, not our epoch', () {
+    final ctrl = File('lib/state/nostr_controller.dart').readAsStringSync();
+    final link = ctrl.substring(
+        ctrl.indexOf('Future<bool> linkPqRootFromCode'),
+        ctrl.indexOf('Future<void> _reloadSettingsAfterLink'));
+
+    // The record is the account's own statement of which root it uses: exact,
+    // epoch-free, and always present on a device that needs linking.
+    test('the fingerprint is the primary check', () {
+      expect(link.contains('record.matches(root)'), isTrue);
+      expect(link.contains('_storageSync?.pqRootRecord'), isTrue);
+    });
+
+    test('and the announced-key fallback uses the announcement own epoch', () {
+      expect(link.contains('_pqRegistry.epochFor(self!)'), isTrue,
+          reason: 'our counter is not the publishing device\'s counter');
+    });
+
+    test('a successful link clears the lock and re-reads settings', () {
+      expect(link.contains('_pqRootLocked = false;'), isTrue);
+      expect(link.contains('_reloadSettingsAfterLink()'), isTrue);
+      expect(ctrl.contains('sync.clearSettingsHashes();'), isTrue,
+          reason: 'an identical blob must still be republished');
+    });
+  });
+
+  // A second device logging in must not publish its defaults over the
+  // account's settings before it can read them.
+  group('a locked device never overwrites settings it cannot read', () {
+    final sync = File('lib/services/api/storage_sync.dart').readAsStringSync();
+    final ctrl = File('lib/state/nostr_controller.dart').readAsStringSync();
+
+    test('rows that did not open are counted, not silently skipped', () {
+      expect(sync.contains('var pending = 0;'), isTrue);
+      expect(
+          sync.contains(
+              '_settingsRestoreUnreadable = pending > 0 && _pqRootLockedOut;'),
+          isTrue);
+    });
+
+    test('and saving is refused while any row is unread', () {
+      expect(sync.contains('if (_settingsRestoreUnreadable) return false;'),
+          isTrue);
+    });
+
+    // The v1 reasoning: with a local nsec, an all-fail decode is final. Under
+    // v2 the rows are sealed to the ROOT, which a fresh device does not have
+    // yet — so that verdict wiped accounts.
+    test('an all-fail decode is not final while locked out', () {
+      expect(sync.contains('if (_pqRootLockedOut) return null;'), isTrue);
+      expect(sync.contains('if (storedBlobs == 0 || _signer is LocalSigner)'),
+          isFalse,
+          reason: 'the old branch treated a locked device as unreadable-forever');
+    });
+
+    test('the controller tells the storage layer the verdict', () {
+      expect(ctrl.contains('sync.pqRootLocked = true;'), isTrue);
+      expect(ctrl.contains('sync.pqRootLocked = false;'), isTrue);
+    });
+
+    // The lock is decided AFTER the load that read the rows — section 6 needs
+    // a completed read to tell "no record" from "could not look" — so the
+    // first load computes the verdict with the lock still unknown. Without
+    // recomputing, the very boot that does the wiping is the unprotected one.
+    test('the verdict is recomputed when the lock is decided', () {
+      expect(sync.contains('_lastLoadPending = pending;'), isTrue);
+      expect(
+          sync.contains(
+              '_settingsRestoreUnreadable = v && _lastLoadPending > 0;'),
+          isTrue);
+    });
+  });
+
+  group('the recovery-code panel confirms what it holds', () {
+    final modal =
+        File('lib/features/identity/nick_edit_modal.dart').readAsStringSync();
+
+    test('it shows the fingerprint, as the PWA does', () {
+      expect(modal.contains('pq.pqRootFingerprint(bytes)'), isTrue);
+      expect(kAppStringsCatalog, contains('Fingerprint: {fp}'));
+    });
+  });
+
+  group('the encrypt-at-rest offer survives an unreadable first load', () {
+    final gate = File('lib/features/onboarding/boot_gate.dart').readAsStringSync();
+
+    // The flag it needs lives in the settings a locked device cannot read, so
+    // at the 2.5s mark it is simply not there yet.
+    test('it is re-checked after the settings have had time to land', () {
+      final retry = gate.substring(gate.indexOf('_pqNoticeRetry = Timer('));
+      expect(retry.substring(0, 700).contains('_maybePromptEncryptAtRest()'),
+          isTrue);
+    });
+  });
+
   group('every new string is translatable', () {
     // A string missing from the catalog stays English in every other language,
     // silently, and only in this one panel.

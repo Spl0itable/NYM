@@ -1318,6 +1318,7 @@ const List<String> kAppStringsCatalog = <String>[
   'Linked',
   'That code did not match',
   'Active, but on the older key: this device has no nympq1… recovery code yet. It is set up automatically the first time this account reaches the network — until then, messages use a key derived from your nsec.',
+  'Fingerprint: {fp}',
   'Post-quantum recovery code copied',
   "Reveal this nym's private key and recovery code",
   'Link',
