@@ -1300,7 +1300,11 @@ Object.assign(NYM.prototype, {
             dupGroupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
         }
         if (dupGroupMsg) {
-            if (isPqWrap && !dupGroupMsg.pqEncrypted) {
+            // Never for our OWN message. We are a member of our own group, so
+            // the fan-out addresses a copy to us; receiving it back says only
+            // that WE hold a key, never that the other members do. The send
+            // path already recorded the real per-member coverage.
+            if (isPqWrap && !dupGroupMsg.pqEncrypted && !dupGroupMsg.isOwn) {
                 dupGroupMsg.pqEncrypted = true;
                 dupGroupMsg.pqRoot = this.pqSealIsRootSeeded(senderPubkey);
                 if (typeof this.refreshMessagePqBadge === 'function') {

@@ -1422,6 +1422,17 @@ Object.assign(NYM.prototype, {
 
             const pmFileOffer = this.parseFileOfferTag(rumor.tags, senderPubkey);
 
+            // Our OWN message, rebuilt from a wrap. The only wrap of it we can
+            // receive is the self-addressed archive copy, sealed to OUR key —
+            // so `isPqWrap` describes our archive, never how the message
+            // reached the recipient. Ask the recipient instead, which is the
+            // question the send path asked. Without this, every message we sent
+            // to a Bitchat peer came back from the archive (cache cleared, a
+            // second device, a D1 restore) marked "quantum-resistant, legacy
+            // key": pqEncrypted true off our own key, pqRoot false because the
+            // PEER has none.
+            const pmIsPq = isOwn ? !!this.pqLayeredKeyFor(peerPubkey) : isPqWrap;
+
             const msg = {
                 id: event.id,                                  // keep outer id for reactions/zaps
                 author: isOwn ? this.nym : senderName,
@@ -1442,8 +1453,8 @@ Object.assign(NYM.prototype, {
                 // Confidentiality, not authentication: orthogonal to
                 // senderVerified, so it gets its own badge rather than folding
                 // into that tri-state lock.
-                pqEncrypted: isPqWrap,
-                pqRoot: isPqWrap && this.pqSealRootVerdict(peerPubkey) === true,
+                pqEncrypted: pmIsPq,
+                pqRoot: pmIsPq && this.pqSealRootVerdict(peerPubkey) === true,
                 isFileOffer: !!pmFileOffer,
                 fileOffer: pmFileOffer,
                 thinking: botThinking || undefined,
@@ -1453,7 +1464,7 @@ Object.assign(NYM.prototype, {
             };
             // The announcement may still be in flight; fill the verdict in
             // rather than leaving the opening message marked legacy.
-            if (isPqWrap) {
+            if (pmIsPq) {
                 this.pqResolveRootVerdict(peerPubkey, nymMsgId || msg.id,
                     (v) => { msg.pqRoot = v; });
             }

@@ -1088,12 +1088,16 @@
         ///     it.
         ///   * `bitchat` — also send a Bitchat-format wrap.
         ///   * `nym` — send the Nymchat-format wrap (post-quantum when `pq`,
-        ///     classical otherwise).
+        ///     classical otherwise). Always true: every recipient gets one.
         ///
         /// No setting. The whole rule is one question — has this peer
         /// published a signed capability announcement? — because inferring
         /// the client from public activity would sometimes be wrong, and
-        /// wrong here means a message their app cannot open, silently.
+        /// wrong here means a message their app cannot open, silently. So:
+        ///
+        ///   no announcement, or an expired one -> NIP-44 + Bitchat
+        ///   live announcement carrying `pk2`   -> pq2 alone
+        ///   live announcement, no key or `pk`  -> NIP-44 alone
         ///
         /// A post-quantum wrap never carries a Bitchat copy of the same
         /// plaintext: that would hand a quantum attacker the easier target
@@ -1107,10 +1111,12 @@
             // instead, which they can always read — protection is what an old
             // peer costs us, never delivery.
             const kemPk = this.pqLayeredKeyFor(recipientPubkey);
+            // The ONLY input to routing. How a peer is classified from their
+            // traffic — `bitchatUsers` / `nymUsers` — decides nothing here any
+            // more, in either direction: it cannot add a Nymchat wrap (every
+            // recipient gets one) and it cannot take a Bitchat wrap away (only
+            // this signed announcement does).
             const provenNym = this.isKnownNymchatClient(recipientPubkey);
-            const knownBitchat = !!(this.bitchatUsers && this.bitchatUsers.has(recipientPubkey));
-            const knownNym = !!(this.nymUsers && this.nymUsers.has(recipientPubkey));
-            const unknown = !knownBitchat && !knownNym;
 
             // The Bitchat wrap exists to reach someone who MIGHT be running
             // Bitchat, and only a signed announcement proves they are not.
@@ -1129,11 +1135,20 @@
                 // a legacy peer still gets a post-quantum wrap.
                 rootSeeded: !!kemPk && this.pqPeerIsRootSeeded(recipientPubkey),
                 bitchat,
-                // Invariant: a message must always leave in SOME format. The
-                // other terms happen to cover every case today, but a silent
-                // no-send is such a bad failure — no error, no retry, the
-                // message simply never exists — that the guard stays.
-                nym: !bitchat || knownNym || unknown || provenNym || !!kemPk,
+                // ALWAYS. Every recipient gets a Nymchat wrap: the layered one
+                // when they announced a key they can open it with, an ordinary
+                // NIP-44 one when they did not.
+                //
+                // This used to be conditional, and the condition was false for
+                // the single commonest case there is — a peer already
+                // classified as Bitchat and nothing else. `knownBitchat` alone
+                // makes `unknown`, `knownNym`, `provenNym` and `kemPk` all
+                // false and `bitchat` true, so every term collapsed and the
+                // peer received the Bitchat wrap ALONE. If they were in fact
+                // running Nymchat, or running both, the Nymchat copy of the
+                // message simply never existed. Withholding it buys nothing:
+                // a Bitchat client ignores a wrap it cannot open.
+                nym: true,
                 // Surfaced for tests and diagnostics; not used for routing.
                 provenNym
             };
