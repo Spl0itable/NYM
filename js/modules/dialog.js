@@ -14,6 +14,13 @@
                     '<div class="modal-header" id="appDialogTitle">Confirm</div>' +
                     '<div class="modal-body">' +
                         '<div class="app-dialog-message" id="appDialogMessage"></div>' +
+                        // A value the dialog is ABOUT rather than asking for:
+                        // shown selectable, with one-tap copy, so the user is
+                        // never told to go find something they are looking at.
+                        '<div class="app-dialog-copy nm-hidden" id="appDialogCopyRow">' +
+                            '<code class="app-dialog-copy-value" id="appDialogCopyValue"></code>' +
+                            '<button type="button" class="pubkey-slideout-copy" id="appDialogCopyBtn">Copy</button>' +
+                        '</div>' +
                         '<label class="app-dialog-checkbox nm-hidden" id="appDialogCheckboxRow"><input type="checkbox" id="appDialogCheckbox"><span id="appDialogCheckboxLabel"></span></label>' +
                         '<input type="text" class="form-input app-dialog-input nm-hidden" id="appDialogInput" autocomplete="off">' +
                         '<textarea class="form-textarea app-dialog-textarea nm-hidden" id="appDialogTextarea" rows="4"></textarea>' +
@@ -95,6 +102,26 @@
             document.getElementById('appDialogTitle').textContent =
                 opts.title || (opts.alertOnly ? 'Notice' : 'Confirm');
             document.getElementById('appDialogMessage').textContent = opts.message || '';
+            var copyRow = document.getElementById('appDialogCopyRow');
+            var copyVal = document.getElementById('appDialogCopyValue');
+            var copyBtn = document.getElementById('appDialogCopyBtn');
+            if (copyRow && copyVal && copyBtn) {
+                if (opts.copyValue) {
+                    copyVal.textContent = opts.copyValue;
+                    copyBtn.textContent = opts.copyLabel || 'Copy';
+                    copyBtn.onclick = function () {
+                        try { navigator.clipboard.writeText(opts.copyValue); } catch (_) { }
+                        var was = copyBtn.textContent;
+                        copyBtn.textContent = 'Copied!';
+                        setTimeout(function () { copyBtn.textContent = was; }, 1200);
+                    };
+                    copyRow.classList.remove('nm-hidden');
+                } else {
+                    copyVal.textContent = '';
+                    copyBtn.onclick = null;
+                    copyRow.classList.add('nm-hidden');
+                }
+            }
             var input = document.getElementById('appDialogInput');
             var textarea = document.getElementById('appDialogTextarea');
             var field = opts.multiline ? textarea : input;
@@ -148,7 +175,9 @@
             alertOnly: true,
             message: message,
             title: opts.title,
-            okLabel: opts.okLabel
+            okLabel: opts.okLabel,
+            copyValue: opts.copyValue,
+            copyLabel: opts.copyLabel
         });
     };
 

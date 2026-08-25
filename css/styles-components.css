@@ -2484,3 +2484,32 @@ body.light-mode .send-btn.danger {
 body.light-mode .send-btn.danger:hover:not(:disabled) {
     background: rgb(from var(--danger) r g b / 0.18);
 }
+
+.form-hint.pq-status-active {
+    color: var(--success, #3fb950);
+}
+
+.app-dialog-copy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.app-dialog-copy-value {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--primary);
+    word-break: break-all;
+    user-select: all;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: 4px;
+}
+
+.app-dialog-copy .pubkey-slideout-copy {
+    flex: 0 0 auto;
+}

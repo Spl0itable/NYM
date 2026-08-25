@@ -3059,19 +3059,6 @@ function refreshPqRootReveal() {
     }
 }
 
-function openPqRootFromSettings() {
-    if (typeof closeModal === 'function') closeModal('settingsModal');
-    if (typeof openNickEditModal === 'function') openNickEditModal();
-    const slideout = document.getElementById('privkeySlideout');
-    if (slideout && getComputedStyle(slideout).display === 'none') {
-        toggleRevealPrivkey();
-    } else {
-        refreshPqRootReveal();
-    }
-    const target = document.getElementById('pqRootReveal');
-    if (target && target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
-}
-
 function togglePqRootVisibility() {
     const input = document.getElementById('pqRootValue');
     if (!input) return;
@@ -3697,6 +3684,9 @@ async function showSettings() {
             : ' No contact has published a post-quantum key yet, so messages are'
               + ' still going out on standard encryption. This turns on by itself'
               + ' as soon as one does.';
+        // Green only when it is genuinely on end to end — the same signal the
+        // mobile apps give, and never for the send-only or unavailable states.
+        pqStatus.classList.toggle('pq-status-active', !!capable);
         pqStatus.innerHTML = capable
             ? '<strong>Active</strong> for messages with other Nymchat users.' + reach
             : sendOnly
@@ -3712,12 +3702,14 @@ async function showSettings() {
                     + (d.ver ? ' (' + d.ver + ')' : '')).join(', ') + '.'
                 : '';
         }
+        // Only the state the user can act on. A device that already holds the
+        // code has nothing to do here, and the line telling it so sat above a
+        // button that led nowhere.
         const rootHint = document.getElementById('pqRootSettingsHint');
         if (rootHint) {
             const has = typeof nym.pqHasRoot === 'function' && nym.pqHasRoot();
-            rootHint.textContent = has
-                ? 'This device holds your nympq1\u2026 recovery code. Copy it to your other devices so they can read the same quantum-resistant messages.'
-                : 'This device has no recovery code yet, so its messages are protected by a key derived from your nsec — which a quantum computer would recover along with the nsec. Paste the nympq1\u2026 code from a device that has one.';
+            rootHint.textContent = has ? ''
+                : 'This device has no recovery code yet, so its messages are protected by a key derived from your nsec — which a quantum computer would recover along with the nsec. Paste the nympq1\u2026 code from a device that has one, in View or Edit Nym\u2019s Details.';
         }
     }
 

@@ -183,11 +183,25 @@
             }
         },
 
-        pqHasRoot() { return !!this.pqRoot(); },
+        pqHasRoot() { return !!this.pqUsableRoot(); },
+
+        /// The root we may derive keys FROM, as distinct from the bytes we
+        /// happen to store. A locked device holds a root that does not open
+        /// this account's record — a stale one from a reset identity — and
+        /// sealing our own copies to it would write history the account's real
+        /// devices cannot open. The announcement is already withheld while
+        /// locked (see publishPqAnnouncement); this withholds the key itself.
+        pqUsableRoot() {
+            if (this._pqRootLocked) return null;
+            return this.pqRoot();
+        },
 
         /// The `nympq1...` code, for the reveal/copy surface beside the nsec.
         pqRootCode() {
-            const r = this.pqRoot();
+            // The usable one: a locked device must not present a stale root as
+            // "your recovery code" and invite the user to copy it onto their
+            // other devices. It gets the link prompt instead.
+            const r = this.pqUsableRoot();
             if (!r) return null;
             try { return window.NymCrypto.pqRootEncode(r); } catch (_) { return null; }
         },
@@ -337,7 +351,7 @@
         pqSelfKeys() {
             if (!this.pqCapable()) return null;
             const epoch = this._pqEpoch();
-            const root = this.pqRoot();
+            const root = this.pqUsableRoot();
             const NC = window.NymCrypto;
             const src = root ? NC.pqRootFingerprint(root) : 'nsec';
             const basis = `${this.pubkey}:${epoch}:${src}`;
@@ -1137,22 +1151,51 @@
                 ? 'This account already has a post-quantum recovery code, and this '
                   + 'device does not have it yet.\n\nUntil you add it, this device '
                   + 'keeps working normally but cannot read the quantum-resistant '
-                  + 'messages your other devices can. Open your Nym\u2019s details '
-                  + 'and paste the nympq1\u2026 code from a device that has it.'
+                  + 'messages your other devices can.\n\nPaste the nympq1\u2026 code '
+                  + 'from a device that has it \u2014 you will find it there under '
+                  + 'View or Edit Nym\u2019s Details. You can also do this later, '
+                  + 'in that same panel.'
                 : 'Your private messages and group chats with other Nymchat users are now '
                   + 'encrypted with an added post-quantum key exchange (ML-KEM-768), so traffic '
                   + 'recorded today can\u2019t be decrypted later by a quantum computer.\n\n'
-                  + 'This uses a recovery code, not your nsec. Save your nympq1\u2026 code '
+                  + 'This uses a recovery code, not your nsec. Save the code below '
                   + 'alongside your nsec \u2014 you will need it to read these messages on '
                   + 'another device, and if every device holding it is lost, they cannot be '
-                  + 'recovered. You will find it in your Nym\u2019s details.\n\n'
+                  + 'recovered. It is always available in your Nym\u2019s details.\n\n'
                   + 'Bitchat users and other Nostr clients are unaffected.';
+            // Shown in the notice itself: the one moment the user is told the
+            // code matters is the moment to let them copy it, rather than
+            // sending them to look for it and hoping they do.
+            const code = linkNeeded ? null : (this.pqRootCode ? this.pqRootCode() : null);
             try {
+                // A device that needs the code can paste it here. Telling it
+                // where to go and then making it navigate is a step for no
+                // reason — the notice already has the user's attention.
+                if (linkNeeded) {
+                    const pasted = await window.showAppPrompt(body, {
+                        title: 'Add your post-quantum recovery code',
+                        okLabel: 'Link this device',
+                        cancelLabel: 'Later',
+                        placeholder: 'nympq1\u2026'
+                    });
+                    const trimmed = (pasted || '').trim();
+                    if (!trimmed) return;
+                    const ok = typeof this.pqRootLinkWithCode === 'function'
+                        && this.pqRootLinkWithCode(trimmed);
+                    if (ok) {
+                        try { await this.publishPqAnnouncement(); } catch (_) { }
+                    }
+                    await window.showAppAlert(ok
+                        ? 'Linked. This device can now read your quantum-resistant messages.'
+                        : 'That code does not match this account. Check it and try again \u2014 you can also paste it in View or Edit Nym\u2019s Details.',
+                        { title: ok ? 'Linked' : 'That code did not match', okLabel: 'Got it' });
+                    return;
+                }
                 await window.showAppAlert(body, {
-                    title: linkNeeded
-                        ? 'Add your post-quantum recovery code'
-                        : 'Quantum-resistant encryption is on',
-                    okLabel: 'Got it'
+                    title: 'Quantum-resistant encryption is on',
+                    okLabel: 'Got it',
+                    copyValue: code || undefined,
+                    copyLabel: 'Copy code'
                 });
             } catch (_) { /* dialog unavailable; the notice is not load-bearing */ }
         },
