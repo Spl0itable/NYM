@@ -613,7 +613,7 @@
                             await breathe();
                             if (!m || m.isOwn || m.isGroup || !m.pubkey) continue;
                             if (m.nymMessageId) this.nymUsers.add(m.pubkey);
-                            else if (m.bitchatMessageId) this.bitchatUsers.add(m.pubkey);
+                            if (m.bitchatMessageId) this.bitchatUsers.add(m.pubkey);
                         }
                     }
                 } else {

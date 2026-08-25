@@ -1357,7 +1357,8 @@ Object.assign(NYM.prototype, {
                     dupMsg.content = messageContent;
                     needsRerender = true;
                 }
-                if (isPqWrap && !dupMsg.pqEncrypted) {
+                // Never for our OWN sent message
+                if (isPqWrap && !dupMsg.pqEncrypted && !dupMsg.isOwn) {
                     dupMsg.pqEncrypted = true;
                     dupMsg.pqRoot = this.pqSealIsRootSeeded(peerPubkey);
                     // Flip the on-screen shield immediately, exactly as the

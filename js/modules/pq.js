@@ -936,6 +936,15 @@
         /// send classical NIP-17 — every caller treats it that way, so a
         /// missing, expired, or KEM-less announcement degrades cleanly instead
         /// of failing a send.
+        /// A peer's ML-KEM key, but ONLY when they accept the layered format.
+        /// The single accessor every send path goes through, so "never send
+        /// pq1" is one rule in one place rather than a check per call site.
+        pqLayeredKeyFor(pubkey) {
+            const rec = this._pqEntry(pubkey);
+            if (!rec || !rec.pk || !rec.pq2) return null;
+            return this.pqEnabled() ? rec.pk : null;
+        },
+
         pqKeyFor(pubkey) {
             if (!this.pqEnabled()) return null;
             const rec = this._pqEntry(pubkey);
@@ -971,7 +980,15 @@
             return true;
         },
 
+        /// Our own key for self-addressed copies — withheld unless every
+        /// device on the account can open the layered format, since we no
+        /// longer produce the combined one. A pq1-only device then gets an
+        /// ordinary NIP-44 copy it can read, rather than one it cannot.
         pqSelfKeyFor() {
+            // Layered only. A device on this account that can open just the
+            // combined format gets an ordinary NIP-44 copy it can read, rather
+            // than a pq1 one we no longer produce.
+            if (!this.pqSelfUsesPq2()) return null;
             if (!this.pqSelfEnabled()) return null;
             // Sealing to a key another of our own devices cannot derive locks
             // that device out of its own settings, and the failure is silent
@@ -1034,7 +1051,8 @@
         /// their REAL pubkey — the announcement is published by the identity,
         /// not by a rotating ephemeral key.
         pqGroupKeyFor(memberRealPubkey) {
-            return this.pqKeyFor(memberRealPubkey);
+            // Layered only, like every other send path.
+            return this.pqLayeredKeyFor(memberRealPubkey);
         },
 
         /// Whether copies addressed to OURSELVES should use the layered
@@ -1082,16 +1100,21 @@
         /// and buys no reach. It falls out of the rule rather than being a
         /// special case.
         pqPmPlan(recipientPubkey) {
-            const kemPk = this.pqKeyFor(recipientPubkey);
+            // Only ever the LAYERED format. A peer that announced just `pk`
+            // can only open the combined one, which mixes the raw ECDH output
+            // and therefore excludes every signer login; we no longer produce
+            // it at all. Withholding the key here sends them ordinary NIP-44
+            // instead, which they can always read — protection is what an old
+            // peer costs us, never delivery.
+            const kemPk = this.pqLayeredKeyFor(recipientPubkey);
             const provenNym = this.isKnownNymchatClient(recipientPubkey);
             const knownBitchat = !!(this.bitchatUsers && this.bitchatUsers.has(recipientPubkey));
             const knownNym = !!(this.nymUsers && this.nymUsers.has(recipientPubkey));
             const unknown = !knownBitchat && !knownNym;
 
             // The Bitchat wrap exists to reach someone who MIGHT be running
-            // Bitchat. A live announcement proves they are not, so it is
-            // dropped; without one we cannot tell, so it is sent.
-            const bitchat = (knownBitchat || unknown) && !provenNym;
+            // Bitchat, and only a signed announcement proves they are not.
+            const bitchat = !provenNym;
 
             const rec = this._pqEntry(recipientPubkey);
             return {
