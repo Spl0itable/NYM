@@ -1911,11 +1911,15 @@ class NostrService {
   /// messages restore across devices). Honors TTL via [settings].
   /// (docs/specs/03 §3.1–§3.2)
   ///
-  /// Bitchat interop (PWA `sendNIP17PM`, pms.js:326-372): when [bitchatRumor] is
-  /// non-null a parallel `bitchat1:`-encoded gift wrap is ALSO published so a
-  /// bitchat-app peer can decrypt us (sent for known-bitchat AND unknown peers).
-  /// [sendNymWrap] gates the NIP-17 recipient wrap (false for a known-bitchat-
-  /// only peer). The self-copy is ALWAYS NIP-17 so own messages restore across
+  /// Bitchat interop (PWA `sendNIP17PM`): each entry in [bitchatRumors] is
+  /// published as a parallel `bitchat1:`-encoded gift wrap so a bitchat-app peer
+  /// can decrypt us (sent for every peer whose signed announcement does not
+  /// prove they are running Nymchat). There is more than one only when the text
+  /// exceeds the 255 bytes bitchat allows in a TLV field and had to be split.
+  /// [sendNymWrap] gates the NIP-17 recipient wrap. `PqPmPlan` never clears it
+  /// any more — every recipient gets a Nymchat wrap, post-quantum or classical
+  /// — and it stays only so a caller with no recipient to reach (a self-copy)
+  /// can say so. The self-copy is ALWAYS NIP-17 so own messages restore across
   /// devices, and only NIP-17 wraps are reported via [onWrap] for D1
   /// archive/deposit — the PWA never deposits bitchat wraps (relay-only).
   Future<bool> publishPM({
@@ -1923,7 +1927,7 @@ class NostrService {
     required String recipientPubkey,
     MessagingSettings settings = const MessagingSettings(),
     void Function(NostrEvent wrap)? onWrap,
-    UnsignedEvent? bitchatRumor,
+    List<UnsignedEvent> bitchatRumors = const [],
     bool sendNymWrap = true,
     Uint8List? recipientKemPublicKey,
     Uint8List? selfKemPublicKey,
@@ -1938,10 +1942,16 @@ class NostrService {
     // passed to [onWrap], so never deposited to D1 — the PWA deposits only the
     // nym wrap). Skipped for a self-copy and for remote signers (bitchat sealing
     // needs a local key).
-    if (bitchatRumor != null && recipientPubkey != identity.pubkey) {
-      final bwrap = await _buildBitchatWrap(bitchatRumor, recipientPubkey,
-          expiration: expiration);
-      if (bwrap != null) await pool.publishDm(bwrap);
+    //
+    // NO expiration on this one. Bitchat 1.7.1 checks the gift wrap's tags are
+    // EXACTLY [["p", recipient]] and rejects the DM outright otherwise, so a
+    // NIP-40 tag here made every message undeliverable to Bitchat for anyone
+    // with disappearing messages switched on. The PWA has never sent one.
+    if (bitchatRumors.isNotEmpty && recipientPubkey != identity.pubkey) {
+      for (final r in bitchatRumors) {
+        final bwrap = await _buildBitchatWrap(r, recipientPubkey);
+        if (bwrap != null) await pool.publishDm(bwrap);
+      }
     }
 
     // Report each produced NIP-17 wrap so the controller can archive/deposit at

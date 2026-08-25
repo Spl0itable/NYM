@@ -2543,7 +2543,16 @@ class AppStateNotifier extends StateNotifier<AppState> {
       // quantum-resistant once its hybrid copy lands. Never downgrades — the
       // Bitchat copy of the same text arriving later says nothing about how the
       // Nymchat one was sealed.
-      if (m.pqEncrypted && !dup.pqEncrypted) {
+      //
+      // Never for our OWN sent message. The only wrap of it we can receive back
+      // is the self-addressed copy kept for our other devices, and that copy is
+      // post-quantum whenever WE hold a key — it says nothing about how the
+      // message reached the recipient. Upgrading from it marked every message
+      // sent to a Bitchat peer, or to any peer with no key, as
+      // "Quantum-resistant, legacy key": pqEncrypted flipped true while pqRoot
+      // stayed false, because the PEER has no root. `markOwnMessagePq` already
+      // recorded the truth about the recipient's copy at send time.
+      if (m.pqEncrypted && !dup.pqEncrypted && !dup.isOwn) {
         dup.pqEncrypted = true;
         // Carried with it, or the upgrade would jump straight to the full
         // shield on a legacy key.

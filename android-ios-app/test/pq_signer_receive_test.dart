@@ -169,15 +169,21 @@ void main() {
       expect(plan.layered, isTrue);
     });
 
-    test('combined for a peer that predates it', () {
+    // The combined format is never produced. A peer that predates the split
+    // announced only `pk`, so they are handed no key at all and receive
+    // ordinary NIP-44 — readable by every client. Protection is what an old
+    // peer costs us; delivery is not.
+    test('no post-quantum wrap at all for a peer that predates it', () {
       final plan = PqPmPlan.decide(
         recipientKemKey: kem.publicKey,
         knownBitchat: false,
         knownNym: true,
         recipientAcceptsLayered: false,
       );
-      expect(plan.pq, isTrue);
+      expect(plan.pq, isFalse);
       expect(plan.layered, isFalse);
+      expect(plan.kemPublicKey, isNull);
+      expect(plan.nym, isTrue, reason: 'they still receive the message');
     });
 
     test('never layered without a key to encapsulate to', () {

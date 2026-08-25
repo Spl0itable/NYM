@@ -349,9 +349,16 @@ void main() {
     // silently voiding the post-quantum guarantee while the UI still claims it.
     final key = unhex(a['kemPublicKey'] as String);
 
-    PqPmPlan plan({Uint8List? kem, bool bitchat = false, bool nym = false}) =>
+    // A peer holding a key is a CURRENT peer: they announced pk2. A peer that
+    // announced only `pk` is modelled with layered:false, and is now sent no
+    // post-quantum wrap at all.
+    PqPmPlan plan({Uint8List? kem, bool bitchat = false, bool nym = false,
+            bool layered = true}) =>
         PqPmPlan.decide(
-            recipientKemKey: kem, knownBitchat: bitchat, knownNym: nym);
+            recipientKemKey: kem,
+            recipientAcceptsLayered: layered,
+            knownBitchat: bitchat,
+            knownNym: nym);
 
     test('unknown peer, no key: bitchat + classical nym (today\'s behaviour)', () {
       final p = plan();
@@ -360,17 +367,41 @@ void main() {
       expect(p.nym, isTrue);
     });
 
-    test('known bitchat peer: bitchat only, never post-quantum', () {
+    // This asserted `p.nym` was FALSE and pinned the bug: a peer classified as
+    // Bitchat received the Bitchat wrap ALONE, so the Nymchat copy of the
+    // message never existed.
+    test('known bitchat peer, no announcement: BOTH formats, never post-quantum',
+        () {
       final p = plan(bitchat: true);
       expect(p.pq, isFalse);
       expect(p.bitchat, isTrue);
-      expect(p.nym, isFalse);
+      expect(p.nym, isTrue);
     });
 
-    test('known nym peer without a key: classical nym only', () {
+    // An announcement proves the pubkey RAN Nymchat this week; bitchat-format
+    // traffic from them proves they are running Bitchat NOW. Only one of those
+    // is about the present, and suppressing on the announcement alone is what
+    // left a peer who moved to Bitchat, or who runs both, receiving nothing.
+    test('a peer we have heard bitchat format from keeps getting it', () {
+      final p = plan(kem: key, bitchat: true);
+      expect(p.bitchat, isTrue);
+      expect(p.nym, isTrue);
+    });
+
+    // A post-quantum wrap beside a readable copy of the same text protects
+    // nothing, so the message goes classical and the shield says so.
+    test('...and is not sent a post-quantum wrap alongside it', () {
+      final p = plan(kem: key, bitchat: true);
+      expect(p.pq, isFalse);
+      expect(p.kemPublicKey, isNull);
+    });
+
+    // Classification is inference, not proof — a Bitchat client echoing our
+    // `x` tag back sets it. Only a signed announcement suppresses the wrap.
+    test('known nym peer without a key still gets the Bitchat copy', () {
       final p = plan(nym: true);
       expect(p.pq, isFalse);
-      expect(p.bitchat, isFalse);
+      expect(p.bitchat, isTrue);
       expect(p.nym, isTrue);
     });
 
@@ -381,12 +412,15 @@ void main() {
       expect(p.bitchat, isFalse);
     });
 
-    test('a bitchat-flagged peer WITH a key gets no classical copy alongside', () {
-      // The dangerous case: sending both would leak the same plaintext to the
-      // weaker copy, handing a future quantum attacker the easier target.
+    // Superseded: a peer we have heard bitchat format from is running Bitchat
+    // now, so the message goes classical + Bitchat rather than post-quantum
+    // alone. Pairing a post-quantum wrap with a readable copy of the same text
+    // is still forbidden, which is why `pq` is false here and not true.
+    test('a peer we have heard bitchat format from is never sent pq alongside',
+        () {
       final p = plan(kem: key, bitchat: true);
-      expect(p.pq, isTrue);
-      expect(p.bitchat, isFalse);
+      expect(p.pq, isFalse);
+      expect(p.bitchat, isTrue);
     });
 
     test('known nym peer with a key: post-quantum, no bitchat copy', () {
@@ -471,6 +505,75 @@ void main() {
     });
   });
 
+  group('routing table (1:1 PM)', () {
+    // Read straight off the rule, not off the code: what a recipient gets
+    // depends on their kind-30078 `nym-pq` announcement and NOTHING else.
+    // Classification from traffic is not an input in either direction.
+    final key = unhex(a['kemPublicKey'] as String);
+
+    void expectRoute(
+      String label, {
+      Uint8List? kem,
+      bool layered = true,
+      bool proven = false,
+      required bool pq,
+      required bool nym,
+      required bool bitchat,
+    }) {
+      // `knownBitchat` is deliberately excluded here: it is first-hand proof
+      // the peer runs Bitchat and IS allowed to move the verdict. See the
+      // Bitchat-wrap suppression group.
+      for (final flags in const [
+        (b: false, n: false, name: 'unclassified'),
+        (b: false, n: true, name: 'nym-flagged'),
+      ]) {
+        test('$label (${flags.name})', () {
+          final p = PqPmPlan.decide(
+            recipientKemKey: kem,
+            recipientAcceptsLayered: layered,
+            provenNymchat: proven,
+            knownBitchat: flags.b,
+            knownNym: flags.n,
+          );
+          expect(p.pq, pq, reason: 'post-quantum wrap');
+          expect(p.nym, nym, reason: 'Nymchat wrap');
+          expect(p.bitchat, bitchat, reason: 'Bitchat wrap');
+        });
+      }
+    }
+
+    expectRoute('no announcement at all -> NIP-44 + Bitchat',
+        pq: false, nym: true, bitchat: true);
+    expectRoute('live announcement with pk2 -> pq2 alone',
+        kem: key, pq: true, nym: true, bitchat: false);
+    expectRoute('live announcement carrying no key -> NIP-44 alone',
+        proven: true, pq: false, nym: true, bitchat: false);
+    expectRoute('live announcement, pq1 key only -> NIP-44 alone',
+        kem: key, layered: false, pq: false, nym: true, bitchat: false);
+
+    test('the Nymchat wrap is sent to every recipient, in every state', () {
+      for (final kem in [null, key]) {
+        for (final layered in [false, true]) {
+          for (final proven in [false, true]) {
+            for (final b in [false, true]) {
+              for (final n in [false, true]) {
+                expect(
+                    PqPmPlan.decide(
+                      recipientKemKey: kem,
+                      recipientAcceptsLayered: layered,
+                      provenNymchat: proven,
+                      knownBitchat: b,
+                      knownNym: n,
+                    ).nym,
+                    isTrue);
+              }
+            }
+          }
+        }
+      }
+    });
+  });
+
   group('Bitchat wrap suppression', () {
     // No setting: a live announcement proves the peer is not on Bitchat, so
     // the extra copy is dropped. Anyone we cannot prove gets exactly what they
@@ -485,6 +588,7 @@ void main() {
     }) =>
         PqPmPlan.decide(
           recipientKemKey: kem,
+          recipientAcceptsLayered: true,
           knownBitchat: bitchat,
           knownNym: nym,
           provenNymchat: proven,
@@ -504,8 +608,9 @@ void main() {
       expect(plan(bitchat: true).bitchat, isTrue);
     });
 
-    test('an announcement overrides a stale bitchat flag', () {
-      expect(plan(bitchat: true, proven: true).bitchat, isFalse);
+    // The reverse of what this used to assert, for the reason above.
+    test('first-hand bitchat traffic outranks the announcement', () {
+      expect(plan(bitchat: true, proven: true).bitchat, isTrue);
     });
 
     test('an unknown peer keeps the pre-existing dual-send', () {

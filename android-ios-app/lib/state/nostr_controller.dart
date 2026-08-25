@@ -3120,9 +3120,26 @@ class NostrController {
       pqRootFor: (peer) => pqSealRootVerdict(peer) == true,
     );
     if (m == null) return;
+    // Our OWN message, rebuilt from a wrap. The only wrap of it we can receive
+    // is the self-addressed archive copy, sealed to OUR key — so `u.isPq`
+    // describes our archive, never how the message reached the recipient. Ask
+    // the recipient instead, which is the question the send path asked. Without
+    // this, every message sent to a Bitchat peer came back from the archive
+    // (cache cleared, a second device, a D1 restore) marked "Quantum-resistant,
+    // legacy key": pqEncrypted true off our own key, pqRoot false because the
+    // PEER has none.
+    if (m.isOwn) {
+      final peer = m.conversationPubkey ?? m.pubkey;
+      final layered = _pqRegistry.acceptsLayered(peer,
+          nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          enabled: PqPolicy.enabled(
+              privkey: _identity?.privkey, mode: _pqMode));
+      m.pqEncrypted = layered;
+      m.pqRoot = layered && pqSealRootVerdict(peer) == true;
+    }
     // The announcement may still be in flight; fill the verdict in rather
     // than leaving the opening message of a conversation marked legacy.
-    if (u.isPq) _resolvePqRootVerdict(m.conversationPubkey ?? m.pubkey,
+    if (m.pqEncrypted) _resolvePqRootVerdict(m.conversationPubkey ?? m.pubkey,
         m.nymMessageId);
     // Resolve the display author against the users map — the PWA's
     // `author: isOwn ? this.nym : this.getNymFromPubkey(senderPubkey)`
@@ -4185,6 +4202,12 @@ class NostrController {
   /// mid-conversation.
   static const int _pqMissTtlMs = 10 * 60 * 1000;
 
+  /// How long a SEND may wait on a peer's announcement before going with what
+  /// it already knows. Deliberately short: a first message that goes classical
+  /// is a missed upgrade and the next one picks the key up, while a message
+  /// that never leaves is gone.
+  static const int _pqSendLookupBudgetMs = 1500;
+
   /// Cap on a single prefetch sweep, so opening a large group does not fire one
   /// subscription per member.
   static const int _pqPrefetchMax = 60;
@@ -4246,8 +4269,23 @@ class NostrController {
         _pqLookupMisses.remove(pubkey);
       }
     });
-    _pqLookups[pubkey] = f;
-    return f;
+    // BOUNDED, because the send path awaits this and a lookup is an
+    // optimization while delivery is not.
+    //
+    // Neither leg is bounded on the send path's terms, and the whole cost falls
+    // on peers with no announcement — a peer WITH a key returns above and never
+    // gets here — which is to say on Bitchat users, every single message. The
+    // bounded future is what later callers attach to as well, so one stuck read
+    // cannot go on holding up every subsequent message to that peer.
+    //
+    // Errors are swallowed for the same reason: not finding an announcement is
+    // the normal outcome here, and it must never be able to abort a send.
+    final bounded = f.timeout(
+      const Duration(milliseconds: _pqSendLookupBudgetMs),
+      onTimeout: () {},
+    ).catchError((_) {});
+    _pqLookups[pubkey] = bounded;
+    return bounded;
   }
 
   /// How many contacts we hold a live post-quantum key for. Surfaced in
@@ -4927,49 +4965,75 @@ class NostrController {
     // send without opening anything, and for the first message of a brand new
     // thread — whose conversation entry does not exist yet, so the critical
     // subscription has not been rebuilt around them.
-    await ensurePqAnnouncement(recipientPubkey);
+    // Never lets a key lookup abort the send: a peer with no announcement is
+    // the normal case here, not an error, and the plan below already treats a
+    // missing key as "send classical".
+    try {
+      await ensurePqAnnouncement(recipientPubkey);
+    } catch (_) {}
 
     // Which transports this recipient gets. See PqPmPlan.decide for why
     // post-quantum replaces rather than accompanies the others.
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final pqOn = PqPolicy.enabled(privkey: identity.privkey, mode: _pqMode);
-    final plan = PqPmPlan.decide(
-      recipientKemKey:
-          _pqRegistry.keyFor(recipientPubkey, nowSec: nowSec, enabled: pqOn),
-      knownBitchat: _bitchatUsers.contains(recipientPubkey),
-      knownNym: _nymUsers.contains(recipientPubkey),
-      provenNymchat:
-          _pqRegistry.isKnownNymchatClient(recipientPubkey, nowSec: nowSec),
-      recipientAcceptsLayered: _pqRegistry.acceptsLayered(recipientPubkey,
-          nowSec: nowSec, enabled: pqOn),
-    );
+    // Deciding the format is an optimization. Delivering the message is not, so
+    // nothing that goes wrong in here may take the send with it. The fallback
+    // is the safe end of every axis — both formats, no post-quantum — which is
+    // what an unknown peer gets anyway. (The PWA hit exactly this: a throw in
+    // its plan aborted the send before any wrap was built, for every
+    // recipient, with nothing visible to the user.)
+    PqPmPlan plan;
+    try {
+      plan = PqPmPlan.decide(
+        recipientKemKey:
+            _pqRegistry.keyFor(recipientPubkey, nowSec: nowSec, enabled: pqOn),
+        knownBitchat: _bitchatUsers.contains(recipientPubkey),
+        knownNym: _nymUsers.contains(recipientPubkey),
+        provenNymchat:
+            _pqRegistry.isKnownNymchatClient(recipientPubkey, nowSec: nowSec),
+        recipientAcceptsLayered: _pqRegistry.acceptsLayered(recipientPubkey,
+            nowSec: nowSec, enabled: pqOn),
+      );
+    } catch (e) {
+      debugPrint('[PQ] send plan failed, falling back to dual-send: $e');
+      plan = const PqPmPlan(kemPublicKey: null, bitchat: true, nym: true);
+    }
 
-    UnsignedEvent? bitchatRumor;
+    // One rumor per chunk. Bitchat caps a TLV value at 255 bytes and sends
+    // longer text as several messages; anything bigger in one packet is
+    // discarded whole on arrival. Short text is a single chunk.
+    final bitchatRumors = <UnsignedEvent>[];
     if (plan.bitchat) {
-      // The bitchat rumor's content is a `bitchat1:` packet; it carries the SAME
-      // `nymMessageId` (`x` tag) as the nym rumor so a peer's reaction/receipt
-      // matches across both formats (pms.js:339-346).
-      String? nymMessageId;
-      for (final t in rumor.tags) {
-        if (t.length > 1 && t[0] == 'x') {
-          nymMessageId = t[1];
-          break;
-        }
+      // The bitchat rumor's content is a `bitchat1:` packet, and the rumor
+      // itself carries no tags at all — see below.
+      for (final chunk in bitchat.chunkBitchatContent(rumor.content)) {
+        final encoded = bitchat.encodeBitchatMessage(
+          chunk,
+          identity.pubkey,
+          recipientPubkey: recipientPubkey,
+        );
+        // NO TAGS. Bitchat 1.7.1 (upstream e9275cb, 2026-07-26) hardened its
+        // envelope checks: `validInnerMessageTags` accepts an inner rumor only
+        // when its tags are EMPTY or exactly [["p", recipient]]. Anything else
+        // and the whole DM is dropped as malformed, silently, on their side.
+        //
+        // We had been putting ['x', nymMessageId] here so a reaction on either
+        // copy could be matched to the other. That one tag is why Bitchat users
+        // stopped receiving anything from us the week they updated — while our
+        // read receipts kept arriving, because those rumors have always been
+        // built with no tags.
+        //
+        // Losing it costs nothing on this copy: only a Bitchat client reads it,
+        // and Bitchat matches receipts by the UUID inside the bitchat1: packet,
+        // never by our tag.
+        bitchatRumors.add(UnsignedEvent(
+          pubkey: identity.pubkey,
+          createdAt: rumor.createdAt,
+          kind: EventKind.dmRumor,
+          tags: const [],
+          content: encoded.content,
+        ));
       }
-      final encoded = bitchat.encodeBitchatMessage(
-        rumor.content,
-        identity.pubkey,
-        recipientPubkey: recipientPubkey,
-      );
-      bitchatRumor = UnsignedEvent(
-        pubkey: identity.pubkey,
-        createdAt: rumor.createdAt,
-        kind: EventKind.dmRumor,
-        tags: [
-          if (nymMessageId != null) ['x', nymMessageId],
-        ],
-        content: encoded.content,
-      );
     }
 
     // The echo went on screen before the recipient's key was looked up, so it
@@ -4989,7 +5053,7 @@ class NostrController {
       recipientPubkey: recipientPubkey,
       settings: _msgSettings,
       onWrap: onWrap,
-      bitchatRumor: bitchatRumor,
+      bitchatRumors: bitchatRumors,
       sendNymWrap: plan.nym,
       recipientKemPublicKey: plan.kemPublicKey,
       selfKemPublicKey: pqSelfKey(),

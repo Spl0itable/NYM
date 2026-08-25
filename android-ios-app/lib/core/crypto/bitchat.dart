@@ -278,6 +278,31 @@ bool _looksLikeUuid(String s) =>
 /// [senderPubkey] / [recipientPubkey] are 64-hex. When [recipientPubkey] is
 /// non-empty the HAS_RECIPIENT flag is set and its first 8 bytes ride the
 /// header (bitchat routing). [messageId] and [nowMs] are injectable for tests.
+/// Bitchat caps a TLV value at 255 bytes: `PrivateMessagePacket` writes a
+/// 1-byte length and `encode()` refuses anything longer, so long text is sent
+/// as several messages. Same constant the mesh path uses.
+const int kBitchatMaxContentBytes = 255;
+
+/// Splits [content] into pieces that each fit one bitchat packet, never cutting
+/// a multi-byte character in half. Mirrors the mesh chunker, which has always
+/// done this correctly.
+List<String> chunkBitchatContent(String content) {
+  final bytes = utf8.encode(content);
+  if (bytes.length <= kBitchatMaxContentBytes) return [content];
+  final out = <String>[];
+  var start = 0;
+  while (start < bytes.length) {
+    var end = start + kBitchatMaxContentBytes;
+    if (end > bytes.length) end = bytes.length;
+    while (end > start && end < bytes.length && (bytes[end] & 0xC0) == 0x80) {
+      end--;
+    }
+    out.add(utf8.decode(bytes.sublist(start, end)));
+    start = end;
+  }
+  return out;
+}
+
 ({String content, String messageId}) encodeBitchatMessage(
   String content,
   String senderPubkey, {
@@ -290,20 +315,22 @@ bool _looksLikeUuid(String s) =>
   final messageBytes = utf8.encode(content);
   final messageIdBytes = utf8.encode(msgId);
 
-  // TLV fields use a 1-byte length when value <= 255 bytes; longer values set
-  // the high bit of the type byte (0x80) and use a 2-byte big-endian length.
+  // ONE-BYTE LENGTHS ONLY, because that is the whole of bitchat's TLV.
+  //
+  // This used to set the high bit of the type byte and follow it with a 2-byte
+  // length for values over 255. That convention does not exist in bitchat:
+  // `PrivateMessagePacket.decode` reads a 1-byte length, meets type 0x81, falls
+  // into its unknown-type branch and discards the ENTIRE packet. Every message
+  // over 255 bytes ever sent to a bitchat user was dropped on arrival. Callers
+  // chunk with [chunkBitchatContent] instead.
   final tlv = <int>[];
   void pushTlv(int type, List<int> value) {
-    if (value.length <= 0xFF) {
-      tlv
-        ..add(type)
-        ..add(value.length);
-    } else {
-      tlv
-        ..add(type | 0x80)
-        ..add((value.length >> 8) & 0xFF)
-        ..add(value.length & 0xFF);
+    if (value.length > 0xFF) {
+      throw ArgumentError('bitchat TLV value over 255 bytes — chunk first');
     }
+    tlv
+      ..add(type)
+      ..add(value.length);
     tlv.addAll(value);
   }
 

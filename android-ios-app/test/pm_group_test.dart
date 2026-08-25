@@ -655,6 +655,62 @@ void main() {
     });
   });
 
+  group('the post-quantum badge on a message we sent', () {
+    // The self-addressed archive copy is post-quantum whenever WE hold a key,
+    // no matter who the message went to. It reached the dedup merge and flipped
+    // the row it matched, so every message sent to a Bitchat peer — or to any
+    // peer with no announced key — ended up showing "Quantum-resistant, legacy
+    // key": pqEncrypted true off our own key, pqRoot false because the PEER has
+    // no root.
+    Message pm({
+      required String peer,
+      required bool isOwn,
+      required bool pq,
+      bool pqRoot = false,
+      String content = 'hello',
+      String id = 'w1',
+    }) =>
+        Message(
+          id: id,
+          author: isOwn ? 'me#0001' : 'peer#0001',
+          pubkey: isOwn ? 'selfpk' : peer,
+          content: content,
+          createdAt: 1000,
+          isOwn: isOwn,
+          isPM: true,
+          conversationKey: 'pm-$peer',
+          conversationPubkey: peer,
+          nymMessageId: 'nym-1',
+          pqEncrypted: pq,
+          pqRoot: pqRoot,
+        );
+
+    test('our own self-copy never upgrades the row it echoes', () {
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      // What the send path recorded: a Bitchat peer, so no post-quantum.
+      n.ingestPMMessage(pm(peer: 'bitchatpk', isOwn: true, pq: false));
+      // The archive copy comes back, sealed to OUR key.
+      n.ingestPMMessage(
+          pm(peer: 'bitchatpk', isOwn: true, pq: true, id: 'w2'));
+      final row = n.state.messages['pm-bitchatpk']!.single;
+      expect(row.pqEncrypted, isFalse,
+          reason: 'our own archive key says nothing about the recipient');
+      expect(row.pqRoot, isFalse);
+    });
+
+    test("but a peer's post-quantum copy still upgrades theirs", () {
+      final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
+      // The Bitchat copy of a dual-send lands first, unprotected.
+      n.ingestPMMessage(pm(peer: 'nympk', isOwn: false, pq: false));
+      // Then the Nymchat one, which was post-quantum.
+      n.ingestPMMessage(pm(
+          peer: 'nympk', isOwn: false, pq: true, pqRoot: true, id: 'w2'));
+      final row = n.state.messages['pm-nympk']!.single;
+      expect(row.pqEncrypted, isTrue);
+      expect(row.pqRoot, isTrue);
+    });
+  });
+
   group('Closed PM re-open semantics', () {
     Message pmFrom(String peer, String content, int createdAtSec) => Message(
           id: 'pm_${peer}_$createdAtSec',
