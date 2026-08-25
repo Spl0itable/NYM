@@ -26,6 +26,10 @@ const NYM_SETTINGS_SECTION_KEYS = {
     data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt']
 };
 
+// The root's wraps. Sealed classically, NEVER to the root-derived key — that
+// would be a circular lock nothing could open. See spec §5.1.
+const NYM_PQ_ROOT_CATEGORY = 'nymchat-pq-root';
+
 function _normalizeIndicatorScope(value, fallback = 'pms-groups') {
     if (value === true || value === 'true') return 'everywhere';
     if (value === false || value === 'false') return 'disabled';
@@ -906,29 +910,53 @@ Object.assign(NYM.prototype, {
     // behind secp256k1 alone. There is no size cap to work around here — D1
     // takes the blob whatever it weighs.
     //
-    // An extension or NIP-46 signer hands back a finished NIP-44 payload rather
-    // than a conversation key, so there is no hybrid one to derive: those
-    // logins stay classical by construction (PqPolicy.capable).
-    async _encryptSettingsBlob(plaintext) {
+    // These are the artifacts a harvest-now-decrypt-later adversary most wants:
+    // a settings blob or an archive row sits in one place for years. Under the
+    // layered format a signer login can protect them too — the KEM layer needs
+    // only our own root-derived key, and the signer produces the NIP-44 inside
+    // it exactly as it already does.
+    async _encryptSettingsBlob(plaintext, opts) {
         const NT = window.NostrTools;
+        const NC = window.NymCrypto;
+        // Not a fallback — for the root category this is required (spec §5.1).
+        const classicalOnly = !!(opts && opts.classical);
+        const selfKemPk = (!classicalOnly && typeof this.pqSelfKeyFor === 'function')
+            ? this.pqSelfKeyFor() : null;
+        const usePq2 = !!selfKemPk && typeof this.pqSelfUsesPq2 === 'function'
+            && this.pqSelfUsesPq2();
         try {
             if (this.privkey) {
-                const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
                 if (selfKemPk) {
                     try {
-                        return window.NymCrypto.pqEncrypt(plaintext, this.privkey, this.pubkey, selfKemPk);
+                        return usePq2
+                            ? NC.pq2Encrypt(plaintext, this.privkey, this.pubkey, selfKemPk)
+                            : NC.pqEncrypt(plaintext, this.privkey, this.pubkey, selfKemPk);
                     } catch (_) { /* fall through to NIP-44 */ }
                 }
                 const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
                 return NT.nip44.encrypt(plaintext, ck);
             }
-            if (window.nostr?.nip44?.encrypt) {
-                return await window.nostr.nip44.encrypt(this.pubkey, plaintext);
-            }
-            if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected) {
-                return await _nip46Encrypt(this.pubkey, plaintext);
-            }
+            // Signer logins: NIP-44 from the signer, then our own ML-KEM layer
+            // around it. Only the layered format can be built this way.
+            const inner = await this._signerEncryptToSelf(plaintext);
+            if (inner == null) return null;
+            if (!usePq2) return inner;
+            try {
+                return NC.pq2Seal(inner, this.pubkey, this.pubkey, selfKemPk);
+            } catch (_) { return inner; }
         } catch (_) { }
+        return null;
+    },
+
+    /// NIP-44 to ourselves via whichever signer is active.
+    async _signerEncryptToSelf(plaintext) {
+        if (window.nostr?.nip44?.encrypt) {
+            return await window.nostr.nip44.encrypt(this.pubkey, plaintext);
+        }
+        if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined'
+            && _nip46State && _nip46State.connected) {
+            return await _nip46Encrypt(this.pubkey, plaintext);
+        }
         return null;
     },
 
@@ -939,6 +967,33 @@ Object.assign(NYM.prototype, {
         const NT = window.NostrTools;
         const NC = window.NymCrypto;
         try {
+            // The layered format first: it is the only one a signer can open,
+            // and a local key opens it too.
+            if (NC && NC.isPq2Payload(ciphertext)) {
+                const keys = typeof this.pqSelfKeys === 'function' ? this.pqSelfKeys() : null;
+                const cands = typeof this.pqUnwrapCandidates === 'function'
+                    ? this.pqUnwrapCandidates([this.privkey || null])
+                    : [];
+                const tried = cands.length
+                    ? cands
+                    : (keys ? [{ kemSk: keys.secretKey, kemPk: keys.publicKey }] : []);
+                for (const c of tried) {
+                    if (!c.kemSk) continue;
+                    let inner;
+                    try {
+                        inner = NC.pq2Open(ciphertext, this.pubkey, this.pubkey,
+                            { kemSk: c.kemSk, kemPk: c.kemPk });
+                    } catch (_) { continue; }
+                    try {
+                        if (this.privkey) {
+                            return NT.nip44.decrypt(inner,
+                                NT.nip44.getConversationKey(this.privkey, this.pubkey));
+                        }
+                        return await this._signerDecryptFromSelf(inner);
+                    } catch (_) { }
+                }
+                return null;
+            }
             if (this.privkey) {
                 if (NC && NC.isPqPayload(ciphertext)) {
                     // Try every epoch we still hold keys for: a blob written
@@ -959,13 +1014,20 @@ Object.assign(NYM.prototype, {
                 const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
                 return NT.nip44.decrypt(ciphertext, ck);
             }
-            if (window.nostr?.nip44?.decrypt) {
-                return await window.nostr.nip44.decrypt(this.pubkey, ciphertext);
-            }
-            if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected) {
-                return await _nip46Decrypt(this.pubkey, ciphertext);
-            }
+            return await this._signerDecryptFromSelf(ciphertext);
         } catch (_) { }
+        return null;
+    },
+
+    /// NIP-44 from ourselves via whichever signer is active.
+    async _signerDecryptFromSelf(ciphertext) {
+        if (window.nostr?.nip44?.decrypt) {
+            return await window.nostr.nip44.decrypt(this.pubkey, ciphertext);
+        }
+        if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined'
+            && _nip46State && _nip46State.connected) {
+            return await _nip46Decrypt(this.pubkey, ciphertext);
+        }
         return null;
     },
 
@@ -977,6 +1039,115 @@ Object.assign(NYM.prototype, {
         } catch (_) {
             return null;
         }
+    },
+
+    // pq root — the wraps that let the user's other devices recover it.
+    // docs/PQ-ROOT-SPEC.md §5–§7.
+
+    PQ_ROOT_CATEGORY: NYM_PQ_ROOT_CATEGORY,
+
+    /// Checked by d-tag, before it is hashed into an opaque D1 column.
+    _isPqRootCategory(dTag) {
+        return dTag === NYM_PQ_ROOT_CATEGORY;
+    },
+
+    /// Whether the account HAS a pq-root row, from the cleartext column list —
+    /// under the hashed column or the bare routing name. Decided WITHOUT
+    /// decrypting: a row we cannot read is still proof a root exists.
+    async _pqRootRowPresent(cats) {
+        if (!cats || typeof cats !== 'object') return false;
+        let hashed = null;
+        try { hashed = await this._d1Category(NYM_PQ_ROOT_CATEGORY); } catch (_) { }
+        for (const name of [hashed, NYM_PQ_ROOT_CATEGORY]) {
+            if (!name) continue;
+            const entry = cats[name];
+            if (entry && typeof entry.blob === 'string' && entry.blob) return true;
+        }
+        return false;
+    },
+
+    /// Runs spec §6 against the root record in a decrypted settings load.
+    /// `adopted` is the signal to retry the rows sealed to the root.
+    async _pqRootApplyFromDecoded(decoded, rowPresent) {
+        if (typeof this.pqRootEnsure !== 'function') return { found: false, adopted: false };
+        let record = null;
+        // Lifted out of `decoded`: key material, not a settings payload.
+        for (let i = decoded.length - 1; i >= 0; i--) {
+            if (decoded[i] && decoded[i].realCat === NYM_PQ_ROOT_CATEGORY) {
+                record = decoded[i].payload;
+                decoded.splice(i, 1);
+            }
+        }
+        const status = this.pqRootEnsure(record, rowPresent);
+        // Only §6.4 writes. A locked device must never publish a record.
+        if (status === 'generated') {
+            try { await this.pqRootPublishRecord(); } catch (_) { }
+        }
+        // The boot announcement went out without a key, because until now we
+        // did not know whether one existed. Publish the real one.
+        if (status === 'adopted' || status === 'generated') {
+            try { await this.publishPqAnnouncement(); } catch (_) { }
+        }
+        return {
+            // A row we could not open still counts: the branch below destroys
+            // rows when it believes nothing opened.
+            found: !!record || !!rowPresent,
+            adopted: status === 'adopted' || status === 'generated'
+        };
+    },
+
+    /// Writes the record; _saveSettingsBlobToD1 forces it classical.
+    async pqRootPublishRecord(wraps) {
+        if (typeof this.pqRootBuildRecord !== 'function') return false;
+        const carried = Array.isArray(wraps) ? wraps : this.pqRootRecordWraps();
+        const record = this.pqRootBuildRecord(carried);
+        if (!record) return false;
+        // Keep the in-memory copy in step so a later wrap builds on this one.
+        this._pqRootRecord = record;
+        return this._saveSettingsBlobToD1(NYM_PQ_ROOT_CATEGORY, JSON.stringify(record));
+    },
+
+    /// The passkey-PRF seam (spec §5). The UI layer does the WebAuthn call
+    /// and passes the raw PRF output; nothing else crosses this line.
+    async pqRootSetPrf(prfOutput) {
+        const root = typeof this.pqRoot === 'function' ? this.pqRoot() : null;
+        if (!root) throw new Error('This device does not hold the post-quantum root.');
+        const wrap = await window.NymCrypto.pqRootWrapPrf(root, prfOutput);
+        const kept = this.pqRootRecordWraps().filter(w => w && w.kind !== 'prf');
+        return this.pqRootPublishRecord(kept.concat([wrap]));
+    },
+
+    async pqRootUnlockWithPrf(prfOutput) {
+        return this._pqRootUnlockWith('prf',
+            (w) => window.NymCrypto.pqRootUnwrapPrf(w, prfOutput));
+    },
+
+    async _pqRootUnlockWith(kind, open) {
+        const wraps = typeof this.pqRootRecordWraps === 'function' ? this.pqRootRecordWraps() : [];
+        for (const w of wraps) {
+            if (!w || w.kind !== kind) continue;
+            let root = null;
+            try { root = await open(w); } catch (_) { continue; }
+            if (!root) continue;
+            if (!this.pqRootAdopt(root)) continue;
+            // Rows we could not open a moment ago can be opened now.
+            this._settingsRestoreUnreadable = false;
+            return true;
+        }
+        return false;
+    },
+
+    /// The manual path: a pasted or scanned `nympq1...`, checked against the
+    /// record's fingerprint so a code from another identity is refused.
+    pqRootLinkWithCode(code) {
+        const NC = window.NymCrypto;
+        let bytes;
+        try { bytes = NC.pqRootDecode(code); } catch (_) { return false; }
+        const rec = this._pqRootRecord;
+        if (rec && rec.fp && NC.pqRootFingerprint(bytes) !== rec.fp) return false;
+        if (!this.pqRootAdopt(bytes)) return false;
+        this._settingsRestoreUnreadable = false;
+        return true;
     },
 
     async _saveSettingsBlobToD1(dTag, plaintext) {
@@ -996,12 +1167,14 @@ Object.assign(NYM.prototype, {
             } catch (_) { }
 
             const category = await this._d1Category(dTag);
+            const classical = this._isPqRootCategory(dTag);
             // The mode rides in the hash basis so a policy flip is a content
             // change. Without it, a row stranded under the old policy — sealed
             // hybrid while another device cannot open it — would keep matching
             // the stored hash and never be rewritten in the form that device
             // can read.
-            const mode = (typeof this.pqSelfKeyFor === 'function' && this.pqSelfKeyFor()) ? 'pq' : 'c';
+            const mode = (!classical && typeof this.pqSelfKeyFor === 'function' && this.pqSelfKeyFor())
+                ? 'pq' : 'c';
             const hash = await this._sha256Hex(`${this.pubkey}|${mode}|${toStore}`);
             const hashKey = `nym_settings_hash_${this.pubkey}_${category}`;
             if (hash) {
@@ -1009,7 +1182,7 @@ Object.assign(NYM.prototype, {
                 try { lastHash = localStorage.getItem(hashKey); } catch (_) { }
                 if (lastHash === hash) return true; // unchanged — nothing to write
             }
-            const blob = await this._encryptSettingsBlob(toStore);
+            const blob = await this._encryptSettingsBlob(toStore, { classical });
             if (!blob) return false;
             const resp = await this._storageApiRequest('settings-set', { category, blob, contentHash: hash || undefined });
             if (hash && resp) {
@@ -1056,12 +1229,10 @@ Object.assign(NYM.prototype, {
 
     // Load encrypted settings categories from D1 and apply them.
     //
-    // Returns a STATUS, not a boolean, because "the account has no settings"
-    // and "we could not read the settings" need opposite handling and used to
-    // be the same `false`. Under the relay proxy D1 is the only source, so a
-    // load that never answered left the session running on defaults — and the
-    // next save wrote those defaults over the rows it had failed to read. The
-    // user's settings were gone, and every device then read the defaults back.
+    // Returns a STATUS, not a boolean: "no settings" and "could not read
+    // them" need opposite handling and used to be the same `false`, so a load
+    // that never answered ran on defaults and then saved them over the rows
+    // it had failed to read.
     //
     //   'loaded'  — rows read and applied.
     //   'empty'   — the API answered and the account genuinely has no rows.
@@ -1087,14 +1258,13 @@ Object.assign(NYM.prototype, {
         // legacy rows fall back to the cleartext column name.
         const decoded = [];
         let storedBlobs = 0;
-        for (const [cat, entry] of Object.entries(cats)) {
-            if (!entry || !entry.blob) continue;
-            storedBlobs++;
+        const pending = [];
+        const decodeOne = async ([cat, entry]) => {
             try {
                 const plain = await this._decryptSettingsBlob(entry.blob);
-                if (!plain) continue;
+                if (!plain) return false;
                 const payload = JSON.parse(plain);
-                if (!payload || typeof payload !== 'object') continue;
+                if (!payload || typeof payload !== 'object') return false;
                 const realCat = typeof payload.__cat === 'string' ? payload.__cat : cat;
                 delete payload.__cat;
                 // Keep the raw inbound payload so a later write can carry
@@ -1103,7 +1273,24 @@ Object.assign(NYM.prototype, {
                 if (!this._lastInboundSections) this._lastInboundSections = {};
                 this._lastInboundSections[realCat] = { ...payload };
                 decoded.push({ realCat, payload, updatedAt: entry.updatedAt || 0 });
-            } catch (_) { }
+                return true;
+            } catch (_) { return false; }
+        };
+
+        for (const [cat, entry] of Object.entries(cats)) {
+            if (!entry || !entry.blob) continue;
+            storedBlobs++;
+            if (!await decodeOne([cat, entry])) pending.push([cat, entry]);
+        }
+
+        // Other categories may be sealed to the root-derived key, and D1's
+        // ordering is not ours to control. The root row is classical so it
+        // always opens; adopt it, then retry whatever failed.
+        const rootRow = await this._pqRootApplyFromDecoded(
+            decoded, await this._pqRootRowPresent(cats));
+        if (rootRow.adopted && pending.length) {
+            const retry = pending.splice(0, pending.length);
+            for (const e of retry) { if (!await decodeOne(e)) pending.push(e); }
         }
 
         if (storedBlobs === 0) {
@@ -1113,7 +1300,9 @@ Object.assign(NYM.prototype, {
             return 'empty';
         }
 
-        if (decoded.length === 0) {
+        // The root row is not in `decoded`, but it still counts as "something
+        // opened" — and this branch destroys rows when nothing did.
+        if (decoded.length === 0 && !rootRow.found) {
             // Rows exist and not one opened. With a local nsec that verdict is
             // final: decryption is pure computation over keys derived from that
             // nsec, and every epoch we can still derive has been tried. Rows we
@@ -1139,6 +1328,15 @@ Object.assign(NYM.prototype, {
 
         // Something opened, so whatever blocked an earlier attempt is over.
         this._settingsRestoreUnreadable = false;
+
+        // ...unless what did not open is sealed to a root we cannot reach.
+        // That is recoverable by linking, so keep saving off rather than
+        // letting this session's defaults replace the account's settings.
+        if (pending.length && typeof this.pqRootLocked === 'function' && this.pqRootLocked()) {
+            this._settingsRestoreUnreadable = true;
+            console.warn(`[NostrSync] ${pending.length} settings categories are sealed to a `
+                + 'post-quantum root this device does not hold; saving is disabled until it is linked');
+        }
 
         const isCore = (c) => c === 'nymchat-settings' || c.startsWith('nymchat-settings-');
 

@@ -358,6 +358,10 @@ window.nymHapticTap = function (ms) {
         'toggleRevealPrivkey':        function () { window.toggleRevealPrivkey(); },
         'toggleNsecVisibility':       function () { window.toggleNsecVisibility(); },
         'copyRevealedNsec':           function () { window.copyRevealedNsec(); },
+        'togglePqRootVisibility':     function () { window.togglePqRootVisibility(); },
+        'copyPqRoot':                 function () { window.copyPqRoot(); },
+        'linkPqRoot':                 function () { window.linkPqRoot(); },
+        'openPqRootFromSettings':     function () { window.openPqRootFromSettings(); },
         'randomizeNick':              function () { window.randomizeNick(); },
         'changeNick':                 function () { window.changeNick(); },
 

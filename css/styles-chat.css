@@ -527,6 +527,7 @@
 }
 
 .verification-popup.pq-popup.partial .verification-popup-title,
+.verification-popup.pq-popup.legacy .verification-popup-title,
 .verification-popup.pq-popup.classical .verification-popup-title {
     color: #9aa0a6;
 }
@@ -806,6 +807,9 @@
 }
 
 .pubkey-slideout-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     margin-top: 8px;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid var(--glass-border);
@@ -2183,7 +2187,7 @@ div.message-input .rich-md-quote {
     max-height: min(40vh, 360px);
     background: var(--bg-tertiary);
     border-color: rgb(from var(--primary) r g b / 0.3);
-    border-radius: var(--radius-md);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
     box-shadow: var(--shadow-lg);
     z-index: 12;
 }

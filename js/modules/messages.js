@@ -3560,26 +3560,27 @@ Object.assign(NYM.prototype, {
         window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     },
 
-    /// The post-quantum info popup, reached by tapping the shield.
-    ///
-    /// The copy names the actual primitives and states the limit plainly: this
-    /// protects confidentiality, not authentication. Signatures are still
-    /// secp256k1, so an adversary who already had a quantum computer could
-    /// forge one and MITM in real time. What the hybrid key exchange defeats is
-    /// harvest-now-decrypt-later, which is the threat that actually exists
-    /// today — and overstating it in the UI would be worse than saying nothing.
+    /// The post-quantum info popup, reached by tapping the shield. The copy
+    /// names the primitives and states the limit: this is confidentiality,
+    /// not authentication — signatures are still secp256k1.
     showPqPopup(anchorEl, state) {
         this.closeTimestampPopup();
         if (!anchorEl) return;
 
         const partial = state === 'partial';
         const classical = state === 'classical';
+        const legacy = state === 'legacy';
         let title = 'Quantum-resistant encryption';
         let body = "This message's key exchange combined the standard NIP-44 secp256k1 ECDH with ML-KEM-768, a post-quantum key encapsulation mechanism. Both must be broken to recover the message, so it stays confidential against an adversary recording traffic today to decrypt with a future quantum computer. The sender's signature is still secp256k1 — this protects confidentiality, not authentication.";
 
         if (classical) {
             title = 'Not quantum-resistant';
             body = "This message is end-to-end encrypted with the standard NIP-44 secp256k1 key exchange, and nobody but the participants can read it today. It has no post-quantum layer, so an adversary recording it now could decrypt it with a future quantum computer. Messages sent before either side upgraded stay this way permanently — the ciphertext already exists and cannot be re-sealed. New messages go quantum-resistant automatically once both sides have published a post-quantum key.";
+        }
+
+        if (legacy) {
+            title = 'Quantum-resistant, legacy key';
+            body = "The hybrid exchange ran, but one side's ML-KEM key came from its Nostr identity key rather than from a recovery code. A quantum computer that recovers the identity key recovers this one with it. New messages upgrade automatically once both sides hold a code.";
         }
 
         if (partial) {
@@ -3595,7 +3596,7 @@ Object.assign(NYM.prototype, {
         }
 
         const modal = document.createElement('div');
-        modal.className = `reactors-modal verification-popup pq-popup${partial ? ' partial' : ''}${classical ? ' classical' : ''}`;
+        modal.className = `reactors-modal verification-popup pq-popup${partial ? ' partial' : ''}${legacy ? ' legacy' : ''}${classical ? ' classical' : ''}`;
         modal.innerHTML = `<div class="verification-popup-title">${this.escapeHtml(title)}</div><div class="verification-popup-body">${this.escapeHtml(body)}</div>`;
         document.body.appendChild(modal);
         this.timestampPopup = modal;
@@ -3649,25 +3650,19 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Post-quantum state for a message: 'full' when the whole conversation was
-    // hybrid-encrypted, 'partial' for a group where only some members could
-    // receive it, 'classical' for an encrypted message that was not, or '' when
-    // the badge should not render at all.
+    // Shield state: 'full', 'legacy' (post-quantum under an nsec-derived key),
+    // 'partial' (group, only some members covered), 'classical' (encrypted, no
+    // post-quantum), or '' for no badge.
     //
-    // Partial deliberately renders differently rather than counting as
-    // protected: if even one member got a classical copy of the same plaintext,
-    // an attacker who breaks secp256k1 reads the message.
+    // 'legacy' and 'partial' both mean the same thing to an attacker who breaks
+    // secp256k1 — a copy of this plaintext is recoverable — so neither may read
+    // as protected. They are separate states only because the reason differs.
     //
-    // 'classical' exists because NO badge is ambiguous. A missing shield could
-    // mean the message is not quantum-resistant, or that the badge is broken,
-    // or that this build does not have the feature — and the reader cannot
-    // tell which. Saying so plainly is the whole point of a security
-    // indicator, and it is also what makes the shield's absence meaningful
-    // when it does appear.
+    // 'classical' is rendered rather than omitted because a missing shield is
+    // ambiguous: unprotected, broken badge, or old build all look alike.
     //
-    // Only for messages that ARE encrypted. A public channel message is
-    // plaintext on the relay, so a shield of any kind there would imply an
-    // encryption it does not have — worse than saying nothing.
+    // Encrypted messages only. A shield on a public channel message would imply
+    // an encryption it does not have.
     _pqBadgeState(message) {
         if (!message) return '';
         const encrypted = !!(message.isPM || message.isGroup);
@@ -3676,9 +3671,13 @@ Object.assign(NYM.prototype, {
                 ? this.pqGroupCoverageFor(message.nymMessageId) : null);
         if (cov && cov.total > 0) {
             if (cov.pq === 0) return encrypted ? 'classical' : '';
-            return cov.pq === cov.total ? 'full' : 'partial';
+            if (cov.pq !== cov.total) return 'partial';
+            return message.pqRoot ? 'full' : 'legacy';
         }
-        if (message.pqEncrypted) return message.isGroup ? 'partial' : 'full';
+        if (message.pqEncrypted) {
+            if (message.isGroup) return 'partial';
+            return message.pqRoot ? 'full' : 'legacy';
+        }
         return encrypted ? 'classical' : '';
     },
 
@@ -3690,12 +3689,15 @@ Object.assign(NYM.prototype, {
         if (!state) return '';
         const partial = state === 'partial';
         const classical = state === 'classical';
+        const legacy = state === 'legacy';
         const title = partial
             ? 'Partly quantum-resistant — tap for details'
-            : classical
-                ? 'Not quantum-resistant — tap for details'
-                : 'Quantum-resistant encryption — tap for details';
-        const cls = partial ? ' partial' : (classical ? ' classical' : '');
+            : legacy
+                ? 'Quantum-resistant, legacy key — tap for details'
+                : classical
+                    ? 'Not quantum-resistant — tap for details'
+                    : 'Quantum-resistant encryption — tap for details';
+        const cls = partial ? ' partial' : (legacy ? ' legacy' : (classical ? ' classical' : ''));
         // The classical shield keeps the same silhouette so the three states
         // read as one scale rather than three unrelated icons, and drops the
         // orbit for a slash: the orbit IS the post-quantum part.

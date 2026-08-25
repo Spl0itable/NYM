@@ -161,6 +161,7 @@
                 && c.nymMessageId === m.nymMessageId
                 && c.senderVerified === m.senderVerified
                 && c.pqEncrypted === m.pqEncrypted
+                && c.pqRoot === m.pqRoot
                 && c.isHistorical === m.isHistorical) {
                 return c.ser;
             }
@@ -187,6 +188,7 @@
                 // authentication. Group coverage rides along so a partly
                 // covered message doesn't restore looking fully protected.
                 pqEncrypted: m.pqEncrypted,
+                pqRoot: m.pqRoot,
                 pqCoverage: m.pqCoverage,
                 bitchatMessageId: m.bitchatMessageId,
                 nymMessageId: m.nymMessageId,
@@ -214,6 +216,7 @@
                     nymMessageId: m.nymMessageId,
                     senderVerified: m.senderVerified,
                     pqEncrypted: m.pqEncrypted,
+                    pqRoot: m.pqRoot,
                     isHistorical: m.isHistorical
                 },
                 writable: true,
@@ -324,6 +327,15 @@
                             rec.pk ? window.NymCrypto._b64uEncode(rec.pk) : null,
                             rec.exp,
                             rec.epoch || 0,
+                            // Without this a reload reads every peer as legacy
+                            // and downgrades their shields until the next
+                            // announcement lands.
+                            rec.root ? 1 : 0,
+                            // Which formats the peer accepts; without these a
+                            // reload would seal the legacy format to a signer
+                            // login that cannot open it.
+                            rec.pq1 ? 1 : 0,
+                            rec.pq2 ? 1 : 0,
                         ]);
                     }
                     if (entries.length) this._cachePut('meta', { key: META_PQ_KEYS, entries });
@@ -364,7 +376,7 @@
                 if (!m || m.key !== META_PQ_KEYS || !Array.isArray(m.entries)) continue;
                 for (const e of m.entries) {
                     if (!Array.isArray(e) || e.length < 3) continue;
-                    const [pubkey, pkB64, exp, epoch] = e;
+                    const [pubkey, pkB64, exp, epoch, root, pq1, pq2] = e;
                     if (typeof pubkey !== 'string' || typeof exp !== 'number') continue;
                     if (exp <= nowSec) continue;
                     let pk = null;
@@ -372,7 +384,13 @@
                         try { pk = window.NymCrypto._b64uDecode(pkB64); } catch (_) { continue; }
                         if (!(pk instanceof Uint8Array) || pk.length !== 1184) continue;
                     }
-                    this.pqKeys.set(pubkey, { pk, exp, epoch: epoch || 0 });
+                    this.pqKeys.set(pubkey, {
+                        pk, exp, epoch: epoch || 0, root: root === 1,
+                        // Rows written before the split carried the legacy
+                        // format only, which is what they actually were.
+                        pq1: pq1 === undefined ? true : pq1 === 1,
+                        pq2: pq2 === 1
+                    });
                 }
             }
         },

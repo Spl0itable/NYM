@@ -1512,11 +1512,13 @@ html.nym-needs-setup #setupModal {
     transition: transform 0.2s;
 }
 
-.crypto-pq-badge.partial {
+.crypto-pq-badge.partial,
+.crypto-pq-badge.legacy {
     color: #9aa0a6;
 }
 
-.crypto-pq-badge.partial svg {
+.crypto-pq-badge.partial svg,
+.crypto-pq-badge.legacy svg {
     stroke-dasharray: 3 2;
 }
 

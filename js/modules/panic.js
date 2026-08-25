@@ -77,6 +77,9 @@ Object.assign(NYM.prototype, {
       this.privkey = null; this.pubkey = null;
       this._vaultKey = null; this._vaultMem = null; this._botAuthCache = null;
     } catch (e) {}
+    // The sweep below takes the stored post-quantum root; this drops the
+    // decoded copy, which alone rebuilds every ML-KEM key the identity had.
+    try { if (typeof this.pqRootWipe === 'function') this.pqRootWipe(); } catch (e) {}
 
     // 1) Encrypt every web-storage value under a random, non-extractable key
     //    that is immediately discarded — so any bytes that survive deletion are

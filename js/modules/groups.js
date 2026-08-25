@@ -1302,6 +1302,7 @@ Object.assign(NYM.prototype, {
         if (dupGroupMsg) {
             if (isPqWrap && !dupGroupMsg.pqEncrypted) {
                 dupGroupMsg.pqEncrypted = true;
+                dupGroupMsg.pqRoot = this.pqSealIsRootSeeded(senderPubkey);
                 if (typeof this.refreshMessagePqBadge === 'function') {
                     this.refreshMessagePqBadge(dupGroupMsg.nymMessageId || dupGroupMsg.id);
                 }
@@ -1348,11 +1349,16 @@ Object.assign(NYM.prototype, {
             senderVerified,
             // Confidentiality, not authentication — see the Message model.
             pqEncrypted: isPqWrap,
+            pqRoot: isPqWrap && this.pqSealRootVerdict(senderPubkey) === true,
             nymMessageId: nymMsgId,
             isFileOffer: !!groupFileOffer,
             fileOffer: groupFileOffer,
             deliveryStatus: isOwn ? 'sent' : undefined
         };
+        if (isPqWrap) {
+            this.pqResolveRootVerdict(senderPubkey, nymMsgId || msg.id,
+                (v) => { msg.pqRoot = v; });
+        }
         this._recordMsgVerification(nymMsgId, senderVerified);
 
         list.push(msg);
@@ -1880,7 +1886,9 @@ Object.assign(NYM.prototype, {
                 // regardless of how the outbound copies were sealed.
                 const selfKemPk = this.pqSelfKeyFor();
                 wrap = selfKemPk
-                    ? window.NymCrypto.pqNip59Wrap(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
+                    ? (this.pqSelfUsesPq2()
+                        ? window.NymCrypto.pq2Nip59Wrap(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
+                        : window.NymCrypto.pqNip59Wrap(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs))
                     : this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
             } else {
                 // Extension / NIP-46: seal via the signer, wrap with a local ephemeral.
@@ -1928,6 +1936,7 @@ Object.assign(NYM.prototype, {
             // classical recipients with no protocol change and no negotiation
             // — which is what keeps mixed Nymchat/Bitchat groups working.
             let pqCount = 0;
+            let rootCount = 0;
             const wrapLocal = async (pubkey) => {
                 const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
                 // The two legs use different keys on purpose: the classical
@@ -1940,9 +1949,13 @@ Object.assign(NYM.prototype, {
                 // delivers harvest-now-decrypt-later protection.
                 const memberKemPk = this.pqGroupKeyFor(pubkey);
                 const wrapped = memberKemPk
-                    ? await this.pqNip59WrapEventAsync(rumor, this.privkey, encryptTo, memberKemPk, expirationTs)
+                    ? await this.pqWrapForPeerAsync(this.pqGroupUsesPq2(pubkey), rumor,
+                        this.privkey, encryptTo, memberKemPk, expirationTs)
                     : await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
-                if (memberKemPk) pqCount++;
+                if (memberKemPk) {
+                    pqCount++;
+                    if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
+                }
                 this.sendDMToRelays(['EVENT', wrapped]);
                 this._recordGiftWrapId(sharedId, wrapped.id);
                 if (depositToD1) this._depositPMEvent(wrapped);
@@ -1958,7 +1971,7 @@ Object.assign(NYM.prototype, {
             // Coverage for this message, so the badge can say "quantum-resistant
             // to 8 of 10 members" rather than implying all-or-nothing.
             if (groupId && sharedId) {
-                this._recordGroupPqCoverage(sharedId, pqCount, members.length);
+                this._recordGroupPqCoverage(sharedId, pqCount, members.length, rootCount);
             }
             return;
         }
@@ -2128,6 +2141,7 @@ Object.assign(NYM.prototype, {
         const coverage = this.pqGroupCoverageFor(nymMessageId);
         if (coverage) {
             msg.pqEncrypted = coverage.total > 0 && coverage.pq === coverage.total;
+            msg.pqRoot = msg.pqEncrypted && coverage.root === coverage.total && this.pqHasRoot();
             msg.pqCoverage = coverage;
             if (typeof this.refreshMessagePqBadge === 'function') {
                 this.refreshMessagePqBadge(nymMessageId);

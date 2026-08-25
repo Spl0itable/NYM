@@ -1166,27 +1166,32 @@
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
             <button class="modal-close" data-action="closeModal" data-modal-id="nickEditModal">✕</button>
-            <div class="modal-header">Change Nym's Details</div>
+            <div class="modal-header">View or Edit Nym's Details</div>
             <div class="modal-body">
+                <div class="form-group">
+                    <div class="pubkey-slideout open" id="pubkeySlideout">
+                        <div class="pubkey-slideout-label" id="pubkeySlideoutLabel">Full Public Key (npub)</div>
+                        <div class="form-hint">A "pubkey" aka "public key" is one half of a keypair: your public key identifies you to everyone, like a username, while your private key proves you are really you, like a password. Others use this pubkey to find you on Nymchat, and you use theirs to find them. The same key has two spellings — <code>npub1&hellip;</code> and hex — and they are interchangeable. The four characters after the <code>#</code> in a nickname are the last four of the hex spelling.</div>
+                        <div class="pubkey-slideout-value" id="pubkeySlideoutValue"></div>
+                        <div class="pubkey-slideout-buttons">
+                            <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutCopy">Copy npub</button>
+                            <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutFormat" title="Switch between npub and hex">
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico4">
+                                    <path d="M 2 6 L 12 6 M 9.5 3.5 L 12 6 L 9.5 8.5" stroke-linecap="round" stroke-linejoin="round" />
+                                    <path d="M 14 10 L 4 10 M 6.5 7.5 L 4 10 L 6.5 12.5" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg><span id="pubkeySlideoutFormatLabel">Show hex</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label class="form-label">Nickname</label>
                     <div class="nm-h-37">
                         <input type="text" class="form-input nm-h-38" id="newNickInput" placeholder="Enter new nym"
                             maxlength="20" data-on-input="updateFieldCharCount" data-char-count="newNickCharCount">
-                        <span id="nickSuffixDisplay" class="nym-suffix nym-suffix-clickable nm-h-39"
-                            title="Click to view full pubkey"></span>
+                        <span id="nickSuffixDisplay" class="nym-suffix nm-h-39"></span>
                     </div>
                     <div class="input-char-count" id="newNickCharCount">0/20</div>
-                    <div class="form-hint">Your ephemeral pseudonym nickname for this session. Click the # and four characters to the right to reveal this Nym's full pubkey.</div>
-                    <div class="pubkey-slideout" id="pubkeySlideout">
-                        <div class="pubkey-slideout-label" id="pubkeySlideoutLabel">Full Public Key (npub)</div>
-                        <div class="form-hint">This is the current Nym's full pubkey. A "pubkey" aka "public key" is a part of a keypair in cryptography. A keypair is two connected codes: your public key (like a username that identifies you to everyone) and your private key (like a password that only you should know and use to prove you're really you). You use this pubkey for others to find you on Nymchat and you use other people's pubkeys to find them.</div>
-                        <div class="pubkey-slideout-value" id="pubkeySlideoutValue"></div>
-                        <div class="pubkey-slideout-buttons">
-                            <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutCopy">Copy</button>
-                            <button type="button" class="pubkey-slideout-copy" id="pubkeySlideoutFormat">Show hex</button>
-                        </div>
-                    </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Avatar</label>
@@ -1250,9 +1255,10 @@
                 <div class="form-group" id="revealPrivkeyGroup">
                     <div class="reveal-privkey-toggle nm-h-41" data-action="toggleRevealPrivkey">
                         <span id="revealPrivkeyArrow" class="nm-dim"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg></span>
-                        <span class="nm-h-42">Reveal this nym's private key</span>
+                        <span class="nm-h-42" id="revealPrivkeyLabel">Reveal this nym's private key</span>
                     </div>
                     <div id="privkeySlideout" class="nm-hidden nm-h-43">
+                        <div id="nsecRevealBlock">
                         <div class="nm-h-44">
                             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-h-45"><path d="M 8 1 L 15 14 L 1 14 Z" stroke-linejoin="round"/><path d="M 8 6 L 8 9.5" stroke-linecap="round" stroke-width="2"/><circle cx="8" cy="11.5" r="0.8" fill="currentColor" stroke="none"/></svg> Your private key (nsec) is like a password for your Nym identity. Anyone with access to it can post as you and read your encrypted messages. Store it securely in a password manager and never share it publicly. You can use the nsec to login on Nymchat.
                         </div><br/>
@@ -1261,6 +1267,28 @@
                             <input type="password" class="form-input nm-h-48" id="revealedNsecValue" readonly>
                             <button type="button" class="icon-btn nm-h-49" data-action="toggleNsecVisibility" id="nsecVisibilityBtn" title="Show/hide"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
                             <button type="button" class="icon-btn nm-h-49" data-action="copyRevealedNsec" id="nsecCopyBtn" title="Copy"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
+                        </div>
+                        </div>
+                        <div id="pqRootReveal" class="nm-hidden">
+                            <br/>
+                            <label class="form-label nm-h-46">Post-quantum recovery code</label>
+                            <div class="form-hint">This code, not your nsec, is what makes your messages quantum-resistant. Copy it to any other device you use this account on — without it, that device can read new messages but not the quantum-resistant ones, and if you lose every device holding it, that history is gone for good. Store it with your nsec and never share it.</div>
+                            <div class="nm-h-47">
+                                <input type="password" class="form-input nm-h-48" id="pqRootValue" readonly>
+                                <button type="button" class="icon-btn nm-h-49" data-action="togglePqRootVisibility" id="pqRootVisibilityBtn" title="Show/hide"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
+                                <button type="button" class="icon-btn nm-h-49" data-action="copyPqRoot" id="pqRootCopyBtn" title="Copy"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
+                            </div>
+                            <div class="form-hint" id="pqRootFingerprint"></div>
+                        </div>
+                        <div id="pqRootLink" class="nm-hidden">
+                            <br/>
+                            <label class="form-label nm-h-46">Post-quantum recovery code</label>
+                            <div class="form-hint">This device has no recovery code yet. Paste the one from a device that already has it — you will find it in this same panel there — so both can read the same quantum-resistant messages.</div>
+                            <div class="nm-h-47">
+                                <input type="text" class="form-input nm-h-48" id="pqRootLinkInput" placeholder="nympq1..." autocomplete="off" spellcheck="false">
+                                <button type="button" class="icon-btn nm-h-49" data-action="linkPqRoot" id="pqRootLinkBtn" title="Link this device">Link</button>
+                            </div>
+                            <div class="form-hint" id="pqRootLinkStatus"></div>
                         </div>
                     </div>
                 </div>
@@ -1695,6 +1723,8 @@
                             receiving standard NIP&#8209;17 exactly as before.
                         </div>
                         <div class="form-hint" id="pqDeviceRoster"></div>
+                        <div class="form-hint" id="pqRootSettingsHint"></div>
+                        <button type="button" class="form-select nm-vault-settings-btn" data-action="openPqRootFromSettings">Post-quantum recovery code&#8230;</button>
                     </div>
 
                     <div class="form-group">

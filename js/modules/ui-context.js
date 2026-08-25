@@ -1900,10 +1900,14 @@ Object.assign(NYM.prototype, {
     _refreshPubkeySlideoutFormat() {
         const value = document.getElementById('pubkeySlideoutValue');
         const label = document.getElementById('pubkeySlideoutLabel');
-        const formatBtn = document.getElementById('pubkeySlideoutFormat');
+        // The label, not the button: the button carries a swap icon beside it.
+        const formatLabel = document.getElementById('pubkeySlideoutFormatLabel');
+        const copyBtn = document.getElementById('pubkeySlideoutCopy');
         const isNpub = this.getPubkeyDisplayFormat() === 'npub';
         if (label) label.textContent = isNpub ? 'Full Public Key (npub)' : 'Full Public Key (hex)';
-        if (formatBtn) formatBtn.textContent = isNpub ? 'Show hex' : 'Show npub';
+        if (formatLabel) formatLabel.textContent = isNpub ? 'Show hex' : 'Show npub';
+        // Same wording as the context menu, so the two read as one control.
+        if (copyBtn) copyBtn.textContent = isNpub ? 'Copy npub' : 'Copy hex pubkey';
         if (value && this.pubkey) value.textContent = this.formatPubkeyForDisplay(this.pubkey);
     },
 

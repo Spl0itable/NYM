@@ -27,11 +27,14 @@
     const PQ_ANNOUNCE_DELAY_MS = 3000;
     // Devices unseen for this long drop off the roster shown in settings.
     const PQ_DEVICE_STALE_SEC = 30 * 24 * 3600;
+    // The root's bech32 code on this device, in _VAULT_KEYS (spec §5.3).
+    const PQ_ROOT_LS_KEY = 'nym_pq_root';
 
     Object.assign(NYM.prototype, {
 
         PQ_D_TAG,
         PQ_TTL_SEC,
+        PQ_ROOT_LS_KEY,
 
         // capability + policy 
         /// Whether the ML-KEM implementation loaded at all.
@@ -42,11 +45,18 @@
         /// Whether we can RECEIVE post-quantum messages, and therefore whether
         /// we announce an ML-KEM key for peers to encapsulate to.
         ///
-        /// Needs the nsec: the ML-KEM keypair is derived from it, and opening a
-        /// message means decapsulating with its secret half. An extension or
-        /// NIP-46 signer holds the nsec and will not do ML-KEM, so those logins
-        /// cannot receive — not by choice, and not fixable from this side.
+        /// The root is enough on its own: under pq2 the decapsulation key is
+        /// derived from it, and the inner NIP-44 is performed by whatever holds
+        /// the identity key — a signer included. An nsec still qualifies, for
+        /// the legacy pq1 keys it derives.
         pqCapable() {
+            return this.pqSupported() && (this.pqHasRoot() || !!this.privkey);
+        },
+
+        /// Whether we can open the LEGACY combined format. It mixes the raw
+        /// ECDH output into the key, which no signer will return, so this one
+        /// really does need the nsec.
+        pq1Capable() {
             return this.pqSupported() && !!this.privkey;
         },
 
@@ -132,18 +142,214 @@
             catch (_) { return 0; }
         },
 
-        /// Our ML-KEM keypair, derived from the nsec and cached per
-        /// (pubkey, epoch) so a key change or rotation invalidates it.
+        // the root secret — docs/PQ-ROOT-SPEC.md
+
+        /// Reads through the secret accessors so the at-rest vault covers the
+        /// root exactly as it covers the nsec.
+        _pqRootStoredCode() {
+            try {
+                if (typeof window !== 'undefined' && typeof window.nymSecretGet === 'function') {
+                    return window.nymSecretGet(PQ_ROOT_LS_KEY);
+                }
+            } catch (_) { }
+            try { return localStorage.getItem(PQ_ROOT_LS_KEY); } catch (_) { return null; }
+        },
+
+        _pqRootStoreCode(code) {
+            try {
+                if (typeof window !== 'undefined' && typeof window.nymSecretSet === 'function') {
+                    window.nymSecretSet(PQ_ROOT_LS_KEY, code);
+                    return;
+                }
+            } catch (_) { }
+            try { localStorage.setItem(PQ_ROOT_LS_KEY, code); } catch (_) { }
+        },
+
+        /// The root this device holds, or null. Cached once decoded.
+        pqRoot() {
+            if (this._pqRootBytes) return this._pqRootBytes;
+            const code = this._pqRootStoredCode();
+            if (!code) return null;
+            try {
+                const bytes = window.NymCrypto.pqRootDecode(code);
+                this._pqRootBytes = bytes;
+                this._pqRootUnreadable = false;
+                return bytes;
+            } catch (_) {
+                // Stored but unreadable (locked vault, corrupt value) is NOT
+                // "no root" — generating over it would discard the real one.
+                this._pqRootUnreadable = true;
+                return null;
+            }
+        },
+
+        pqHasRoot() { return !!this.pqRoot(); },
+
+        /// The `nympq1...` code, for the reveal/copy surface beside the nsec.
+        pqRootCode() {
+            const r = this.pqRoot();
+            if (!r) return null;
+            try { return window.NymCrypto.pqRootEncode(r); } catch (_) { return null; }
+        },
+
+        pqRootFingerprint() {
+            const r = this.pqRoot();
+            if (!r) return null;
+            try { return window.NymCrypto.pqRootFingerprint(r); } catch (_) { return null; }
+        },
+
+        /// The only way a root is installed — generation, pasted code and
+        /// every unwrap path funnel through here so caches clear in one place.
+        pqRootAdopt(rootBytes) {
+            const NC = window.NymCrypto;
+            if (!NC || !NC.pqIsRoot(rootBytes)) return false;
+            const code = NC.pqRootEncode(rootBytes);
+            this._pqRootBytes = rootBytes;
+            this._pqRootStoreCode(code);
+            this._pqRootLocked = false;
+            this._pqSelfCache = null;
+            return true;
+        },
+
+        /// Destroys the root here. Panic wipe and forget-identity call it:
+        /// a root outliving its identity is a liability with no owner.
+        pqRootWipe() {
+            this._pqRootBytes = null;
+            this._pqSelfCache = null;
+            this._pqRootLocked = false;
+            this._pqRootRecord = null;
+            try {
+                if (typeof window !== 'undefined' && typeof window.nymSecretRemove === 'function') {
+                    window.nymSecretRemove(PQ_ROOT_LS_KEY);
+                    return;
+                }
+            } catch (_) { }
+            try { localStorage.removeItem(PQ_ROOT_LS_KEY); } catch (_) { }
+        },
+
+        /// A record exists that this device cannot open. It must not
+        /// generate a root and must not announce (spec §7).
+        pqRootLocked() { return !!this._pqRootLocked; },
+
+        /// Whether §6 has run. Until it has, this device does not yet know
+        /// whether the account has a root, so any key it could announce is
+        /// nsec-derived by default rather than by decision.
+        pqRootSettled() { return !!this._pqRootSettled; },
+
+        /// Same condition, named for the "link this device" prompt.
+        pqRootLinkNeeded() { return this.pqRootLocked(); },
+
+        /// Whether our own key is root-seeded, i.e. whether we may announce
+        /// `v:2, src:"root"`.
+        pqRootSeeded() { return this.pqCapable() && this.pqHasRoot(); },
+
+        /// The `nymchat-pq-root` record. `wraps` may be empty: the record
+        /// still says a root EXISTS, which is what silences other devices.
+        pqRootBuildRecord(wraps) {
+            const r = this.pqRoot();
+            if (!r) return null;
+            return {
+                v: 2,
+                fp: window.NymCrypto.pqRootFingerprint(r),
+                wraps: Array.isArray(wraps) ? wraps : [],
+                ts: Math.floor(Date.now() / 1000)
+            };
+        },
+
+        /// A stored record only counts if it is actually a v2 root record.
+        _pqRootValidRecord(record) {
+            return !!(record && typeof record === 'object'
+                && record.v === 2 && typeof record.fp === 'string' && record.fp);
+        },
+
+        /// The wraps from the record we last read.
+        pqRootRecordWraps() {
+            const rec = this._pqRootRecord;
+            return (rec && Array.isArray(rec.wraps)) ? rec.wraps : [];
+        },
+
+        /// Spec §6. `record` is the decrypted `nymchat-pq-root` payload, or
+        /// null when the account has none. Returns 'unavailable' (no local
+        /// key), 'adopted', 'locked' (record we cannot open — do not generate,
+        /// do not announce) or 'generated'.
+        /// `rowPresent` is the D1 row's existence, independent of whether it
+        /// decrypted. A row we cannot read is still proof a root exists, and
+        /// generating over it splits the account.
+        pqRootEnsure(record, rowPresent) {
+            // Deliberately pqSupported, not pqCapable: for a signer login the
+            // root is what makes it capable, so gating on capability here
+            // would be a deadlock — never capable, so never a root.
+            if (!this.pqSupported()) return 'unavailable';
+            this._pqRootSettled = true;
+            this._pqRootRecord = this._pqRootValidRecord(record) ? record : null;
+            const NC = window.NymCrypto;
+            const mine = this.pqRoot();
+
+            if (this._pqRootRecord) {
+                if (mine && NC.pqRootFingerprint(mine) === this._pqRootRecord.fp) {
+                    this._pqRootLocked = false;
+                    return 'adopted';
+                }
+                // Nothing, or a different root (a stale one from a reset
+                // identity). Both mean "cannot open this record".
+                this._pqRootLocked = true;
+                return 'locked';
+            }
+
+            // No record, but we hold a root already (the write has not
+            // landed yet). Keep it rather than rolling a second one.
+            if (mine) {
+                this._pqRootLocked = false;
+                return 'adopted';
+            }
+            // Bytes are there, this session just cannot see them.
+            if (this._pqRootUnreadable) {
+                this._pqRootLocked = true;
+                return 'locked';
+            }
+            // A record exists that we could not open or could not parse.
+            if (rowPresent) {
+                this._pqRootLocked = true;
+                return 'locked';
+            }
+
+            let fresh;
+            try { fresh = NC.pqGenerateRoot(); } catch (_) { return 'unavailable'; }
+            if (!this.pqRootAdopt(fresh)) return 'unavailable';
+            // Surfaced to the user once (spec §9).
+            try { localStorage.setItem('nym_pq_root_reveal', 'pending'); } catch (_) { }
+            return 'generated';
+        },
+
+        /// Drives the one-time "here is your recovery code" surface.
+        pqRootRevealPending() {
+            try { return localStorage.getItem('nym_pq_root_reveal') === 'pending'; }
+            catch (_) { return false; }
+        },
+
+        dismissPqRootReveal() {
+            try { localStorage.removeItem('nym_pq_root_reveal'); } catch (_) { }
+        },
+
+        // our own key
+        /// Our ML-KEM keypair: root-seeded when we hold a root, nsec-seeded
+        /// otherwise. Cached per (pubkey, epoch, seed source).
         pqSelfKeys() {
             if (!this.pqCapable()) return null;
             const epoch = this._pqEpoch();
-            const basis = `${this.pubkey}:${epoch}`;
+            const root = this.pqRoot();
+            const NC = window.NymCrypto;
+            const src = root ? NC.pqRootFingerprint(root) : 'nsec';
+            const basis = `${this.pubkey}:${epoch}:${src}`;
             if (this._pqSelfCache && this._pqSelfCache.basis === basis) {
                 return this._pqSelfCache.keys;
             }
             let keys;
-            try { keys = window.NymCrypto.pqKeypairFromPrivkey(this.privkey, epoch); }
-            catch (_) { return null; }
+            try {
+                if (root) keys = NC.pqKeypairFromRoot(root, epoch);
+                else if (this.privkey) keys = NC.pqKeypairFromPrivkey(this.privkey, epoch);
+                else return null;
+            } catch (_) { return null; }
             this._pqSelfCache = { basis, keys };
             return keys;
         },
@@ -159,17 +365,29 @@
             if (this.pqSelfEnabled()) await this.publishPqAnnouncement();
         },
 
-        /// Ordered decrypt candidates for our own ML-KEM keys: the current
-        /// epoch first, then a bounded window of previous ones, so a wrap sent
-        /// just before a rotation still opens.
+        /// Decrypt candidates (spec §4): root-derived epoch..epoch-3, then
+        /// nsec-derived epoch..epoch-3. The nsec half is PERMANENT, not a
+        /// migration window — everything sealed under v1 needs it. Dropping
+        /// it is a data-loss bug, not a cleanup.
         pqSelfCandidates() {
             if (!this.pqCapable()) return [];
+            const NC = window.NymCrypto;
             const out = [];
             const epoch = this._pqEpoch();
-            for (let e = epoch; e >= Math.max(0, epoch - 3); e--) {
+            const floor = Math.max(0, epoch - 3);
+            const root = this.pqRoot();
+            if (root) {
+                for (let e = epoch; e >= floor; e--) {
+                    try {
+                        const k = NC.pqKeypairFromRoot(root, e);
+                        out.push({ kemSk: k.secretKey, kemPk: k.publicKey, root: true });
+                    } catch (_) { }
+                }
+            }
+            for (let e = epoch; e >= floor; e--) {
                 try {
-                    const k = window.NymCrypto.pqKeypairFromPrivkey(this.privkey, e);
-                    out.push({ kemSk: k.secretKey, kemPk: k.publicKey });
+                    const k = NC.pqKeypairFromPrivkey(this.privkey, e);
+                    out.push({ kemSk: k.secretKey, kemPk: k.publicKey, root: false });
                 } catch (_) { }
             }
             return out;
@@ -207,7 +425,14 @@
             // `pq` says whether this device can DECAPSULATE, which decides
             // whether copies addressed to the account can go hybrid at all —
             // see pqAllDevicesCapable.
-            out.push({ id, ver: this._pqAppVersion(), ts: nowSec, pq: this.pqCapable() ? 1 : 0 });
+            out.push({
+                id, ver: this._pqAppVersion(), ts: nowSec,
+                pq: this.pqCapable() ? 1 : 0,
+                // Separate from `pq`: a signer login can open the layered
+                // format but never the combined one, so a self-copy sealed
+                // pq1 would lock it out of its own settings and archive.
+                pq2: this.pqCapable() ? 1 : 0
+            });
             out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
             return out.slice(0, 16);
         },
@@ -215,24 +440,42 @@
         /// Publishes our capability announcement.
         ///
         /// EVERY Nymchat client publishes this, not only post-quantum-capable
-        /// ones. Its mere presence is signed, unforgeable proof that a pubkey
-        /// runs Nymchat — which is what lets the send path skip the
-        /// speculative Bitchat wrap for peers who demonstrably are not on
-        /// Bitchat. The ML-KEM key rides along only when post-quantum is both
-        /// possible and switched on, so the two claims stay independent:
+        /// ones: its presence is signed proof that a pubkey runs Nymchat,
+        /// which is what lets the send path skip the speculative Bitchat
+        /// wrap. The ML-KEM key rides along only when usable, so the two
+        /// claims stay independent:
         ///
         ///   announcement + `pk`  -> Nymchat, post-quantum
-        ///   announcement, no pk  -> Nymchat, classical (PQ off, or an
-        ///                           extension / NIP-46 login that cannot seal
-        ///                           a hybrid message at all)
+        ///   announcement, no pk  -> Nymchat, classical (PQ off, or a device
+        ///                           not yet linked to the root)
         ///   no announcement      -> unknown; could be Bitchat or any other
         ///                           Nostr client
         async publishPqAnnouncement() {
             try {
                 if (!this.connected || !this.pubkey) return false;
-                // A KEM key only when we can actually use one.
-                // A KEM key only when we can actually decapsulate with it.
-                const keys = this.pqSelfEnabled() ? this.pqSelfKeys() : null;
+                // Spec §7: the announcement is replaceable, so a device that
+                // cannot open the account's root would clobber the real one.
+                if (this.pqRootLocked()) return false;
+                // A KEM key only when we can actually decapsulate with it —
+                // and only once §6 has decided where it comes from.
+                //
+                // On a fresh account the settings load that generates the root
+                // has not finished when this first fires. Announcing anyway
+                // published an nsec-derived key, and a peer who cached it kept
+                // sealing to it for the whole TTL. Two accounts created minutes
+                // apart therefore exchanged genuinely legacy-sealed messages,
+                // which is what the badge was correctly reporting.
+                //
+                // `nym: 1` still goes out, so we remain a known Nymchat client
+                // and peers skip the Bitchat wrap; they just have no key to
+                // encapsulate to yet, which reads as classical rather than as
+                // false post-quantum. A keyless entry does not end their
+                // lookup (see ensurePqAnnouncement), so the republish below is
+                // picked up promptly rather than after the TTL.
+                const keys = (this.pqSelfEnabled() && this.pqRootSettled())
+                    ? this.pqSelfKeys() : null;
+                // Only true when the key we are publishing IS root-derived.
+                const rootSeeded = !!keys && this.pqRootSeeded();
 
                 // Kind 30078 is addressable (NIP-01): the relay keeps one event
                 // per (kind, pubkey, d-tag), so this replaces our previous
@@ -251,7 +494,10 @@
                 this._pqLastPublishTs = nowSec;
                 const exp = nowSec + PQ_TTL_SEC;
                 const payload = {
-                    v: 1,
+                    // v:2 + src:"root" claims independently seeded entropy;
+                    // without a root we are v1 and must say so (spec §3).
+                    v: rootSeeded ? 2 : 1,
+                    ...(rootSeeded ? { src: 'root' } : {}),
                     alg: PQ_ALG,
                     // Marks this as a Nymchat client regardless of whether a
                     // KEM key is present. Parsed separately from `pk` so
@@ -259,7 +505,22 @@
                     // retraction.
                     nym: 1,
                     epoch: this._pqEpoch(),
-                    ...(keys ? { pk: window.NymCrypto._b64uEncode(keys.publicKey) } : {}),
+                    // Two claims, because they are not the same claim.
+                    //
+                    // `pk` means "seal to this with EITHER format". Only a
+                    // login holding the nsec can say it, because the legacy
+                    // combined format needs the raw ECDH output to open.
+                    //
+                    // `pk2` means "seal to this with the layered format only".
+                    // A signer login says just this, and an older build — which
+                    // has never heard of pk2 — reads the announcement as a
+                    // Nymchat client with no post-quantum key and sends plain
+                    // NIP-44, which a signer CAN read. That degrade is the
+                    // whole point of splitting them: the alternative is an
+                    // older peer sealing pq1 to a login that can never open it.
+                    ...(keys && this.pq1Capable()
+                        ? { pk: window.NymCrypto._b64uEncode(keys.publicKey) } : {}),
+                    ...(keys ? { pk2: window.NymCrypto._b64uEncode(keys.publicKey) } : {}),
                     exp,
                     devices: this._pqMergeDeviceRoster(nowSec)
                 };
@@ -283,7 +544,7 @@
                 this._pqLastPublishAt = Date.now();
                 // Record our own entry so self-addressed wraps resolve through
                 // the same lookup as everyone else's.
-                this._pqRecord(this.pubkey, keys ? keys.publicKey : null, exp, payload.epoch);
+                this._pqRecord(this.pubkey, keys ? keys.publicKey : null, exp, payload.epoch, rootSeeded);
                 return true;
             } catch (_) {
                 return false;
@@ -336,9 +597,18 @@
         /// Records a capability entry. `pk` may be null — that still means
         /// "this pubkey runs Nymchat", which is the signal the send path uses
         /// to skip the Bitchat wrap.
-        _pqRecord(pubkey, pk, exp, epoch) {
+        /// `root` is the §3 claim: v:2 AND src=="root". Anything else is
+        /// recorded as legacy, because the badge reports the truth.
+        _pqRecord(pubkey, pk, exp, epoch, root, fmt) {
             if (!this.pqKeys) this.pqKeys = new Map();
-            this.pqKeys.set(pubkey, { pk: pk || null, exp, epoch });
+            // Absent `fmt` means an entry recorded before the split (or by our
+            // own self-record): assume the legacy format only, which is what
+            // every such entry actually was.
+            this.pqKeys.set(pubkey, {
+                pk: pk || null, exp, epoch, root: !!root,
+                pq1: fmt ? !!fmt.pq1 : true,
+                pq2: fmt ? !!fmt.pq2 : false
+            });
             // Ride the same debounced write the other dedup sets use, so a
             // reload does not start from nothing and send the next message
             // classically while it looks every peer up again. Restoring is
@@ -349,6 +619,54 @@
             while (this.pqKeys.size > 5000) {
                 this.pqKeys.delete(this.pqKeys.keys().next().value);
             }
+        },
+
+        /// Spec §3. Exact and positive: `v` is the NUMBER 2 and `src` the
+        /// STRING "root". Everything else, unknown src included, is legacy.
+        _pqAnnouncementIsRootSeeded(payload) {
+            return !!payload && payload.v === 2 && payload.src === 'root';
+        },
+
+        /// Whether a peer's live announcement is root-seeded, for the badge.
+        pqPeerIsRootSeeded(pubkey) {
+            const rec = this._pqEntry(pubkey);
+            return !!(rec && rec.pk && rec.root);
+        },
+
+        /// A seal is fully post-quantum only when BOTH ends' KEM keys are
+        /// root-seeded. The same plaintext exists in a copy under each, so one
+        /// nsec-derived key is enough for an adversary who breaks secp256k1.
+        pqSealIsRootSeeded(peerPubkey) {
+            return this.pqHasRoot() && this.pqPeerIsRootSeeded(peerPubkey);
+        },
+
+        /// Same question, but able to answer "I don't know yet".
+        ///
+        /// The first message from a new peer arrives before their announcement
+        /// does, and treating that absence as legacy marked every opening
+        /// message of every conversation legacy until a second one arrived.
+        /// Unknown is not legacy; it is a lookup that has not landed.
+        pqSealRootVerdict(peerPubkey) {
+            if (!this.pqHasRoot()) return false;      // our own half settles it
+            const rec = this._pqEntry(peerPubkey);
+            if (!rec) return null;
+            return !!(rec.pk && rec.root);
+        },
+
+        /// Resolves a pending verdict once the peer's announcement lands, then
+        /// repaints that one row. No-op when we already know.
+        pqResolveRootVerdict(peerPubkey, nymMessageId, apply) {
+            if (this.pqSealRootVerdict(peerPubkey) !== null) return;
+            Promise.resolve(this.ensurePqAnnouncement(peerPubkey))
+                .then(() => {
+                    const v = this.pqSealRootVerdict(peerPubkey);
+                    if (v === null) return;
+                    apply(v);
+                    if (typeof this.refreshMessagePqBadge === 'function') {
+                        this.refreshMessagePqBadge(nymMessageId);
+                    }
+                })
+                .catch(() => { });
         },
 
         /// Ingests a peer's kind-30078 'nym-pq' announcement. Relay events are
@@ -381,13 +699,24 @@
                 // No `pk` is a valid announcement: a Nymchat client that cannot
                 // or will not do post-quantum. Recording it is what stops us
                 // sending them a pointless Bitchat wrap.
-                let pk = null;
-                if (payload.pk != null) {
-                    try { pk = window.NymCrypto._b64uDecode(payload.pk); } catch (_) { return; }
-                    if (!(pk instanceof Uint8Array) || pk.length !== 1184) return;
-                }
+                const readKey = (raw) => {
+                    if (raw == null) return undefined;
+                    let k;
+                    try { k = window.NymCrypto._b64uDecode(raw); } catch (_) { return null; }
+                    return (k instanceof Uint8Array && k.length === 1184) ? k : null;
+                };
+                const pk1 = readKey(payload.pk);
+                const pk2 = readKey(payload.pk2);
+                // A malformed key is a malformed announcement: leave the peer
+                // classical rather than half-configured.
+                if (pk1 === null || pk2 === null) return;
+                const pk = pk2 !== undefined ? pk2 : (pk1 !== undefined ? pk1 : null);
 
-                this._pqRecord(event.pubkey, pk, exp, parseInt(payload.epoch, 10) || 0);
+                this._pqRecord(event.pubkey, pk, exp, parseInt(payload.epoch, 10) || 0,
+                    this._pqAnnouncementIsRootSeeded(payload),
+                    // Which formats this peer can open. pk2 alone means the
+                    // layered one only — a signer login.
+                    { pq1: pk1 !== undefined, pq2: pk2 !== undefined });
                 if (event.pubkey === this.pubkey) this._pqSelfAnnouncement = payload;
             } catch (_) { }
         },
@@ -395,32 +724,20 @@
         /// Fetches a peer's capability announcement if we do not already hold a
         /// live one.
         ///
-        /// The standing subscription for these (relays.js,
-        /// _buildCriticalFilters) is scoped to the peers in `pmConversations`
-        /// and the groups we are in. That list does get rebuilt when a
-        /// conversation is added (`_scheduleCriticalResubscribe`), but the
-        /// rebuild is debounced 750ms, and — the part that actually bit — the
-        /// entry for a brand new conversation is not created until AFTER the
-        /// first message has been sent (pms.js, addPMConversation from within
-        /// sendPM). So at the moment the send path asked pqKeyFor() for a new
-        /// peer, that peer had never been in a filter, the answer was null, and
-        /// the message went classical with no shield. Waiting on a rebuild that
-        /// has not been scheduled yet is not something the send path can do.
+        /// The standing subscription (relays.js, _buildCriticalFilters) covers
+        /// existing conversations only, and a new one is not added until AFTER
+        /// its first message is sent — so without this the first message to a
+        /// new peer always went classical.
         ///
-        /// Resolves either way. A peer with no announcement is a normal
-        /// outcome, not an error: they may be on Bitchat, or on a build without
-        /// post-quantum.
+        /// Resolves either way: a peer with no announcement is normal, not an
+        /// error.
         ensurePqAnnouncement(pubkey) {
             if (!pubkey || !this.pqEnabled()) return Promise.resolve(null);
             const known = this._pqEntry(pubkey);
-            // Only an entry WITH A KEY ends the search. A keyless one says
-            // "this is a Nymchat client that published no post-quantum key" —
-            // true when we recorded it, and recorded for a week. A peer who
-            // was on an older build, or signed in with an extension, and has
-            // since switched to their nsec would go on getting classical
-            // messages for the rest of that week because this returned early
-            // on the stale answer. The whole point of this lookup is the key,
-            // so not having one is a reason to look again, not to stop.
+            // Only an entry WITH A KEY ends the search. A keyless one is
+            // cached for a week, so a peer who has since published a key would
+            // stay classical for the rest of it. Not having one is a reason to
+            // look again, not to stop.
             if (known && known.pk) return Promise.resolve(known);
             if (!this._pqFetches) this._pqFetches = new Map();
 
@@ -593,31 +910,18 @@
         /// Our own ML-KEM key, for copies addressed to OURSELVES — self-wraps,
         /// the D1 archive, synced settings.
         ///
-        /// Null unless we can decapsulate, which is not the same question as
-        /// whether a key exists. A second device holding the nsec may have
-        /// announced one for this npub; encapsulating to it from an extension
-        /// or NIP-46 login — which cannot derive its secret half — would lock
-        /// THIS device out of its own history. Outbound messages have no such
-        /// hazard, because the recipient is the one who decapsulates.
+        /// Null unless we can decapsulate: sealing to a key another device
+        /// announced would lock THIS one out of its own history. Outbound
+        /// messages have no such hazard — the recipient decapsulates.
         /// Whether EVERY device on this account can open a hybrid copy
-        /// addressed to the account.
+        /// addressed to the account. A device that cannot runs on defaults
+        /// forever, silently.
         ///
-        /// A self-addressed blob is encapsulated to an ML-KEM key derived from
-        /// the nsec. A device signed in with an extension or a NIP-46 remote
-        /// signer holds no secret to derive from — it can only ask the signer
-        /// for NIP-44 — so it can open neither the settings blob nor the sync
-        /// ping, and it silently runs on defaults forever.
+        /// An unknown device counts as incapable: guessing capable is what
+        /// locks one out, and guessing the other way only falls back to
+        /// classical until it updates.
         ///
-        /// An unknown device counts as incapable. Entries from builds before
-        /// the flag existed carry no `pq`, and one of those may well be a
-        /// signer login; guessing capable is what locks a device out, and the
-        /// cost of guessing the other way is a temporary fall back to the
-        /// encryption these blobs had before the hybrid, which heals itself as
-        /// the devices update.
-        ///
-        /// An empty roster means no evidence of a second device, not a missing
-        /// answer — a single-device account is the common case and must not be
-        /// downgraded by it.
+        /// An empty roster means no second device, not a missing answer.
         pqAllDevicesCapable() {
             const devices = (this._pqSelfAnnouncement && Array.isArray(this._pqSelfAnnouncement.devices))
                 ? this._pqSelfAnnouncement.devices : [];
@@ -639,13 +943,9 @@
             // and total. Better to protect the account's copies with what all
             // of it can read.
             if (!this.pqAllDevicesCapable()) return null;
-            // DERIVED, not read from the registry. The registry entry is
-            // whatever epoch was last announced — possibly by another device on
-            // this nsec, at an epoch this one has never held — while decryption
-            // only ever tries pqSelfCandidates(), which walks OUR epoch and the
-            // few before it. Taking the announced key could therefore seal our
-            // own settings and archive to a key we cannot open, and the failure
-            // is silent and total: the blob is simply unreadable ever after.
+            // DERIVED, not read from the registry: the announced epoch may be
+            // another device's, and decryption only walks our own candidates.
+            // Sealing to a key we cannot open fails silently and for good.
             // Deriving keeps the two sides on the same key by construction, and
             // has the side benefit of working from the first save rather than
             // only after the announcement lands.
@@ -702,6 +1002,29 @@
             return this.pqKeyFor(memberRealPubkey);
         },
 
+        /// Whether copies addressed to OURSELVES should use the layered
+        /// format. True unless some device on this account can only open the
+        /// combined one — a self-copy has to be readable by all of them.
+        pqSelfUsesPq2() {
+            const devices = (this._pqSelfAnnouncement && Array.isArray(this._pqSelfAnnouncement.devices))
+                ? this._pqSelfAnnouncement.devices : [];
+            const nowSec = Math.floor(Date.now() / 1000);
+            const selfId = this._pqDeviceId();
+            for (const d of devices) {
+                if (!d || d.id === selfId) continue;
+                if ((nowSec - (d.ts || 0)) >= PQ_DEVICE_STALE_SEC) continue;
+                // Absent on builds that predate the split: those are pq1-only.
+                if (d.pq2 !== 1) return false;
+            }
+            return true;
+        },
+
+        /// Whether a member accepts the layered format.
+        pqGroupUsesPq2(memberRealPubkey) {
+            const rec = this._pqEntry(memberRealPubkey);
+            return !!(rec && rec.pk && rec.pq2);
+        },
+
         /// Decides which transports a 1:1 PM to `recipientPubkey` should use.
         /// Both PM send paths (sendNIP17PM and sendEditedPM) go through this so
         /// the rule lives in exactly one place.
@@ -714,21 +1037,15 @@
         ///   * `nym` — send the Nymchat-format wrap (post-quantum when `pq`,
         ///     classical otherwise).
         ///
-        /// There is no setting here. Nymchat-to-Nymchat is post-quantum;
-        /// anyone we cannot prove is on Nymchat gets exactly what they got
-        /// before post-quantum existed. The whole rule is one question — has
-        /// this peer published a capability announcement? — because that
-        /// announcement is signed and cannot be faked, whereas inferring the
-        /// client from public activity would occasionally be wrong, and being
-        /// wrong here means sending someone a message their app cannot open,
-        /// with no error and no retry.
+        /// No setting. The whole rule is one question — has this peer
+        /// published a signed capability announcement? — because inferring
+        /// the client from public activity would sometimes be wrong, and
+        /// wrong here means a message their app cannot open, silently.
         ///
-        /// Note a post-quantum wrap is never accompanied by a Bitchat copy of
-        /// the same plaintext: it would hand a future quantum attacker the
-        /// easier target and make the shield badge a lie, and it buys no
-        /// reach, because a peer with an ML-KEM key is demonstrably not on
-        /// Bitchat. That falls out of the rule below rather than being a
-        /// special case — holding a key implies holding the announcement.
+        /// A post-quantum wrap never carries a Bitchat copy of the same
+        /// plaintext: that would hand a quantum attacker the easier target
+        /// and buys no reach. It falls out of the rule rather than being a
+        /// special case.
         pqPmPlan(recipientPubkey) {
             const kemPk = this.pqKeyFor(recipientPubkey);
             const provenNym = this.isKnownNymchatClient(recipientPubkey);
@@ -741,9 +1058,18 @@
             // dropped; without one we cannot tell, so it is sent.
             const bitchat = (knownBitchat || unknown) && !provenNym;
 
+            const rec = this._pqEntry(recipientPubkey);
             return {
                 pq: !!kemPk,
                 kemPk: kemPk || null,
+                // Which wrap to build. The layered format whenever the peer
+                // accepts it, because it is the one a signer login on either
+                // end can open; the combined one only for peers that predate
+                // it. Never a format the recipient cannot open.
+                pq2: !!kemPk && !!(rec && rec.pq2),
+                // Root-seeded peer key, for the badge. Not used for routing:
+                // a legacy peer still gets a post-quantum wrap.
+                rootSeeded: !!kemPk && this.pqPeerIsRootSeeded(recipientPubkey),
                 bitchat,
                 // Invariant: a message must always leave in SOME format. The
                 // other terms happen to cover every case today, but a silent
@@ -759,10 +1085,12 @@
         /// post-quantum wrap, so the badge can say "quantum-resistant to 8 of
         /// 10 members" instead of implying all-or-nothing. Keyed by the shared
         /// Nymchat message id, bounded like the other per-message caches.
-        _recordGroupPqCoverage(sharedId, pqCount, total) {
+        _recordGroupPqCoverage(sharedId, pqCount, total, rootCount) {
             if (!sharedId || !total) return;
             if (!this.pqGroupCoverage) this.pqGroupCoverage = new Map();
-            this.pqGroupCoverage.set(sharedId, { pq: pqCount, total });
+            this.pqGroupCoverage.set(sharedId, {
+                pq: pqCount, total, root: rootCount || 0
+            });
             while (this.pqGroupCoverage.size > 2000) {
                 this.pqGroupCoverage.delete(this.pqGroupCoverage.keys().next().value);
             }
@@ -787,30 +1115,52 @@
             return out;
         },
 
-        /// Shows the upgrade notice once, if this install was upgraded into
-        /// post-quantum rather than starting with it.
+        /// Shows the post-quantum notice once, if this install was upgraded
+        /// into post-quantum rather than starting with it.
         ///
-        /// Purely informational — there is no switch to offer. The point is to
-        /// explain a confusing symptom BEFORE it happens: a second device on
-        /// the same npub running an older build will quietly stop receiving
-        /// messages until it updates, and that device publishes nothing, so it
-        /// cannot be detected and warned directly.
+        /// Suppressed while the tutorial is still pending: the tour covers the
+        /// same ground beside the nsec, and two explanations of the same thing
+        /// back to back is worse than one. It is dismissed rather than
+        /// deferred, so a user who takes the tour never sees it twice.
+        ///
+        /// The copy branches on what this device actually needs. A device that
+        /// holds the root is told to save the code; one that does not is told
+        /// to link, because for that device nothing is protected until it
+        /// does, and saying "you're covered" would be false.
         async maybeShowPqUpgradeNotice() {
             if (!this.pqUpgradeNoticePending()) return;
             if (!this.pqCapable()) { this.dismissPqUpgradeNotice(); return; }
+            if (this._pqTutorialPending()) { this.dismissPqUpgradeNotice(); return; }
             this.dismissPqUpgradeNotice();
+            const linkNeeded = this.pqRootLinkNeeded();
+            const body = linkNeeded
+                ? 'This account already has a post-quantum recovery code, and this '
+                  + 'device does not have it yet.\n\nUntil you add it, this device '
+                  + 'keeps working normally but cannot read the quantum-resistant '
+                  + 'messages your other devices can. Open your Nym\u2019s details '
+                  + 'and paste the nympq1\u2026 code from a device that has it.'
+                : 'Your private messages and group chats with other Nymchat users are now '
+                  + 'encrypted with an added post-quantum key exchange (ML-KEM-768), so traffic '
+                  + 'recorded today can\u2019t be decrypted later by a quantum computer.\n\n'
+                  + 'This uses a recovery code, not your nsec. Save your nympq1\u2026 code '
+                  + 'alongside your nsec \u2014 you will need it to read these messages on '
+                  + 'another device, and if every device holding it is lost, they cannot be '
+                  + 'recovered. You will find it in your Nym\u2019s details.\n\n'
+                  + 'Bitchat users and other Nostr clients are unaffected.';
             try {
-                await window.showAppAlert(
-                    'Your private messages and group chats with other Nymchat users are now '
-                    + 'encrypted with an added post-quantum key exchange (ML-KEM-768), so traffic '
-                    + 'recorded today can\u2019t be decrypted later by a quantum computer.\n\n'
-                    + 'If you use this same account on another device, update it too \u2014 an '
-                    + 'older version can\u2019t read the new format and will stop receiving your '
-                    + 'messages until it does.\n\n'
-                    + 'Bitchat users and other Nostr clients are unaffected.',
-                    { title: 'Quantum-resistant encryption is on', okLabel: 'Got it' }
-                );
+                await window.showAppAlert(body, {
+                    title: linkNeeded
+                        ? 'Add your post-quantum recovery code'
+                        : 'Quantum-resistant encryption is on',
+                    okLabel: 'Got it'
+                });
             } catch (_) { /* dialog unavailable; the notice is not load-bearing */ }
+        },
+
+        /// Whether the tutorial is still ahead of this user.
+        _pqTutorialPending() {
+            try { return localStorage.getItem('nym_tutorial_seen') !== 'true'; }
+            catch (_) { return false; }
         },
 
         /// The device roster from our own announcement, newest first, for the

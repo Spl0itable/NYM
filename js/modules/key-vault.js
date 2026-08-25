@@ -15,7 +15,10 @@ window.nymSecretRemove = function (name) {
 
 Object.assign(NYM.prototype, {
 
-  _VAULT_KEYS: ['nym_session_nsec', 'nym_dev_nsec', 'nym_nostr_login_nsec', 'nym_nip46_client_secret'],
+  // `nym_pq_root` seeds the ML-KEM identity key, so it is protected — and
+  // destroyed on reset — exactly like the nsec (spec §5.3).
+  _VAULT_KEYS: ['nym_session_nsec', 'nym_dev_nsec', 'nym_nostr_login_nsec', 'nym_nip46_client_secret',
+    'nym_pq_root'],
 
   // localStorage key prefixes for additional secret material that is encrypted
   // alongside the identity keys (per-pubkey group ephemeral secret keys).
@@ -383,6 +386,9 @@ Object.assign(NYM.prototype, {
   // password — the encrypted identity is unrecoverable and is discarded).
   resetVault() {
     for (const name of this._VAULT_KEYS) { try { localStorage.removeItem(name); } catch (e) {} }
+    // The loop above takes the stored root; this drops the decoded copy the
+    // instance is still holding.
+    try { if (typeof this.pqRootWipe === 'function') this.pqRootWipe(); } catch (e) {}
     // Encrypted-under-the-discarded-key extras are unrecoverable — drop them,
     // and clear the PM cache whose encrypted records can never be read again.
     this._vaultDiscardExtras();

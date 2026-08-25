@@ -29,7 +29,7 @@
             },
             {
                 title: 'Your Nym',
-                body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin lightning address for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices. Long-pressing this area for 2 seconds will engage Panic Mode, which will encrypt all data with multiple throwaway Nyms, overwrite all data with junk, and logout immediately to make it difficult for anyone to access the data if you need to quickly hide and protect yourself.',
+                body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin lightning address for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices. Beside it you will find your post-quantum recovery code, the nympq1… code that makes your private messages quantum-resistant. Save that one too and keep it with your nsec: another device needs it to read those messages, and if every device holding it is lost they cannot be recovered. Long-pressing this area for 2 seconds will engage Panic Mode, which will encrypt all data with multiple throwaway Nyms, overwrite all data with junk, and logout immediately to make it difficult for anyone to access the data if you need to quickly hide and protect yourself.',
                 selector: '.nym-display',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -2589,40 +2589,31 @@ function editNick() {
     const suffix = nym.getPubkeySuffix(nym.pubkey);
     const suffixEl = document.getElementById('nickSuffixDisplay');
     suffixEl.textContent = `#${suffix}`;
-    suffixEl.title = 'Click to view full pubkey';
 
-    // Click handler to toggle the full public key slide-out. The key is shown
-    // in whichever format the user picked (npub by default) and both Copy and
-    // the format switch follow that choice — see the npub/hex notes in users.js.
-    suffixEl.onclick = (e) => {
-        e.stopPropagation();
-        const slideout = document.getElementById('pubkeySlideout');
-        if (!slideout) return;
-        const copyBtn = document.getElementById('pubkeySlideoutCopy');
-        const formatBtn = document.getElementById('pubkeySlideoutFormat');
-        nym._refreshPubkeySlideoutFormat();
-        if (copyBtn) {
-            copyBtn.textContent = 'Copy';
-            copyBtn.onclick = (ev) => {
-                ev.stopPropagation();
-                navigator.clipboard.writeText(nym.formatPubkeyForDisplay(nym.pubkey));
-                copyBtn.textContent = 'Copied!';
-                setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
-            };
-        }
-        if (formatBtn) {
-            formatBtn.onclick = (ev) => {
-                ev.stopPropagation();
-                nym.togglePubkeyDisplayFormat();
-                nym._refreshPubkeySlideoutFormat();
-            };
-        }
-        slideout.classList.toggle('open');
-    };
-
-    // Reset pubkey slide-out state
-    const pubkeySlideout = document.getElementById('pubkeySlideout');
-    if (pubkeySlideout) pubkeySlideout.classList.remove('open');
+    // The pubkey panel is open from the start — it is the "view" half of this
+    // modal, and hiding it behind a click on four characters was a thing to
+    // discover rather than a thing to read. Copy and the format switch follow
+    // the one shared npub/hex preference (see the notes in users.js), so
+    // switching here switches the context menu too.
+    const copyBtn = document.getElementById('pubkeySlideoutCopy');
+    const formatBtn = document.getElementById('pubkeySlideoutFormat');
+    nym._refreshPubkeySlideoutFormat();
+    if (copyBtn) {
+        copyBtn.onclick = (ev) => {
+            ev.stopPropagation();
+            navigator.clipboard.writeText(nym.formatPubkeyForDisplay(nym.pubkey));
+            const orig = copyBtn.textContent;
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => { copyBtn.textContent = orig; }, 1200);
+        };
+    }
+    if (formatBtn) {
+        formatBtn.onclick = (ev) => {
+            ev.stopPropagation();
+            nym.togglePubkeyDisplayFormat();
+            nym._refreshPubkeySlideoutFormat();
+        };
+    }
 
     // Show current avatar in edit modal and reset upload UI state
     const preview = document.getElementById('nickEditAvatarPreview');
@@ -2676,10 +2667,20 @@ function editNick() {
     if (privkeyArrow) privkeyArrow.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
     const nsecInput = document.getElementById('revealedNsecValue');
     if (nsecInput) { nsecInput.value = ''; nsecInput.type = 'password'; }
-    // Hide reveal privkey option for extension login (no local privkey)
-    const revealGroup = document.getElementById('revealPrivkeyGroup');
-    if (revealGroup) {
-        revealGroup.style.display = (nym.nostrLoginMethod === 'extension') ? 'none' : 'block';
+    const rootInput = document.getElementById('pqRootValue');
+    if (rootInput) { rootInput.value = ''; rootInput.type = 'password'; }
+    const linkStatus = document.getElementById('pqRootLinkStatus');
+    if (linkStatus) linkStatus.textContent = '';
+    // An extension login has no nsec to show — but it does have a recovery
+    // code, and is the login that most needs it, so only the nsec half goes.
+    const signerOnly = nym.nostrLoginMethod === 'extension';
+    const nsecBlock = document.getElementById('nsecRevealBlock');
+    if (nsecBlock) nsecBlock.style.display = signerOnly ? 'none' : 'block';
+    const revealLabel = document.getElementById('revealPrivkeyLabel');
+    if (revealLabel) {
+        revealLabel.textContent = signerOnly
+            ? "Reveal this nym's post-quantum recovery code"
+            : "Reveal this nym's private key and recovery code";
     }
 
     document.getElementById('nickEditModal').classList.add('active');
@@ -3033,6 +3034,81 @@ function toggleRevealPrivkey() {
         } else if (nsecInput) {
             nsecInput.value = 'No private key available (using browser extension)';
         }
+        refreshPqRootReveal();
+    }
+}
+
+// The recovery code sits in the same slideout as the nsec: same handling, same
+// warning, and the pair is what a device actually needs to be fully you.
+function refreshPqRootReveal() {
+    const reveal = document.getElementById('pqRootReveal');
+    const link = document.getElementById('pqRootLink');
+    if (!reveal || !link) return;
+    const code = typeof nym.pqRootCode === 'function' ? nym.pqRootCode() : null;
+    reveal.classList.toggle('nm-hidden', !code);
+    link.classList.toggle('nm-hidden', !!code);
+    if (!code) return;
+    const input = document.getElementById('pqRootValue');
+    if (input) { input.value = code; input.type = 'password'; }
+    const fp = document.getElementById('pqRootFingerprint');
+    if (fp) {
+        const f = nym.pqRootFingerprint();
+        // The fingerprint lets two devices be compared without either showing
+        // the code itself.
+        fp.textContent = f ? `Fingerprint: ${f}` : '';
+    }
+}
+
+function openPqRootFromSettings() {
+    if (typeof closeModal === 'function') closeModal('settingsModal');
+    if (typeof openNickEditModal === 'function') openNickEditModal();
+    const slideout = document.getElementById('privkeySlideout');
+    if (slideout && getComputedStyle(slideout).display === 'none') {
+        toggleRevealPrivkey();
+    } else {
+        refreshPqRootReveal();
+    }
+    const target = document.getElementById('pqRootReveal');
+    if (target && target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
+}
+
+function togglePqRootVisibility() {
+    const input = document.getElementById('pqRootValue');
+    if (!input) return;
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function copyPqRoot() {
+    const input = document.getElementById('pqRootValue');
+    if (!input || !input.value) return;
+    navigator.clipboard.writeText(input.value).then(() => {
+        const btn = document.getElementById('pqRootCopyBtn');
+        if (!btn) return;
+        const orig = btn.innerHTML;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.innerHTML = orig; }, 2000);
+    });
+}
+
+function linkPqRoot() {
+    const input = document.getElementById('pqRootLinkInput');
+    const status = document.getElementById('pqRootLinkStatus');
+    if (!input) return;
+    const code = (input.value || '').trim();
+    if (!code) return;
+    const ok = typeof nym.pqRootLinkWithCode === 'function'
+        && nym.pqRootLinkWithCode(code);
+    if (status) {
+        status.textContent = ok
+            ? 'Linked. This device can now read your quantum-resistant messages.'
+            : 'That code does not match this account. Check it and try again.';
+    }
+    if (!ok) return;
+    input.value = '';
+    refreshPqRootReveal();
+    // Republish so peers encapsulate to the root-seeded key from now on.
+    if (typeof nym.publishPqAnnouncement === 'function') {
+        try { nym.publishPqAnnouncement(); } catch (_) { }
     }
 }
 
@@ -3606,9 +3682,10 @@ async function showSettings() {
     }
 
     // Quantum-resistant encryption is automatic — no setting. This is a
-    // read-only status line so the security posture is still visible, and so
-    // an extension / NIP-46 login can be told WHY it is classical rather than
-    // being left to wonder.
+    // read-only status line so the security posture is still visible, and so a
+    // device that cannot yet decapsulate can be told WHY it is receiving
+    // classical rather than being left to wonder. Sending needs only the
+    // peer's key; receiving needs the root, which is what the code carries.
     const pqStatus = document.getElementById('pqStatus');
     if (pqStatus) {
         const capable = typeof nym.pqCapable === 'function' && nym.pqCapable();
@@ -3623,7 +3700,7 @@ async function showSettings() {
         pqStatus.innerHTML = capable
             ? '<strong>Active</strong> for messages with other Nymchat users.' + reach
             : sendOnly
-                ? '<strong>Active for messages you send</strong> to other Nymchat users. Messages you receive, and your own synced settings and history, stay on standard encryption: your signer holds the key they would have to be derived from, and won\u2019t do the post-quantum half. Logging in with your nsec covers both directions.' + reach
+                ? '<strong>Active for messages you send</strong> to other Nymchat users. Messages you receive, and your own synced settings and history, stay on standard encryption until this device has your nympq1\u2026 recovery code.' + reach
                 : '<strong>Not available.</strong> Post-quantum encryption needs the ML-KEM implementation, which did not load.';
         const roster = document.getElementById('pqDeviceRoster');
         if (roster) {
@@ -3634,6 +3711,13 @@ async function showSettings() {
                     (d.isSelf ? 'this device' : 'another device')
                     + (d.ver ? ' (' + d.ver + ')' : '')).join(', ') + '.'
                 : '';
+        }
+        const rootHint = document.getElementById('pqRootSettingsHint');
+        if (rootHint) {
+            const has = typeof nym.pqHasRoot === 'function' && nym.pqHasRoot();
+            rootHint.textContent = has
+                ? 'This device holds your nympq1\u2026 recovery code. Copy it to your other devices so they can read the same quantum-resistant messages.'
+                : 'This device has no recovery code yet, so its messages are protected by a key derived from your nsec — which a quantum computer would recover along with the nsec. Paste the nympq1\u2026 code from a device that has one.';
         }
     }
 
@@ -4394,7 +4478,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.74.541';
+const NYMCHAT_VERSION = 'v3.74.542';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 

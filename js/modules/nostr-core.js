@@ -1764,6 +1764,22 @@ Object.assign(NYM.prototype, {
             () => window.NymCrypto.pqNip59Wrap(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null));
     },
 
+    // The layered wrap. Same offload; the KEM encapsulation is identical and
+    // only the framing differs.
+    async pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
+        return this._cryptoCall('pq2Nip59Wrap',
+            [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null],
+            () => window.NymCrypto.pq2Nip59Wrap(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null));
+    },
+
+    /// Builds whichever post-quantum wrap the recipient can open. `usePq2` comes
+    /// from their announcement, never from a guess.
+    async pqWrapForPeerAsync(usePq2, event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
+        return usePq2
+            ? this.pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs)
+            : this.pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs);
+    },
+
     requestUserProfile(pubkey) {
         try {
             // Use the batched profile fetching system
