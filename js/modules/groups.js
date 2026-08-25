@@ -2009,8 +2009,13 @@ Object.assign(NYM.prototype, {
                 // ephemeral pubkey the classical leg uses has no announcement.
                 const memberKemPk = this.pqGroupKeyFor(pubkey);
                 const ephSk = NT.generateSecretKey();
+                // The format the MEMBER announced, never a fixed one — a peer
+                // that published only `pk2` cannot open a combined wrap, so
+                // sending one dropped them out of the conversation silently.
                 const wrapContent = memberKemPk
-                    ? window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk)
+                    ? (this.pqGroupUsesPq2(pubkey)
+                        ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk)
+                        : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk))
                     : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, encryptTo));
                 const wrapUnsigned = {
                     kind: 1059,

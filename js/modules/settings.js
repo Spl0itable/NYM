@@ -847,10 +847,21 @@ Object.assign(NYM.prototype, {
             const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
             if (selfKemPk) {
                 const NC = window.NymCrypto;
-                const wrapped = build(
-                    (pt) => NC.pqEncrypt(pt, this.privkey, this.pubkey, selfKemPk),
-                    (pt, ephSk) => NC.pqEncrypt(pt, ephSk, this.pubkey, selfKemPk)
-                );
+                // Layered unless a device on this account can only open the
+                // combined form — the same question `pqSelfUsesPq2` answers
+                // for every other self-addressed copy. This used to be pq1
+                // unconditionally, so a signer login on another device could
+                // not read its own settings.
+                const pq2 = this.pqSelfUsesPq2();
+                const wrapped = pq2
+                    ? build(
+                        (pt) => NC.pq2Encrypt(pt, this.privkey, this.pubkey, selfKemPk),
+                        (pt, ephSk) => NC.pq2Encrypt(pt, ephSk, this.pubkey, selfKemPk)
+                    )
+                    : build(
+                        (pt) => NC.pqEncrypt(pt, this.privkey, this.pubkey, selfKemPk),
+                        (pt, ephSk) => NC.pqEncrypt(pt, ephSk, this.pubkey, selfKemPk)
+                    );
                 // The hybrid costs ~1.5 KB a layer for the KEM ciphertext, which
                 // a category already close to the relay cap cannot absorb.
                 // Losing the sync entirely would be a worse trade than losing

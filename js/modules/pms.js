@@ -486,8 +486,14 @@ Object.assign(NYM.prototype, {
 
             // GiftWrap (kind 1059) with local ephemeral
             const ephSk = NT.generateSecretKey();
+            // The format the RECIPIENT announced, never a fixed one. A peer
+            // that published only `pk2` — a signer login, or any v2-only
+            // client — cannot open a combined wrap at all, so sending one
+            // produced a message that silently never arrived.
             const wrapContent = recipientKemPk
-                ? window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, recipientKemPk)
+                ? (plan.pq2
+                    ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, recipientPubkey, recipientKemPk)
+                    : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, recipientKemPk))
                 : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, recipientPubkey));
             const wrapUnsigned = {
                 kind: 1059,
@@ -3650,7 +3656,9 @@ Object.assign(NYM.prototype, {
                 const ephSk = NT.generateSecretKey();
                 const ephPk = NT.getPublicKey(ephSk);
                 const wrapContent = editKemPk
-                    ? window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk)
+                    ? (plan.pq2
+                        ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk)
+                        : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk))
                     : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, recipientPubkey));
                 const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: [['p', recipientPubkey]], pubkey: ephPk };
                 if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
