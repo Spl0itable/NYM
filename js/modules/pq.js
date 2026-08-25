@@ -13,6 +13,11 @@
     /// A one-shot lookup gives up after this and the message goes classical,
     /// which is the pre-existing behaviour rather than a new failure.
     const PQ_FETCH_TIMEOUT_MS = 2500;
+    /// How long a SEND may wait on a peer's announcement before going with what
+    /// it already knows. Deliberately shorter than the relay deadline above: a
+    /// first message that goes classical is a missed upgrade, and the next one
+    /// picks the key up, while a message that never leaves is gone.
+    const PQ_SEND_LOOKUP_BUDGET_MS = 1500;
     /// How long to keep listening after the FIRST relay says it has nothing.
     /// The request goes to several at once and they answer at their own pace,
     /// so one relay's "done" is not the answer — it is one vote out of five.
@@ -794,8 +799,22 @@
                 }
                 return this._pqAnnouncementFromRelays(pubkey);
             });
-            this._pqFetches.set(pubkey, { at: Date.now(), promise: viaD1 });
-            return viaD1;
+
+            let settle;
+            const bound = new Promise((res) => { settle = res; });
+            const timer = setTimeout(() => settle(this._pqEntry(pubkey)), PQ_SEND_LOOKUP_BUDGET_MS);
+            const bounded = Promise.race([viaD1, bound])
+                .catch(() => this._pqEntry(pubkey))
+                .then((v) => {
+                    clearTimeout(timer);
+                    // Stop later callers attaching to a promise that has already
+                    // settled, or the refetch window below could never reopen.
+                    const cur = this._pqFetches.get(pubkey);
+                    if (cur && cur.promise === bounded) this._pqFetches.set(pubkey, { at: cur.at });
+                    return v;
+                });
+            this._pqFetches.set(pubkey, { at: Date.now(), promise: bounded });
+            return bounded;
         },
 
         /// The relay half of the lookup: one short-lived subscription, fanned
@@ -1104,23 +1123,51 @@
         /// and buys no reach. It falls out of the rule rather than being a
         /// special case.
         pqPmPlan(recipientPubkey) {
+            // Deciding the format is an optimization. Delivering the message is
+            // not, so nothing that goes wrong in here may take the send with it.
+            try {
+                return this._pqPmPlan(recipientPubkey);
+            } catch (e) {
+                try { console.error('[PQ] send plan failed, falling back to dual-send', e); } catch (_) { }
+                return {
+                    pq: false, kemPk: null, pq2: false, rootSeeded: false,
+                    bitchat: true, nym: true, provenNym: false
+                };
+            }
+        },
+
+        _pqPmPlan(recipientPubkey) {
             // Only ever the LAYERED format. A peer that announced just `pk`
             // can only open the combined one, which mixes the raw ECDH output
             // and therefore excludes every signer login; we no longer produce
             // it at all. Withholding the key here sends them ordinary NIP-44
             // instead, which they can always read — protection is what an old
             // peer costs us, never delivery.
-            const kemPk = this.pqLayeredKeyFor(recipientPubkey);
-            // The ONLY input to routing. How a peer is classified from their
-            // traffic — `bitchatUsers` / `nymUsers` — decides nothing here any
-            // more, in either direction: it cannot add a Nymchat wrap (every
-            // recipient gets one) and it cannot take a Bitchat wrap away (only
-            // this signed announcement does).
+            const announced = this.pqLayeredKeyFor(recipientPubkey);
             const provenNym = this.isKnownNymchatClient(recipientPubkey);
 
-            // The Bitchat wrap exists to reach someone who MIGHT be running
-            // Bitchat, and only a signed announcement proves they are not.
-            const bitchat = !provenNym;
+            // Have we ever DECRYPTED a bitchat-format wrap from this pubkey?
+            // Not inference: `bitchatUsers` is written when a `v2:` payload
+            // from them opens, which only their client could have produced.
+            // `nymUsers` is different and is deliberately not consulted — a
+            // Bitchat client that echoes our `x` tag back sets that one.
+            const knownBitchat = !!(this.bitchatUsers && this.bitchatUsers.has(recipientPubkey));
+
+            // Two kinds of evidence, answering different questions. An
+            // announcement proves the pubkey RAN Nymchat in the last week;
+            // bitchat-format traffic from them proves they are running Bitchat
+            // NOW. When both are true the second decides: an unnecessary
+            // Bitchat copy is a few hundred wasted bytes, a missing one is a
+            // message that never arrives and never errors.
+            const bitchat = knownBitchat || !provenNym;
+
+            // A post-quantum wrap never accompanies a Bitchat copy of the same
+            // plaintext: the copy is the easier target, so pairing them buys a
+            // quantum attacker the message and buys us nothing. When the peer
+            // is getting a Bitchat copy the honest answer is classical NIP-44,
+            // and the shield says so rather than claiming a protection the
+            // plaintext does not have.
+            const kemPk = bitchat ? null : announced;
 
             const rec = this._pqEntry(recipientPubkey);
             return {
@@ -1138,16 +1185,6 @@
                 // ALWAYS. Every recipient gets a Nymchat wrap: the layered one
                 // when they announced a key they can open it with, an ordinary
                 // NIP-44 one when they did not.
-                //
-                // This used to be conditional, and the condition was false for
-                // the single commonest case there is — a peer already
-                // classified as Bitchat and nothing else. `knownBitchat` alone
-                // makes `unknown`, `knownNym`, `provenNym` and `kemPk` all
-                // false and `bitchat` true, so every term collapsed and the
-                // peer received the Bitchat wrap ALONE. If they were in fact
-                // running Nymchat, or running both, the Nymchat copy of the
-                // message simply never existed. Withholding it buys nothing:
-                // a Bitchat client ignores a wrap it cannot open.
                 nym: true,
                 // Surfaced for tests and diagnostics; not used for routing.
                 provenNym

@@ -356,24 +356,33 @@ Object.assign(NYM.prototype, {
             // For known bitchat users OR unknown peers, send bitchat-format wrap
             // This ensures bitchat app users can always decrypt our messages
             if (plan.bitchat) {
-                const encoded = this.encodeBitchatMessage(content, recipientPubkey);
-                bitchatMessageId = encoded.messageId;
+                // One wrap per chunk. Bitchat caps a TLV value at 255 bytes and
+                // sends longer text as several messages; anything bigger in one
+                // packet is discarded whole on arrival. Short text — nearly
+                // everything — is a single chunk and behaves exactly as before.
+                const chunks = this.chunkBitchatContent(content);
+                for (const chunk of chunks) {
+                    const encoded = this.encodeBitchatMessage(chunk, recipientPubkey);
+                    // The first chunk's id is the one we keep, matching the mesh
+                    // path: it is what a bitchat receipt for this message refers to.
+                    if (bitchatMessageId === null) bitchatMessageId = encoded.messageId;
 
-                const bitchatRumor = {
-                    kind: 14,
-                    created_at: now,
-                    tags: [['x', nymMessageId]],  // Include nymMessageId so reactions match across formats
-                    content: encoded.content,
-                    pubkey: this.pubkey
-                };
-                const bitchatWrapped = await this.bitchatWrapEventAsync(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
-                this.sendDMToRelays(['EVENT', bitchatWrapped]);
-                sentWrappedEvents.push(['EVENT', bitchatWrapped]);
-                wrapped = bitchatWrapped;
-                this._recordGiftWrapId(nymMessageId, bitchatWrapped.id);
+                    const bitchatRumor = {
+                        kind: 14,
+                        created_at: now,
+                        tags: [],
+                        content: encoded.content,
+                        pubkey: this.pubkey
+                    };
+                    const bitchatWrapped = await this.bitchatWrapEventAsync(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
+                    this.sendDMToRelays(['EVENT', bitchatWrapped]);
+                    sentWrappedEvents.push(['EVENT', bitchatWrapped]);
+                    wrapped = bitchatWrapped;
+                    this._recordGiftWrapId(nymMessageId, bitchatWrapped.id);
 
-                if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                    setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id, 1059); }, 600000);
+                    if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
+                        setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id, 1059); }, 600000);
+                }
                 }
             }
 
@@ -3661,14 +3670,18 @@ Object.assign(NYM.prototype, {
 
                 // Hybrid on the wrap, which is ours to build even here — the
                 // seal is not. See pqSendCapable (pq.js).
-                const editKemPk = this.pqPmPlan(recipientPubkey).kemPk;
+                // Its own plan: `plan` above is scoped to the local-key branch,
+                // so reading plan.pq2 from here threw ReferenceError and killed
+                // the edit outright on every signer login.
+                const editPlan = this.pqPmPlan(recipientPubkey);
+                const editKemPk = editPlan.kemPk;
                 const sealContent = await enc44(recipientPubkey, JSON.stringify(rumor));
                 const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
                 const seal = await signEvt(sealUnsigned);
                 const ephSk = NT.generateSecretKey();
                 const ephPk = NT.getPublicKey(ephSk);
                 const wrapContent = editKemPk
-                    ? (plan.pq2
+                    ? (editPlan.pq2
                         ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk)
                         : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk))
                     : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, recipientPubkey));

@@ -9,6 +9,7 @@
     "canary:sign": "node scripts/sign-canary.mjs",
     "canary:check": "node scripts/check-canary.mjs",
     "test:pq": "node scripts/test-pq.mjs",
+    "test:pm-send": "node scripts/test-pm-send.mjs",
     "test:wysiwyg": "node scripts/test-wysiwyg.mjs",
     "test:i18n": "node scripts/test-i18n.mjs",
     "pq:vectors": "node scripts/emit-pq-vectors.mjs",

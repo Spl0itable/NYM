@@ -1079,6 +1079,30 @@ Object.assign(NYM.prototype, {
     },
 
     // Encode message in Bitchat's bitchat1: format
+    // Bitchat caps a TLV value at 255 bytes: `PrivateMessagePacket` writes a
+    // 1-byte length and `encode()` refuses anything longer, so long text is
+    // sent as several messages. Same constant the mesh path uses.
+    BITCHAT_MAX_CONTENT_BYTES: 255,
+
+    /// Splits `content` into pieces that each fit one bitchat packet, never
+    /// cutting a multi-byte character in half. Mirrors the mesh `_chunk`
+    /// (mesh-service.js), which has always done this correctly.
+    chunkBitchatContent(content) {
+        const bytes = new TextEncoder().encode(content);
+        const max = this.BITCHAT_MAX_CONTENT_BYTES;
+        if (bytes.length <= max) return [content];
+        const dec = new TextDecoder();
+        const out = [];
+        let start = 0;
+        while (start < bytes.length) {
+            let end = Math.min(start + max, bytes.length);
+            while (end > start && end < bytes.length && (bytes[end] & 0xC0) === 0x80) end--;
+            out.push(dec.decode(bytes.subarray(start, end)));
+            start = end;
+        }
+        return out;
+    },
+
     encodeBitchatMessage(content, recipientPubkey = null) {
         const now = Date.now();
         const messageID = this.generateUUID();
@@ -1087,19 +1111,20 @@ Object.assign(NYM.prototype, {
 
         const tlvParts = [];
 
-        // TLV fields use a 1-byte length when value <= 255 bytes. For longer
-        // values we set the high bit of the type byte (0x80) to signal that
-        // a 2-byte big-endian length follows. Without this, message content
-        // over 255 bytes silently truncates because the length wraps mod 256.
+        // ONE-BYTE LENGTHS ONLY, because that is the whole of bitchat's TLV.
+        //
+        // This used to set the high bit of the type byte and follow it with a
+        // 2-byte length for values over 255. That convention does not exist in
+        // bitchat: `PrivateMessagePacket.decode` reads a 1-byte length, meets
+        // type 0x81, falls into its unknown-type branch and discards the ENTIRE
+        // packet. Every message over 255 bytes we ever sent a bitchat user was
+        // dropped on arrival. Callers chunk with chunkBitchatContent instead.
         const pushTlvField = (type, valueBytes) => {
-            if (valueBytes.length <= 0xFF) {
-                tlvParts.push(type);
-                tlvParts.push(valueBytes.length);
-            } else {
-                tlvParts.push(type | 0x80);
-                tlvParts.push((valueBytes.length >> 8) & 0xFF);
-                tlvParts.push(valueBytes.length & 0xFF);
+            if (valueBytes.length > 0xFF) {
+                throw new Error('bitchat TLV value over 255 bytes — chunk first');
             }
+            tlvParts.push(type);
+            tlvParts.push(valueBytes.length);
             for (const b of valueBytes) tlvParts.push(b);
         };
 
@@ -1745,6 +1770,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Worker-offloaded gift-wrap (encrypt + sign), falling back to the sync path.
+    // `expirationTs` is accepted and NOT forwarded — see bitchatWrap.
     async bitchatWrapEventAsync(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
         return this._cryptoCall('bitchatWrap', [event, senderPrivateKey, recipientPublicKey],
             () => window.NymCrypto.bitchatWrap(event, senderPrivateKey, recipientPublicKey));
