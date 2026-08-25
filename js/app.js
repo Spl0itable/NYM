@@ -3676,6 +3676,10 @@ async function showSettings() {
     const pqStatus = document.getElementById('pqStatus');
     if (pqStatus) {
         const capable = typeof nym.pqCapable === 'function' && nym.pqCapable();
+        // Root-seeded is the only state that earns the unqualified "Active".
+        // Saying it without a code contradicts the panel that says there is
+        // none, and overstates what is protecting the messages.
+        const rootHeld = typeof nym.pqHasRoot === 'function' && nym.pqHasRoot();
         const sendOnly = !capable && typeof nym.pqEnabled === 'function' && nym.pqEnabled();
 
         const peers = typeof nym.pqKnownPeers === 'function' ? nym.pqKnownPeers().length : 0;
@@ -3686,10 +3690,12 @@ async function showSettings() {
               + ' as soon as one does.';
         // Green only when it is genuinely on end to end — the same signal the
         // mobile apps give, and never for the send-only or unavailable states.
-        pqStatus.classList.toggle('pq-status-active', !!capable);
-        pqStatus.innerHTML = capable
+        pqStatus.classList.toggle('pq-status-active', !!(capable && rootHeld));
+        pqStatus.innerHTML = (capable && rootHeld)
             ? '<strong>Active</strong> for messages with other Nymchat users.' + reach
-            : sendOnly
+            : capable
+                ? '<strong>Active, but on the older key:</strong> this device has no nympq1\u2026 recovery code yet. It is set up automatically the first time this account reaches the network \u2014 until then, messages use a key derived from your nsec.' + reach
+                : sendOnly
                 ? '<strong>Active for messages you send</strong> to other Nymchat users. Messages you receive, and your own synced settings and history, stay on standard encryption until this device has your nympq1\u2026 recovery code.' + reach
                 : '<strong>Not available.</strong> Post-quantum encryption needs the ML-KEM implementation, which did not load.';
         const roster = document.getElementById('pqDeviceRoster');
