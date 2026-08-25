@@ -30,6 +30,12 @@ const NYM_SETTINGS_SECTION_KEYS = {
 // would be a circular lock nothing could open. See spec §5.1.
 const NYM_PQ_ROOT_CATEGORY = 'nymchat-pq-root';
 
+// pq2 framing, for the size budget below: `pq2.` plus a fixed 1088-byte ML-KEM
+// ciphertext, both base64url. Constants rather than a magic number so the
+// budget stays honest if the parameter set ever changes.
+const PQ2_PREFIX_LEN = 4;
+const ML_KEM_CIPHERTEXT_BYTES = 1088;
+
 function _normalizeIndicatorScope(value, fallback = 'pms-groups') {
     if (value === true || value === 'true') return 'everywhere';
     if (value === false || value === 'false') return 'disabled';
@@ -373,33 +379,62 @@ Object.assign(NYM.prototype, {
         return Math.ceil(raw / 3) * 4;
     },
 
+    /// Length of a `pq2.` payload wrapping a NIP-44 payload of `innerLen`:
+    /// the prefix, the base64url KEM ciphertext (1088 bytes, fixed), the dot,
+    /// and the base64url AEAD output (inner + a 16-byte tag). Exact, not an
+    /// estimate — the KEM ciphertext is a constant size and base64url is a
+    /// pure function of length.
+    _pq2PayloadLen(innerLen) {
+        const b64u = (n) => Math.ceil(n * 4 / 3);
+        return PQ2_PREFIX_LEN + b64u(ML_KEM_CIPHERTEXT_BYTES) + 1 + b64u(innerLen + 16);
+    },
+
     /// Size of the final `["EVENT", wrapped]` frame for a rumor of this size.
-    _wrappedSizeForRumor(rumorBytes) {
+    ///
+    /// `pq2` matters and is not a rounding error: the layer adds ~1.5 KB of KEM
+    /// ciphertext AND inflates what it wraps by a third, on BOTH layers, so a
+    /// rumor the classical model says fits in 65 KB can produce an event of
+    /// nearly 120 KB. Budgeting with the classical model and then publishing
+    /// post-quantum is what made every packed history shard overflow and fall
+    /// back to NIP-44.
+    _wrappedSizeForRumor(rumorBytes, pq2 = false) {
         const SEAL_OVERHEAD = 200;   // kind/created_at/tags/pubkey/id/sig
         const WRAP_OVERHEAD = 320;   // same, plus the p/d/k tags added here
-        const sealJson = this._nip44PayloadLen(rumorBytes) + SEAL_OVERHEAD;
-        return this._nip44PayloadLen(sealJson) + WRAP_OVERHEAD + 10;
+        const layer = (n) => pq2
+            ? this._pq2PayloadLen(this._nip44PayloadLen(n))
+            : this._nip44PayloadLen(n);
+        const sealJson = layer(rumorBytes) + SEAL_OVERHEAD;
+        return layer(sealJson) + WRAP_OVERHEAD + 10;
     },
 
     /// Largest rumor whose wrapped event still clears the relay gate. Memoised;
     /// derived rather than hardcoded so it stays correct if the gate moves.
-    _maxRumorBytesForWrap(limit = 65000) {
+    _maxRumorBytesForWrap(limit = 65000, pq2 = false) {
         if (!this._maxRumorCache) this._maxRumorCache = {};
-        const hit = this._maxRumorCache[limit];
+        const key = `${limit}:${pq2 ? 2 : 0}`;
+        const hit = this._maxRumorCache[key];
         if (hit) return hit;
         let lo = 32, hi = 64 * 1024, best = 32;
         while (lo <= hi) {
             const mid = (lo + hi) >> 1;
-            if (this._wrappedSizeForRumor(mid) <= limit) { best = mid; lo = mid + 1; }
+            if (this._wrappedSizeForRumor(mid, pq2) <= limit) { best = mid; lo = mid + 1; }
             else hi = mid - 1;
         }
-        this._maxRumorCache[limit] = best;
+        this._maxRumorCache[key] = best;
         return best;
+    },
+
+    /// Whether a self-addressed wrap published now will carry the pq2 layer,
+    /// which is what the size budget has to be computed against.
+    _selfWrapUsesPq2() {
+        return !!(typeof this.pqSelfKeyFor === 'function' && this.pqSelfKeyFor()
+            && typeof this.pqSelfUsesPq2 === 'function' && this.pqSelfUsesPq2());
     },
 
     async _publishCategoryWrap(payload, dTag, createdAt, trimFns) {
         const RUMOR_OVERHEAD = 256;
-        const MAX_RUMOR_BYTES = this._maxRumorBytesForWrap();
+        const MAX_RUMOR_BYTES =
+            this._maxRumorBytesForWrap(65000, this._selfWrapUsesPq2());
         const encoder = new TextEncoder();
         const rumorByteSize = (p) => {
             const json = JSON.stringify(p);
@@ -568,10 +603,14 @@ Object.assign(NYM.prototype, {
             if (groupMessageHistory) {
                 // Message JSON per shard. The rumor carries this as an ESCAPED
                 // string, which inflates it, and the escaped total has to stay
-                // under _maxRumorBytesForWrap() (28,672). Budgeting 18 KB of raw
-                // message JSON leaves room for that escaping plus the rumor
-                // scaffolding; the old 30,000 exceeded the cliff on its own.
-                const SHARD_BUDGET = 18000;
+                // under the rumor ceiling for the encryption actually in play.
+                // Derived, not hardcoded: post-quantum lowers that ceiling from
+                // 28,672 to 16,384, and a fixed 18 KB budget overflowed EVERY
+                // packed shard — which is what made the whole history fall back
+                // to NIP-44. 0.628 is the share of the ceiling the raw JSON may
+                // occupy, leaving the rest for escaping and scaffolding.
+                const SHARD_BUDGET = Math.floor(
+                    this._maxRumorBytesForWrap(65000, this._selfWrapUsesPq2()) * 0.628);
                 // Last-resort guard if a single message is itself enormous.
                 const trimOldestHistory = (p) => {
                     const hist = p.groupMessageHistory || {};
