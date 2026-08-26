@@ -94,6 +94,7 @@ class Message {
     this.pqCoverage,
     this.bitchatMessageId,
     this.nymMessageId,
+    this.threadRoot,
     this.deliveryStatus = DeliveryStatus.sending,
     this.isEdited = false,
     this.channel,
@@ -182,6 +183,14 @@ class Message {
   ({int pq, int total})? pqCoverage;
   String? bitchatMessageId;
   String? nymMessageId;
+
+  /// Thread root this message replies to (Slack-style threads), or null for a
+  /// top-level message. Channel replies reference the root's EVENT id via a
+  /// NIP-10 marked `['e', rootId, '', 'root']` tag; PM/group replies reference
+  /// the root's shared `nymMessageId` via a `['nymthread', rootId]` rumor tag
+  /// (gift wrap ids differ per recipient, so the `x`-tag id is the only one
+  /// every member shares). Mirrors the PWA's `message.threadRoot`.
+  String? threadRoot;
   DeliveryStatus deliveryStatus;
   bool isEdited;
 
@@ -284,6 +293,7 @@ class Message {
         if (pqCoverage != null) 'pqCoverTotal': pqCoverage!.total,
         'bitchatMessageId': bitchatMessageId,
         'nymMessageId': nymMessageId,
+        'threadRoot': threadRoot,
         'deliveryStatus': deliveryStatus.name,
         'isEdited': isEdited,
         'channel': channel,
@@ -366,6 +376,7 @@ class Message {
           : null,
       bitchatMessageId: j['bitchatMessageId'] as String?,
       nymMessageId: j['nymMessageId'] as String?,
+      threadRoot: j['threadRoot'] as String?,
       deliveryStatus: deliveryStatusFromString(j['deliveryStatus'] as String?),
       isEdited: j['isEdited'] == true,
       channel: j['channel'] as String?,

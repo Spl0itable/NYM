@@ -97,6 +97,8 @@ class PmLogic {
         : senderPubkey;
     final nymMessageId = _tagValue(tags, 'x');
     final ms = int.tryParse(_tagValue(tags, 'ms') ?? '') ?? 0;
+    // Thread reply marker: the root's shared nymMessageId (threads).
+    final threadRoot = _tagValue(tags, 'nymthread');
 
     // A PM can carry a P2P file offer on an `['offer', JSON]` tag (pms.js:1270
     // — `parseFileOfferTag(rumor.tags, senderPubkey)` sets isFileOffer/
@@ -133,6 +135,7 @@ class PmLogic {
       conversationPubkey: peer,
       eventKind: EventKind.giftWrap,
       nymMessageId: nymMessageId,
+      threadRoot: threadRoot,
       senderVerified: senderVerified,
       pqEncrypted: pqEncrypted,
       pqRoot: pqEncrypted && (pqRootFor?.call(peer) ?? false),

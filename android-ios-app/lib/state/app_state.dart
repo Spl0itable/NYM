@@ -109,6 +109,13 @@ bool nymVouchSpamGateEnabled = false;
 bool appSpamFilterEnabled = true;
 bool appSpamFilterAggressive = true;
 
+/// Live mirror of the Slack-style message-threads setting (default ON), kept
+/// as a module global (like [appSpamFilterEnabled]) so the pure
+/// [visibleMessagesFor] filter can consult it without a Riverpod dependency.
+/// Seeded from persisted settings at boot and updated by
+/// `SettingsController.setThreadsEnabled`.
+bool appThreadsEnabled = true;
+
 /// Inbound PoW exclusion threshold in leading zero bits; 0 disables it.
 ///
 /// This is the user's "Proof of Work Difficulty" setting, and it does ONE
@@ -4606,7 +4613,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
       {String? nymMessageId,
       String? pubkeyOverride,
       String? authorOverride,
-      Map<String, dynamic>? fileOffer}) {
+      Map<String, dynamic>? fileOffer,
+      String? threadRoot}) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return null;
     final view = state.view;
@@ -4635,6 +4643,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       conversationKey: view.kind != ViewKind.channel ? view.storageKey : null,
       conversationPubkey: view.kind == ViewKind.pm ? view.id : null,
       nymMessageId: nymMessageId,
+      threadRoot: threadRoot,
       deliveryStatus: DeliveryStatus.sent,
       senderVerified: true,
       // A P2P share echoes as a file-offer card (p2p.js:171 sets
@@ -4980,11 +4989,105 @@ List<Message> visibleMessagesFor(AppState s, String storageKey) {
   final canFilter = s.blockedUsers.isNotEmpty ||
       s.blockedKeywords.isNotEmpty ||
       appSpamFilterEnabled;
-  final visible = canFilter
+  var visible = canFilter
       ? list.where((m) => !s.isMessageFiltered(m)).toList()
       : [...list];
+  // Slack-style threads: replies collapse into their root's thread view and
+  // are hidden from the flat conversation — but only when the root is
+  // actually present locally, so a reply whose root we never saw still
+  // renders inline and is never lost (PWA getFilteredMessages parity).
+  if (appThreadsEnabled && visible.any((m) => m.threadRoot != null)) {
+    final rootIds = <String>{
+      for (final m in list)
+        if (m.threadRoot == null) threadKeyForMessage(m),
+    }..remove('');
+    visible = visible
+        .where((m) =>
+            m.threadRoot == null || !rootIds.contains(m.threadRoot))
+        .toList();
+  }
   visible.sort(compareMessages);
   return visible;
+}
+
+/// The id a thread reply's marker points at: the shared cross-recipient
+/// `nymMessageId` for PM/group messages, the event id for channel messages.
+String threadKeyForMessage(Message m) =>
+    (m.isPM || m.isGroup) ? (m.nymMessageId ?? m.id) : m.id;
+
+/// Reply count per thread root for one conversation store (raw, unfiltered —
+/// counts include replies from senders the viewer later blocked only until
+/// the next recount, mirroring the PWA's cached count map).
+Map<String, int> threadReplyCounts(AppState s, String storageKey) {
+  if (!appThreadsEnabled) return const {};
+  final list = s.messages[storageKey];
+  if (list == null || list.isEmpty) return const {};
+  final counts = <String, int>{};
+  for (final m in list) {
+    final root = m.threadRoot;
+    if (root == null || root.isEmpty) continue;
+    if (s.isMessageFiltered(m)) continue;
+    counts[root] = (counts[root] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/// Chronological replies for one thread root within [storageKey].
+List<Message> threadRepliesFor(AppState s, String storageKey, String rootId) {
+  final list = s.messages[storageKey] ?? const <Message>[];
+  final replies = list
+      .where((m) => m.threadRoot == rootId && !s.isMessageFiltered(m))
+      .toList()
+    ..sort(compareMessages);
+  return replies;
+}
+
+/// The open thread (Slack-style), or null when no thread view is showing.
+///
+/// A thread is identified by its conversation [view] plus the root message's
+/// thread key ([rootId] — the event id for channels, the shared `nymMessageId`
+/// for PMs/groups). Opening a thread swaps the conversation's message list in
+/// place (same composer); the chat header's back/forward history records it.
+class ActiveThread {
+  const ActiveThread({required this.view, required this.rootId});
+  final ChatView view;
+  final String rootId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ActiveThread && other.view == view && other.rootId == rootId;
+
+  @override
+  int get hashCode => Object.hash(view, rootId);
+}
+
+final activeThreadProvider = StateProvider<ActiveThread?>((ref) => null);
+
+/// Whether [m] can anchor a thread: it needs an id every client can reference
+/// (a real event id or shared nymMessageId, not an optimistic temp id) and
+/// must not itself be a reply.
+bool threadEligibleRoot(Message m) {
+  if (m.threadRoot != null || m.isSystemRow || m.isMeAction) return false;
+  if (m.isPM || m.isGroup) return (m.nymMessageId ?? '').isNotEmpty;
+  return m.id.length == 64 && !m.id.startsWith('_optim_');
+}
+
+/// Reply counts per thread root for [storageKey], recomputed once per display
+/// revision and shared by every rendered row (so N rows don't each rescan the
+/// store).
+final threadCountsProvider =
+    Provider.family<Map<String, int>, String>((ref, storageKey) {
+  ref.watch(appStateProvider.select((s) => s.displayRev));
+  return threadReplyCounts(ref.read(appStateProvider), storageKey);
+});
+
+/// The root message for [rootId] within [storageKey], or null.
+Message? threadRootMessage(AppState s, String storageKey, String rootId) {
+  final list = s.messages[storageKey] ?? const <Message>[];
+  for (final m in list) {
+    if (m.threadRoot == null && threadKeyForMessage(m) == rootId) return m;
+  }
+  return null;
 }
 
 /// Ordered messages for the active view (oldest first), via

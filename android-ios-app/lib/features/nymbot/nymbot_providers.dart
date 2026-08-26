@@ -752,6 +752,18 @@ class BotChatController extends StateNotifier<BotChatState> {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nymMessageId = PmLogic.generateSharedEventId();
 
+    // A send while the bot conversation's thread view is open replies into
+    // that thread: the root's shared id rides inside the encrypted rumor
+    // (`nymthread`), the worker scopes its context to the thread and files
+    // its reply there — same wiring as `_sendMessageContent`.
+    String? threadRoot;
+    if (appThreadsEnabled) {
+      final at = _ref.read(activeThreadProvider);
+      if (at != null && at.view == const ChatView.pm(kNymbotPubkey)) {
+        threadRoot = at.rootId;
+      }
+    }
+
     // Build the kind-14 rumor (with the NIP-30 custom-emoji declarations the
     // PWA spreads in, pms.js:313), wrap it to the bot AND to self, and publish
     // both — the worker fetches the bot-addressed wrap by its id from relays.
@@ -763,9 +775,12 @@ class BotChatController extends StateNotifier<BotChatState> {
         recipientPubkey: kNymbotPubkey,
         content: content,
         nymMessageId: nymMessageId,
-        extraTags: _ref
-            .read(liveCustomEmojiProvider.notifier)
-            .emojiTagsForContent(content),
+        extraTags: [
+          if (threadRoot != null) ['nymthread', threadRoot],
+          ..._ref
+              .read(liveCustomEmojiProvider.notifier)
+              .emojiTagsForContent(content),
+        ],
         nowMs: nowMs,
       );
       botWrap = await _wrapRumor(rumor, kNymbotPubkey);
@@ -799,6 +814,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       eventKind: 1059,
       senderVerified: true,
       nymMessageId: nymMessageId,
+      threadRoot: threadRoot,
       deliveryStatus:
           botWrap != null ? DeliveryStatus.sent : DeliveryStatus.failed,
     );
@@ -838,6 +854,28 @@ class BotChatController extends StateNotifier<BotChatState> {
     try {
       final sk = _privkey;
       if (sk != null) {
+        // Hybrid post-quantum whenever the recipient announced a layered
+        // ML-KEM key — which the Nymbot worker now does (its keypair derives
+        // from the bot's own nympq1 root). Falls back to classical exactly
+        // like the canonical PM path; a lookup failure never blocks the send.
+        Uint8List? kemPk;
+        try {
+          kemPk = await _ref
+              .read(nostrControllerProvider)
+              .pqLayeredWrapKeyFor(recipientPubkey);
+        } catch (_) {
+          kemPk = null;
+        }
+        if (kemPk != null) {
+          // Awaited inside the try so a seal failure is caught here.
+          return await giftwrap.pq2Nip59Wrap(
+            rumor: rumor,
+            senderPrivkey: sk,
+            recipientPubkey: recipientPubkey,
+            recipientKemPublicKey: kemPk,
+            expiration: expiration,
+          );
+        }
         return giftwrap.nip59Wrap(
           rumor: rumor,
           senderPrivkey: sk,
@@ -871,8 +909,19 @@ class BotChatController extends StateNotifier<BotChatState> {
     if (sk == null) return;
     try {
       final wrap = NostrEvent.fromJson(wrapJson);
-      final unwrapped =
-          await giftwrap.unwrapGiftWrap(wrap, [giftwrap.classicalCandidate(sk)]);
+      // The full self candidate set (ML-KEM keypairs first, classical last):
+      // once the user announced a key, the worker seals its replies
+      // post-quantum, and a classical-only candidate would push every reply
+      // onto the slower relay-echo fallback.
+      var candidates = const <giftwrap.UnwrapCandidate>[];
+      try {
+        candidates =
+            _ref.read(nostrControllerProvider).selfUnwrapCandidates();
+      } catch (_) {}
+      if (candidates.isEmpty) {
+        candidates = [giftwrap.classicalCandidate(sk)];
+      }
+      final unwrapped = await giftwrap.unwrapGiftWrap(wrap, candidates);
       if (unwrapped == null || !mounted) return;
       final rumor = unwrapped.rumor;
       final msg = PmLogic.mapPmRumor(
@@ -927,6 +976,12 @@ class BotChatController extends StateNotifier<BotChatState> {
         recipientPubkey: kNymbotPubkey,
         content: m.content,
         nymMessageId: m.nymMessageId ?? PmLogic.generateSharedEventId(),
+        // A message sent from a thread view keeps its thread on the rebuilt
+        // wrap too, so the worker sees the same `nymthread` the original
+        // rumor carried.
+        extraTags: [
+          if ((m.threadRoot ?? '').isNotEmpty) ['nymthread', m.threadRoot!],
+        ],
       );
       final wrap = await _wrapRumor(rumor, kNymbotPubkey);
       if (wrap != null && _publishDmEvent(wrap.toJson())) {
@@ -948,6 +1003,13 @@ class BotChatController extends StateNotifier<BotChatState> {
       final fresh = RegExp(r'^\s*!\s*\S').hasMatch(m.content);
       final pro = state.proModel;
       final git = state.git;
+      Map<String, dynamic>? pqAnnouncement;
+      try {
+        pqAnnouncement =
+            _ref.read(nostrControllerProvider).pqSelfAnnouncementJson;
+      } catch (_) {
+        pqAnnouncement = null;
+      }
       final data = await _service.sendBotMessage(
         pubkey: _pubkey!,
         eventId: wrapId,
@@ -960,6 +1022,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         // (pms.js:2455-2466).
         git: (pro != null && git != null && git.hasRepo) ? git : null,
         cmdAlias: commandAliasHint(m.content),
+        pqAnnouncement: pqAnnouncement,
       );
       if (!mounted) return;
       _setBotTyping(false);

@@ -39,6 +39,7 @@ import '../emoji/emoji_picker.dart';
 import '../emoji/gif_picker.dart';
 import '../i18n/i18n.dart';
 import '../reactions/reaction_picker.dart';
+import '../threads/thread_view.dart' show ThreadView;
 import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import 'bot_credits_modal.dart';
@@ -124,6 +125,17 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   NymColors _colors(BuildContext context) =>
       Theme.of(context).extension<NymColors>() ?? _fallbackColors;
 
+  /// The open thread when it belongs to THIS bot conversation — the message
+  /// area then swaps to the in-place [ThreadView] (ChatPane does the same for
+  /// canonical conversations, but renders this screen instead for the bot PM,
+  /// so the swap has to happen here). Null when no bot thread is open.
+  ActiveThread? get _openThread {
+    if (!appThreadsEnabled) return null;
+    final at = ref.watch(activeThreadProvider);
+    if (at == null || at.view != const ChatView.pm(kNymbotPubkey)) return null;
+    return at;
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = _colors(context);
@@ -169,13 +181,22 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: () => FocusScope.of(context).unfocus(),
-            child: _buildMessagesArea(c),
+            // An open thread swaps the messages area for the in-place
+            // ThreadView, exactly like ChatPane does for canonical
+            // conversations — the premium control bar and bot composer stay,
+            // and sends while it is open reply into the thread.
+            child: _openThread != null
+                ? ThreadView(key: ValueKey(_openThread), thread: _openThread!)
+                : _buildMessagesArea(c),
           ),
         ),
         // The shared `.typing-indicator` strip pinned above the composer —
         // "Nymbot is thinking" with the 18px avatar + bouncing dots
-        // (pms.js `_setBotTyping` → `_renderTypingInto`).
-        const TypingIndicatorRow(storageKey: 'pm-$kNymbotPubkey'),
+        // (pms.js `_setBotTyping` → `_renderTypingInto`). ThreadView renders
+        // its own strip, so the flat-view one is skipped while a thread is
+        // open.
+        if (_openThread == null)
+          const TypingIndicatorRow(storageKey: 'pm-$kNymbotPubkey'),
         _BotComposer(
           colors: c,
           onSubmit: (content) {
@@ -212,10 +233,23 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     // The canonical thread merged with the LOCAL-ONLY info bubbles (welcome,
     // `?help` guide, command outputs — never in the shared store, never
     // persisted; PWA `_displayBotInfoMessage`, pms.js:1773-1776).
-    final msgs = mergeBotThreadWithInfo(
+    var msgs = mergeBotThreadWithInfo(
       app.messages[BotChatController.conversationKey] ?? const <Message>[],
       ref.watch(botChatControllerProvider).infoMessages,
     );
+    // Slack-style threads: replies collapse into their root's thread view and
+    // are hidden from the flat conversation when the root is present locally —
+    // the same filter `visibleMessagesFor` applies to canonical conversations.
+    if (appThreadsEnabled && msgs.any((m) => m.threadRoot != null)) {
+      final rootIds = <String>{
+        for (final m in msgs)
+          if (m.threadRoot == null) threadKeyForMessage(m),
+      }..remove('');
+      msgs = [
+        for (final m in msgs)
+          if (m.threadRoot == null || !rootIds.contains(m.threadRoot)) m,
+      ];
+    }
 
     // `.messages-container` bg: black@0.15 dark / white@0.3 light.
     final containerColor = c.isLight

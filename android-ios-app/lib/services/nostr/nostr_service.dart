@@ -1479,6 +1479,10 @@ class NostrService {
     List<List<String>> emojiTags = const [],
     int powDifficulty = 0,
     EventSigner? signerOverride,
+    // Thread reply: the root message's event id. Emitted as a NIP-10 marked
+    // ['e', rootId, '', 'root'] tag so other clients still see a normal
+    // channel message while Nymchat groups it under its root (threads).
+    String? threadRoot,
   }) async {
     // [signerOverride] is the pseudonymous-send path: a fresh per-message
     // ephemeral key (publishMessagePseudonymous) so the message is unlinkable to
@@ -1495,6 +1499,8 @@ class NostrService {
       ['n', nym],
       ['ms', '$nowMs'],
       [isGeo ? 'g' : 'd', isGeo ? geohash : channelKey],
+      if (threadRoot != null && threadRoot.isNotEmpty)
+        ['e', threadRoot, '', 'root'],
       // NIP-30: declare any custom emoji used in the message so other clients
       // render them (messages.js `customEmojiTagsForContent`).
       ...emojiTags,

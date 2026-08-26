@@ -61,6 +61,9 @@ class StorageKeys {
   static const transparencyEnabled = 'nym_transparency_enabled';
   static const chatLayout = 'nym_chat_layout';
   static const chatViewMode = 'nym_chat_view_mode';
+
+  /// Message threads (Slack-style reply threads) on/off — default on.
+  static const threadsEnabled = 'nym_threads_enabled';
   static const columnsLayout = 'nym_columns_layout';
   static const columnsWallpaper = 'nym_columns_wallpaper';
   static const wallpaperType = 'nym_wallpaper_type';

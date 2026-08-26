@@ -6,6 +6,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/i18n/i18n.dart';
 import '../../state/settings_provider.dart';
+import 'keyboard_inset_dialog.dart';
 
 /// Shared confirm / alert / prompt dialog — the native port of the PWA's
 /// `dialog.js` (`showAppConfirm` / `showAppAlert` / `showAppPrompt`), styled to
@@ -254,7 +255,12 @@ class _AppDialogState extends State<_AppDialog> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
+    // KeyboardInsetDialog (not a bare Center): shifts the dialog above the
+    // soft keyboard and caps its height to the visible area, so a prompt
+    // field — e.g. the post-quantum `nympq1…` recovery-code paste — is never
+    // hidden behind the keyboard on mobile (same fix as the other custom
+    // modals).
+    return KeyboardInsetDialog(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(

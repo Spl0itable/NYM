@@ -148,6 +148,7 @@ class StorageSync {
     ],
     'messaging': [
       'groupChatPMOnlyMode',
+      'threadsEnabled',
       'translateLanguage',
       'translateFavoriteLanguages',
       'emojiPackFavorites',
@@ -287,6 +288,7 @@ class StorageSync {
       'acceptCalls': s.acceptCalls,
       'showStatus': _showStatusForSync(s.showStatus),
       'groupChatPMOnlyMode': s.groupChatPMOnlyMode,
+      'threadsEnabled': s.threadsEnabled,
       'translateLanguage': s.translateLanguage,
       'gesturesEnabled': s.gesturesEnabled,
       'swipeLeftAction': s.swipeLeftAction,

@@ -27,6 +27,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../chat/message_row.dart';
+import '../../features/threads/thread_view.dart' show ThreadView;
 import '../chat/messages_list.dart' show messageListScrollerProvider;
 import '../chat/message_skeleton.dart';
 import '../chat/typing_indicator.dart';
@@ -1947,6 +1948,14 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       }
     }
 
+    // An open thread belonging to THIS column's conversation swaps the
+    // column's message list for the in-place ThreadView (the shared composer
+    // below the deck attaches the thread root while it is open).
+    final activeThread = ref.watch(activeThreadProvider);
+    final threadOpen = activeThread != null &&
+        appThreadsEnabled &&
+        activeThread.view.storageKey == widget.desc.storageKey;
+
     // `.cv-column.focused` (desktop): primary border + `--shadow-glow`
     // (`0 0 20px primary@0.1`). Mobile resets focused styling to none.
     final showFocus = widget.focused && !mobile;
@@ -1993,7 +2002,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
           // so it must be mode-aware or the column body looks dark-tinted in
           // light mode. Transparent only under the columns wallpaper.
           Expanded(
-            child: ColoredBox(
+            child: threadOpen
+                ? ThreadView(key: ValueKey(activeThread), thread: activeThread)
+                : ColoredBox(
               color: transparent
                   ? Colors.transparent
                   : (c.isLight

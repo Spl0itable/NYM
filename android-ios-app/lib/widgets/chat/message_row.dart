@@ -21,6 +21,7 @@ import '../../features/p2p/p2p_models.dart';
 import '../../features/p2p/p2p_service.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/reactions/quick_context_items.dart';
+import '../../features/threads/thread_view.dart' show openMessageThread;
 import '../../features/reactions/quick_react_popup.dart';
 import '../../features/reactions/reaction_burst.dart';
 import 'relative_time_ticker.dart';
@@ -244,12 +245,17 @@ class MessageRow extends ConsumerStatefulWidget {
     this.bubbleAnchorKey,
     this.swipeAvatarDx,
     this.scrollKey,
+    this.showThreadAffordances = true,
   });
 
   final Message message;
   final Settings settings;
   final List<MessageReaction> reactions;
   final bool mentioned;
+
+  /// False inside the thread panel: a row already living in a thread view must
+  /// not render the "N replies" link or the thread long-press entry for itself.
+  final bool showThreadAffordances;
 
   /// Conversation `storageKey` of the list this row lives in — forwarded to the
   /// message body's tappable blockquote so a columns column jumps its OWN list.
@@ -484,6 +490,65 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   /// True when this message has accrued zaps (`zapsProvider`), so the reactions
   /// row must render to host the `⚡ N` zap badge even without reactions.
+  /// Reply count when this row is a thread root (0 hides the link). Watches
+  /// the per-conversation counts map, recomputed once per display revision.
+  int get _threadReplyCount {
+    if (!appThreadsEnabled || !widget.showThreadAffordances) return 0;
+    final m = message;
+    if (m.threadRoot != null || m.isSystemRow || m.isMeAction) return 0;
+    final key =
+        widget.scrollKey ?? ref.read(appStateProvider).view.storageKey;
+    final counts = ref.watch(threadCountsProvider(key));
+    return counts[threadKeyForMessage(m)] ?? 0;
+  }
+
+  /// Whether tapping this message's body may open its thread view (threads
+  /// on, affordances allowed, and the row is a thread root or reply).
+  bool get _threadTapEligible =>
+      appThreadsEnabled &&
+      widget.showThreadAffordances &&
+      (message.threadRoot != null || threadEligibleRoot(message));
+
+  /// The clickable "N replies" row shown under the reactions/zaps row on a
+  /// thread root (the PWA's `.thread-indicator`). Opens the thread view.
+  Widget _threadIndicator(BuildContext context, int count) {
+    final c = context.nym;
+    return Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () =>
+            openMessageThread(ref, message, storageKey: widget.scrollKey),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: c.primaryA(0.06),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: c.primaryA(0.25)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              NymSvgIcon(NymIcons.thread, size: 14, color: c.primary),
+              const SizedBox(width: 6),
+              Text(
+                count == 1
+                    ? tr('1 reply')
+                    // Count abbreviated like reaction badges (`abbreviateNumber`).
+                    : tr('{n} replies', {'n': abbreviateNumber(count)}),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   bool get _hasZaps {
     final z = ref.watch(zapsProvider)[message.id];
     return z != null && z.totalSats > 0;
@@ -802,6 +867,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                         ? null
                         : () => widget.onReactionPicker!.call(message),
                     onTranslate: _showTranslated,
+                    onThread: appThreadsEnabled &&
+                            widget.showThreadAffordances &&
+                            (message.threadRoot != null ||
+                                threadEligibleRoot(message))
+                        ? () => openMessageThread(ref, message,
+                            storageKey: widget.scrollKey)
+                        : null,
                     // `body.columns-mode .msg-hover-buttons { flex-direction:
                     // column }` (styles-columns.css:80-82) — the pair stacks
                     // vertically to fit the 360px column.
@@ -832,6 +904,22 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         !message.isHistorical &&
         ref.watch(floodTrackerProvider).isFlooding(message.pubkey)) {
       row = Opacity(opacity: 0.2, child: row);
+    }
+    // Threads: tapping the message body opens its thread view (links, media,
+    // badges, author taps and long-presses all win the gesture arena first;
+    // ineligible rows stay silent). IRC rows take the whole-row tap; in
+    // bubble mode the tap target is the bubble itself (wrapped inside
+    // [_buildBubble]) — the row spans the full width with the bubble aligned
+    // to one side, and the blank flex area beside it must not read as a
+    // message click.
+    if (!settings.useBubbles && _threadTapEligible) {
+      final tappableRow = row;
+      row = GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () =>
+            openMessageThread(ref, message, storageKey: widget.scrollKey, silent: true),
+        child: tappableRow,
+      );
     }
     // `.message-scroll-flash`: a tapped blockquote scrolls to its quoted source
     // and flashes it (`_scrollToQuotedMessage`, messages.js:2775). Watch the
@@ -1451,6 +1539,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             padding: const EdgeInsets.only(top: 5),
             child: _reactionsRow(context),
           ),
+        // The "N replies" thread link, under the reactions/zaps row.
+        if (_threadReplyCount > 0)
+          _threadIndicator(context, _threadReplyCount),
       ],
     );
 
@@ -1938,7 +2029,21 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           alignment: sideAlign,
           // Key the rounded bubble (NOT the trailing reactions/translation/
           // receipt rows) so the group avatar can bottom-align to it.
-          child: KeyedSubtree(key: widget.bubbleAnchorKey, child: bubble),
+          // Threads: in bubble mode the tap-to-open-thread target is the
+          // bubble ITSELF — never the full-width row, whose blank flex space
+          // on either side of the bubble must stay inert (links, media,
+          // badges and long-presses inside still win the gesture arena).
+          child: KeyedSubtree(
+            key: widget.bubbleAnchorKey,
+            child: _threadTapEligible
+                ? GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => openMessageThread(ref, message,
+                        storageKey: widget.scrollKey, silent: true),
+                    child: bubble,
+                  )
+                : bubble,
+          ),
         ),
         // PM sent/delivered/read receipt (`.delivery-status`). The PWA emits it as
         // a TOP-LEVEL sibling AFTER `.message-content` (`messages.js:940`), and the
@@ -1971,6 +2076,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
               padding: const EdgeInsets.only(top: 5),
               child: _reactionsRow(context),
             ),
+          ),
+        // The "N replies" thread link, under the reactions/zaps row.
+        if (_threadReplyCount > 0)
+          Align(
+            alignment: sideAlign,
+            child: _threadIndicator(context, _threadReplyCount),
           ),
       ],
     );
@@ -2469,6 +2580,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
               messageId: message.id,
               content: message.content,
             ),
+        onThread: appThreadsEnabled &&
+                widget.showThreadAffordances &&
+                (message.threadRoot != null || threadEligibleRoot(message))
+            ? () =>
+                openMessageThread(ref, message, storageKey: widget.scrollKey)
+            : null,
       ),
     );
   }
@@ -3539,6 +3656,7 @@ class _MsgHoverButtons extends StatelessWidget {
   const _MsgHoverButtons({
     required this.onReact,
     required this.onTranslate,
+    this.onThread,
     this.vertical = false,
   });
 
@@ -3546,6 +3664,10 @@ class _MsgHoverButtons extends StatelessWidget {
   /// rendered but inert, like a PWA row whose picker action can't resolve.
   final VoidCallback? onReact;
   final VoidCallback onTranslate;
+
+  /// Opens the thread view for this message; null hides the button (threads
+  /// disabled, or the row already lives inside a thread view).
+  final VoidCallback? onThread;
 
   /// Columns mode stacks the pair vertically (`body.columns-mode
   /// .msg-hover-buttons { flex-direction: column }`, styles-columns.css:80-82).
@@ -3559,6 +3681,15 @@ class _MsgHoverButtons extends StatelessWidget {
       _HoverActionButton(svg: NymIcons.addReaction, onTap: onReact),
       // `.msg-hover-buttons { gap: 4px }`.
       SizedBox(width: vertical ? 0 : 4, height: vertical ? 4 : 0),
+      // `.thread-msg-btn` — static, same chrome as its neighbours.
+      if (onThread != null) ...[
+        _HoverActionButton(
+          svg: NymIcons.thread,
+          onTap: onThread,
+          tooltip: tr('Reply in thread'),
+        ),
+        SizedBox(width: vertical ? 0 : 4, height: vertical ? 4 : 0),
+      ],
       // `.translate-msg-btn` (`title="Translate"`).
       _HoverActionButton(
         svg: NymIcons.translate,

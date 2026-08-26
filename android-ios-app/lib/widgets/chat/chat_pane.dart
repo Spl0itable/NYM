@@ -38,6 +38,7 @@ import '../context_menu/context_menu_panel.dart' show ContextMenuPanel;
 import '../context_menu/profile_badges.dart' show VerifiedBadge;
 import '../context_menu/group_context_menu_panel.dart'
     show GroupContextMenuPanel;
+import '../../features/threads/thread_view.dart' show ThreadView;
 import '../columns/columns_deck.dart';
 import 'message_row.dart' show formatRelativeTime;
 import 'composer.dart';
@@ -112,6 +113,16 @@ class ChatPane extends ConsumerWidget {
     // canonicalization in `switchView`, still routes here on every entry path
     // (sidebar tap, new-PM, notification, deep link, boot restore).
     final view = ref.watch(currentViewProvider);
+    // A view change closes an open thread that belongs to a DIFFERENT
+    // conversation (sidebar tap, column focus), so the shared composer can
+    // never mis-thread a send. Navigation that reopens a thread sets the
+    // provider after the switch, which this listener leaves alone.
+    ref.listen(appStateProvider.select((s) => s.view), (_, next) {
+      final at = ref.read(activeThreadProvider);
+      if (at != null && at.view != next) {
+        ref.read(activeThreadProvider.notifier).state = null;
+      }
+    });
     if (view.kind == ViewKind.pm && view.id.toLowerCase() == kNymbotPubkey) {
       // The premium Nymbot chat keeps the SHARED `_ChatHeader` (back/forward
       // nav, audio/video call buttons, notification bell + hamburger on the
@@ -162,6 +173,8 @@ class ChatPane extends ConsumerWidget {
           ),
           // `#messagesContainer` (single view) / `#columnsStrip` (columns mode)
           // — the deck replaces only the messages list, not the header/composer.
+          // An open thread swaps the messages list for the in-place ThreadView
+          // (same composer below; the header's back/forward steps in and out).
           Expanded(
             // Tap-outside dismisses the soft keyboard (01-B3): a translucent
             // GestureDetector over the messages region drops focus when a tap
@@ -174,7 +187,17 @@ class ChatPane extends ConsumerWidget {
               onTap: () => FocusScope.of(context).unfocus(),
               child: KeyedSubtree(
                 key: TutorialTargets.keyFor(TutorialTarget.messagesContainer),
-                child: useColumns ? const ColumnsDeck() : const MessagesList(),
+                child: Consumer(builder: (context, paneRef, _) {
+                  final at = paneRef.watch(activeThreadProvider);
+                  final threadOpen =
+                      at != null && at.view == view && appThreadsEnabled;
+                  if (threadOpen && !useColumns) {
+                    return ThreadView(key: ValueKey(at), thread: at);
+                  }
+                  return useColumns
+                      ? const ColumnsDeck()
+                      : const MessagesList();
+                }),
               ),
             ),
           ),
@@ -221,9 +244,11 @@ class _ChatHeader extends ConsumerStatefulWidget {
 
 class _ChatHeaderState extends ConsumerState<_ChatHeader> {
   // A simple back/forward navigation history (channels.js `navigationHistory` /
-  // `navigationIndex`). Each entry is a [ChatView]. Forward is disabled when at
-  // the tip; back is disabled at the start (like the PWA).
-  final List<ChatView> _history = [];
+  // `navigationIndex`). Each entry is a [ChatView] plus, when a thread was
+  // open, its root id — so Back closes an open thread and Forward reopens it
+  // (the PWA pushes `{type:'thread'}` entries the same way). Forward is
+  // disabled when at the tip; back is disabled at the start (like the PWA).
+  final List<({ChatView view, String? threadRoot})> _history = [];
   int _index = -1;
   bool _navigating = false;
 
@@ -288,14 +313,18 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     unawaited(engine.refreshBalance());
   }
 
-  void _recordView(ChatView view) {
+  void _recordView(ChatView view, {String? threadRoot}) {
     if (_navigating) return;
-    if (_index >= 0 && _history[_index] == view) return;
+    if (_index >= 0 &&
+        _history[_index].view == view &&
+        _history[_index].threadRoot == threadRoot) {
+      return;
+    }
     // Truncate any forward entries, then push.
     if (_index < _history.length - 1) {
       _history.removeRange(_index + 1, _history.length);
     }
-    _history.add(view);
+    _history.add((view: view, threadRoot: threadRoot));
     if (_history.length > 50) _history.removeAt(0);
     _index = _history.length - 1;
   }
@@ -312,11 +341,22 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     _go(_history[_index]);
   }
 
-  void _go(ChatView view) {
+  void _go(({ChatView view, String? threadRoot}) entry) {
     _navigating = true;
-    ref.read(appStateProvider.notifier).switchView(view);
-    // Reset the flag after the frame so didChangeDependencies doesn't re-record.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _navigating = false);
+    ref.read(appStateProvider.notifier).switchView(entry.view);
+    // Reopen (or close) the thread this entry captured. Post-frame so the
+    // ThreadPanelHost's view-change listener — which closes the panel on a
+    // view switch — has already run and cannot clobber the reopen.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final target = entry.threadRoot == null
+          ? null
+          : ActiveThread(view: entry.view, rootId: entry.threadRoot!);
+      if (ref.read(activeThreadProvider) != target) {
+        ref.read(activeThreadProvider.notifier).state = target;
+      }
+      _navigating = false;
+    });
     setState(() {});
   }
 
@@ -327,7 +367,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader> {
     final settings = ref.watch(settingsProvider);
     final app = ref.watch(appStateProvider);
     final view = ref.watch(currentViewProvider);
-    _recordView(view);
+    final activeThread = ref.watch(activeThreadProvider);
+    _recordView(view,
+        threadRoot:
+            activeThread?.view == view ? activeThread?.rootId : null);
 
     // Columns-deck focus / sidebar switches onto the bot PM re-render this
     // shared header — mirror `_renderPMHeader`'s bot branch (credit-meta

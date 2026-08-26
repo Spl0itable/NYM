@@ -1242,6 +1242,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: false, label: tr('Solid')),
       (value: true, label: tr('Glass')),
     ];
+    final threadsItems = <({bool value, String label})>[
+      (value: true, label: tr('Enabled')),
+      (value: false, label: tr('Disabled (classic flat view)')),
+    ];
     // The custom-wallpaper thumbnail shown on the Upload tile when custom mode
     // is active (`initWallpaperUI`, app.js:4211-4227).
     final customWallpaperPath = s.wallpaperType == 'custom'
@@ -1342,6 +1346,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onChanged: (v) {
               ctrl.setChatViewMode(v);
               _mutate((d) => d.copyWith(chatViewMode: v));
+            },
+          ),
+        ),
+      ),
+      // Message Threads (Slack-style reply threads) — default on; disabling
+      // restores the classic flat view. Live-applied (PWA
+      // `onThreadsEnabledChange`).
+      _GroupSpec(
+        text: tr('Message Threads {options} Group replies under their '
+            'original message. Replies open in a thread view and the '
+            'original shows a reply count. Disabling shows every message '
+            'inline like before.', {'options': _optText(threadsItems)}),
+        child: FormGroup(
+          label: tr('Message Threads'),
+          hint: tr('Group replies under their original message. Replies '
+              'open in a thread view and the original shows a reply count. '
+              'Disabling shows every message inline like before.'),
+          child: FormSelect<bool>(
+            value: s.threadsEnabled,
+            items: threadsItems,
+            onChanged: (v) {
+              ctrl.setThreadsEnabled(v);
+              _mutate((d) => d.copyWith(threadsEnabled: v));
             },
           ),
         ),

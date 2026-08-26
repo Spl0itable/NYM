@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Each released version corresponds to a tag on
 [github.com/Spl0itable/NYM](https://github.com/Spl0itable/NYM/releases).
 
+## [3.75.543] - 2026-08-26
+
+### Added
+- Slack-style message threads across channels, PMs, and group chats. Tapping a
+  message (or its "N replies" row under the reactions/zaps row) swaps the
+  current view to the thread — the root message plus its replies — using the
+  same composer, and the chat header's back/forward buttons navigate in and
+  out of threads. Desktop hover actions gain a thread button beside quick
+  react/translate, and the long-press menu gains "Reply in Thread". On by
+  default; a new "Message Threads" setting (synced across devices) restores
+  the classic flat view. Channel replies carry a NIP-10 marked
+  `['e', rootId, '', 'root']` tag so other clients still see a normal channel
+  message; PM/group replies carry `['nymthread', rootNymMessageId]` inside the
+  encrypted rumor.
+
+### Fixed
+- The app dialog (including the post-quantum `nympq1…` recovery-code paste
+  prompt) now lifts above the soft keyboard instead of hiding its input
+  behind it, matching the other keyboard-aware modals.
+
 ## [3.74.542] - 2026-08-25
 
 ### Added

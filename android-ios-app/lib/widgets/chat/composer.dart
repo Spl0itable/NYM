@@ -2045,8 +2045,12 @@ class _ComposerState extends ConsumerState<Composer> {
       cursorColor: c.isLight ? Colors.black : Colors.white,
       decoration: InputDecoration(
         isDense: true,
-        // PWA `data-placeholder` teaches the `/` and `?` affordances (F9).
-        hintText: tr('Message, / for commands, ? for Nymbot...'),
+        // PWA `data-placeholder` teaches the `/` and `?` affordances (F9);
+        // inside an open thread view the same composer replies into the
+        // thread, so the placeholder says so.
+        hintText: ref.watch(activeThreadProvider) != null
+            ? tr('Reply in thread...')
+            : tr('Message, / for commands, ? for Nymbot...'),
         // Translated hints run longer than the English one and would wrap,
         // growing the field to a second row and pushing the translate button
         // down with it. Keep the placeholder on one line and ellipsize.
@@ -2243,7 +2247,12 @@ class _ComposerState extends ConsumerState<Composer> {
     }
 
     if (_formatToolbarOpen) {
-      panels.add(FormatToolbar(onTool: _applyFormatTool));
+      // An open command palette / autocomplete sits flush on the toolbar's
+      // top edge — square the touching corners while it shows (PWA parity).
+      panels.add(FormatToolbar(
+        onTool: _applyFormatTool,
+        squareTop: _overlayActive,
+      ));
     }
 
     if (panels.isEmpty) return null;

@@ -7,6 +7,7 @@ import '../core/theme/nym_colors.dart';
 import '../core/theme/nym_theme.dart';
 import '../models/settings.dart';
 import '../services/storage/key_value_store.dart';
+import 'app_state.dart' show appThreadsEnabled;
 
 /// Provides the opened [KeyValueStore]. Overridden in `main()` with the
 /// concrete instance (SharedPreferences must be opened asynchronously).
@@ -78,6 +79,16 @@ class SettingsController extends StateNotifier<Settings> {
   void setChatViewMode(String mode) {
     _kv.setString(StorageKeys.chatViewMode, mode);
     state = state.copyWith(chatViewMode: mode);
+    _syncedChanged();
+  }
+
+  /// Slack-style message threads on/off (default on). Mirrored onto the
+  /// [appThreadsEnabled] module flag so the pure [visibleMessagesFor] filter
+  /// can consult it without a provider dependency (like [appSpamFilterEnabled]).
+  void setThreadsEnabled(bool v) {
+    _kv.setBool(StorageKeys.threadsEnabled, v);
+    appThreadsEnabled = v;
+    state = state.copyWith(threadsEnabled: v);
     _syncedChanged();
   }
 

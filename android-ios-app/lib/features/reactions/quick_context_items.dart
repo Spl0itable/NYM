@@ -8,6 +8,7 @@ import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../widgets/context_menu/context_menu_actions.dart';
+import '../../widgets/nym_icons.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../i18n/i18n.dart';
@@ -37,6 +38,7 @@ List<QuickContextItem> buildQuickContextItems(
   Message message, {
   VoidCallback? onTranslate,
   VoidCallback? onEdit,
+  VoidCallback? onThread,
 }) {
   final controller = ref.read(nostrControllerProvider);
   final app = ref.read(appStateProvider);
@@ -71,6 +73,16 @@ List<QuickContextItem> buildQuickContextItems(
       svg: ctxActionSvg(CtxAction.zap),
       color: QuickContextItemColor.lightning,
       onTap: () => _zap(context, ref, message, baseNym),
+    ));
+  }
+
+  // "Reply in Thread" — any message that can anchor (or already belongs to)
+  // a thread; the host gates on the threads setting and supplies the opener.
+  if (onThread != null && hasMessageId) {
+    items.add(QuickContextItem(
+      label: tr('Reply in Thread'),
+      svg: NymIcons.thread,
+      onTap: onThread,
     ));
   }
 

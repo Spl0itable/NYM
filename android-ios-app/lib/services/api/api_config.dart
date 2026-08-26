@@ -21,7 +21,7 @@ class ApiConfig {
   static const String apiHost = 'web.nymchat.app';
 
   /// App version, used in the User-Agent. Keep in sync with pubspec `version`.
-  static const String appVersion = '3.74.543';
+  static const String appVersion = '3.75.543';
 
   /// User-Agent that passes the backend `isNymchatClient` UA gate.
   ///

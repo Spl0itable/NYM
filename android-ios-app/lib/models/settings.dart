@@ -32,6 +32,7 @@ class Settings {
     this.chatLayout = 'bubbles',
     this.chatViewMode = 'single',
     this.columnsWallpaper = false,
+    this.threadsEnabled = true,
     this.lowDataMode = false,
     this.backgroundConnectivity = false,
     this.meshEnabled = true,
@@ -76,6 +77,10 @@ class Settings {
   final String chatLayout; // 'bubbles' | 'irc'
   final String chatViewMode; // 'single' | 'columns'
   final bool columnsWallpaper;
+
+  /// Slack-style message threads (default ON). When disabled the app shows the
+  /// classic flat view: replies render inline and no thread affordances appear.
+  final bool threadsEnabled;
   final bool lowDataMode;
 
   /// When true, the app asks the OS to keep the Nostr relay sockets and the
@@ -169,6 +174,7 @@ class Settings {
     String? chatLayout,
     String? chatViewMode,
     bool? columnsWallpaper,
+    bool? threadsEnabled,
     bool? lowDataMode,
     bool? backgroundConnectivity,
     bool? meshEnabled,
@@ -215,6 +221,7 @@ class Settings {
       chatLayout: chatLayout ?? this.chatLayout,
       chatViewMode: chatViewMode ?? this.chatViewMode,
       columnsWallpaper: columnsWallpaper ?? this.columnsWallpaper,
+      threadsEnabled: threadsEnabled ?? this.threadsEnabled,
       lowDataMode: lowDataMode ?? this.lowDataMode,
       backgroundConnectivity:
           backgroundConnectivity ?? this.backgroundConnectivity,
@@ -319,6 +326,7 @@ class Settings {
       chatViewMode: kv.getString(StorageKeys.chatViewMode) ?? 'single',
       columnsWallpaper:
           kv.getBool(StorageKeys.columnsWallpaper, defaultValue: false),
+      threadsEnabled: kv.getBool(StorageKeys.threadsEnabled, defaultValue: true),
       lowDataMode: kv.getBool(StorageKeys.lowDataMode, defaultValue: false),
       backgroundConnectivity: kv.getBool(StorageKeys.backgroundConnectivity,
           defaultValue: false),

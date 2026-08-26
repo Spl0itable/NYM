@@ -188,6 +188,7 @@ class NymbotService {
     bool fresh = false,
     GitConfig? git,
     Map<String, String>? cmdAlias,
+    Map<String, dynamic>? pqAnnouncement,
   }) async {
     final res = await _botRequest(
       'pm',
@@ -198,6 +199,10 @@ class NymbotService {
         if (git != null) 'git': git.toWire(),
         // Lets the worker read a command the user typed in their own language.
         if (cmdAlias != null) 'cmdAlias': cmdAlias,
+        // Our own signed nym-pq announcement, so the worker seals its reply
+        // post-quantum deterministically (it verifies the signature; no
+        // archive/relay lookup race can leave the reply classical).
+        if (pqAnnouncement != null) 'pqAnnouncement': pqAnnouncement,
       },
       pubkey: pubkey,
       auth: auth,

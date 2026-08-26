@@ -92,6 +92,8 @@ class EventMapper {
     // actual sender (anti-spoof) and returns null when absent/mismatched.
     final fileOffer = parseFileOfferTag(e.tags, e.pubkey);
 
+    final threadRoot = _threadRootFromTags(e.tags);
+
     return Message(
       id: e.id,
       author: author,
@@ -112,12 +114,35 @@ class EventMapper {
       isHistorical: isHistorical,
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer?.toJson(),
+      threadRoot: threadRoot,
       // NIP-13 target the sender committed to, or null when there is no nonce
       // tag at all — which is how the timestamp popup tells "no proof-of-work"
       // (another client) from "mined to N bits". The work actually proven is
       // recomputed from the id via [powBitsForId], never trusted from the tag.
       powTarget: _powTarget(e),
     );
+  }
+
+  /// The thread root a NIP-10 marked `e` tag points at (threads): the first
+  /// `['e', id, …, 'root']` tag wins, falling back to a `'reply'` marker.
+  /// Only 64-char hex event ids are accepted; anything else is ignored so a
+  /// foreign client's stray `e` tags can't hide a message behind a bogus root.
+  static String? _threadRootFromTags(List<List<String>> tags) {
+    String? root;
+    String? reply;
+    for (final t in tags) {
+      if (t.length < 2 || t[0] != 'e' || t[1].isEmpty) continue;
+      final marker = t.length > 3 ? t[3] : '';
+      if (marker == 'root') {
+        root ??= t[1];
+      } else if (marker == 'reply') {
+        reply ??= t[1];
+      }
+    }
+    final id = root ?? reply;
+    if (id == null) return null;
+    final isHex = id.length == 64 && RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(id);
+    return isHex ? id : null;
   }
 
   /// The difficulty a NIP-13 `nonce` tag commits to, or null when the event

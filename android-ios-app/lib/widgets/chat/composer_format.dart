@@ -434,9 +434,15 @@ class _FormatInputButtonState extends State<FormatInputButton> {
 
 /// `.format-toolbar` — the row of markdown tools plus the preview toggle.
 class FormatToolbar extends StatelessWidget {
-  const FormatToolbar({super.key, required this.onTool});
+  const FormatToolbar({super.key, required this.onTool, this.squareTop = false});
 
   final void Function(FormatTool tool) onTool;
+
+  /// True while an anchored popup (command palette / autocomplete) is stacked
+  /// directly above the toolbar: the touching top corners square off so the
+  /// two surfaces read as one, and round back when the popup closes —
+  /// animated both ways (PWA `.format-toolbar` border-radius transition).
+  final bool squareTop;
 
   @override
   Widget build(BuildContext context) {
@@ -445,32 +451,42 @@ class FormatToolbar extends StatelessWidget {
     // sits in the same slot above the field and should read as the same
     // surface — opaque `--glass-bg` under solid-ui, bg-tertiary in glass mode,
     // rounded across the top only, `--shadow-lg`.
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(
-        color: c.glassBg.a == 1.0 ? c.glassBg : c.bgTertiary,
-        border: Border.all(color: c.glassBorder),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        boxShadow: [
-          BoxShadow(
-            color:
-                c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
-            blurRadius: 32,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final tool in kFormatTools)
-                _FormatToolButton(tool: tool, onTap: () => onTool(tool)),
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(end: squareTop ? 0 : 16),
+      duration: NymMotion.transition,
+      curve: NymMotion.curve,
+      builder: (context, topRadius, child) {
+        final radius = BorderRadius.vertical(top: Radius.circular(topRadius));
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          decoration: BoxDecoration(
+            color: c.glassBg.a == 1.0 ? c.glassBg : c.bgTertiary,
+            border: Border.all(color: c.glassBorder),
+            borderRadius: radius,
+            boxShadow: [
+              BoxShadow(
+                color: c.isLight
+                    ? const Color(0x1F000000)
+                    : const Color(0x80000000),
+                blurRadius: 32,
+                offset: const Offset(0, 8),
+              ),
             ],
           ),
+          child: ClipRRect(
+            borderRadius: radius,
+            child: child,
+          ),
+        );
+      },
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final tool in kFormatTools)
+              _FormatToolButton(tool: tool, onTap: () => onTool(tool)),
+          ],
         ),
       ),
     );
