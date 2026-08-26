@@ -567,6 +567,9 @@ Object.assign(NYM.prototype, {
     _cvFocusColumn(id) {
         const col = this._cvColumns.find(c => c.id === id);
         if (!col) return;
+        // Focusing a different conversation exits an open thread view (its
+        // column gets its conversation back) so the composer never mis-threads.
+        if (typeof this._threadOnColumnFocus === 'function') this._threadOnColumnFocus(col.key);
         this._cvFocusedId = id;
         for (const c of this._cvColumns) c.el && c.el.classList.toggle('focused', c.id === id);
         this._cvRebuildPager();

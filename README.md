@@ -51,6 +51,7 @@ The web app is served as static files plus a set of Cloudflare Pages Functions u
 - **Forward Secrecy and Disappearing Messages**: Optional per-message forward secrecy for DMs and a configurable message time-to-live.
 - **Read Receipts and Typing Indicators**: Optional, with per-scope control (everyone, friends only, or off).
 - **Rich Text**: Markdown for bold, italic, strikethrough, code blocks, and quotes.
+- **Message Threads**: Reply threads in channels, PMs, and group chats. Clicking a message (or its reply-count row) swaps the current view to the thread. On by default and can be disabled in Settings, which restores the classic flat view. Channel replies carry a NIP-10 marked `['e', rootId, '', 'root']` tag so other clients still see a normal message; PM/group replies carry a `['nymthread', rootNymMessageId]` tag inside the encrypted rumor.
 - **Message Reactions**: React to messages with emoji ([NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md)).
 - **Custom Emoji**: NIP-30 custom emoji pack discovery and rendering.
 - **Polls**: Create and vote on polls in channels.

@@ -1742,7 +1742,18 @@ Object.assign(NYM.prototype, {
 
     // Update message with zap display
     updateMessageZaps(messageId) {
-        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+        // A message can be rendered more than once (main view + thread view),
+        // so update every copy. Scoped to `.message` rows — the hover
+        // `.reaction-btn` carries the same data-message-id and must never be
+        // treated as a message element.
+        const els = document.querySelectorAll(`.message[data-message-id="${messageId}"]`);
+        if (!els.length) return false;
+        let updated = false;
+        els.forEach(el => { updated = this._updateMessageZapsEl(messageId, el) || updated; });
+        return updated;
+    },
+
+    _updateMessageZapsEl(messageId, messageEl) {
         if (!messageEl) return false;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
@@ -1751,12 +1762,15 @@ Object.assign(NYM.prototype, {
 
         const messageZaps = this.zaps.get(messageId);
 
-        // Find or create reactions row
-        let reactionsRow = messageEl.querySelector('.reactions-row');
+        // Find or create reactions row (always a DIRECT child of the row)
+        let reactionsRow = messageEl.querySelector(':scope > .reactions-row');
         if (!reactionsRow) {
             reactionsRow = document.createElement('div');
             reactionsRow.className = 'reactions-row';
-            messageEl.appendChild(reactionsRow);
+            // Keep the reply-count thread row beneath the reactions/zaps row.
+            const threadIndicator = messageEl.querySelector(':scope > .thread-indicator-row');
+            if (threadIndicator) messageEl.insertBefore(reactionsRow, threadIndicator);
+            else messageEl.appendChild(reactionsRow);
         }
 
         // Remove existing zap badges

@@ -205,7 +205,10 @@ Object.assign(NYM.prototype, {
                 if (contentEl) {
                     const hb = document.createElement('div');
                     hb.className = 'msg-hover-buttons';
-                    hb.innerHTML = `<button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${signedEvent.id}"><svg viewBox="0 0 20 20" class="nm-msg-2"><path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path></svg></button><button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate"><svg viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg></button>`;
+                    const _threadHb = (typeof this.threadsEnabled === 'function' && this.threadsEnabled())
+                        ? `<button class="thread-msg-btn" data-action="openMessageThread" title="Reply in thread"><svg viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 3a7 7 0 1 0 3.394 13.124.75.75 0 0 1 .542-.074l2.794.68-.68-2.794a.75.75 0 0 1 .073-.542A7 7 0 0 0 10 3m-8.5 7a8.5 8.5 0 1 1 16.075 3.859l.904 3.714a.75.75 0 0 1-.906.906l-3.714-.904A8.5 8.5 0 0 1 1.5 10M6 8.25a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 6 8.25M6.75 11a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5z" clip-rule="evenodd"></path></svg></button>`
+                        : '';
+                    hb.innerHTML = `<button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${signedEvent.id}"><svg viewBox="0 0 20 20" class="nm-msg-2"><path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path></svg></button>${_threadHb}<button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate"><svg viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg></button>`;
                     contentEl.appendChild(hb);
                 }
             }
@@ -466,8 +469,16 @@ Object.assign(NYM.prototype, {
         // than the single active conversation; null means no open column for it.
         let _cvContainer = null;
 
+        // Thread panel rendering: the message is already stored and routed —
+        // just build its element into the panel container (threads.js).
+        const _threadRender = message._threadRender === true;
+        const _threadTarget = _threadRender ? this._threadRenderTarget : null;
+        if (_threadRender && !_threadTarget) return;
+
         // Handle PM messages differently
-        if (message.isPM) {
+        if (_threadRender) {
+            // Storage and view routing are skipped in thread render mode.
+        } else if (message.isPM) {
             if (this._cvActive) {
                 _cvContainer = this._cvListForKey(message.conversationKey);
                 if (!_cvContainer) return;
@@ -597,16 +608,37 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        // Thread replies never render inline while threads are enabled: update
+        // the root's reply-count row (and the open thread panel) instead. A
+        // reply whose root isn't stored locally falls through and renders like
+        // a normal message so it is never lost (threads.js).
+        if (!_threadRender && message.threadRoot &&
+            typeof this.threadsEnabled === 'function' && this.threadsEnabled() &&
+            this._threadRootExistsFor(message)) {
+            this._onThreadReplyArrived(message);
+            return;
+        }
+
         // Don't re-add if already displayed in DOM
         // For group messages use the shared nymMessageId so duplicates from multiple relays are caught
         const _dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-        if (document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
+        if (_threadRender) {
+            if (_threadTarget.querySelector(`[data-message-id="${_dedupeId}"]`)) return;
+        } else if (document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
             return;
         }
 
         // Now actually display the message in the DOM (a column list in
         // column view mode, otherwise the single shared container)
-        const container = _cvContainer || document.getElementById('messagesContainer');
+        const container = _threadTarget || _cvContainer || document.getElementById('messagesContainer');
+
+        // An open thread view owns its container: ordinary conversation
+        // messages stay stored-only and reappear when the thread closes
+        // (closing re-renders the conversation from the store).
+        if (!_threadRender && typeof this._threadViewOccupies === 'function' &&
+            this._threadViewOccupies(container)) {
+            return;
+        }
 
         // A real message is landing — drop any loading shimmer or settled
         // "no messages" note. Bulk renders already cleared the container, so
@@ -794,14 +826,20 @@ Object.assign(NYM.prototype, {
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             const isMobile = window.innerWidth <= 768;
 
-            // Show reaction & translate buttons for all messages with valid IDs (including PMs)
+            // Show reaction, thread & translate buttons for all messages with valid IDs (including PMs)
+            const threadHoverBtn = (typeof this.threadsEnabled === 'function' && this.threadsEnabled()) ? `
+        <button class="thread-msg-btn" data-action="openMessageThread" title="Reply in thread">
+            <svg viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 3a7 7 0 1 0 3.394 13.124.75.75 0 0 1 .542-.074l2.794.68-.68-2.794a.75.75 0 0 1 .073-.542A7 7 0 0 0 10 3m-8.5 7a8.5 8.5 0 1 1 16.075 3.859l.904 3.714a.75.75 0 0 1-.906.906l-3.714-.904A8.5 8.5 0 0 1 1.5 10M6 8.25a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 6 8.25M6.75 11a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5z" clip-rule="evenodd"></path>
+            </svg>
+        </button>` : '';
             const hoverButtons = isValidEventId && !isMobile ? `
     <div class="msg-hover-buttons">
         <button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${reactionMsgId}">
             <svg viewBox="0 0 20 20" class="nm-msg-2">
                 <path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path>
             </svg>
-        </button>
+        </button>${threadHoverBtn}
         <button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate">
             <svg viewBox="0 0 24 24">
                 <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
@@ -984,6 +1022,15 @@ Object.assign(NYM.prototype, {
                     return false;
                 });
             }
+
+            // Reply-count row for thread roots ("N replies"), under the
+            // reactions/zaps row (threads.js).
+            if (!_threadRender && !message.threadRoot &&
+                typeof this.threadsEnabled === 'function' && this.threadsEnabled() &&
+                typeof this._threadReplyCountFor === 'function') {
+                const _threadCount = this._threadReplyCountFor(message);
+                if (_threadCount > 0) this._appendThreadIndicator(messageEl, message, _threadCount);
+            }
         }
 
 
@@ -1091,7 +1138,7 @@ Object.assign(NYM.prototype, {
         // Sending your own channel message should always jump to the latest,
         // even if you'd scrolled up — reverse-column auto-pinning only holds
         // when already at the bottom, so force the scroll here.
-        if (message.isOwn && !message.isPM && !message.isHistorical) {
+        if (message.isOwn && !message.isPM && !message.isHistorical && !_threadRender) {
             this._scheduleScrollToBottom(true);
         }
 
@@ -1124,7 +1171,7 @@ Object.assign(NYM.prototype, {
         // Skip per-insert DOM prune during bulk render — the caller already
         // limits to channelPageSize, and scanning the whole DOM after every
         // insert makes channel switching quadratic.
-        if (!this._bulkAppending) {
+        if (!this._bulkAppending && !_threadRender) {
             const domMessages = container.querySelectorAll('[data-message-id]');
             const domLimit = this.userScrolledUp
                 ? (message.isPM ? this.pmStorageLimit : this.channelMessageLimit)
@@ -1174,8 +1221,12 @@ Object.assign(NYM.prototype, {
 
 
         // Play notification sound for mentions and PMs (but not for historical messages, own messages, or bot messages)
-        // Skip sound when bulk-rendering stored messages (e.g. opening an unread conversation)
-        if (!this._suppressSound && !message.isHistorical && !message.isOwn && !message.isBot && this.settings.sound) {
+        // Skip sound when bulk-rendering stored messages (e.g. opening an unread conversation).
+        // Thread render mode is always a re-render from the store — opening a
+        // thread must never replay its root's or replies' mention/PM sound —
+        // so it is silent here; a LIVE reply landing in an open thread gets
+        // its one sound from _onThreadReplyArrived instead.
+        if (!_threadRender && !this._suppressSound && !message.isHistorical && !message.isOwn && !message.isBot && this.settings.sound) {
             if (isMentioned || message.isPM) {
                 this.playSound(this.settings.sound);
             }
@@ -2428,6 +2479,10 @@ Object.assign(NYM.prototype, {
         const quoteData = savedQuote; // Pass to publishMessage for nymquote tag
         const rawInput = content; // User's typed text before quote prepend
 
+        // In a thread view the same composer replies into the thread.
+        const threadRoot = (typeof this._threadRootForSend === 'function')
+            ? this._threadRootForSend() : null;
+
         // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
@@ -2446,17 +2501,17 @@ Object.assign(NYM.prototype, {
         } else {
             if (this.inPMMode && this.currentGroup) {
                 // Send to private group
-                await this.sendGroupMessage(content, this.currentGroup);
+                await this.sendGroupMessage(content, this.currentGroup, { threadRoot });
             } else if (this.inPMMode && this.currentPM) {
                 // Send 1:1 PM
-                await this.sendPM(content, this.currentPM);
+                await this.sendPM(content, this.currentPM, { threadRoot });
             } else if (this.currentGeohash) {
                 // The Bluetooth mesh carries #mesh always, and any channel when
                 // the internet route is down.
                 if (meshOnly) {
                     await this._sendChannelOverMesh(content, this.currentGeohash);
                 } else {
-                    await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData);
+                    await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot);
                 }
                 // Check for bot commands (? prefix or @Nymbot mention)
                 // Use rawInput for trigger detection since quote prepend may hide the prefix
@@ -2504,6 +2559,10 @@ Object.assign(NYM.prototype, {
         const quoteData = savedQuote; // Pass to publishMessagePseudonymous for nymquote tag
         const rawInput = content;
 
+        // In a thread view the same composer replies into the thread.
+        const threadRoot = (typeof this._threadRootForSend === 'function')
+            ? this._threadRootForSend() : null;
+
         // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
@@ -2522,12 +2581,12 @@ Object.assign(NYM.prototype, {
         } else {
             if (this.inPMMode && this.currentGroup) {
                 // Group messages always use the logged-in key
-                await this.sendGroupMessage(content, this.currentGroup);
+                await this.sendGroupMessage(content, this.currentGroup, { threadRoot });
             } else if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM);
+                await this.sendPM(content, this.currentPM, { threadRoot });
             } else if (this.currentGeohash) {
                 // Send via ephemeral keypair (pseudonymous)
-                await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, quoteData);
+                await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot);
                 // Check for bot commands (? prefix or @Nymbot mention)
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
@@ -3023,6 +3082,18 @@ Object.assign(NYM.prototype, {
     getFilteredMessages(storageKey) {
         const messages = this.messages.get(storageKey) || [];
 
+        // With threads enabled, replies live in their root's thread panel and
+        // are hidden from the flat view — but only when the root is actually
+        // present locally, so a reply never disappears with nowhere to open it.
+        const _threadsOn = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
+        let _threadRoots = null;
+        if (_threadsOn) {
+            _threadRoots = new Set();
+            for (const m of messages) {
+                if (m && !m.threadRoot && m.id) _threadRoots.add(m.id);
+            }
+        }
+
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
@@ -3034,6 +3105,7 @@ Object.assign(NYM.prototype, {
             if (!msg.isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
             if (!msg.isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;
             if (!msg.isOwn && this.isSpamMessage(msg.content)) return false;
+            if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
             return true;
         }).sort((a, b) => this._compareMessages(a, b));
     },
@@ -3223,6 +3295,7 @@ Object.assign(NYM.prototype, {
     },
 
     loadOlderChannelMessages(storageKey) {
+        if (this.activeThread) return false;
         const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
         const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
         if (!container || !scroller) return false;

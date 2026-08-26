@@ -1,4 +1,4 @@
-// ml-kem.js — ML-KEM-768 (FIPS 203) for Nymchat hybrid post-quantum key agreement.
+// ml-kem — ML-KEM-768 (FIPS 203) for Nymchat hybrid post-quantum key agreement.
 // Bundled from @noble/post-quantum v0.7.0 (MIT, Paul Miller) via esbuild.
 // Exposes: NymMlKem.ml_kem768 { keygen(seed?), encapsulate(pk), decapsulate(ct, sk) }.
 // Sizes: pk 1184B, sk 2400B, ciphertext 1088B, shared secret 32B.

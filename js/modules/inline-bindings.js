@@ -270,6 +270,11 @@ window.nymHapticTap = function (ms) {
         'imageModalNext':             function (e) { e.stopPropagation(); if (window.navigateImageModalGallery) window.navigateImageModalGallery(1); },
         'videoModalStop':             function (e) { e.stopPropagation(); },
 
+        // Threads
+        'openMessageThread':          function (_e, t) { nym().openMessageThread(t); },
+        'closeThreadView':            function () { nym().closeThreadView(); },
+        'onThreadsEnabledChange':     function (_e, t) { window.onThreadsEnabledChange(t.value); },
+
         // Channel nav / search
         'navigateBack':               function () { nym().navigateBack(); },
         'navigateForward':            function () { nym().navigateForward(); },

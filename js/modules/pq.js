@@ -581,6 +581,10 @@
                 const signed = await this.signEvent(event);
                 this.sendToRelay(['EVENT', signed]);
                 this._pqSelfAnnouncement = payload;
+                // Kept for the Nymbot worker: the bot PM request carries this
+                // signed event so the worker can seal its reply to our KEM key
+                // without depending on an archive/relay lookup finding it.
+                this._pqSelfSignedAnnouncement = signed;
                 this._pqLastPublishAt = Date.now();
                 // Record our own entry so self-addressed wraps resolve through
                 // the same lookup as everyone else's.

@@ -4,6 +4,13 @@
 import { ledgerCall } from "./_ledger.js";
 export { NymLedger } from "./_ledger.js";
 import {
+  botPqSelfFromEnv,
+  fetchPqAnnouncementKey,
+  pqAnnouncementEventsFromD1,
+  userPqRecordFromEvents,
+  buildPqGiftWrappedDM
+} from "./_pq.js";
+import {
   hasD1,
   replica,
   shopGet,
@@ -202,6 +209,44 @@ async function botInvoiceFromAddress(env, address, sats, zapRequest, comment) {
 function clientAuthOk(context, body, userPubkey) {
   if (context && context._wsAuthedPubkey) return context._wsAuthedPubkey === userPubkey;
   return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action });
+}
+
+var STORAGE_PQ_RELAYS = [
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.primal.net",
+  "wss://offchain.pub"
+];
+
+// Builds a shop gift/transfer notification DM, hybrid post-quantum whenever the
+// recipient announced an ML-KEM key (the same PQ_CODE-derived bot identity the
+// premium chat uses); classical otherwise. Never throws — a lookup failure or
+// missing PQ_CODE falls back to a plain NIP-17 wrap.
+async function buildStoragePqDM(env, botPrivkey, botPubkey, recipient, msg) {
+  try {
+    var botPq = botPqSelfFromEnv(env);
+    var recipKem = null;
+    if (botPq) {
+      // D1 archive first — the same store the recipient's own client resolves
+      // keys from (their announcement rides the relay proxy, not necessarily
+      // any relay this worker polls). Signature-verified either way.
+      try {
+        var db = hasD1(env.DB_CHANNELS) ? replica(env.DB_CHANNELS) : null;
+        var d1Events = await pqAnnouncementEventsFromD1(db, recipient);
+        if (d1Events) recipKem = userPqRecordFromEvents(d1Events, recipient);
+      } catch (e) { recipKem = null; }
+      if (!recipKem) {
+        recipKem = await fetchPqAnnouncementKey(recipient, STORAGE_PQ_RELAYS, 2500);
+      }
+    }
+    return buildPqGiftWrappedDM(msg, botPrivkey, botPubkey, recipient, recipKem);
+  } catch (e) {
+    try {
+      return buildPqGiftWrappedDM(msg, botPrivkey, botPubkey, recipient, null);
+    } catch (e2) {
+      return null;
+    }
+  }
 }
 
 async function handleShopAction(context, body, botPrivkey, botPubkey) {
@@ -432,11 +477,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       var gifterName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
       var giftMsg = (gifterName ? gifterName + " gifted you " : "You've been gifted ") +
         "a Nymchat shop item. Open the Flair Shop to find it in your inventory.";
-      try {
-        giftEvent = buildGiftWrappedDM(giftMsg, botPrivkey, botPubkey, recipient);
-      } catch (e) {
-        giftEvent = null;
-      }
+      giftEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, recipient, giftMsg);
     }
     return json({
       itemId: pending.itemId, code: code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
@@ -462,7 +503,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       var tName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
       var tMsg = (tName ? tName + " transferred you " : "You've been transferred ") +
         "a Nymchat shop item. Open the Flair Shop to find it in your inventory.";
-      transferEvent = buildGiftWrappedDM(tMsg, botPrivkey, botPubkey, toPubkey);
+      transferEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, toPubkey, tMsg);
     } catch (e) {
       transferEvent = null;
     }

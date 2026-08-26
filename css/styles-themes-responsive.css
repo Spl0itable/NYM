@@ -1215,6 +1215,7 @@ body.light-mode .upload-progress {
 }
 
 body.light-mode .reaction-btn,
+body.light-mode .thread-msg-btn,
 body.light-mode .translate-msg-btn {
     background: rgba(255, 255, 255, 0.85);
     border-color: rgba(0, 0, 0, 0.08);

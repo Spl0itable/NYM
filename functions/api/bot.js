@@ -36,6 +36,20 @@
 
 import { ledgerCall } from "./_ledger.js";
 import { translateText } from "./_translate.js";
+import {
+  PQ_D_TAG,
+  pqAwareDecrypt,
+  parsePqAnnouncement,
+  botPqSelfFromEnv,
+  verifiedAnnouncementFrom,
+  userPqRecordFromEvents,
+  pqAnnouncementEventsFromD1,
+  rumorTagValue,
+  rumorInThreadScope,
+  buildBotPqAnnouncement,
+  buildPqGiftWrappedDM,
+  buildPqGiftWrappedDMPair
+} from "./_pq.js";
 export { NymLedger } from "./_ledger.js";
 import {
   creditsGet,
@@ -62,8 +76,6 @@ import {
   hkdfExpand,
   nip44PaddedLen,
   randomTimestampNow,
-  buildGiftWrappedDM,
-  buildGiftWrappedDMPair,
   verifyClientAuth,
   enforceAuthReplay,
   parseNwcUri,
@@ -85,13 +97,20 @@ import {
 } from "./_shared.js";
 
 
-// NIP-59 unwrap with the bot's key
-function unwrapBotGiftWrap(wrap, botPrivkey) {
+// NIP-59 unwrap with the bot's key. Accepts every payload the bot can meet:
+// the layered pq2 and combined pq1 hybrids (with the root-derived KEM keys)
+// and plain NIP-44 — at the wrap AND the seal layer independently.
+function unwrapBotGiftWrap(wrap, botPrivkey, botPq) {
   try {
     if (!wrap || wrap.kind !== 1059 || !wrap.pubkey || !wrap.content) return null;
-    var seal = JSON.parse(nip44Decrypt(wrap.content, nip44ConversationKey(botPrivkey, wrap.pubkey)));
+    var self = {
+      skHex: botPrivkey,
+      kemSk: botPq ? botPq.kemSk : null,
+      kemPk: botPq ? botPq.kemPk : null
+    };
+    var seal = JSON.parse(pqAwareDecrypt(wrap.content, wrap.pubkey, self));
     if (!seal || seal.kind !== 13 || !seal.pubkey || !seal.content) return null;
-    var rumor = JSON.parse(nip44Decrypt(seal.content, nip44ConversationKey(botPrivkey, seal.pubkey)));
+    var rumor = JSON.parse(pqAwareDecrypt(seal.content, seal.pubkey, self));
     if (!rumor || rumor.kind !== 14) return null;
     // NIP-59: the rumor's author must match the seal's signer, else it's forged
     if (rumor.pubkey !== seal.pubkey) return null;
@@ -99,6 +118,147 @@ function unwrapBotGiftWrap(wrap, botPrivkey) {
   } catch (e) {
     return null;
   }
+}
+
+// A user's live announced KEM key, as { pk, fmt: 'pq2'|'pq1' } — the layered
+// format whenever they accept it, the combined one only for clients that
+// predate it — or null for classical. Cached per isolate so one conversation
+// doesn't re-query relays on every reply.
+var pqUserKeyCache = new Map();
+var PQ_USER_CACHE_MS = 10 * 60 * 1000;
+async function fetchUserPqRecord(context, userPubkey) {
+  var hit = pqUserKeyCache.get(userPubkey);
+  if (hit && Date.now() - hit.at < PQ_USER_CACHE_MS) return hit.rec;
+  var rec = null;
+  // D1 archive first: clients publish their announcement through the relay
+  // proxy (which archives it) and resolve peers' keys from the archive, so
+  // the worker's own relay list may never carry the event. Signatures are
+  // verified either way inside userPqRecordFromEvents.
+  try {
+    var env = context && context.env;
+    var db = env && hasD1(env.DB_CHANNELS) ? replica(env.DB_CHANNELS) : null;
+    var d1Events = await pqAnnouncementEventsFromD1(db, userPubkey);
+    if (d1Events) rec = userPqRecordFromEvents(d1Events, userPubkey);
+  } catch (e) { rec = null; }
+  if (!rec) {
+    try {
+      var events = await fetchRecentEvents(
+        { kinds: [30078], authors: [userPubkey], "#d": [PQ_D_TAG], limit: 3 }, 2500);
+      rec = userPqRecordFromEvents(events, userPubkey);
+    } catch (e) { rec = null; }
+  }
+  pqUserKeyCache.set(userPubkey, { at: Date.now(), rec: rec });
+  if (pqUserKeyCache.size > 500) {
+    pqUserKeyCache.delete(pqUserKeyCache.keys().next().value);
+  }
+  return rec;
+}
+
+// Publish one signed event to the fetch relays (["EVENT", …], resolved on OK
+// or a short timeout per relay).
+function publishEventToRelay(relayUrl, evt, timeoutMs) {
+  return new Promise(function (resolve) {
+    var done = false;
+    function finish(ok) {
+      if (done) return;
+      done = true;
+      try { ws.close(); } catch (e) {}
+      resolve(!!ok);
+    }
+    var ws;
+    try { ws = new WebSocket(relayUrl); } catch (e) { resolve(false); return; }
+    var timer = setTimeout(function () { finish(false); }, timeoutMs || 4000);
+    ws.addEventListener("open", function () {
+      try { ws.send(JSON.stringify(["EVENT", evt])); } catch (e) { finish(false); }
+    });
+    ws.addEventListener("message", function (msg) {
+      try {
+        var data = JSON.parse(msg.data);
+        if (Array.isArray(data) && data[0] === "OK" && data[1] === evt.id) {
+          clearTimeout(timer);
+          finish(data[2] !== false);
+        }
+      } catch (e) {}
+    });
+    ws.addEventListener("error", function () { clearTimeout(timer); finish(false); });
+    ws.addEventListener("close", function () { clearTimeout(timer); finish(false); });
+  });
+}
+
+async function publishEventToRelays(evt) {
+  var results = await Promise.all(FETCH_RELAYS.map(function (url) {
+    return publishEventToRelay(url, evt, 4000);
+  }));
+  return results.some(function (ok) { return ok; });
+}
+
+// Writes a signature-verified `nym-pq` announcement into the D1 channel
+// archive — the store clients (and this worker) resolve keys from first. Only
+// ever called with an event that already passed verifiedAnnouncementFrom;
+// INSERT OR IGNORE keeps republished ids deduped and reads take the newest by
+// created_at, matching how the relay proxy archives the same events.
+async function archivePqAnnouncementToD1(env, evt) {
+  try {
+    if (!env || !hasD1(env.DB_CHANNELS)) return;
+    if (!evt || typeof evt.id !== "string" || typeof evt.pubkey !== "string") return;
+    var json = JSON.stringify(evt);
+    if (json.length > 16384) return;
+    await env.DB_CHANNELS.prepare(
+      "INSERT OR IGNORE INTO events (id, channel, kind, pubkey, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).bind(evt.id, PQ_D_TAG, 30078, evt.pubkey, evt.created_at || 0, json, Date.now()).run();
+  } catch (e) {}
+}
+
+// Keeps the bot's own `nym-pq` capability announcement live on the relays AND
+// in the D1 archive, so clients hybridize their wraps to the bot
+// automatically. Clients resolve keys D1-first, and the bot's direct relay
+// publishes never pass through the archiving proxy — without the D1 leg its
+// announcement only reaches D1 if some relay happens to echo it through a
+// proxied subscription. Checked at most every few hours per isolate, off the
+// request path; republished when the live announcement is missing, stale,
+// expiring, or carries a different key.
+var botAnnounceLastCheckMs = 0;
+function maybeEnsureBotPqAnnouncement(context, botPrivkey, botPubkey, botPq) {
+  if (!botPq) return;
+  var now = Date.now();
+  if (now - botAnnounceLastCheckMs < 6 * 3600 * 1000) return;
+  botAnnounceLastCheckMs = now;
+  var work = (async function () {
+    var nowSec = Math.floor(now / 1000);
+    var fresh = null;
+    function freshEvt() {
+      if (!fresh) fresh = buildBotPqAnnouncement(botPrivkey, botPubkey, botPq.kemPk, NYMCHAT_VERSION);
+      return fresh;
+    }
+    function announcementLive(events) {
+      var newest = verifiedAnnouncementFrom(events || [], botPubkey);
+      var parsed = newest ? parsePqAnnouncement(newest, nowSec) : null;
+      return !!(parsed && parsed.rootSeeded && parsed.pk2 &&
+        parsed.exp > nowSec + 3 * 86400 &&
+        sameBytes(parsed.pk2, botPq.kemPk));
+    }
+    try {
+      var events = await fetchRecentEvents(
+        { kinds: [30078], authors: [botPubkey], "#d": [PQ_D_TAG], limit: 3 }, 3000);
+      if (!announcementLive(events)) await publishEventToRelays(freshEvt());
+    } catch (e) {}
+    try {
+      var env = context && context.env;
+      if (env && hasD1(env.DB_CHANNELS)) {
+        var d1Events = await pqAnnouncementEventsFromD1(replica(env.DB_CHANNELS), botPubkey);
+        if (!announcementLive(d1Events)) await archivePqAnnouncementToD1(env, freshEvt());
+      }
+    } catch (e) {}
+  })();
+  try {
+    if (context && typeof context.waitUntil === "function") context.waitUntil(work);
+  } catch (e) {}
+}
+
+function sameBytes(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 // Fetch gift-wrap events by id from relays, retrying so a just-published wrap
@@ -153,7 +313,7 @@ async function publicCommandRateOk(request) {
     return true;
   }
 }
-var NYMCHAT_VERSION = "3.74.543";
+var NYMCHAT_VERSION = "3.75.543";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
@@ -518,8 +678,16 @@ function botProMaxCost(m) {
 function botProCost(m, calls, outputTokens) {
   calls = Math.max(1, Math.floor(Number(calls) || 1));
   var cost = (m.baseCredits || 1) * calls;
+  // The base price already covers the first `outTokensPerCredit` output
+  // tokens of each call; only tokens beyond that scale the cost. Charging
+  // ceil(all/step) instead added a "length" credit to EVERY reply — a
+  // one-line howdy billed base+1 and the client then reported it as a long
+  // reply.
   if (m.outTokensPerCredit && outputTokens > 0) {
-    cost += Math.ceil(outputTokens / m.outTokensPerCredit);
+    var included = m.outTokensPerCredit * calls;
+    if (outputTokens > included) {
+      cost += Math.ceil((outputTokens - included) / m.outTokensPerCredit);
+    }
   }
   return Math.min(cost, botProMaxCost(m) * calls);
 }
@@ -1817,6 +1985,53 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
   }
 
+  // Post-quantum context for this exchange. With the PQ_CODE binding set the
+  // bot advertises (and keeps live) its ML-KEM capability announcement, opens
+  // hybrid wraps from users, and seals replies post-quantum to every user who
+  // announced a key of their own — all fail-open to classical.
+  var botPq = botPqSelfFromEnv(env);
+  maybeEnsureBotPqAnnouncement(context, botPrivkey, botPubkey, botPq);
+  // Deterministic post-quantum replies: the client hands us its own signed
+  // `nym-pq` announcement with the request (every peer that can PM the bot is
+  // a Nymchat client, post-quantum by default), so sealing back to it never
+  // depends on an archive or relay lookup finding the event. The signature is
+  // verified before the key is trusted — the exact check the lookup paths
+  // apply — so this grants nothing an unauthenticated relay event couldn't.
+  var suppliedPqRec = null;
+  if (botPq && body.pqAnnouncement && typeof body.pqAnnouncement === "object") {
+    try {
+      suppliedPqRec = userPqRecordFromEvents([body.pqAnnouncement], userPubkey);
+    } catch (e) { suppliedPqRec = null; }
+    if (suppliedPqRec) {
+      pqUserKeyCache.set(userPubkey, { at: Date.now(), rec: suppliedPqRec });
+      // Keep the archive warm for the paths that can't carry the event
+      // (shop gift/transfer DMs, lookups by other workers).
+      try {
+        var annWork = archivePqAnnouncementToD1(env, body.pqAnnouncement);
+        if (context && typeof context.waitUntil === "function") context.waitUntil(annWork);
+      } catch (e) {}
+    }
+  }
+  var userPqPromise = suppliedPqRec ? Promise.resolve(suppliedPqRec) : null;
+  function userPqKem() {
+    if (!botPq) return Promise.resolve(null);
+    if (!userPqPromise) {
+      userPqPromise = fetchUserPqRecord(context, userPubkey).catch(function () { return null; });
+    }
+    return userPqPromise;
+  }
+  function botSelfKem() {
+    return botPq ? { pk: botPq.kemPk, fmt: "pq2" } : null;
+  }
+  // `threadRoot`: set when the user's message arrived inside a thread — the
+  // reply pair then carries the same `nymthread` marker so clients file it in
+  // that thread instead of the flat conversation.
+  async function wrapReplyPair(text, threadRoot) {
+    return buildPqGiftWrappedDMPair(
+      text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(),
+      threadRoot ? { threadRoot: threadRoot } : null);
+  }
+
   if (body.action === "balance") {
     var rec = await botGetCredits(env, userPubkey);
     var prec = await botGetProCredits(env, userPubkey);
@@ -2000,7 +2215,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           " with me. Type ?balance to check your balance anytime.";
       }
       try {
-        giftEvent = buildGiftWrappedDM(giftMsg, botPrivkey, botPubkey, creditTo);
+        var giftKem = botPq ? await fetchUserPqRecord(context, creditTo).catch(function () { return null; }) : null;
+        giftEvent = buildPqGiftWrappedDM(giftMsg, botPrivkey, botPubkey, creditTo, giftKem);
       } catch (e) {
         giftEvent = null;
       }
@@ -2083,7 +2299,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (!currentWrap) {
       return json({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
     }
-    var currentUnwrapped = unwrapBotGiftWrap(currentWrap, botPrivkey);
+    var currentUnwrapped = unwrapBotGiftWrap(currentWrap, botPrivkey, botPq);
     if (!currentUnwrapped) return json({ error: "Could not decrypt your message." }, 400);
     // The current message must be authored by the authenticated user
     if (currentUnwrapped.author !== userPubkey) {
@@ -2094,6 +2310,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // A command typed in the user's language arrives with the canonical token
     // the client resolved it to, so the parsers below stay English-only.
     message = canonicalizeBotText(message, body && body.cmdAlias);
+    // A message sent from inside a thread carries the root's shared id in its
+    // encrypted rumor. The bot then answers inside that thread, and the model
+    // context is scoped to it — each thread is its own isolated discussion,
+    // and the flat conversation in turn excludes thread replies.
+    var threadRoot = rumorTagValue(currentUnwrapped.rumor, "nymthread");
 
     // Reconstruct prior turns (in order) from the remaining fetched wraps.
     var history = [];
@@ -2101,10 +2322,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       if (historyIds[hk] === currentId) continue;
       var hw = fetched[historyIds[hk]];
       if (!hw) continue;
-      var hu = unwrapBotGiftWrap(hw, botPrivkey);
+      var hu = unwrapBotGiftWrap(hw, botPrivkey, botPq);
       if (!hu || !hu.rumor || !hu.rumor.content) continue;
       var isBotTurn = hu.author === botPubkey;
       if (!isBotTurn && hu.author !== userPubkey) continue;
+      if (!rumorInThreadScope(hu.rumor, threadRoot)) continue;
       var hText = String(hu.rumor.content);
       // Old reasoning blocks are for the user's eyes, not model context.
       if (isBotTurn) hText = hText.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "");
@@ -2124,7 +2346,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
             + "\nDefault: " + BOT_PRO_IMAGE_MODELS[BOT_PRO_IMAGE_DEFAULT].label + "."
           : "Frontier image models need a Pro model selected (?model <name>). Standard ?image uses the built-in generator for "
             + BOT_MEDIA_COSTS.image.standard + " credits.";
-        var listPair = buildGiftWrappedDMPair(listText, botPrivkey, botPubkey, userPubkey);
+        var listPair = await wrapReplyPair(listText, threadRoot);
         var listThread = thread.filter(function (id) { return id !== currentId; });
         listThread.push(currentId);
         listThread.push(listPair.selfEvent.id);
@@ -2197,7 +2419,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         mediaRecord.balance = mediaSpend.balance;
       }
       var mediaReply = mediaUrl;
-      var mediaPair = buildGiftWrappedDMPair(mediaReply, botPrivkey, botPubkey, userPubkey);
+      var mediaPair = await wrapReplyPair(mediaReply, threadRoot);
       var mediaThread = thread.filter(function (id) { return id !== currentId; });
       mediaThread.push(currentId);
       mediaThread.push(mediaPair.selfEvent.id);
@@ -2274,7 +2496,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     } else {
       spendRecord.balance = consumed.balance;
     }
-    var pair = buildGiftWrappedDMPair(reply, botPrivkey, botPubkey, userPubkey);
+    var pair = await wrapReplyPair(reply, threadRoot);
     var updatedThread = thread.filter(function (id) { return id !== currentId; });
     updatedThread.push(currentId);
     updatedThread.push(pair.selfEvent.id);

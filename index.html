@@ -1540,6 +1540,15 @@
                         <button class="nm-h-58" data-action="resetColumnView">Reset columns to defaults</button>
                     </div>
 
+                    <div class="form-group">
+                        <label class="form-label">Message Threads</label>
+                        <select class="form-select" id="threadsSelect" data-on-change="onThreadsEnabledChange">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled (classic flat view)</option>
+                        </select>
+                        <div class="form-hint">Group replies under their original message. Replies open in a thread view and the original shows a reply count. Disabling shows every message inline like before.</div>
+                    </div>
+
                     <div class="form-group cv-only-setting">
                         <label class="form-label">Column Message Wallpaper</label>
                         <select class="form-select" id="columnsWallpaperSelect" data-on-change="onColumnsWallpaperChange">
@@ -2500,6 +2509,7 @@
     <script defer src="js/modules/i18n.js"></script>
     <script defer src="js/modules/sidebar-sections.js"></script>
     <script defer src="js/modules/columns.js"></script>
+    <script defer src="js/modules/threads.js"></script>
     <script defer src="js/modules/polls.js"></script>
     <script defer src="js/geo-decode.js"></script>
     <script defer src="js/modules/geohash-globe.js"></script>

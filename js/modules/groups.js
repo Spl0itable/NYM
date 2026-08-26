@@ -1355,6 +1355,8 @@ Object.assign(NYM.prototype, {
             pqEncrypted: isPqWrap,
             pqRoot: isPqWrap && this.pqSealRootVerdict(senderPubkey) === true,
             nymMessageId: nymMsgId,
+            threadRoot: (typeof this.threadRootFromRumorTags === 'function')
+                ? this.threadRootFromRumorTags(rumor.tags) : null,
             isFileOffer: !!groupFileOffer,
             fileOffer: groupFileOffer,
             deliveryStatus: isOwn ? 'sent' : undefined
@@ -2096,6 +2098,11 @@ Object.assign(NYM.prototype, {
         const fileOffer = options.fileOffer || null;
         if (fileOffer) tags.push(['offer', JSON.stringify(fileOffer)]);
 
+        // Thread reply marker (root's shared nymMessageId) inside the
+        // encrypted rumor — see threads.js.
+        const threadRoot = options.threadRoot || null;
+        if (threadRoot) tags.push(['nymthread', threadRoot]);
+
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
@@ -2119,6 +2126,7 @@ Object.assign(NYM.prototype, {
             conversationPubkey: null,
             eventKind: 1059,
             nymMessageId,
+            threadRoot: threadRoot || undefined,
             senderVerified: true,
             // Filled in below once the fan-out reports per-member coverage.
             pqEncrypted: false,
@@ -3803,6 +3811,8 @@ Object.assign(NYM.prototype, {
         }
 
         if (this._cvActive) { this._cvOpenConversation({ type: 'group', groupId }); return; }
+        // In single view a thread belongs to the conversation on screen.
+        if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {

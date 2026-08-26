@@ -554,6 +554,10 @@ Object.assign(NYM.prototype, {
                 isFileOffer: !!fileOffer,
                 fileOffer: fileOffer,
                 isBot: this.isVerifiedBot(event.pubkey),
+                // NIP-10 marked root reference — groups this message under its
+                // thread root when threads are enabled (threads.js).
+                threadRoot: (typeof this.threadRootFromChannelTags === 'function')
+                    ? this.threadRootFromChannelTags(event.tags) : null,
                 // NIP-13 target the sender committed to, or null when the event
                 // carries no nonce tag (i.e. it did not come from this app).
                 // The work actually PROVEN is recomputed from the id on demand.
@@ -2592,7 +2596,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null) {
+    async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null) {
         try {
             if (!this.connected) {
                 throw new Error('Not connected to relay');
@@ -2609,6 +2613,14 @@ Object.assign(NYM.prototype, {
             const wire = this.channelWire(channelKey);
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);
+
+            // Thread reply: NIP-10 marked root reference. Other clients see a
+            // normal channel message; Nymchat groups it under its root.
+            if (threadRoot && /^[0-9a-f]{64}$/i.test(threadRoot)) {
+                tags.push(['e', threadRoot, '', 'root']);
+            } else {
+                threadRoot = null;
+            }
 
             // Build wire content: if quoting, use @mention format instead of > blockquote
             // so other Nostr clients see a normal mention, while NYM reconstructs the quote
@@ -2661,6 +2673,7 @@ Object.assign(NYM.prototype, {
                 isOwn: true,
                 isHistorical: false,
                 isPM: false,
+                threadRoot: threadRoot || undefined,
                 _optimistic: true,
                 _storageKey: storageKey
             };
@@ -2693,7 +2706,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async publishMessagePseudonymous(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null) {
+    async publishMessagePseudonymous(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null) {
         try {
             if (!this.connected) {
                 throw new Error('Not connected to relay');
@@ -2742,6 +2755,13 @@ Object.assign(NYM.prototype, {
             const wire = this.channelWire(channelKey);
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);
+
+            // Thread reply: NIP-10 marked root reference (threads.js).
+            if (threadRoot && /^[0-9a-f]{64}$/i.test(threadRoot)) {
+                tags.push(['e', threadRoot, '', 'root']);
+            } else {
+                threadRoot = null;
+            }
 
             // Build wire content: if quoting, use @mention format instead of > blockquote
             let wireContent = content;
@@ -2792,6 +2812,7 @@ Object.assign(NYM.prototype, {
                 isOwn: true,
                 isHistorical: false,
                 isPM: false,
+                threadRoot: threadRoot || undefined,
                 _optimistic: true,
                 _storageKey: storageKey
             };

@@ -2275,6 +2275,16 @@ function onColumnsWallpaperChange(value) {
 window.onColumnsWallpaperChange = onColumnsWallpaperChange;
 window.applyColumnsWallpaper = applyColumnsWallpaper;
 
+// Message threads (Slack-style reply threads) on/off
+function onThreadsEnabledChange(value) {
+    const enabled = value === 'true' || value === true;
+    nym.settings.threadsEnabled = enabled;
+    localStorage.setItem('nym_threads_enabled', String(enabled));
+    if (typeof nym.applyThreadsEnabled === 'function') nym.applyThreadsEnabled();
+    nostrSettingsSave();
+}
+window.onThreadsEnabledChange = onThreadsEnabledChange;
+
 function onTransparencyChange(value) {
     const enabled = value === 'true' || value === true;
     nym.settings.transparencyEnabled = enabled;
@@ -3643,6 +3653,8 @@ async function showSettings() {
         nym.playSound(this.value);
     };
     document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
+    const threadsSelectEl = document.getElementById('threadsSelect');
+    if (threadsSelectEl) threadsSelectEl.value = nym.settings.threadsEnabled !== false ? 'true' : 'false';
     document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
     document.getElementById('timeFormatSelect').value = nym.settings.timeFormat;
     const dateFormatSelectEl = document.getElementById('dateFormatSelect');
@@ -4482,7 +4494,7 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.74.543';
+const NYMCHAT_VERSION = 'v3.75.543';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -6803,6 +6815,18 @@ async function applyNostrSettings(s) {
     if (Array.isArray(s.columnsLayout)) {
         nym.columnsLayout = s.columnsLayout;
         try { localStorage.setItem('nym_columns_layout', JSON.stringify(s.columnsLayout)); } catch (e) { }
+    }
+
+    // Message threads on/off
+    if (typeof s.threadsEnabled === 'boolean') {
+        const prevThreads = nym.settings.threadsEnabled !== false;
+        nym.settings.threadsEnabled = s.threadsEnabled;
+        localStorage.setItem('nym_threads_enabled', String(s.threadsEnabled));
+        const threadsSel = document.getElementById('threadsSelect');
+        if (threadsSel) threadsSel.value = s.threadsEnabled ? 'true' : 'false';
+        if (prevThreads !== s.threadsEnabled && typeof nym.applyThreadsEnabled === 'function') {
+            nym.applyThreadsEnabled();
+        }
     }
 
     // Chat view mode (single vs columns)

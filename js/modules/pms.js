@@ -311,6 +311,10 @@ Object.assign(NYM.prototype, {
         const nymMessageId = this._generateSharedEventId();
 
         const fileOffer = options.fileOffer || null;
+        // Thread reply marker rides inside the encrypted rumor. It references
+        // the root's shared nymMessageId (`x` tag) because gift wrap event ids
+        // differ per recipient (threads.js).
+        const threadRoot = options.threadRoot || null;
 
         const rumor = {
             kind: 14,
@@ -319,6 +323,7 @@ Object.assign(NYM.prototype, {
                 ['p', recipientPubkey],
                 ['x', nymMessageId],  // Nymchat message ID for delivery receipts
                 ['ms', String(nowMs)],  // Millisecond send time for sub-second ordering
+                ...(threadRoot ? [['nymthread', threadRoot]] : []),
                 ...(fileOffer ? [['offer', JSON.stringify(fileOffer)]] : []),
                 ...this.customEmojiTagsForContent(content),
                 ...(typeof this.imetaTagsForContent === 'function' ? this.imetaTagsForContent(content) : [])
@@ -436,6 +441,7 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 bitchatMessageId,  // For tracking Bitchat delivery/read receipts
                 nymMessageId,  // Always store for reaction matching (peer may react using nymMessageId from x tag)
+                threadRoot: threadRoot || undefined,
                 senderVerified: true,
                 pqEncrypted,
                 pqRoot,
@@ -577,6 +583,7 @@ Object.assign(NYM.prototype, {
                 conversationPubkey: recipientPubkey,
                 eventKind: 1059,
                 nymMessageId,  // For tracking Nymchat delivery/read receipts
+                threadRoot: threadRoot || undefined,
                 senderVerified: true,
                 pqEncrypted: !!recipientKemPk,
                 pqRoot: !!recipientKemPk && plan.rootSeeded && this.pqHasRoot(),
@@ -1469,6 +1476,8 @@ Object.assign(NYM.prototype, {
                 thinking: botThinking || undefined,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId,  // For sending Nymchat read receipts
+                threadRoot: (typeof this.threadRootFromRumorTags === 'function')
+                    ? this.threadRootFromRumorTags(rumor.tags) : null,
                 deliveryStatus: isOwn ? 'sent' : undefined
             };
             // The announcement may still be in flight; fill the verdict in
@@ -2908,6 +2917,12 @@ Object.assign(NYM.prototype, {
             // Send only the current message's wrap ID; the worker maintains the
             // ordered thread server-side. fresh (!) tells it to skip history.
             const reqExtra = { eventId: wrapId, fresh: isFresh };
+            // Our own signed nym-pq announcement rides along so the worker
+            // seals its reply post-quantum deterministically (it verifies the
+            // signature; no lookup race can leave the reply classical).
+            if (this._pqSelfSignedAnnouncement) {
+                reqExtra.pqAnnouncement = this._pqSelfSignedAnnouncement;
+            }
             const cmdAlias = this.commandAliasHint(content);
             if (cmdAlias) reqExtra.cmdAlias = cmdAlias;
             if (proModel) {
@@ -3420,6 +3435,8 @@ Object.assign(NYM.prototype, {
             this.ensurePqAnnouncement(pubkey);
         }
         if (this._cvActive) { this._cvOpenConversation({ type: 'pm', pubkey, nym }); return; }
+        // In single view a thread belongs to the conversation on screen.
+        if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
@@ -4205,7 +4222,21 @@ Object.assign(NYM.prototype, {
     getFilteredPMMessages(conversationKey) {
         const pmMessages = this.pmMessages.get(conversationKey) || [];
 
+        // With threads enabled, replies collapse into their root's thread and
+        // are hidden from the flat view when the root exists locally.
+        const _threadsOn = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
+        let _threadRoots = null;
+        if (_threadsOn) {
+            _threadRoots = new Set();
+            for (const m of pmMessages) {
+                if (!m || m.threadRoot) continue;
+                const k = m.nymMessageId || m.id;
+                if (k) _threadRoots.add(k);
+            }
+        }
+
         return pmMessages.filter(msg => {
+            if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
@@ -4224,6 +4255,7 @@ Object.assign(NYM.prototype, {
 
     // Load older PM/group messages when user scrolls to top
     loadOlderPMMessages(conversationKey) {
+        if (this.activeThread) return false;
         const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
         const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
         if (!container || !scroller) return false;

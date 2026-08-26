@@ -150,7 +150,16 @@
             document.getElementById('appDialogModal').classList.add('active');
             document.addEventListener('keydown', onKey, true);
             setTimeout(function () {
-                try { (opts.prompt ? field : okBtn).focus(); if (opts.prompt) field.select(); } catch (_) {}
+                try {
+                    (opts.prompt ? field : okBtn).focus();
+                    if (opts.prompt) {
+                        field.select();
+                        // Keep the input visible once the mobile keyboard opens
+                        if (typeof field.scrollIntoView === 'function') {
+                            setTimeout(function () { try { field.scrollIntoView({ block: 'nearest' }); } catch (_) {} }, 250);
+                        }
+                    }
+                } catch (_) {}
             }, 30);
         });
     }

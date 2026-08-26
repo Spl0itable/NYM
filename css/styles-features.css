@@ -3679,6 +3679,10 @@ body.chat-bubbles .message.self .reactions-row {
     justify-content: flex-end;
 }
 
+body.chat-bubbles .message.self .thread-indicator-row {
+    justify-content: flex-end;
+}
+
 body.chat-bubbles .message.pm .message-content {
     background: rgba(255, 255, 255, 0.14);
 }

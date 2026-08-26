@@ -200,6 +200,9 @@
                 fileOffer: m.fileOffer,
                 isBot: m.isBot,
                 thinking: m.thinking,
+                // Thread root reference — without it, restored history loses
+                // its reply grouping and every reply reflows inline.
+                threadRoot: m.threadRoot,
                 // NIP-13 target from the sender's nonce tag. Without this the
                 // cache restore drops it and every reloaded message reports
                 // "no proof of work" regardless of what was actually mined.

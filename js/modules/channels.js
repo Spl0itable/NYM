@@ -568,6 +568,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (entry.type === 'channel' && current.channel === entry.channel && current.geohash === entry.geohash) return;
             if (entry.type === 'pm' && current.pubkey === entry.pubkey) return;
             if (entry.type === 'group' && current.groupId === entry.groupId) return;
+            if (entry.type === 'thread' && current.rootId === entry.rootId) return;
         }
         // Truncate any forward history
         this.navigationHistory = this.navigationHistory.slice(0, this.navigationIndex + 1);
@@ -608,6 +609,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _navigateTo(entry) {
         this._navigating = true;
         try {
+            if (entry.type === 'thread') {
+                if (typeof this._navOpenThread === 'function') this._navOpenThread(entry);
+                return;
+            }
+            // Leaving a thread entry (or jumping conversations) exits the
+            // thread view, restoring its conversation in place.
+            if (typeof this.closeThreadView === 'function') this.closeThreadView({ nav: false });
             if (entry.type === 'channel') {
                 this.switchChannel(entry.channel, entry.geohash);
             } else if (entry.type === 'pm') {
@@ -1494,6 +1502,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     switchChannel(channel, geohash = '') {
         if (this._cvActive) { this._cvOpenConversation({ type: 'channel', channel, geohash: geohash || '' }); return; }
+        // In single view a thread belongs to the conversation on screen.
+        if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         // Keep the current conversation's unsent input before switching away
         this._saveCurrentDraft();
         // Store previous state

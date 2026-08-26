@@ -1921,6 +1921,10 @@ ${bundleCodes || (code ? `
                 if (s.theme) document.getElementById('themeSelect').value = s.theme;
                 if (s.sound !== undefined) document.getElementById('soundSelect').value = ({ icq: 'uhoh', msn: 'msnding' })[s.sound] || s.sound;
                 if (s.autoscroll !== undefined) document.getElementById('autoscrollSelect').value = String(s.autoscroll);
+                if (s.threadsEnabled !== undefined) {
+                    const thEl = document.getElementById('threadsSelect');
+                    if (thEl) thEl.value = String(s.threadsEnabled !== false);
+                }
                 if (s.showTimestamps !== undefined) {
                     document.getElementById('timestampSelect').value = String(s.showTimestamps);
                     const timeFormatGroup = document.getElementById('timeFormatGroup');

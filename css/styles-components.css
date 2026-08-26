@@ -2435,10 +2435,14 @@ body.is-scrolling {
 
 .app-dialog {
     z-index: 10003;
+    height: 100%;
+    height: calc(100dvh - var(--keyboard-inset, 0px));
 }
 
 .app-dialog-content {
     max-width: 440px;
+    max-height: calc(100dvh - var(--keyboard-inset, 0px) - 24px);
+    overflow-y: auto;
 }
 
 .app-dialog-message {

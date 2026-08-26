@@ -429,17 +429,34 @@ Object.assign(NYM.prototype, {
     },
 
     updateMessageReactions(messageId) {
-        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+        // A message can be rendered more than once (main view + thread view),
+        // so update every copy. Scoped to `.message` rows: the hover
+        // `.reaction-btn` carries the same data-message-id and must never be
+        // treated as a message element (injecting a row into it duplicated
+        // badges and polluted the hover-button stack).
+        const els = document.querySelectorAll(`.message[data-message-id="${messageId}"]`);
+        if (!els.length) return false;
+        let updated = false;
+        els.forEach(el => { updated = this._updateMessageReactionsEl(messageId, el) || updated; });
+        return updated;
+    },
+
+    _updateMessageReactionsEl(messageId, messageEl) {
         if (!messageEl) return false;
 
         // Capture scroll state before modifying DOM so we can auto-scroll if needed
         const container = document.getElementById('messagesScroller');
         const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
+        // Defensive: drop any reactions-row a past bug nested inside the
+        // hover buttons, so it can never shadow the real row below.
+        messageEl.querySelectorAll('.msg-hover-buttons .reactions-row, .reaction-btn .reactions-row')
+            .forEach(el => el.remove());
+
         const reactions = this.reactions.get(messageId);
         if (!reactions || reactions.size === 0) {
             // Remove reaction badges from DOM but preserve zap badges
-            const reactionsRow = messageEl.querySelector('.reactions-row');
+            const reactionsRow = messageEl.querySelector(':scope > .reactions-row');
             if (reactionsRow) {
                 // Remove reaction badges and add-reaction button, keep zap elements
                 reactionsRow.querySelectorAll('.reaction-badge, .add-reaction-btn').forEach(el => el.remove());
@@ -452,8 +469,10 @@ Object.assign(NYM.prototype, {
             return true;
         }
 
-        // Remove existing reactions display but preserve zap badges
-        let reactionsRow = messageEl.querySelector('.reactions-row');
+        // Remove existing reactions display but preserve zap badges. The row
+        // is always a DIRECT child of the message row — a scoped lookup can
+        // never pick up a row nested somewhere inside the content.
+        let reactionsRow = messageEl.querySelector(':scope > .reactions-row');
         let zapBadge = null;
         let addZapBtn = null;
 
@@ -472,7 +491,10 @@ Object.assign(NYM.prototype, {
         if (!reactionsRow) {
             reactionsRow = document.createElement('div');
             reactionsRow.className = 'reactions-row';
-            messageEl.appendChild(reactionsRow);
+            // Keep the reply-count thread row beneath the reactions/zaps row.
+            const threadIndicator = messageEl.querySelector(':scope > .thread-indicator-row');
+            if (threadIndicator) messageEl.insertBefore(reactionsRow, threadIndicator);
+            else messageEl.appendChild(reactionsRow);
         }
 
         // Clear and rebuild reactions
