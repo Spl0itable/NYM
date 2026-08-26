@@ -2285,6 +2285,14 @@ div.message-input .rich-md-quote {
     box-shadow: var(--shadow-lg);
     overflow-x: auto;
     scrollbar-width: none;
+    transition: border-radius var(--transition);
+}
+
+.input-wrapper:has(> .autocomplete-dropdown.active) .format-toolbar,
+.input-wrapper:has(> .emoji-autocomplete.active) .format-toolbar,
+.input-wrapper:has(> .command-palette.active) .format-toolbar {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
 }
 
 .format-toolbar::-webkit-scrollbar {
