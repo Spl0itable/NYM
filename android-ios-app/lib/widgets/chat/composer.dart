@@ -278,6 +278,18 @@ class _ComposerState extends ConsumerState<Composer> {
   /// clears it (`--ac-offset = previewH + 8`, ui-context.js:1759) — see 04-F2.
   final GlobalKey _chipKey = GlobalKey();
 
+  /// Measures the panel stack that sits between the chip and the field (the
+  /// attachment strip + the WYSIWYG format toolbar) so the autocomplete
+  /// dropdown clears it instead of painting over it — the `panelsH` term of
+  /// the PWA's `--ac-offset` (ui-context.js:1869-1882). The measured column
+  /// already carries its own trailing 8px gap, so no `+ 8` is added here.
+  final GlobalKey _panelsKey = GlobalKey();
+
+  /// The `--ac-offset` the open dropdown was last positioned with, so a panel
+  /// that appears (or animates its height) underneath it can trigger exactly
+  /// the rebuilds needed to keep it clear — see [_settleOverlayOffset].
+  double _acOffsetUsed = 0;
+
   /// Measures the floating popout field so the autocomplete dropdown clears the
   /// popout OVERHANG too (`--ac-offset` includes the overhang, ui-context.js
   /// :1759) — the dropdown floats above the grown field, not under it.
@@ -1878,7 +1890,14 @@ class _ComposerState extends ConsumerState<Composer> {
         ? math.max(0.0, _boxHeight(_popoutFieldKey) - _composerRowBase)
         : 0.0;
     final chipH = _boxHeight(_chipKey);
-    final acOffset = overhang + (chipH > 0 ? chipH + 8 : 0);
+    // The attachment strip / format toolbar stack sits between the chip and the
+    // field, OUTSIDE the `_acAnchor` target (which wraps the field alone), so
+    // without this term the dropdown lands on the field's top edge and paints
+    // over the toolbar (the PWA sums the same `panelsH` into `--ac-offset`).
+    final panelsH = _boxHeight(_panelsKey);
+    final acOffset = overhang + panelsH + (chipH > 0 ? chipH + 8 : 0);
+    _acOffsetUsed = acOffset;
+    _settleOverlayOffset();
     return CompositedTransformFollower(
       link: _acAnchor,
       targetAnchor: Alignment.topLeft,
@@ -1918,6 +1937,32 @@ class _ComposerState extends ConsumerState<Composer> {
     final box = key.currentContext?.findRenderObject() as RenderBox?;
     return (box != null && box.hasSize) ? box.size.height : 0;
   }
+
+  /// Re-positions an open dropdown once the panels below it have been laid out.
+  ///
+  /// The offset is measured during BUILD, so a panel appearing in the same
+  /// frame (or growing through its 200ms [AnimatedSize]) is still the previous
+  /// frame's height when the dropdown reads it. Re-measuring after the frame
+  /// and rebuilding only while the number actually changes keeps the dropdown
+  /// glued to the top of the stack as it grows, and stops on its own once the
+  /// size settles.
+  void _settleOverlayOffset() {
+    if (_offsetSettleQueued) return;
+    _offsetSettleQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _offsetSettleQueued = false;
+      if (!mounted || !_acPortal.isShowing) return;
+      final overhang = _popout
+          ? math.max(0.0, _boxHeight(_popoutFieldKey) - _composerRowBase)
+          : 0.0;
+      final chipH = _boxHeight(_chipKey);
+      final settled =
+          overhang + _boxHeight(_panelsKey) + (chipH > 0 ? chipH + 8 : 0);
+      if ((settled - _acOffsetUsed).abs() > 0.5) setState(() {});
+    });
+  }
+
+  bool _offsetSettleQueued = false;
 
   /// Resolves the verified/friend badge flags for a mention row (F3). Verified
   /// = verified developer OR Nymbot (Foundations `isVerifiedDeveloper/Bot`);
@@ -2169,8 +2214,13 @@ class _ComposerState extends ConsumerState<Composer> {
   /// `toggleFormatToolbar` — reveal/hide the markdown toolbar and remember the
   /// choice, so a user who composes with it keeps it between sessions.
   Future<void> _toggleFormatToolbar() async {
-    setState(() => _formatToolbarOpen = !_formatToolbarOpen);
+    // Resolve prefs BEFORE flipping: on the very first tap of a session
+    // [_ensurePrefs] hydrates `_formatToolbarOpen` from storage, so toggling
+    // first let that hydration land afterwards and snap the toolbar shut
+    // again. Resolved prefs are cached, so every later tap is instant.
     final prefs = await _ensurePrefs();
+    if (!mounted) return;
+    setState(() => _formatToolbarOpen = !_formatToolbarOpen);
     await prefs.setBool(kFormatToolbarKey, _formatToolbarOpen);
   }
 
@@ -2256,16 +2306,22 @@ class _ComposerState extends ConsumerState<Composer> {
     }
 
     if (panels.isEmpty) return null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < panels.length; i++)
-          Padding(
-            padding: EdgeInsets.only(bottom: i == panels.length - 1 ? 8 : 4),
-            child: panels[i],
-          ),
-      ],
+    // Keyed so the autocomplete dropdown can clear this stack's height
+    // (`--ac-offset`'s `panelsH`). Only ONE instance is mounted at a time —
+    // in flow, or inside the popout overlay — like [_chipKey].
+    return KeyedSubtree(
+      key: _panelsKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < panels.length; i++)
+            Padding(
+              padding: EdgeInsets.only(bottom: i == panels.length - 1 ? 8 : 4),
+              child: panels[i],
+            ),
+        ],
+      ),
     );
   }
 
