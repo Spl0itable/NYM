@@ -422,7 +422,9 @@
                 try { await this._hydratePqKeys(meta); } catch (_) { }
                 for (const m of meta) {
                     if (!m || !m.key || !Array.isArray(m.ids)) continue;
-                    if (m.key === META_DELETED_EVENT_IDS && this.deletedEventIds) {
+                    if (m.key === META_PROCESSED_PM_EVENT_IDS && this.processedPMEventIds) {
+                        for (const id of m.ids) this.processedPMEventIds.add(id);
+                    } else if (m.key === META_DELETED_EVENT_IDS && this.deletedEventIds) {
                         for (const id of m.ids) this.deletedEventIds.add(id);
                     } else if (m.key === META_NYMCHAT_PUBKEYS && this.nymchatPubkeys) {
                         for (const id of m.ids) this.nymchatPubkeys.add(id);
@@ -439,21 +441,6 @@
                             if (typeof ts === 'number' && ts > 0) this._shardLastSeenAt.set(shardId, ts);
                         }
                     }
-                }
-            } catch (_) { }
-        },
-
-        /// Restores the processed-wrap dedup ids — LATE, only once the
-        /// PM/group stores are hydrated (see the note in _hydrateDedupSets).
-        async _hydrateProcessedPmIds() {
-            if (this._processedPmIdsHydrated) return;
-            this._processedPmIdsHydrated = true;
-            try {
-                const meta = await this._cacheGetAll('meta');
-                for (const m of meta) {
-                    if (!m || m.key !== META_PROCESSED_PM_EVENT_IDS || !Array.isArray(m.ids)) continue;
-                    if (!this.processedPMEventIds) continue;
-                    for (const id of m.ids) this.processedPMEventIds.add(id);
                 }
             } catch (_) { }
         },
@@ -701,7 +688,6 @@
                 }
 
                 await this._hydrateDedupSets();
-                await this._hydrateProcessedPmIds();
                 this._seedDecryptedWrapIds();
                 this._seedVerifiedEventIds();
 
