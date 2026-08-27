@@ -35,6 +35,17 @@ export function llmMaxTokens(text, attempt = 0) {
   return Math.min(LLM_MAX_TOKENS, (attempt === 0 ? 2048 : 6144) + forOutput);
 }
 
+/// Whether a failed generation was REFUSED for its parameters rather than
+/// attempted and lost. Only the shapes a gateway uses to say "I do not know
+/// this field" count: an outage, a timeout or a content filter must not look
+/// like one, because those are the cases that must not be paid for twice.
+function isParameterRejection(message) {
+  const m = String(message || '');
+  if (/reasoning_effort|chat_template_kwargs|thinking/i.test(m)) return true;
+  return /\b(400|422)\b/.test(m)
+    || /unrecognized|unrecognised|unexpected|unsupported|unknown (field|parameter|argument)|invalid (field|parameter|argument|request|body)|not permitted|additionalProperties/i.test(m);
+}
+
 /// Our language codes that the MT model carries, mapped to the code IT uses.
 /// Everything absent here goes straight to the instruct model.
 ///
@@ -498,6 +509,11 @@ export async function translateText(ai, { text, source, target }) {
   const prompts = [system, `Translate the user's message into ${langName(target)}. `
     + 'Answer immediately with the translation and nothing else. Do not '
     + 'think first, do not explain, do not show your working.'];
+
+  const noThink = {
+    reasoning_effort: 'none',
+    chat_template_kwargs: { thinking: false },
+  };
   for (let attempt = 0; attempt < prompts.length; attempt++) {
     try {
       const res = await ai.run(LLM_MODEL, {
@@ -505,7 +521,15 @@ export async function translateText(ai, { text, source, target }) {
           { role: 'system', content: prompts[attempt] },
           { role: 'user', content: q },
         ],
+        // A ceiling, not a charge: only tokens actually generated are billed,
+        // so this stays generous enough that a run which DOES still think is
+        // not truncated mid-thought into the empty answer that costs a second
+        // call -- which is the whole reason the budget is shaped as it is.
         max_tokens: llmMaxTokens(q, attempt),
+        // Only the first attempt asks for no thinking. The retry is then also
+        // the shape this route has always sent, so a gateway that refuses the
+        // fields outright still gets an answer out of the second call.
+        ...(attempt === 0 ? noThink : {}),
       });
       const raw = pickLlmText(res);
       const tagged = takeSourceTag(raw);
@@ -519,8 +543,18 @@ export async function translateText(ai, { text, source, target }) {
       }
       failures.push(`${LLM_MODEL}: empty response (${describeResponse(res)})`);
     } catch (err) {
-      failures.push(`${LLM_MODEL}: ${err && err.message ? err.message : String(err)}`);
-      break; // A thrown error is not the transient shape; do not pay for it twice.
+      const msg = err && err.message ? err.message : String(err);
+      failures.push(`${LLM_MODEL}: ${msg}`);
+      // A thrown error is not the transient shape; do not pay for it twice.
+      //
+      // One exception: the first attempt carries the reasoning fields, and a
+      // gateway that REFUSES them rejects the request before it runs, so it
+      // was never billed and retrying costs nothing. The retry does not carry
+      // them, so it answers. Narrow on purpose -- a model that is simply down
+      // must still cost one call, not two, which is what the rest of this
+      // catch is for.
+      if (attempt === 0 && isParameterRejection(msg)) continue;
+      break;
     }
   }
 

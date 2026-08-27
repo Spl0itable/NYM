@@ -956,15 +956,20 @@ Object.assign(NYM.prototype, {
                         return;
                     }
                 }
-
-                const bq = e.target.closest('.message-content > blockquote');
-                if (bq && !e.target.closest('a, button, img, .reaction-badge, .add-reaction-btn, .nm-mention, code, pre')) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this._scrollToQuotedMessage(bq);
-                }
             });
         }
+
+        // Clicking a quoted block jumps to the message it quotes. Delegated on
+        // the document, not on #messagesContainer: under column view each
+        // column renders into its own list, which that container never sees.
+        document.addEventListener('click', (e) => {
+            const bq = e.target.closest && e.target.closest('.message-content > blockquote');
+            if (!bq || !bq.closest('.message[data-message-id]')) return;
+            if (e.target.closest('a, button, img, .reaction-badge, .add-reaction-btn, .nm-mention, code, pre')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._scrollToQuotedMessage(bq);
+        });
 
         // Quote preview close button
         document.getElementById('quotePreviewClose').addEventListener('click', () => {

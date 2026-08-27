@@ -7,7 +7,7 @@ Object.assign(NYM.prototype, {
         this.shareChannel();
     },
 
-    async _handleBotCommand(content, geohash, quoteContext, publishedContent) {
+    async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot) {
         if (!this.useRelayProxy) return;
         // Support @Nymbot mentions anywhere in the message as an alias for ?ask
         const mentionRegex = /@nymbot(?:#[a-f0-9]{4})?/i;
@@ -40,10 +40,19 @@ Object.assign(NYM.prototype, {
         if (!command) return;
         const canonical = this.resolveCommandToken(prefix + command);
         if (canonical) command = canonical.slice(prefix.length);
-        // Build conversation context from quote chain for ?ask and ?guess commands
+        // Build conversation context for ?ask and ?guess commands: the whole
+        // thread when the message came from one (a thread IS the conversation,
+        // and a game's [gc:] token lives further up it), otherwise the quote
+        // chain the user replied to.
         let conversation = [];
-        if (quoteContext && ['ask', 'guess'].includes(command.toLowerCase())) {
-            conversation = this._extractQuoteChain(quoteContext);
+        if (['ask', 'guess'].includes(command.toLowerCase())) {
+            const storageKey = geohash ? `#${geohash}` : this.currentChannel;
+            if (threadRoot && typeof this._threadBotConversation === 'function') {
+                conversation = this._threadBotConversation(threadRoot, storageKey, { exclude: publishedContent });
+            }
+            if (!conversation.length && quoteContext) {
+                conversation = this._extractQuoteChain(quoteContext);
+            }
         }
         // Gather channel context for AI-aware commands (ask, summarize)
         let channelMessages = [];
@@ -198,7 +207,7 @@ Object.assign(NYM.prototype, {
             const resp = await fetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers, lang: (this.getUiLanguage && this.getUiLanguage()) || '' })
+                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers, threadRoot: threadRoot || null, lang: (this.getUiLanguage && this.getUiLanguage()) || '' })
             });
             if (!resp.ok) { this._setBotChannelThinking(false); return; }
             const data = await resp.json();

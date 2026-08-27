@@ -2482,6 +2482,13 @@ Object.assign(NYM.prototype, {
         // In a thread view the same composer replies into the thread.
         const threadRoot = (typeof this._threadRootForSend === 'function')
             ? this._threadRootForSend() : null;
+        // A plain reply in a channel thread Nymbot started or last spoke in
+        // continues that conversation the same way a quote-reply does. Captured
+        // before publishing, while the bot is still the thread's last speaker.
+        const threadBotQuote = (!savedQuote && threadRoot && !this.inPMMode &&
+            typeof this._threadBotQuoteContext === 'function')
+            ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
+            : null;
 
         // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
@@ -2516,9 +2523,10 @@ Object.assign(NYM.prototype, {
                 // Check for bot commands (? prefix or @Nymbot mention)
                 // Use rawInput for trigger detection since quote prepend may hide the prefix
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
-                const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
+                const botQuote = savedQuote || threadBotQuote;
+                const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
                 if (isBotCmd || isNymbotReply) {
-                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote, content);
+                    this._handleBotCommand(rawInput, this.currentGeohash, botQuote, content, threadRoot);
                 }
             }
         }
@@ -2562,6 +2570,13 @@ Object.assign(NYM.prototype, {
         // In a thread view the same composer replies into the thread.
         const threadRoot = (typeof this._threadRootForSend === 'function')
             ? this._threadRootForSend() : null;
+        // A plain reply in a channel thread Nymbot started or last spoke in
+        // continues that conversation the same way a quote-reply does. Captured
+        // before publishing, while the bot is still the thread's last speaker.
+        const threadBotQuote = (!savedQuote && threadRoot && !this.inPMMode &&
+            typeof this._threadBotQuoteContext === 'function')
+            ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
+            : null;
 
         // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
@@ -2589,9 +2604,10 @@ Object.assign(NYM.prototype, {
                 await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot);
                 // Check for bot commands (? prefix or @Nymbot mention)
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
-                const isNymbotReply = savedQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(savedQuote.author);
+                const botQuote = savedQuote || threadBotQuote;
+                const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
                 if (isBotCmd || isNymbotReply) {
-                    this._handleBotCommand(rawInput, this.currentGeohash, savedQuote, content);
+                    this._handleBotCommand(rawInput, this.currentGeohash, botQuote, content, threadRoot);
                 }
             }
         }
@@ -2818,36 +2834,118 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    // The list a quote-jump searches and the scroller that owns it: the clicked
+    // message's own column under column view, otherwise the single shared
+    // container. Both survive a thread view closing (only their children are
+    // re-rendered), so a target resolved before the close stays usable.
+    _quoteJumpTargetFor(el) {
+        const colList = (el && el.closest) ? el.closest('.cv-column-list') : null;
+        if (colList) return { container: colList, scroller: colList.closest('.cv-column-scroller') };
+        return {
+            container: document.getElementById('messagesContainer'),
+            scroller: this._getMessagesScroller ? this._getMessagesScroller() : document.getElementById('messagesScroller')
+        };
+    },
+
+    // Split a quote header's text into the nym and its 4-hex pubkey suffix.
+    // The suffix is matched ANYWHERE, not anchored to the end: badges and flair
+    // sit after it inside the header, and the genesis flair carries its edition
+    // NUMBER as SVG text, which an end-anchored match would trip over. No word
+    // boundary after it either — an edition's digits are themselves hex, so
+    // `#1a2b69` has to still read as suffix 1a2b.
+    _parseQuotedAuthor(authorText) {
+        const text = String(authorText || '').replace(/^@/, '').replace(/:\s*$/, '').trim();
+        const sfxMatch = text.match(/#([0-9a-f]{4})/i);
+        return {
+            name: text.replace(/#[0-9a-f]{4}.*$/i, '').trim(),
+            suffix: sfxMatch ? sfxMatch[1].toLowerCase() : null
+        };
+    },
+
+    // What the search needs from the clicked blockquote, read up front so the
+    // jump can outlive the element — closing a thread view re-renders it away.
+    _quoteJumpDescriptor(blockquoteEl) {
+        const authorEl = blockquoteEl.querySelector('.quote-author');
+        let authorText = '';
+        if (authorEl) {
+            // Avatar, flair and badges live inside the header but aren't part
+            // of the name.
+            const authorClone = authorEl.cloneNode(true);
+            authorClone.querySelectorAll('img, svg, .flair-badge, .verified-badge, .supporter-badge, .friend-badge')
+                .forEach(n => n.remove());
+            authorText = authorClone.textContent || '';
+        }
+        const parsedAuthor = this._parseQuotedAuthor(authorText);
+        const clone = blockquoteEl.cloneNode(true);
+        // The author header and the truncation toggle are chrome, not quoted
+        // text — "Read more" riding along would never match anything.
+        clone.querySelectorAll('.quote-author, .read-more-btn').forEach(n => n.remove());
+        const quotedText = (clone.textContent || '').trim().replace(/\s+/g, ' ');
+        if (!quotedText) return null;
+        const hostMsg = blockquoteEl.closest('.message');
+        return {
+            quotedName: parsedAuthor.name,
+            quotedSuffix: parsedAuthor.suffix,
+            needle: quotedText.slice(0, 200),
+            hostKey: hostMsg ? hostMsg.dataset.messageId : null
+        };
+    },
+
+    // Clicking a quoted block jumps to the message it quotes. Kept working
+    // alongside click-to-open-thread: threads.js excludes quotes from the body
+    // click, so this is still the only thing a quote click does.
     _scrollToQuotedMessage(blockquoteEl) {
         if (!blockquoteEl) return;
-        const authorEl = blockquoteEl.querySelector('.quote-author');
-        const authorText = (authorEl?.textContent || '').replace(/^@/, '').replace(/:\s*$/, '').trim();
-        const sfxMatch = authorText.match(/#([0-9a-f]{4})$/i);
-        const quotedSuffix = sfxMatch ? sfxMatch[1].toLowerCase() : null;
-        const quotedName = authorText.replace(/#[0-9a-f]{4}$/i, '').trim();
+        const desc = this._quoteJumpDescriptor(blockquoteEl);
+        if (!desc) return;
+        const target = this._quoteJumpTargetFor(blockquoteEl);
+        if (!target.container) return;
+        // A quote clicked inside an open thread means "show me the original in
+        // the conversation": leave the thread first, then jump in the restored
+        // channel once it has rendered.
+        if (blockquoteEl.closest('.thread-view-active') && this.activeThread &&
+            typeof this.closeThreadView === 'function') {
+            this.closeThreadView();
+            requestAnimationFrame(() => this._jumpToQuotedMessage(desc, target));
+            return;
+        }
+        this._jumpToQuotedMessage(desc, target);
+    },
 
-        const clone = blockquoteEl.cloneNode(true);
-        clone.querySelectorAll('.quote-author').forEach(n => n.remove());
-        const quotedText = (clone.textContent || '').trim().replace(/\s+/g, ' ');
-        if (!quotedText) return;
-
-        const hostMsg = blockquoteEl.closest('.message');
-        const hostKey = hostMsg ? hostMsg.dataset.messageId : null;
-
-        const container = document.getElementById('messagesContainer');
-        if (!container) return;
-
-        const needle = quotedText.slice(0, 200);
+    _jumpToQuotedMessage(desc, target) {
+        const container = target && target.container;
+        if (!container || !desc) return;
+        const { quotedName, quotedSuffix, needle, hostKey } = desc;
+        // The needle is the quote as RENDERED — markdown markers consumed
+        // (`**bold**` → `bold`), and textContent runs `<br>`-separated lines
+        // together — while the haystack is the stored SOURCE text. Comparing
+        // those two directly only ever matched plain single-line prose, which
+        // is why a quote of anything else reported the original as missing.
+        // So also compare a normalized form: letters and digits only, which
+        // both sides reduce to identically. Kept below the literal tiers so an
+        // exact match still wins, and above them in worth so a normalized hit
+        // beats a merely-contained one.
+        const loose = (str) => (str || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+        const looseNeedle = loose(needle);
         const scoreHaystack = (haystack) => {
             if (!haystack) return 0;
             if (haystack === needle) return 1000;
             if (haystack.includes(needle)) return 500;
             if (needle.length > 20 && haystack.includes(needle.slice(0, 80))) return 250;
+            if (!looseNeedle) return 0;
+            const looseHay = loose(haystack);
+            if (!looseHay) return 0;
+            if (looseHay === looseNeedle) return 900;
+            if (looseNeedle.length >= 8 && looseHay.includes(looseNeedle)) return 400;
+            if (looseNeedle.length >= 20 && looseHay.includes(looseNeedle.slice(0, 60))) return 200;
             return 0;
         };
         const matchesAuthor = (author, pubkey) => {
             const suffix = (pubkey || '').slice(-4).toLowerCase();
-            if (quotedSuffix && suffix !== quotedSuffix) return false;
+            // When the quote recorded a #suffix, that IS the identity — the
+            // displayed nym is only how it was spelled at quote time, so don't
+            // also demand the name agree.
+            if (quotedSuffix) return suffix === quotedSuffix;
             const trimmed = (author || '').trim();
             const baseAuthor = this.stripPubkeySuffix(trimmed);
             if (quotedName && baseAuthor !== quotedName && trimmed !== quotedName) return false;
@@ -2882,10 +2980,17 @@ Object.assign(NYM.prototype, {
                 const renderedStart = startMap.get(storageKey) || 0;
                 let targetIdx = -1;
                 let bestScore = -1;
-                for (let i = 0; i < Math.min(renderedStart, store.length); i++) {
+                // The WHOLE store, not just the not-yet-rendered head. The DOM
+                // scan above only sees what is currently painted, and a message
+                // scrolled far enough up has been trimmed back out of the DOM
+                // by collapseChannelToLatest — searching only [0, renderedStart)
+                // missed exactly that case, and did nothing at all in a
+                // conversation short enough to be rendered whole.
+                for (let i = 0; i < store.length; i++) {
                     const m = store[i];
                     if (!m) continue;
-                    if (hostKey && m.id === hostKey) continue;
+                    const mKey = (m.isPM && m.nymMessageId) ? m.nymMessageId : m.id;
+                    if (hostKey && mKey === hostKey) continue;
                     if (!matchesAuthor(m.author, m.pubkey)) continue;
                     const raw = (m.content || '').replace(/\s+/g, ' ').trim();
                     if (!raw) continue;
@@ -2894,6 +2999,7 @@ Object.assign(NYM.prototype, {
                     if (score > bestScore) { bestScore = score; targetIdx = i; }
                 }
                 if (targetIdx >= 0) {
+                    const targetMsg = store[targetIdx];
                     let safety = 60;
                     while (safety-- > 0) {
                         const currentStart = startMap.get(storageKey) || 0;
@@ -2901,7 +3007,16 @@ Object.assign(NYM.prototype, {
                         const advanced = isPM ? this.loadOlderPMMessages(storageKey) : this.loadOlderChannelMessages(storageKey);
                         if (!advanced) break;
                     }
-                    best = findInDom();
+                    // Resolve by id: which message this is has already been
+                    // decided, so don't put it back through the fuzzy scan and
+                    // risk losing it to a mismatch there.
+                    const domId = (targetMsg.isPM && targetMsg.nymMessageId) ? targetMsg.nymMessageId : targetMsg.id;
+                    if (domId) {
+                        for (const el of container.querySelectorAll('.message[data-message-id]')) {
+                            if (el.dataset.messageId === domId) { best = el; break; }
+                        }
+                    }
+                    if (!best) best = findInDom();
                 }
             }
         }
@@ -2910,15 +3025,14 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Original message is not available');
             return;
         }
-        const scroller = this._getMessagesScroller ? this._getMessagesScroller() : document.getElementById('messagesScroller');
-        const target = best;
-        if (typeof target.scrollIntoView === 'function') {
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const scroller = target.scroller;
+        if (typeof best.scrollIntoView === 'function') {
+            best.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else if (scroller) {
-            scroller.scrollTop = Math.max(0, target.offsetTop - 100);
+            scroller.scrollTop = Math.max(0, best.offsetTop - 100);
         }
-        target.classList.add('message-scroll-flash');
-        setTimeout(() => target.classList.remove('message-scroll-flash'), 1600);
+        best.classList.add('message-scroll-flash');
+        setTimeout(() => best.classList.remove('message-scroll-flash'), 1600);
     },
 
     findMessageElementAnywhere(messageId) {

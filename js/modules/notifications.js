@@ -1,5 +1,7 @@
 // notifications.js - Notification history, badges, sounds, settings
 
+const NYM_NOTIFICATION_ICON = 'https://nymchat.app/images/NYM-icon.png';
+
 Object.assign(NYM.prototype, {
 
     showNotification(title, body, channelInfo = null, timestamp = null) {
@@ -77,7 +79,7 @@ Object.assign(NYM.prototype, {
             try {
                 const notification = new Notification(titleToShow, {
                     body: body,
-                    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><text x="50" y="55" font-size="24" fill="%230ff" text-anchor="middle" font-family="monospace">Nymchat</text></svg>',
+                    icon: NYM_NOTIFICATION_ICON,
                     tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
                     requireInteraction: false,
                     data: { channelInfo: channelInfo }

@@ -262,6 +262,8 @@ Nymbot is context-aware. When you use `?ask` or `?summarize`, the bot receives t
 
 Quote-reply to any Nymbot response to continue the conversation. The bot carries context from the reply chain (up to six messages of history). You can also quote any message and mention `@Nymbot` to ask the AI about it.
 
+Nymbot also works inside message threads. Open a thread on a Nymbot message and a plain reply continues that conversation — no `?` prefix or `@Nymbot` mention needed — and Nymbot answers inside the thread, tagging its reply with the same NIP-10 `['e', rootId, '', 'root']` marker other channel replies use. The whole thread is sent as the bot's context, so a game started in a thread (`?trivia`, `?wordle`, `?riddle`, `?anagram`) keeps its state there instead of losing it to the flat channel. In a thread rooted on someone else's message, `?commands` and `@Nymbot` mentions still work and are answered in the thread; Nymbot only replies unprompted once it is already the thread's last speaker.
+
 ## Mobile App (iOS & Android)
 
 Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory. The Android APK can be downloaded directly from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).

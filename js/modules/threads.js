@@ -100,6 +100,67 @@ Object.assign(NYM.prototype, {
             .sort((a, b) => this._compareMessages(a, b));
     },
 
+    // Nymbot in channel threads 
+    // `nym#abcd`, the shape quote-replies use, so /api/bot can tell the bot's
+    // own turns apart from the humans' in a thread transcript.
+    _threadMessageAuthor(msg) {
+        const nym = (msg && msg.author) || 'nym';
+        const suffix = (msg && msg.pubkey && typeof this.getPubkeySuffix === 'function')
+            ? this.getPubkeySuffix(msg.pubkey) : '';
+        return suffix ? `${nym}#${suffix}` : nym;
+    },
+
+    // The channel thread's messages, root first then replies, chronological.
+    _threadChannelChain(rootId, storageKey) {
+        if (!rootId || !storageKey || !this.threadsEnabled()) return [];
+        const list = this.messages.get(storageKey) || [];
+        const root = list.find(m => m && m.id === rootId);
+        if (!root) return [];
+        return [root, ...this._threadRepliesFor(root)];
+    },
+
+    // The Nymbot message a plain thread reply is answering, shaped like a
+    // pendingQuote so the bot command path treats a thread reply exactly like a
+    // quote-reply. Null unless Nymbot is the thread's root or its last speaker
+    // — a thread nobody asked the bot into still needs an explicit ?command or
+    // @Nymbot mention. Call this BEFORE publishing the outgoing message, so the
+    // user's own message isn't the thread's last one yet.
+    _threadBotQuoteContext(rootId, storageKey) {
+        const chain = this._threadChannelChain(rootId, storageKey)
+            .filter(m => String(m.content || '').trim());
+        if (!chain.length) return null;
+        const last = chain[chain.length - 1];
+        if (!chain[0].isBot && !last.isBot) return null;
+        const botMsgs = chain.filter(m => m.isBot);
+        if (!botMsgs.length) return null;
+        // An unfinished game lives in the newest [gc:] token in the thread;
+        // quoting a bot message without it would route the guess to ?ask and
+        // drop the game.
+        let target = null;
+        for (let i = botMsgs.length - 1; i >= 0; i--) {
+            if (/\[gc:[A-Za-z0-9+/=]+\]/.test(botMsgs[i].content || '')) { target = botMsgs[i]; break; }
+        }
+        if (!target) target = botMsgs[botMsgs.length - 1];
+        const text = String(target.content || '');
+        return { author: this._threadMessageAuthor(target), text, fullText: text };
+    },
+
+    // The thread transcript as bot conversation context, in the same
+    // {author, text} shape _extractQuoteChain produces. `exclude` drops the
+    // message just published (it is sent separately as the question).
+    _threadBotConversation(rootId, storageKey, opts = {}) {
+        const limit = opts.limit || 20;
+        // Compared against the same 1000-char slice the entries carry.
+        const exclude = opts.exclude ? String(opts.exclude).slice(0, 1000).trim() : '';
+        const entries = this._threadChannelChain(rootId, storageKey)
+            .filter(m => !m._spamGated && String(m.content || '').trim())
+            .map(m => ({ author: this._threadMessageAuthor(m), text: String(m.content).slice(0, 1000) }));
+        if (exclude && entries.length && entries[entries.length - 1].text.trim() === exclude) {
+            entries.pop();
+        }
+        return entries.slice(-limit);
+    },
+
     // Find a message by its thread key within a conversation context.
     _threadFindMessage(ctx, id) {
         const list = ctx.isPM ? (this.pmMessages.get(ctx.storageKey) || [])
@@ -509,9 +570,11 @@ Object.assign(NYM.prototype, {
 });
 
 // Clicking a message body opens its thread (threads enabled only). Interactive
-// children — links, media, buttons, badges, the author, timestamps, quotes —
-// keep their own behavior; a text selection or a just-fired long-press never
-// triggers it.
+// children — links, media, buttons, badges, the author, timestamps — keep their
+// own behavior; a text selection or a just-fired long-press never triggers it.
+// Quoted blocks are excluded here rather than relying on the quote handler
+// stopping the event first: that handler is delegated on the conversation
+// container, which never sees a click inside a column's own list.
 (function () {
     document.addEventListener('click', function (e) {
         var n = window.nym;
@@ -531,7 +594,7 @@ Object.assign(NYM.prototype, {
         if (e.target.closest('a, button, img, video, audio, input, textarea, select, code, pre, ' +
             '.author-clickable, .clickable-timestamp, .reaction-badge, .add-reaction-btn, ' +
             '.zap-badge, .add-zap-btn, .thread-indicator, .thread-indicator-row, .msg-hover-buttons, [data-action], ' +
-            '.file-offer, .message-gallery, .quoted-message, .poll-card, .spoiler, ' +
+            '.file-offer, .message-gallery, blockquote, .quote-author, .poll-card, .spoiler, ' +
             '.crypto-verified-badge, .crypto-pq-badge, .group-readers, .channel-readers, ' +
             '.delivery-status, .read-more-btn')) return;
         var sel = window.getSelection && window.getSelection();

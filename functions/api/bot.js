@@ -320,7 +320,7 @@ var BOT_SATS_PER_CREDIT = 10;
 var BOT_MODEL_DEFAULT = "@cf/qwen/qwen3-30b-a3b-fp8";
 // Small, fast, NON-reasoning model for the short structured one-shots (task
 // classification, jokes, riddles, word games, ?define, ?translate).
-var BOT_MODEL_UTILITY = "@cf/meta/llama-4-scout-17b-16e-instruct";
+var BOT_MODEL_UTILITY = "@cf/meta/llama-3.1-8b-instruct-fast";
 // Qwen3's soft switch for its hybrid reasoning mode
 var BOT_FREE_NO_THINK = "\n\n/no_think";
 // Free public-channel reply budget. Covers the stripped reasoning block plus
@@ -2653,7 +2653,15 @@ async function onRequest(context) {
   }
 
 
-  const { command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers, lang } = body;
+  const { command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers, lang, threadRoot } = body;
+  // A command sent from inside a message thread carries that thread's root
+  // event id. The reply then carries the same NIP-10 marked root so clients
+  // file it in the thread instead of the flat channel — otherwise a game or a
+  // follow-up question started in a thread gets answered somewhere the user
+  // isn't looking, and the thread's context is lost.
+  const replyThreadRoot = (typeof threadRoot === "string" && /^[0-9a-f]{64}$/.test(threadRoot.trim().toLowerCase()))
+    ? threadRoot.trim().toLowerCase()
+    : null;
   if (!command) {
     return new Response(JSON.stringify({ error: "Missing command" }), {
       status: 400,
@@ -2806,8 +2814,13 @@ async function onRequest(context) {
   if (command.toLowerCase() === "ask" && senderNym) {
     var userMsg = (publishedContent || args || "").replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").trim();
     if (userMsg) {
-      // Store quote data in nymquote tag for NYM app to reconstruct
-      quoteTag = ["nymquote", senderNym, userMsg];
+      // Inside a thread the root reference already says what this answers, and
+      // the quoted message is the row directly above it — so the mention goes
+      // out without the quote block there.
+      if (!replyThreadRoot) {
+        // Store quote data in nymquote tag for NYM app to reconstruct
+        quoteTag = ["nymquote", senderNym, userMsg];
+      }
       // Wire content uses @mention format so non-NYM clients see a normal mention
       response = "@" + senderNym + " " + response;
     }
@@ -2826,6 +2839,9 @@ async function onRequest(context) {
   ];
   if (quoteTag) {
     eventTags.push(quoteTag);
+  }
+  if (replyThreadRoot) {
+    eventTags.push(["e", replyThreadRoot, "", "root"]);
   }
   var event = {
     kind: isGeo ? 20000 : 23333,
@@ -2887,7 +2903,7 @@ function handleHelp() {
     "**?nostr** \u2014 Random Nostr protocol tips",
     "**?changelog** \u2014 Latest Nymchat release notes (?changelog <version> for a specific release)",
     "",
-    "Tip: You can @Nymbot to ask the AI directly! Quote-reply any message and @Nymbot to ask about it, or reply directly to a Nymbot response to continue the conversation!"
+    "Tip: You can @Nymbot to ask the AI directly! Quote-reply any message and @Nymbot to ask about it, or reply directly to a Nymbot response \u2014 in the channel or inside a message thread \u2014 to continue the conversation!"
   ].join("\n");
 }
 
@@ -3314,6 +3330,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Info: ?help — List all bot commands, ?about — About Nymchat (version, platform links), ?nostr — Nostr protocol tips, ?changelog [version] — Live Nymchat release notes pulled from GitHub (default shows the latest release; pass a tag like ?changelog v3.74.533 for a specific version).",
   "Users can also type @Nymbot <question> to ask me directly.",
   "Users can quote-reply any message and mention @Nymbot to ask about it, or reply to my responses to continue the conversation with context.",
+  "Message threads: opening a thread on one of my messages and replying there continues our conversation without needing a ? prefix or an @Nymbot mention, and I answer inside that thread. The whole thread is my context, so a game started or continued in a thread keeps its state there. In a thread on someone else's message, a ? command or an @Nymbot mention still reaches me and I answer in that thread. Threads are on by default and can be turned off in Settings.",
   "",
   "=== NOSTR PROTOCOL ===",
   "Nymchat uses the Nostr protocol. Messages are cryptographically signed events published to relays.",
@@ -4514,11 +4531,13 @@ function handleGuess(guess, conversation) {
   if (!guess) {
     return "Reply to a game challenge with your guess!";
   }
-  // Extract game token from the quoted bot message in the conversation
+  // Extract game token from the quoted bot message in the conversation.
+  // Newest first: a thread reply sends the whole thread as context, so the
+  // most recent challenge is the one being answered.
   var gameType = null;
   var answer = null;
   var tokenTag = null;
-  for (var i = 0; i < (conversation || []).length; i++) {
+  for (var i = (conversation || []).length - 1; i >= 0; i--) {
     var text = conversation[i].text || "";
     var match = text.match(/\[gc:([A-Za-z0-9+/=]+)\]/);
     if (match) {
