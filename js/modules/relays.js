@@ -3775,6 +3775,9 @@ Object.assign(NYM.prototype, {
                 this._verifiedEventIds.delete(key);
             }
         }
+        // Debounced persist so the NEXT session's replay of this event skips
+        // the verify workers too (restored by _hydrateDedupSets).
+        if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
     },
 
     // Sync fallback when the worker is unavailable

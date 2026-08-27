@@ -214,7 +214,7 @@
                 const idx = mediaPlaceholders.length;
                 mediaPlaceholders.push({
                     kind: 'image',
-                    html: `<img src="${proxiedUrl}" alt="Image" class="msg-img" data-action="expandImageFromData"${fbAttr} />`
+                    html: `<img src="${proxiedUrl}" alt="Image" class="msg-img" decoding="async" loading="lazy" data-action="expandImageFromData"${fbAttr} />`
                 });
                 return `﷒${idx}﷓`;
             }

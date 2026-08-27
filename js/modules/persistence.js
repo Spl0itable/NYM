@@ -28,6 +28,13 @@
     const META_NYMCHAT_VOUCHES = 'nymchatVouches';
     const META_TRUSTED_PUBKEYS = 'trustedPubkeys';
     const META_POOL_SHARD_LAST_SEEN = 'poolShardLastSeen';
+    // Event ids whose BIP340 signature verified in past sessions (bounded,
+    // newest-biased). Restored at boot so the relay replay of already-seen
+    // reactions, profiles, presence and history skips the signature math in
+    // the verify workers — ids are content-bound hashes (sha256 of the
+    // serialized event, re-checked on every cache hit in _verifiedIdCheck),
+    // so a tampered event can never ride the cache.
+    const META_VERIFIED_EVENT_IDS = 'verifiedEventIds';
 
     Object.assign(NYM.prototype, {
 
@@ -355,6 +362,12 @@
                         ids: Array.from(this.trustedPubkeys).slice(-20000)
                     });
                 }
+                if (this._verifiedEventIds && this._verifiedEventIds.size > 0) {
+                    this._cachePut('meta', {
+                        key: META_VERIFIED_EVENT_IDS,
+                        ids: Array.from(this._verifiedEventIds).slice(-20000)
+                    });
+                }
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
@@ -414,6 +427,9 @@
                         for (const id of m.ids) this.nymchatVouches.add(id);
                     } else if (m.key === META_TRUSTED_PUBKEYS && this.trustedPubkeys) {
                         for (const id of m.ids) this.trustedPubkeys.add(id);
+                    } else if (m.key === META_VERIFIED_EVENT_IDS) {
+                        if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
+                        for (const id of m.ids) this._verifiedEventIds.add(id);
                     } else if (m.key === META_POOL_SHARD_LAST_SEEN && m.map && typeof m.map === 'object') {
                         if (!this._shardLastSeenAt) this._shardLastSeenAt = new Map();
                         for (const [shardId, ts] of Object.entries(m.map)) {
@@ -422,6 +438,23 @@
                     }
                 }
             } catch (_) { }
+        },
+
+        /// Marks every channel message restored from disk as already
+        /// signature-verified (it was verified when first received), so the
+        /// cold-boot relay replay of that history skips the verify workers —
+        /// the signature-side counterpart of _seedDecryptedWrapIds. The
+        /// content binding still holds: _verifiedIdCheck recomputes the id
+        /// hash on every cache hit.
+        _seedVerifiedEventIds() {
+            if (!this.messages) return;
+            if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
+            for (const msgs of this.messages.values()) {
+                if (!Array.isArray(msgs)) continue;
+                for (const m of msgs) {
+                    if (m && typeof m.id === 'string' && m.id) this._verifiedEventIds.add(m.id);
+                }
+            }
         },
 
         /// Marks every PM restored from disk as already unwrapped.
@@ -651,6 +684,7 @@
 
                 await this._hydrateDedupSets();
                 this._seedDecryptedWrapIds();
+                this._seedVerifiedEventIds();
 
                 this._populateSidebarFromHydration();
             } catch (_) {
