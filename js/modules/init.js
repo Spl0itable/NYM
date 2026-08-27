@@ -96,6 +96,15 @@ Object.assign(NYM.prototype, {
                 this._renderColumnSkeletons();
             }
 
+            // Restore the dedup/skip meta sets FIRST, unraced — one small
+            // IndexedDB read. These (processedPMEventIds, deletedEventIds,
+            // verifiedEventIds, pq keys, trust sets) are what stop the relay
+            // replay after connect from re-decrypting, re-VERIFYING and
+            // re-UPLOADING history this client has already handled; they used
+            // to load at the END of hydrateFromCache, so a heavy account that
+            // lost the 1500ms race below connected with them still empty.
+            try { await this._hydrateDedupSets(); } catch (_) { }
+
             // Hydrate channel/PM/profile/reaction caches from IndexedDB
             try {
                 await Promise.race([
