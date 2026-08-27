@@ -2821,6 +2821,9 @@ async function onRequest(context) {
         // Store quote data in nymquote tag for NYM app to reconstruct
         quoteTag = ["nymquote", senderNym, userMsg];
       }
+      // Drop a mention the model wrote itself, or it ends up doubled.
+      response = response.replace(
+        new RegExp("^@?" + senderNym.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\s:,]+", "i"), "");
       // Wire content uses @mention format so non-NYM clients see a normal mention
       response = "@" + senderNym + " " + response;
     }
@@ -3545,6 +3548,19 @@ function buildGeohashLocationContext(geohash) {
     + "Use this when the user's question is about the channel's location, the local area, nearby places, local time/weather/news, or anything geographically scoped. Identify the city, region, and country from the coordinates yourself — never claim you don't know where the channel is. Don't mention 'geohash' or coordinates unless the user explicitly asks; just speak naturally about the place.\n";
 }
 
+// Nymbot's replies go out with an @mention prefix and can carry a zap prompt,
+// and a reply carries the block it quotes. None of that is what was said, and
+// a model shown it as context writes the format back instead of answering.
+function stripWireEnvelope(text, isBot) {
+  var out = String(text || "").split("\n").filter(function (l) {
+    return l.charAt(0) !== ">";
+  }).join("\n");
+  if (isBot) {
+    out = out.replace(/^@\S+[ \t]+/, "").replace(/^[ \t]*\u26a1.*$/gm, "");
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function buildChannelContext(channelMessages, activeUsers) {
   var parts = [];
   // Build user list from activeUsers + message authors for completeness
@@ -3600,7 +3616,7 @@ function buildChannelContext(channelMessages, activeUsers) {
       var isBot = m.isBot || /^nymbot/i.test(m.nym || "");
       // Strip the nym to just alphanumeric + basic chars to avoid confusing the LLM
       var author = isBot ? "Nymbot" : (m.nym || "nym").replace(/[\x00-\x1F\x7F]/g, "").slice(0, 25);
-      var text = (m.content || "").replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, "").trim().slice(0, 1000);
+      var text = stripWireEnvelope((m.content || "").replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, ""), isBot).slice(0, 1000);
       // Strip @Nymbot mentions and ?command prefixes from context to avoid confusing the LLM
       text = text.replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").replace(/^\?ask\s*/i, "").trim();
       if (!text) continue;
@@ -3980,9 +3996,11 @@ async function handleAsk(question, context, conversation, channelMessages, activ
         // Skip prompt injection attempts in conversation history
         if (isPromptInjection(sanitizedText)) continue;
         var isBot = /^nymbot(?:#[a-f0-9]{4})?$/i.test(entry.author || "");
+        var entryText = stripWireEnvelope(sanitizedText, isBot);
+        if (!entryText) continue;
         messages.push({
           role: isBot ? "assistant" : "user",
-          content: sanitizedText
+          content: entryText
         });
       }
     }
