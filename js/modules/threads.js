@@ -145,17 +145,37 @@ Object.assign(NYM.prototype, {
         return { author: this._threadMessageAuthor(target), text, fullText: text };
     },
 
+    // One entry's text, with the wire envelope off: quote block, and for the
+    // bot its @mention and zap prompt. Left in, the model mimics the format
+    // instead of answering. The quote is redundant here anyway — in a thread
+    // the message it quotes is its own entry.
+    _threadEntryText(msg) {
+        let text = String((msg && msg.content) || '')
+            .split('\n').filter(l => !l.startsWith('>')).join('\n');
+        if (msg && msg.isBot) text = this._stripBotEnvelope(text);
+        return text.replace(/\n{3,}/g, '\n\n').trim();
+    },
+
+    // The @mention a bot reply opens with and the zap prompt it can close
+    // with. The `[gc:]` token stays — ?guess reads the live game out of it.
+    _stripBotEnvelope(text) {
+        return String(text || '')
+            .replace(/^@[^\s]+[ \t]+/, '')
+            .replace(/^[ \t]*\u26a1.*$/gm, '');
+    },
+
     // The thread transcript as bot conversation context, in the same
     // {author, text} shape _extractQuoteChain produces. `exclude` drops the
     // message just published (it is sent separately as the question).
     _threadBotConversation(rootId, storageKey, opts = {}) {
         const limit = opts.limit || 20;
-        // Compared against the same 1000-char slice the entries carry.
-        const exclude = opts.exclude ? String(opts.exclude).slice(0, 1000).trim() : '';
+        // Normalised like the entries: the caller hands it over as published.
+        const exclude = opts.exclude ? this._threadEntryText({ content: opts.exclude }) : '';
         const entries = this._threadChannelChain(rootId, storageKey)
-            .filter(m => !m._spamGated && String(m.content || '').trim())
-            .map(m => ({ author: this._threadMessageAuthor(m), text: String(m.content).slice(0, 1000) }));
-        if (exclude && entries.length && entries[entries.length - 1].text.trim() === exclude) {
+            .filter(m => !m._spamGated)
+            .map(m => ({ author: this._threadMessageAuthor(m), text: this._threadEntryText(m).slice(0, 1000) }))
+            .filter(e => e.text);
+        if (exclude && entries.length && entries[entries.length - 1].text === exclude) {
             entries.pop();
         }
         return entries.slice(-limit);

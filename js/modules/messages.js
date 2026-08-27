@@ -135,11 +135,26 @@ Object.assign(NYM.prototype, {
         }
         // If quoteContext has non-quoted text remainder, add it as the replier's text
         // (this is the previous reply before the current user's input)
+        // The text below the quote is the REPLIER's, not the quoted author's;
+        // tagged as Nymbot's it reached the worker as an assistant turn and
+        // came straight back as an echo.
         const nonQuotedText = lines.filter(l => !l.startsWith('>')).join('\n').trim();
         if (nonQuotedText && (conversation.length === 0 || conversation[conversation.length - 1].text !== nonQuotedText)) {
-            conversation.push({ author: quoteContext.author, text: nonQuotedText });
+            const senderNym = (this.nym && this.pubkey && typeof this.getPubkeySuffix === 'function')
+                ? `${this.nym}#${this.getPubkeySuffix(this.pubkey)}`
+                : (this.nym || 'nym');
+            conversation.push({ author: senderNym, text: nonQuotedText });
         }
-        return conversation;
+        // Take the wire envelope off Nymbot's own turns; shown it as history
+        // the model writes it itself.
+        if (typeof this._stripBotEnvelope === 'function') {
+            for (const entry of conversation) {
+                if (/^nymbot(?:#[a-f0-9]{4})?$/i.test((entry.author || '').trim())) {
+                    entry.text = this._stripBotEnvelope(entry.text).trim();
+                }
+            }
+        }
+        return conversation.filter(e => e.text);
     },
 
     // Swap an optimistic message's temp id for the real signed event id, and
@@ -2900,19 +2915,24 @@ Object.assign(NYM.prototype, {
         if (!desc) return;
         const target = this._quoteJumpTargetFor(blockquoteEl);
         if (!target.container) return;
-        // A quote clicked inside an open thread means "show me the original in
-        // the conversation": leave the thread first, then jump in the restored
-        // channel once it has rendered.
-        if (blockquoteEl.closest('.thread-view-active') && this.activeThread &&
-            typeof this.closeThreadView === 'function') {
-            this.closeThreadView();
-            requestAnimationFrame(() => this._jumpToQuotedMessage(desc, target));
-            return;
+        // A quote inside a thread usually points into that same thread, and
+        // the flat view collapses thread replies away — so search the thread
+        // first rather than closing it to look somewhere it cannot be.
+        const inThread = blockquoteEl.closest('.thread-view-active') && this.activeThread;
+        if (inThread) {
+            if (this._jumpToQuotedMessage(desc, target, { domOnly: true })) return;
+            if (typeof this.closeThreadView === 'function') {
+                this.closeThreadView();
+                requestAnimationFrame(() => this._jumpToQuotedMessage(desc, this._quoteJumpTargetFor(null)));
+                return;
+            }
         }
         this._jumpToQuotedMessage(desc, target);
     },
 
-    _jumpToQuotedMessage(desc, target) {
+    // Returns whether it found the message. `domOnly` limits it to what is
+    // rendered, and stays silent when it misses.
+    _jumpToQuotedMessage(desc, target, opts = {}) {
         const container = target && target.container;
         if (!container || !desc) return;
         const { quotedName, quotedSuffix, needle, hostKey } = desc;
@@ -2971,7 +2991,7 @@ Object.assign(NYM.prototype, {
 
         let best = findInDom();
 
-        if (!best) {
+        if (!best && !opts.domOnly) {
             const isPM = container.dataset.virtualScrollIsPM === 'true';
             const storageKey = container.dataset.virtualScrollKey;
             if (storageKey) {
@@ -3022,8 +3042,8 @@ Object.assign(NYM.prototype, {
         }
 
         if (!best) {
-            this.displaySystemMessage('Original message is not available');
-            return;
+            if (!opts.domOnly) this.displaySystemMessage('Original message is not available');
+            return false;
         }
         const scroller = target.scroller;
         if (typeof best.scrollIntoView === 'function') {
@@ -3033,6 +3053,7 @@ Object.assign(NYM.prototype, {
         }
         best.classList.add('message-scroll-flash');
         setTimeout(() => best.classList.remove('message-scroll-flash'), 1600);
+        return true;
     },
 
     findMessageElementAnywhere(messageId) {
