@@ -2363,9 +2363,16 @@ div.message-input .rich-md-quote {
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     box-shadow: var(--shadow-lg);
-    margin-bottom: 8px;
     overflow-x: auto;
     scrollbar-width: thin;
+    transition: border-radius var(--transition);
+}
+
+.input-wrapper:has(> .autocomplete-dropdown.active) .media-preview-strip,
+.input-wrapper:has(> .emoji-autocomplete.active) .media-preview-strip,
+.input-wrapper:has(> .command-palette.active) .media-preview-strip {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
 }
 
 .media-preview-item {

@@ -544,7 +544,15 @@ Object.assign(NYM.prototype, {
 
                 const messages = this.messages.get(storageKey);
                 if (messages && messages.length > this.channelMessageLimit) {
-                    this.messages.set(storageKey, messages.slice(-this.channelMessageLimit));
+                    let trimmed = messages.slice(-this.channelMessageLimit);
+                    // Keep thread roots the kept window still references, so
+                    // a busy channel scrolling past the cap doesn't break its
+                    // threads live (same pinning the persisted window gets in
+                    // persistChannelMessages).
+                    if (typeof this._withPinnedThreadRoots === 'function') {
+                        trimmed = this._withPinnedThreadRoots(messages, trimmed, m => m.id);
+                    }
+                    this.messages.set(storageKey, trimmed);
                 }
 
                 // If a zap notification is waiting for this message's text,
@@ -1044,7 +1052,15 @@ Object.assign(NYM.prototype, {
                 typeof this.threadsEnabled === 'function' && this.threadsEnabled() &&
                 typeof this._threadReplyCountFor === 'function') {
                 const _threadCount = this._threadReplyCountFor(message);
-                if (_threadCount > 0) this._appendThreadIndicator(messageEl, message, _threadCount);
+                if (_threadCount > 0) {
+                    this._appendThreadIndicator(messageEl, message, _threadCount);
+                    // Replies that rendered inline while this root was still
+                    // missing (hydration/replay order) belong in the thread
+                    // now that the root row is here — remove the strays.
+                    if (typeof this._sweepInlineThreadReplies === 'function') {
+                        this._sweepInlineThreadReplies(message);
+                    }
+                }
             }
         }
 

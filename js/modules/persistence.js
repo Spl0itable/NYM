@@ -870,6 +870,31 @@
             }
         },
 
+        // Keep thread ROOTS in the persisted window: the window is a plain
+        // last-N slice, so a root older than the window drops off while its
+        // replies stay — and after a reload those replies can never re-thread
+        // (the root is gone from the store, and the bounded relay replay
+        // doesn't reach that far back either): the replies render inline and
+        // their thread affordance dead-ends. Any message the kept window
+        // references as a thread root is pinned in front of the slice.
+        _withPinnedThreadRoots(messages, trimmed, keyOf) {
+            if (trimmed === messages) return trimmed;
+            const kept = new Set();
+            for (const m of trimmed) { if (m) kept.add(keyOf(m)); }
+            const wanted = new Set();
+            for (const m of trimmed) {
+                if (m && m.threadRoot && !kept.has(m.threadRoot)) wanted.add(m.threadRoot);
+            }
+            if (!wanted.size) return trimmed;
+            const pinned = [];
+            for (const m of messages) {
+                if (!m) continue;
+                const k = keyOf(m);
+                if (wanted.has(k)) { pinned.push(m); wanted.delete(k); }
+            }
+            return pinned.length ? [...pinned, ...trimmed] : trimmed;
+        },
+
         persistChannelMessages(key) {
             if (!key || this._cacheDisabled) return;
             this._scheduleMsgPersist('ch', key, () => {
@@ -879,7 +904,9 @@
                     return;
                 }
                 const limit = this.channelMessageLimit || 100;
-                const trimmed = messages.length > limit ? messages.slice(-limit) : messages;
+                let trimmed = messages.length > limit ? messages.slice(-limit) : messages;
+                // Channel thread keys are event ids (threadKeyForMessage).
+                trimmed = this._withPinnedThreadRoots(messages, trimmed, m => m.id);
                 this._cachePut('channels', {
                     key,
                     messages: trimmed.map(m => this._serialiseMessage(m))
@@ -900,7 +927,11 @@
                     return;
                 }
                 const limit = this.pmStorageLimit || 500;
-                const trimmed = messages.length > limit ? messages.slice(-limit) : messages;
+                let trimmed = messages.length > limit ? messages.slice(-limit) : messages;
+                // PM/group thread keys are the shared nymMessageId when
+                // present (threadKeyForMessage), else the event id.
+                trimmed = this._withPinnedThreadRoots(
+                    messages, trimmed, m => m.nymMessageId || m.id);
                 const serialised = trimmed.map(m => this._serialiseMessage(m));
                 // With Identity Encryption on, the PM/group cache is written
                 // AES-GCM-encrypted under the vault key — the plaintext mirror

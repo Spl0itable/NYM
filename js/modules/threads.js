@@ -244,7 +244,18 @@ Object.assign(NYM.prototype, {
         // Opening "the thread" of a reply means opening its root's thread.
         if (msg.threadRoot) {
             const root = this._threadFindMessage(ctx, msg.threadRoot);
-            if (root) msg = root;
+            if (root) {
+                msg = root;
+            } else {
+                // The root is no longer in the local store (bounded cache /
+                // replay window). The thread still exists — open it keyed by
+                // the reply's root reference; the view renders "Original
+                // message unavailable" above whatever replies remain, instead
+                // of dead-ending on the "cannot start a thread yet" toast
+                // (that toast is for unconfirmed OWN messages, not this).
+                this.openThreadView(msg.threadRoot, ctx);
+                return;
+            }
         }
         if (!this._threadEligibleRoot(msg)) {
             // A stray body click on an unsendable/system row stays quiet; the
@@ -503,6 +514,32 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Remove INLINE copies of a root's replies from the conversation view
+    // (never from an open thread view). A reply renders inline when its root
+    // hasn't hydrated/arrived yet — the "never lost" fallback — but once the
+    // root IS here the reply belongs to the thread, and the DOM dedupe would
+    // otherwise keep the stray inline copy forever: the message shows both
+    // "escaped" at top level and inside its thread.
+    _sweepInlineThreadReplies(rootMsg) {
+        if (!rootMsg || typeof document === 'undefined') return;
+        if (!this.threadsEnabled()) return;
+        const rootId = this.threadKeyForMessage(rootMsg);
+        if (!rootId) return;
+        const list = this._threadListForMessage(rootMsg) || [];
+        for (const m of list) {
+            if (!m || m.threadRoot !== rootId) continue;
+            for (const id of [m.id, m.nymMessageId]) {
+                if (!id) continue;
+                const sel = `.message[data-message-id="${String(id).replace(/"/g, '\\"')}"]`;
+                document.querySelectorAll(sel).forEach(el => {
+                    if (el.closest('.thread-view-active')) return;
+                    el.remove();
+                });
+                if (this.renderedMessageIds) this.renderedMessageIds.delete(id);
+            }
+        }
+    },
+
     // Update/create the "N replies" row on every rendered copy of the root
     // (single view and columns; never inside an active thread view).
     _refreshThreadIndicators(rootId, sampleMsg) {
@@ -510,6 +547,9 @@ Object.assign(NYM.prototype, {
         const list = sampleMsg ? this._threadListForMessage(sampleMsg) : null;
         const rootMsg = list ? (list.find(m => this.threadKeyForMessage(m) === rootId) || null) : null;
         const count = rootMsg ? this._threadRepliesFor(rootMsg).length : 0;
+        // The root being present means its replies belong in the thread, not
+        // inline — clear any that escaped while the root was still missing.
+        if (rootMsg && count > 0) this._sweepInlineThreadReplies(rootMsg);
         // `.message` rows only — the hover reaction button carries the same
         // data-message-id and must never receive an indicator.
         document.querySelectorAll(`.message[data-message-id="${rootId}"]`).forEach(el => {
