@@ -615,7 +615,12 @@ Object.assign(NYM.prototype, {
                     }
                     return;
                 }
-                if (typeof this._markChannelRead === 'function' && message.created_at) {
+                // A reply collapsed inside a thread is not on screen, so it must
+                // not advance the channel's read watermark: doing so landed its
+                // notification pre-viewed (`_notificationAlreadySeen`) and the
+                // bell badge never moved for a thread @mention.
+                if (typeof this._markChannelRead === 'function' && message.created_at &&
+                    !(typeof this._threadReplyHidden === 'function' && this._threadReplyHidden(message))) {
                     this._markChannelRead(storageKey, message.created_at);
                 }
 

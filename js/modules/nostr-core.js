@@ -578,7 +578,13 @@ Object.assign(NYM.prototype, {
                 // Notification check
                 const _notifStorageKey = geohash ? `#${geohash}` : message.channel;
                 const _notifCurrentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-                const _isViewingChannel = !this.inPMMode && _notifStorageKey === _notifCurrentKey;
+                // A reply collapsed inside a thread is off screen even while its
+                // channel is open, so it must not count as "already seen" —
+                // otherwise a thread @mention/quote-reply never reached the bell.
+                const _threadHidden = typeof this._threadReplyHidden === 'function' &&
+                    this._threadReplyHidden(message);
+                const _isViewingChannel = !this.inPMMode &&
+                    _notifStorageKey === _notifCurrentKey && !_threadHidden;
 
                 const shouldNotify = !message.isOwn &&
                     !message._spamGated &&

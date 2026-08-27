@@ -1398,12 +1398,41 @@ Object.assign(NYM.prototype, {
         }
 
         const senderBlocked = this.blockedUsers.has(senderPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
+        // A reply collapsed inside a thread is off screen even while the group is
+        // open, so it must not advance the read watermark, and an @mention /
+        // quote-reply inside it still has to reach the bell.
+        const groupThreadHidden = typeof this._threadReplyHidden === 'function' &&
+            this._threadReplyHidden(msg);
+        const notifyForGroup = () => {
+            if (senderBlocked) return;
+            if (msgType === 'group-invite') return;
+            if (this.groupNotifyMentionsOnly && !this.isMentioned(messageContent)) return;
+            const ageMs = Date.now() - (tsSec * 1000);
+            const treatAsHistorical = msg.isHistorical || ageMs > 30000;
+            const groupMsgChannelInfo = {
+                type: 'group',
+                groupId,
+                id: groupConvKey,
+                pubkey: senderPubkey,
+                eventId: event.id
+            };
+            if (!treatAsHistorical) {
+                this.showNotification(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
+            } else {
+                this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
+            }
+        };
         if (this.inPMMode && this.currentGroup === groupId) {
             this.displayMessage(msg);
             this._scheduleScrollToBottom();
-            if (typeof this._markChannelRead === 'function') {
+            if (typeof this._markChannelRead === 'function' && !groupThreadHidden) {
                 this._markChannelRead(groupConvKey, msg.created_at);
             }
+            // A reply the open group keeps collapsed was never on screen, so it
+            // notifies exactly as it would had the group not been open —
+            // `groupNotifyMentionsOnly` inside `notifyForGroup` is still the
+            // knob that decides how much of that reaches the user.
+            if (!isOwn && groupThreadHidden) notifyForGroup();
             if (!isOwn && !msg.isHistorical && !document.hidden && !this.userScrolledUp &&
                 this._canSendGiftWraps() && nymMsgId) {
                 this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group', groupId);
@@ -1416,25 +1445,8 @@ Object.assign(NYM.prototype, {
             const cvShown = this._cvActive && this._cvListForKey(groupConvKey);
             if (cvShown) this.displayMessage(msg);
             if (!isOwn && !senderBlocked) {
-                const ageMs = Date.now() - (tsSec * 1000);
-                const treatAsHistorical = msg.isHistorical || ageMs > 30000;
                 if (!(cvShown && this._cvMarkColumnRead(groupConvKey))) this.updateUnreadCount(groupConvKey);
-                const isInviteRumor = msgType === 'group-invite';
-                const shouldNotifyGroup = !isInviteRumor && (!this.groupNotifyMentionsOnly || this.isMentioned(messageContent));
-                if (shouldNotifyGroup) {
-                    const groupMsgChannelInfo = {
-                        type: 'group',
-                        groupId,
-                        id: groupConvKey,
-                        pubkey: senderPubkey,
-                        eventId: event.id
-                    };
-                    if (!treatAsHistorical) {
-                        this.showNotification(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
-                    } else {
-                        this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
-                    }
-                }
+                notifyForGroup();
             }
         }
     },

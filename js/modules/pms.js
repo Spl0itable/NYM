@@ -1526,13 +1526,38 @@ Object.assign(NYM.prototype, {
                 }
             }
 
+            // A reply collapsed inside a thread is off screen even while its
+            // conversation is open: it must neither advance the read watermark
+            // nor be treated as seen by the notification gate below.
+            const pmThreadHidden = typeof this._threadReplyHidden === 'function' &&
+                this._threadReplyHidden(msg);
+            // The bell/sound path, shared by the not-viewing branch and by a
+            // thread reply the open conversation keeps collapsed.
+            const notifyForPM = () => {
+                if (this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author)) return;
+                const ageMs = Date.now() - (tsSec * 1000);
+                const treatAsHistorical = msg.isHistorical || ageMs > 30000;
+                const pmChannelInfo = {
+                    type: 'pm',
+                    nym: msg.author,
+                    pubkey: peerPubkey,
+                    id: conversationKey,
+                    eventId: event.id
+                };
+                if (!treatAsHistorical) {
+                    this.showNotification(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
+                } else {
+                    this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
+                }
+            };
             if (this.inPMMode && this.currentPM === peerPubkey) {
                 this.displayMessage(msg);
                 // Force auto-scroll to bottom for PM messages
                 this._scheduleScrollToBottom();
-                if (typeof this._markChannelRead === 'function') {
+                if (typeof this._markChannelRead === 'function' && !pmThreadHidden) {
                     this._markChannelRead(conversationKey, msg.created_at);
                 }
+                if (!isOwn && pmThreadHidden) notifyForPM();
                 // Send READ receipt if viewing the conversation, and mark
                 // the message so openPM doesn't re-send on next open.
                 if (!isOwn) {
@@ -1558,24 +1583,8 @@ Object.assign(NYM.prototype, {
                 // appends the trailing new messages to the cached fragment,
                 // avoiding a full re-render of long PM threads.
                 if (!isOwn) {
-                    const pmSenderBlocked = this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
-                    const ageMs = Date.now() - (tsSec * 1000);
-                    const treatAsHistorical = msg.isHistorical || ageMs > 30000;
-                    const pmChannelInfo = {
-                        type: 'pm',
-                        nym: msg.author,
-                        pubkey: peerPubkey,
-                        id: conversationKey,
-                        eventId: event.id
-                    };
                     if (!(cvShown && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey);
-                    if (!pmSenderBlocked) {
-                        if (!treatAsHistorical) {
-                            this.showNotification(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
-                        } else {
-                            this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
-                        }
-                    }
+                    notifyForPM();
                 }
             }
         } catch (err) {

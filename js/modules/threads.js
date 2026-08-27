@@ -71,6 +71,24 @@ Object.assign(NYM.prototype, {
         return list.some(m => m !== msg && this.threadKeyForMessage(m) === rootId);
     },
 
+    // True when a message is HIDDEN behind a collapsed thread: it is a reply
+    // whose root we hold (so it renders inside the thread instead of inline)
+    // and whose thread view isn't the one currently open.
+    //
+    // Such a message never reaches the screen even while its conversation is on
+    // screen, so the notification gates must not treat "viewing the
+    // conversation" as "the user saw it" for it. Without this an @mention or a
+    // quote-reply landing in a thread played its sound
+    // (`_onThreadReplyArrived`) and was never recorded: the bell modal stayed
+    // empty for a message the user was told about but could not see.
+    _threadReplyHidden(message) {
+        if (!message || !message.threadRoot) return false;
+        if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
+        if (!this._threadRootExistsFor(message)) return false;
+        const at = this.activeThread;
+        return !(at && at.rootId === message.threadRoot);
+    },
+
     // Reply-count lookup, cached per store list. The cache keys on the list's
     // identity and length so inserts (push/splice) and slice reassignments
     // both invalidate it naturally.
@@ -492,11 +510,18 @@ Object.assign(NYM.prototype, {
         this._refreshThreadIndicators(message.threadRoot, message);
 
         // Thread renders are silent in displayMessage (a re-render must never
-        // replay sounds), so a LIVE reply for the visible conversation plays
-        // its one mention/PM sound here — whether its thread is open (it is
-        // appended below) or collapsed behind the reply-count row. Same gates
-        // as the normal live-message path.
-        if (!message.isHistorical && !message.isOwn && !message.isBot &&
+        // replay sounds), so a LIVE reply landing in the OPEN thread plays its
+        // one mention/PM sound here — the same gates as the normal live-message
+        // path, which plays a sound for a mention the user can see.
+        //
+        // A reply for a COLLAPSED thread is deliberately NOT sounded here: it is
+        // off screen, so it goes through the real notification path
+        // (`showNotification`) like any other message the user cannot see, which
+        // plays the sound AND records the bell entry. Sounding it here as well
+        // was the whole bug — the tone fired while the notification modal stayed
+        // empty, because the conversation being open suppressed the notification.
+        if (!this._threadReplyHidden(message) &&
+            !message.isHistorical && !message.isOwn && !message.isBot &&
             this.settings && this.settings.sound &&
             (message.isPM || (typeof this.isMentioned === 'function' && this.isMentioned(message.content)))) {
             this.playSound(this.settings.sound);
