@@ -13,6 +13,7 @@ class NotificationRoute {
     required this.type,
     this.route = '',
     this.senderPubkey = '',
+    this.threadRoot = '',
   });
 
   /// Bell-history category: 'pm' | 'group' | 'channel' | 'geohash' | 'mention'
@@ -24,6 +25,10 @@ class NotificationRoute {
 
   /// The sender, used as the fallback target for reactions/mentions.
   final String senderPubkey;
+
+  /// The thread this notification came FROM, when it came from one. Empty for
+  /// an ordinary conversation message.
+  final String threadRoot;
 }
 
 /// The conversation-opening surface [openNotificationRoute] needs. Kept to
@@ -33,6 +38,11 @@ abstract class NotificationRouteTarget {
   void openChannel(String channel);
   void openPM(String pubkey);
   void openGroup(String groupId);
+
+  /// Swaps the just-opened conversation to the thread rooted at [threadRoot].
+  /// Called only after one of the three opens above, so the conversation the
+  /// thread belongs to is already the current one.
+  void openThread(String threadRoot);
 }
 
 /// Payload prefix, so a tap payload can be told apart from the deep-link URLs
@@ -46,8 +56,10 @@ String encodeNotificationPayload({
   required String type,
   String? route,
   String? senderPubkey,
+  String? threadRoot,
 }) =>
-    '$_kPayloadScheme$type|${route ?? ''}|${senderPubkey ?? ''}';
+    '$_kPayloadScheme$type|${route ?? ''}|${senderPubkey ?? ''}'
+    '|${threadRoot ?? ''}';
 
 /// Decodes a tap payload written by [encodeNotificationPayload]. Returns null
 /// for anything else (e.g. a deep-link URL), so the caller can fall through to
@@ -60,6 +72,9 @@ NotificationRoute? decodeNotificationPayload(String payload) {
     type: parts[0],
     route: parts.length > 1 ? parts[1] : '',
     senderPubkey: parts.length > 2 ? parts[2] : '',
+    // Absent from payloads written before threads carried their root, which is
+    // why this is read positionally rather than required.
+    threadRoot: parts.length > 3 ? parts[3] : '',
   );
 }
 
@@ -105,18 +120,26 @@ bool openNotificationRoute(
 ) {
   final route = target.route;
   final sender = target.senderPubkey;
+  // A notification raised by a thread reply must land IN that thread. The
+  // conversation opens first (the thread view takes over its message list), so
+  // this runs on the way out of each branch that actually opened one.
+  bool opened(bool ok) {
+    if (ok && target.threadRoot.isNotEmpty) into.openThread(target.threadRoot);
+    return ok;
+  }
+
   switch (target.type) {
     case 'group':
       if (route.isEmpty) return false;
       into.openGroup(route);
-      return true;
+      return opened(true);
     case 'channel':
     case 'geohash':
       // A channel/geohash mention switches to that channel (the route is the
       // bare channel name; switchChannel auto-detects geohash).
       if (route.isEmpty) return false;
       into.openChannel(route);
-      return true;
+      return opened(true);
     case 'call':
       // Call routes carry a group id (group call) or a pubkey (1:1 call).
       if (isPubkeyRoute(route)) {
@@ -141,6 +164,6 @@ bool openNotificationRoute(
           sender.isNotEmpty ? sender : (isPubkeyRoute(route) ? route : '');
       if (peer.isEmpty) return false;
       into.openPM(peer);
-      return true;
+      return opened(true);
   }
 }

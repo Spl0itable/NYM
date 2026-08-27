@@ -197,10 +197,14 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
         type: entry.type,
         route: entry.route ?? '',
         senderPubkey: entry.senderPubkey ?? '',
+        // A bell row for a thread reply opens that thread, like its OS
+        // notification does.
+        threadRoot: entry.threadRoot ?? '',
       ),
       AppNotificationRouteTarget(
         controller: ref.read(nostrControllerProvider),
         appState: ref.read(appStateProvider.notifier),
+        container: ProviderScope.containerOf(context, listen: false),
       ),
     );
     Navigator.of(context).maybePop();
@@ -365,6 +369,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
   // match the unchecked PWA checkboxes (index.html:2272/2277).
   late bool _mentionsOnly;
   late bool _friendsOnly;
+  late bool _threadMentionsOnly;
 
   /// What the OS says about posting notifications. The in-app toggle is only
   /// half the story: Android 13+ and iOS both drop everything we post until the
@@ -379,6 +384,8 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
     final kv = ref.read(keyValueStoreProvider);
     _mentionsOnly = kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
     _friendsOnly = kv.getString(StorageKeys.notifyFriendsOnly) == 'true';
+    _threadMentionsOnly =
+        kv.getString(StorageKeys.threadNotifyMentionsOnly) == 'true';
     _refreshOsPermission();
   }
 
@@ -438,6 +445,18 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             onChanged: (v) {
               setState(() => _mentionsOnly = v);
               kv.setString(StorageKeys.groupNotifyMentionsOnly, '$v');
+            },
+          ),
+          // The thread-scoped twin of the group setting. Off, a reply in a
+          // thread the user STARTED notifies too — a thread is a conversation
+          // they are in, and its replies are collapsed out of sight either way.
+          _ToggleRow(
+            label: tr('Only notify for mentions in threads'),
+            value: _threadMentionsOnly,
+            indent: true,
+            onChanged: (v) {
+              setState(() => _threadMentionsOnly = v);
+              kv.setString(StorageKeys.threadNotifyMentionsOnly, '$v');
             },
           ),
           // Two ways enabled notifications still never appear, both invisible

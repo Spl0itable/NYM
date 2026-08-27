@@ -14,6 +14,7 @@ import '../../services/mesh/mesh_service.dart';
 import '../../services/mesh/noise/noise_identity.dart';
 import 'ghost_mode.dart';
 import '../../services/mesh/noise/nostr_link.dart';
+import '../../services/mesh/protocol/mesh_diagnostics_packets.dart';
 import '../../services/mesh/protocol/mesh_profile.dart';
 import '../../services/mesh/transport/ble_mesh_transport.dart';
 import '../../services/mesh/transport/mesh_transport.dart';
@@ -22,6 +23,33 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import 'mesh_bridge.dart';
 import 'mesh_diagnostics.dart';
+
+/// The state of one peer's echo probe, for the diagnostics list.
+///
+/// A peer list says who is out there. It cannot say whether they are in the
+/// same room or three relays away — the echo can.
+@immutable
+class MeshPingState {
+  const MeshPingState.waiting()
+      : roundTripMs = null,
+        hops = null,
+        lost = false;
+  const MeshPingState.lost()
+      : roundTripMs = null,
+        hops = null,
+        lost = true;
+  const MeshPingState.result({required this.roundTripMs, required this.hops})
+      : lost = false;
+
+  final int? roundTripMs;
+
+  /// Null when the reply's TTL pair was impossible, which means the packet was
+  /// rewritten rather than relayed. Better no hop count than a wrong one.
+  final int? hops;
+  final bool lost;
+
+  bool get isWaiting => !lost && roundTripMs == null;
+}
 
 /// Immutable UI snapshot of the mesh radio status. Conversations themselves live
 /// in the normal [AppState] stores (channels/PMs) and render through the
@@ -36,6 +64,7 @@ class MeshUiState {
     this.myPeerID,
     this.linkCount = 0,
     this.peers = const [],
+    this.pings = const {},
     this.meshChannelKeys = const {},
     this.meshPmPubkeys = const {},
     this.error,
@@ -47,6 +76,9 @@ class MeshUiState {
   final String? myPeerID;
   final int linkCount;
   final List<MeshPeer> peers;
+
+  /// peerID -> the last probe's state. Only holds peers actually probed.
+  final Map<String, MeshPingState> pings;
 
   /// Bare channel keys (lowercase) that are mesh-backed.
   final Set<String> meshChannelKeys;
@@ -68,6 +100,7 @@ class MeshUiState {
     String? myPeerID,
     int? linkCount,
     List<MeshPeer>? peers,
+    Map<String, MeshPingState>? pings,
     Set<String>? meshChannelKeys,
     Set<String>? meshPmPubkeys,
     String? error,
@@ -80,6 +113,7 @@ class MeshUiState {
       myPeerID: myPeerID ?? this.myPeerID,
       linkCount: linkCount ?? this.linkCount,
       peers: peers ?? this.peers,
+      pings: pings ?? this.pings,
       meshChannelKeys: meshChannelKeys ?? this.meshChannelKeys,
       meshPmPubkeys: meshPmPubkeys ?? this.meshPmPubkeys,
       error: clearError ? null : (error ?? this.error),
@@ -226,6 +260,7 @@ class MeshController extends StateNotifier<MeshUiState> {
         );
       }));
       _subs.add(service.onProfile.listen(_onProfile));
+      _subs.add(service.onPingResult.listen(_onPingResult));
       // Keep the UI availability live: the BLE radio reports `unknown` at start
       // and only becomes `ready` a beat later when the adapter powers on, so a
       // one-shot read would leave the status stuck on "Starting…".
@@ -404,12 +439,55 @@ class MeshController extends StateNotifier<MeshUiState> {
     unawaited(service.requestProfile(peer.peerID));
   }
 
+  /// How long a probe waits before the row says so. A peer is in the list
+  /// because we heard an announce, which may have been minutes and several
+  /// moves ago; silence is an answer, not a hang.
+  static const Duration pingTimeout = Duration(seconds: 10);
+
+  final Map<String, Timer> _pingTimeouts = <String, Timer>{};
+
+  /// Probes [peerID]: are you there, and how many links away?
+  Future<void> ping(String peerID) async {
+    final service = _service;
+    if (service == null || !state.running) return;
+    _setPing(peerID, const MeshPingState.waiting());
+    _pingTimeouts.remove(peerID)?.cancel();
+    _pingTimeouts[peerID] = Timer(pingTimeout, () {
+      _pingTimeouts.remove(peerID);
+      // Reading `state` after dispose throws, and a timer outlives it.
+      if (!mounted) return;
+      if (state.pings[peerID]?.isWaiting ?? false) {
+        _setPing(peerID, const MeshPingState.lost());
+      }
+    });
+    if (await service.ping(peerID)) return;
+    _pingTimeouts.remove(peerID)?.cancel();
+    _setPing(peerID, const MeshPingState.lost());
+  }
+
+  void _onPingResult(MeshPingResult result) {
+    _pingTimeouts.remove(result.peerID)?.cancel();
+    _setPing(
+      result.peerID,
+      MeshPingState.result(roundTripMs: result.roundTripMs, hops: result.hops),
+    );
+  }
+
+  void _setPing(String peerID, MeshPingState value) {
+    if (!mounted) return;
+    state = state.copyWith(
+        pings: {...state.pings, peerID: value});
+  }
+
   Future<void> _stop() async {
     if (_busy) return;
     _busy = true;
     try {
       await _teardown();
-      state = state.copyWith(running: false, linkCount: 0, peers: const []);
+      // A round trip measured to a peer we can no longer reach is a stale
+      // number, not a reading. (_teardown cancelled the timers.)
+      state = state.copyWith(
+          running: false, linkCount: 0, peers: const [], pings: const {});
     } finally {
       _busy = false;
     }
@@ -420,6 +498,10 @@ class MeshController extends StateNotifier<MeshUiState> {
       await s.cancel();
     }
     _subs.clear();
+    for (final t in _pingTimeouts.values) {
+      t.cancel();
+    }
+    _pingTimeouts.clear();
     await _bridge?.dispose();
     _bridge = null;
     final service = _service;

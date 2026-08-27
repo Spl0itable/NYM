@@ -11,6 +11,7 @@ import 'mesh_constants.dart';
 import 'mesh_events.dart';
 import 'mesh_peer.dart';
 import 'noise/channel_encryption.dart';
+import 'noise/noise_crypto.dart';
 import 'noise/noise_identity.dart';
 import 'noise/noise_session_manager.dart';
 import 'noise/nostr_link.dart';
@@ -21,7 +22,15 @@ import 'protocol/bitchat_packet.dart';
 import 'protocol/fragment_payload.dart';
 import 'protocol/identity_announcement.dart';
 import 'protocol/mesh_message_identity.dart';
+import 'protocol/mesh_diagnostics_packets.dart';
 import 'protocol/mesh_message_type.dart';
+import 'protocol/nostr_carrier_packet.dart';
+import 'courier/courier_envelope.dart';
+import 'courier/local_prekeys.dart';
+import 'courier/prekey_bundle.dart';
+import 'courier/courier_store.dart';
+import 'sync/gossip_sync.dart';
+import 'sync/request_sync_packet.dart';
 import 'protocol/mesh_profile.dart';
 import 'protocol/noise_payload.dart';
 import 'transport/mesh_transport.dart';
@@ -92,7 +101,65 @@ class MeshService {
   StreamSubscription<MeshLinkEvent>? _linkSub;
   Timer? _announceTimer;
   Timer? _cleanupTimer;
+  Timer? _syncTimer;
   bool _running = false;
+
+  /// Recent public history, reconciled with neighbours so a peer that was out
+  /// of range — or in another mesh partition — still receives it. See
+  /// [GossipSync]; the radio work lives here, the policy lives there.
+  final GossipSync gossip = GossipSync();
+
+  /// Mail this device is carrying for other people — sealed messages bound for
+  /// peers who were not in range when they were sent. See [CourierStore]; the
+  /// radio work lives here, the policy (who may deposit, who may carry, how far
+  /// a copy spreads) lives there.
+  final CourierStore couriers = CourierStore();
+
+  /// Whether Ghost Mode is on. Wired by the bridge. A ghosted device never
+  /// deposits mail with a courier: the deposit would outlive the epoch and
+  /// associate a throwaway identity with a message someone else still holds.
+  bool Function()? isGhostMode;
+
+  /// Whether a conversation with this peer is pinned to the mesh because it
+  /// began under a ghost identity. Wired by the bridge; such a conversation
+  /// never leaves the radio, courier included.
+  bool Function(String recipientStaticKeyHex)? isGhostPinned;
+
+  /// This device's one-time prekeys. Publishing them lets a sender seal courier
+  /// mail to a key we DELETE after use, so an envelope captured in transit
+  /// cannot be opened later even if our identity key is compromised.
+  final LocalPrekeys prekeys = LocalPrekeys();
+
+  /// Peers' published bundles, newest per device. Fed by gossip, so a bundle
+  /// reaches us while its owner is away — which is exactly when their mail is
+  /// being couriered.
+  final Map<String, PrekeyBundle> _peerPrekeys = <String, PrekeyBundle>{};
+
+  /// Called when our prekey batch changes and should be re-published. Wired by
+  /// the bridge so the private halves are persisted; null in tests.
+  void Function(String encoded)? onPrekeysChanged;
+
+  /// Completed [ping] probes, for the mesh diagnostics panel.
+  Stream<MeshPingResult> get onPingResult => _pingResults.stream;
+  final _pingResults = StreamController<MeshPingResult>.broadcast();
+
+  /// Outstanding probes: nonce hex → (peerID, sent-at, origin TTL).
+  final Map<String, (String, int, int)> _pendingPings = {};
+
+  /// Signed Nostr events a mesh-only peer has asked us to publish, and events
+  /// a gateway has rebroadcast to us. Wired by the bridge, which owns the relay
+  /// connection; null when this device is not acting as a gateway.
+  void Function(NostrCarrierPacket carrier, String fromPeerID)? onNostrCarrier;
+
+  /// Called whenever the gossip store changes enough to be worth persisting, so
+  /// the carried history survives a restart. Wired by the bridge; null in
+  /// tests.
+  void Function(String archive)? onGossipArchiveChanged;
+
+  /// Set when the store has changed since the last archive write. Encoding the
+  /// whole store per packet would be absurd in a busy room, so the tick does
+  /// it.
+  bool _gossipDirty = false;
 
   // ---- Public API -----------------------------------------------------------
 
@@ -268,7 +335,15 @@ class MeshService {
     _scheduleAnnounce();
     _cleanupTimer = Timer.periodic(
         const Duration(seconds: 30), (_) => _cleanupStalePeers());
+    // Reconcile public history with whoever is in range. The per-peer schedule
+    // lives in [GossipSync]; this tick just gives it a heartbeat.
+    _syncTimer = Timer.periodic(
+        const Duration(seconds: 5), (_) => unawaited(_gossipTick()));
     await _broadcastAnnounce();
+    // Publish our one-time prekeys so senders can seal courier mail to a key we
+    // delete after use rather than to our long-lived identity key. Broadcast
+    // and gossiped, because it has to reach people while we are AWAY.
+    unawaited(publishPrekeyBundle());
     debugLog?.call('sent initial identity announce — awaiting peers');
     return availability;
   }
@@ -283,6 +358,7 @@ class MeshService {
     ));
     _announceTimer?.cancel();
     _cleanupTimer?.cancel();
+    _syncTimer?.cancel();
     await _inboundSub?.cancel();
     await _linkSub?.cancel();
     await _transport.stop();
@@ -332,6 +408,7 @@ class MeshService {
         sign: true,
       );
       await _sendPacket(packet);
+      _rememberOwnPublic(packet);
       return msg.id;
     }
 
@@ -354,6 +431,7 @@ class MeshService {
       sign: true,
     );
     await _sendPacket(packet);
+    _rememberOwnPublic(packet);
     return MeshMessageIdentity.stableId(
       senderIdHex: identity.peerID,
       timestampMs: timestampMs,
@@ -444,6 +522,7 @@ class MeshService {
     _files.close();
     _typing.close();
     _reactions.close();
+    _pingResults.close();
     _peersChanged.close();
   }
 
@@ -490,6 +569,16 @@ class MeshService {
         packet.isBroadcast ||
         _hex(packet.recipientID!) == identity.peerID;
 
+    // Remember public traffic so this device can serve it to a peer who was
+    // out of range when it went by. Directed packets are refused inside — the
+    // store is public history, never anybody's private mail.
+    if (packet.isBroadcast && GossipSync.isSyncable(packet.type)) {
+      gossip.onPublicPacketSeen(packet);
+      // Persisting on the tick rather than here: encoding the whole store is
+      // far too expensive to do per packet in a busy room.
+      _gossipDirty = true;
+    }
+
     switch (packet.type) {
       case MeshMessageType.announce:
         await _handleAnnounce(packet, senderPeerID, rssi);
@@ -535,6 +624,33 @@ class MeshService {
         break;
       case MeshMessageType.nymReaction:
         _handleReactionBroadcast(packet, senderPeerID);
+        break;
+      case MeshMessageType.courierEnvelope:
+        // Directed mail. Try to open it: if it is ours, deliver it; if not,
+        // carry it for whoever it belongs to.
+        if (forUs) await _handleCourierEnvelope(packet, senderPeerID);
+        break;
+      case MeshMessageType.ping:
+        if (forUs) await _handlePing(packet, senderPeerID);
+        break;
+      case MeshMessageType.pong:
+        if (forUs) _handlePong(packet, senderPeerID);
+        break;
+      case MeshMessageType.prekeyBundle:
+        _handlePrekeyBundle(packet, senderPeerID);
+        break;
+      case MeshMessageType.nostrCarrier:
+        // Directed = "publish this for me"; broadcast = a gateway relaying what
+        // it heard. Either way the carried event is verified by the handler,
+        // never trusted because a gateway passed it on.
+        _handleNostrCarrier(packet, senderPeerID);
+        break;
+      case MeshMessageType.requestSync:
+        // Local-only by design: a sync request is answered by the peer that
+        // heard it and never relayed, which is why it carries TTL 0 below.
+        if (forUs || packet.isBroadcast) {
+          await _handleRequestSync(packet, senderPeerID);
+        }
         break;
       default:
         break;
@@ -594,6 +710,10 @@ class MeshService {
 
     peer.touch();
     _emitPeers();
+    // Meeting a peer is the moment mail can move: hand them anything we carry
+    // for them, and a share of anything still spreading. Best-effort and
+    // unawaited so a slow radio never stalls the announce path.
+    unawaited(_courierEncounter(peer));
   }
 
   /// bitchat public mesh message ([MeshMessageType.message]): the payload is the
@@ -662,11 +782,11 @@ class MeshService {
       }
       final response = await _noise.handleHandshake(senderPeerID, payload);
       if (response != null) {
-        await _sendPacket(await _buildPacket(
+        await _sendDirected(
+          peerID: senderPeerID,
           type: MeshMessageType.noiseHandshake,
           payload: response,
-          recipientID: _peerIdBytes(senderPeerID),
-        ));
+        );
       }
       if (_noise.isEstablished(senderPeerID)) {
         // Announce our capabilities inside the session BEFORE flushing queued
@@ -715,6 +835,17 @@ class MeshService {
     } catch (_) {
       return;
     }
+    await _dispatchNoisePayload(senderPeerID, plaintext);
+  }
+
+  /// Handles a decrypted transport payload from [senderPeerID].
+  ///
+  /// Shared by the live Noise session path and the courier path: an envelope
+  /// opened out of a courier's hands yields the SAME plaintext a session would
+  /// have, so a message that arrived by mail behaves exactly like one that
+  /// arrived over the air.
+  Future<void> _dispatchNoisePayload(
+      String senderPeerID, Uint8List plaintext) async {
     final noisePayload = NoisePayload.decode(plaintext);
     if (noisePayload == null) return;
 
@@ -839,12 +970,12 @@ class MeshService {
       {bool avatar = true, bool banner = false}) async {
     if (!_running || _profileRequested.contains(peerID)) return;
     _profileRequested.add(peerID);
-    await _sendPacket(await _buildPacket(
+    await _sendDirected(
+      peerID: peerID,
       type: MeshMessageType.nymProfileRequest,
       payload:
           MeshProfileRequest(wantAvatar: avatar, wantBanner: banner).encode(),
-      recipientID: _peerIdBytes(peerID),
-    ));
+    );
   }
 
   Future<void> _handleProfileRequest(
@@ -854,11 +985,11 @@ class MeshService {
     final request = MeshProfileRequest.decode(payload);
     final profile = await provider(request);
     if (profile == null) return;
-    await _sendPacket(await _buildPacket(
+    await _sendDirected(
+      peerID: senderPeerID,
       type: MeshMessageType.nymProfileResponse,
       payload: profile.encode(),
-      recipientID: _peerIdBytes(senderPeerID),
-    ));
+    );
   }
 
   void _handleProfileResponse(String senderPeerID, Uint8List payload) {
@@ -890,11 +1021,11 @@ class MeshService {
   Future<void> _sendOrQueueEncrypted(String peerID, Uint8List plaintext) async {
     if (_noise.isEstablished(peerID)) {
       final ciphertext = await _noise.encrypt(peerID, plaintext);
-      await _sendPacket(await _buildPacket(
+      await _sendDirected(
+        peerID: peerID,
         type: MeshMessageType.noiseEncrypted,
         payload: ciphertext,
-        recipientID: _peerIdBytes(peerID),
-      ));
+      );
       return;
     }
     _pendingPlaintext.putIfAbsent(peerID, () => []).add(plaintext);
@@ -902,11 +1033,11 @@ class MeshService {
       // New session ⇒ the peer-state proof must be re-sent once it establishes.
       _peerStateSentTo.remove(peerID);
       final msg1 = await _noise.initiateHandshake(peerID);
-      await _sendPacket(await _buildPacket(
+      await _sendDirected(
+        peerID: peerID,
         type: MeshMessageType.noiseHandshake,
         payload: msg1,
-        recipientID: _peerIdBytes(peerID),
-      ));
+      );
     }
   }
 
@@ -925,11 +1056,11 @@ class MeshService {
     for (final plaintext in queued) {
       try {
         final ciphertext = await _noise.encrypt(peerID, plaintext);
-        await _sendPacket(await _buildPacket(
+        await _sendDirected(
+          peerID: peerID,
           type: MeshMessageType.noiseEncrypted,
           payload: ciphertext,
-          recipientID: _peerIdBytes(peerID),
-        ));
+        );
       } catch (_) {}
     }
   }
@@ -1010,6 +1141,632 @@ class MeshService {
   }
 
   /// Builds a packet from us with the standard TTL, optionally Ed25519-signed.
+  // ---- Diagnostics: ping / pong ---------------------------------------------
+
+  /// Probes [peerID]: are you there, and how many links away?
+  ///
+  /// A peer list cannot tell you the difference between someone in the same
+  /// room and someone three relays away. The reply carries the TTL this packet
+  /// was LAUNCHED with, so the hop count falls out of comparing it against the
+  /// TTL that arrives ([MeshPingPayload.hopCount]). The nonce is unguessable,
+  /// so only a genuine answer to this probe can complete it.
+  Future<bool> ping(String peerID, {int ttl = MeshConstants.messageTtl}) async {
+    final recipient = _peerIdBytes(peerID);
+    if (recipient == null) return false;
+    final nonce = Uint8List.fromList(List<int>.generate(
+        MeshPingPayload.nonceLength, (_) => _random.nextInt(256)));
+    final payload = MeshPingPayload.create(nonce: nonce, originTtl: ttl);
+    if (payload == null) return false;
+    _pendingPings[_hex(nonce)] =
+        (peerID, DateTime.now().millisecondsSinceEpoch, ttl);
+    try {
+      await _sendPacket(await _buildPacket(
+        type: MeshMessageType.ping,
+        payload: payload.encode(),
+        recipientID: recipient,
+        ttl: ttl,
+      ));
+      return true;
+    } catch (_) {
+      _pendingPings.remove(_hex(nonce));
+      return false;
+    }
+  }
+
+  /// Answers a probe by echoing its nonce, with our own launch TTL so the far
+  /// end can measure the return path too.
+  Future<void> _handlePing(BitchatPacket packet, String senderPeerID) async {
+    final probe = MeshPingPayload.decode(packet.payload);
+    if (probe == null) return;
+    final recipient = _peerIdBytes(senderPeerID);
+    if (recipient == null) return;
+    const ttl = MeshConstants.messageTtl;
+    final reply = MeshPingPayload.create(nonce: probe.nonce, originTtl: ttl);
+    if (reply == null) return;
+    try {
+      await _sendPacket(await _buildPacket(
+        type: MeshMessageType.pong,
+        payload: reply.encode(),
+        recipientID: recipient,
+        ttl: ttl,
+      ));
+    } catch (_) {}
+  }
+
+  /// Completes a probe. An unknown nonce is silently dropped: it answers a
+  /// probe we never sent, which is either a stale reply or somebody guessing.
+  void _handlePong(BitchatPacket packet, String senderPeerID) {
+    final reply = MeshPingPayload.decode(packet.payload);
+    if (reply == null) return;
+    final pending = _pendingPings.remove(_hex(reply.nonce));
+    if (pending == null) return;
+    final (peerID, sentAt, _) = pending;
+    if (peerID != senderPeerID) return;
+    final rtt = DateTime.now().millisecondsSinceEpoch - sentAt;
+    final hops = MeshPingPayload.hopCount(
+      originTtl: reply.originTtl,
+      receivedTtl: packet.ttl,
+    );
+    debugLog?.call('pong from $senderPeerID rtt=${rtt}ms hops=${hops ?? '?'}');
+    if (!_pingResults.isClosed) {
+      _pingResults.add(MeshPingResult(
+          peerID: senderPeerID, roundTripMs: rtt, hops: hops));
+    }
+  }
+
+  // ---- Gateway mode: carrying Nostr events ---------------------------------
+
+  /// Asks [gatewayPeerID] to publish a signed Nostr event for us.
+  ///
+  /// The sender outbox waits for OUR internet to come back. This does not wait
+  /// for ours: one peer with a signal is enough for the whole room. The event
+  /// is signed by us before it leaves, so the gateway is a postbox — it cannot
+  /// alter or forge what it publishes, and the relays would reject it if it
+  /// tried.
+  Future<bool> carryToGateway({
+    required String gatewayPeerID,
+    required String geohash,
+    required Map<String, dynamic> event,
+  }) async {
+    final recipient = _peerIdBytes(gatewayPeerID);
+    if (recipient == null) return false;
+    final carrier = NostrCarrierPacket.fromEvent(
+      direction: NostrCarrierDirection.toGateway,
+      geohash: geohash,
+      event: event,
+    );
+    if (carrier == null) return false;
+    try {
+      await _sendPacket(await _buildPacket(
+        type: MeshMessageType.nostrCarrier,
+        payload: carrier.encode(),
+        recipientID: recipient,
+        ttl: MeshConstants.messageTtl,
+      ));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Rebroadcasts a relay event to mesh-only peers, so they can READ a geohash
+  /// channel and not only write to it.
+  Future<bool> broadcastFromGateway({
+    required String geohash,
+    required Map<String, dynamic> event,
+  }) async {
+    final carrier = NostrCarrierPacket.fromEvent(
+      direction: NostrCarrierDirection.fromGateway,
+      geohash: geohash,
+      event: event,
+    );
+    if (carrier == null) return false;
+    try {
+      await _sendPacket(await _buildPacket(
+        type: MeshMessageType.nostrCarrier,
+        payload: carrier.encode(),
+        recipientID: kBroadcastRecipient,
+        ttl: MeshConstants.messageTtl,
+      ));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _handleNostrCarrier(BitchatPacket packet, String senderPeerID) {
+    final carrier = NostrCarrierPacket.decode(packet.payload);
+    if (carrier == null) return;
+    debugLog?.call('nostr carrier ${carrier.direction.name} '
+        'geo=${carrier.geohash} from $senderPeerID');
+    // The bridge verifies the signature before publishing or displaying. A
+    // gateway relays; it does not vouch.
+    onNostrCarrier?.call(carrier, senderPeerID);
+  }
+
+  // ---- Prekey bundles -------------------------------------------------------
+
+  /// Signs and broadcasts our current batch of one-time prekeys.
+  ///
+  /// Broadcast rather than directed, and gossip-synced, because the whole point
+  /// is that a bundle reaches senders while we are AWAY. Anyone holding our
+  /// announce-verified signing key can check it offline, so it can spread
+  /// through devices that have never spoken to us.
+  Future<bool> publishPrekeyBundle() async {
+    // Never while ghosted. Courier mail to or from a ghost is refused at both
+    // ends ([CourierStore.mayDeposit]), so the bundle could not deliver
+    // anything — it would only be one more thing the epoch broadcasts.
+    if (isGhostMode?.call() ?? false) return false;
+    if (await prekeys.replenish()) {
+      onPrekeysChanged?.call(prekeys.encode());
+    }
+    final available = prekeys.available;
+    if (available.isEmpty) return false;
+    final bundle = PrekeyBundle(
+      noiseStaticPublicKey: identity.staticPublic,
+      prekeys: [
+        for (final k in available) Prekey(id: k.id, publicKey: k.publicKey),
+      ],
+      generatedAtMs: DateTime.now().millisecondsSinceEpoch,
+      signature: Uint8List(PrekeyBundle.signatureLength),
+    );
+    final signed = PrekeyBundle(
+      noiseStaticPublicKey: bundle.noiseStaticPublicKey,
+      prekeys: bundle.prekeys,
+      generatedAtMs: bundle.generatedAtMs,
+      signature: await identity.sign(bundle.signableBytes()),
+    );
+    final bytes = signed.encode();
+    if (bytes == null) return false;
+    try {
+      await _sendPacket(await _buildPacket(
+        type: MeshMessageType.prekeyBundle,
+        payload: bytes,
+        recipientID: kBroadcastRecipient,
+        ttl: MeshConstants.messageTtl,
+      ));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Files a peer's bundle after verifying it against the signing key their
+  /// announce bound to that Noise key.
+  ///
+  /// Verification is what makes gossip safe: without it, anyone could publish
+  /// prekeys "for" someone else and harvest mail sealed to keys they hold.
+  void _handlePrekeyBundle(BitchatPacket packet, String senderPeerID) {
+    final bundle = PrekeyBundle.decode(packet.payload);
+    if (bundle == null) return;
+    final ownerHex = _hex(bundle.noiseStaticPublicKey);
+    // The signing key comes from the owner's own verified announce, NOT from
+    // the packet — a relayed bundle's carrier is not its author.
+    final ownerPeerID = _peerIdForNoiseKey(bundle.noiseStaticPublicKey);
+    final owner = _peers[ownerPeerID];
+    final signingKey = owner?.signingPublicKey;
+    if (owner == null || signingKey == null || !owner.isVerified) {
+      debugLog?.call('prekey bundle from unknown/unverified owner — dropped');
+      return;
+    }
+    final existing = _peerPrekeys[ownerHex];
+    // A newer bundle replaces an older one; an older one is refused so a
+    // replayed bundle cannot resurrect keys its owner has already deleted.
+    if (existing != null && existing.generatedAtMs >= bundle.generatedAtMs) {
+      return;
+    }
+    unawaited(() async {
+      final ok = await NoiseIdentity.verify(
+        bundle.signableBytes(),
+        bundle.signature,
+        signingKey,
+      );
+      if (!ok) {
+        debugLog?.call('prekey bundle signature FAILED — dropped');
+        return;
+      }
+      _peerPrekeys[ownerHex] = bundle;
+      debugLog?.call('prekey bundle from $ownerPeerID: '
+          '${bundle.prekeys.length} key(s)');
+    }());
+  }
+
+  // ---- Couriers -------------------------------------------------------------
+
+  /// The Noise transport payload a private message rides in, built without a
+  /// session — so a courier envelope can carry exactly what a live session
+  /// would have, and the receiver's dispatch cannot tell the difference.
+  ///
+  /// Null when the content does not fit one packet (the TLV length is a single
+  /// byte). Couriered mail is not chunked: a stranger carries one envelope, not
+  /// a reassembly job.
+  static Uint8List? privateMessagePayload({
+    required String messageId,
+    required String content,
+  }) {
+    final body =
+        PrivateMessagePacket(messageID: messageId, content: content).encode();
+    if (body == null) return null;
+    return NoisePayload(NoisePayloadType.privateMessage, body).encode();
+  }
+
+  /// Seals [payload] to [recipientStaticKeyHex] and hands sealed copies to
+  /// nearby peers, who carry it and deliver it if they meet the recipient.
+  ///
+  /// The last-resort delivery path: the recipient is not in range and, with no
+  /// internet, the sender outbox cannot help either. Returns how many couriers
+  /// took a copy — zero when the deposit was refused, which the caller should
+  /// treat as "no worse off", never as an error.
+  ///
+  /// Refusal is the important half. [CourierStore.mayDeposit] blocks a
+  /// ghost-pinned conversation and a ghosted sender outright: handing an
+  /// envelope to a courier tells that courier a message exists and that we sent
+  /// it, and a ghost identity exists precisely so that no such link is made.
+  Future<int> depositWithCouriers({
+    required String recipientStaticKeyHex,
+    required Uint8List payload,
+    int copies = 4,
+  }) async {
+    final ghosted = isGhostMode?.call() ?? false;
+    final pinned = isGhostPinned?.call(recipientStaticKeyHex) ?? false;
+    final key = _fromHex(recipientStaticKeyHex);
+    if (!CourierStore.mayDeposit(
+      isGhostPinned: pinned,
+      isGhostMode: ghosted,
+      hasRecipientStaticKey: key != null && key.length == 32,
+    )) {
+      debugLog?.call('courier deposit refused (ghost/no key)');
+      return 0;
+    }
+    final recipientPeerID = _peerIdForNoiseKey(key!);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // Prefer a one-time PREKEY over the long-lived static key when the
+    // recipient has published one. Both seal the same way; the difference is
+    // that they DELETE a prekey after use, so an envelope captured in transit
+    // cannot be opened later even if their identity key is compromised. Falling
+    // back to the static key keeps mail flowing to a peer whose bundle we have
+    // never seen — worse secrecy, but delivered.
+    final bundle = _peerPrekeys[recipientStaticKeyHex.toLowerCase()];
+    final prekey = bundle == null ? null : prekeys.chooseFrom(bundle.prekeys);
+    Uint8List sealed;
+    try {
+      sealed = await CourierSeal.seal(
+        payload: payload,
+        recipientStaticKey: prekey?.publicKey ?? key,
+        senderStaticPrivate: identity.staticPrivate,
+        senderStaticPublic: identity.staticPublic,
+        prologue:
+            prekey == null ? null : courierPrekeyPrologue(prekey.id),
+      );
+    } catch (e) {
+      debugLog?.call('courier seal failed: $e');
+      return 0;
+    }
+    final envelope = CourierEnvelope(
+      // The TAG is always derived from the identity key, prekey or not: it is
+      // how the recipient recognises their own mail, and they cannot look up an
+      // envelope by a prekey they may already have retired.
+      recipientTag: await CourierEnvelope.recipientTagFor(
+        noiseStaticKey: key,
+        epochDay: CourierEnvelope.epochDayFor(now),
+      ),
+      expiryMs: now + CourierEnvelope.maxLifetimeMs,
+      ciphertext: sealed,
+      copies: copies,
+      prekeyId: prekey?.id,
+    );
+    final bytes = envelope.encode();
+    if (bytes == null) return 0;
+
+    var handed = 0;
+    for (final peer in _peers.values) {
+      if (handed >= couriers.maxCouriersPerDeposit) break;
+      if (!CourierStore.mayCourier(
+        isVerified: peer.isVerified,
+        isSelf: peer.peerID == identity.peerID,
+        isRecipient: peer.peerID == recipientPeerID,
+      )) {
+        continue;
+      }
+      final recipient = _peerIdBytes(peer.peerID);
+      if (recipient == null) continue;
+      try {
+        await _sendPacket(await _buildPacket(
+          type: MeshMessageType.courierEnvelope,
+          payload: bytes,
+          recipientID: recipient,
+          ttl: 0,
+        ));
+        handed++;
+      } catch (_) {
+        // A courier that will not take it is not a failure; try the next.
+      }
+    }
+    debugLog?.call('courier deposit: $handed carrier(s)');
+    return handed;
+  }
+
+  /// An envelope arrived. Either it is ours — open and deliver it — or it is
+  /// somebody else's mail we have been asked to carry.
+  Future<void> _handleCourierEnvelope(
+      BitchatPacket packet, String senderPeerID) async {
+    final envelope = CourierEnvelope.decode(packet.payload);
+    if (envelope == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (envelope.isExpiredAt(now)) return;
+
+    // Is it for us? Only the recipient can open it, so this is also the test.
+    // A v2 envelope names the prekey it was sealed to; if that key was never
+    // ours (or its grace window has lapsed) the open fails and we simply carry
+    // it, exactly as for any other stranger's mail.
+    final pkId = envelope.prekeyId;
+    final pkPriv = pkId == null ? null : prekeys.privateKeyFor(pkId);
+    final pkPub = pkId == null ? null : prekeys.publicKeyFor(pkId);
+    try {
+      if (pkId != null && (pkPriv == null || pkPub == null)) {
+        throw StateError('not our prekey');
+      }
+      final (plaintext, senderStatic) = await CourierSeal.open(
+        ciphertext: envelope.ciphertext,
+        localStaticPrivate: pkPriv ?? identity.staticPrivate,
+        localStaticPublic: pkPub ?? identity.staticPublic,
+        prologue: pkId == null ? null : courierPrekeyPrologue(pkId),
+      );
+      if (pkId != null && prekeys.markConsumed(pkId)) {
+        // First open of this key: republish the shrunken batch. Redeliveries
+        // of the same envelope arrive later (spray-and-wait), so the private
+        // half survives a grace window before it is really deleted.
+        onPrekeysChanged?.call(prekeys.encode());
+        unawaited(publishPrekeyBundle());
+      }
+      // The sender's static key is AUTHENTICATED by the seal's `ss` DH, so the
+      // peerID derived from it is who really wrote this — not whoever handed
+      // it over.
+      final originPeerID = _peerIdForNoiseKey(senderStatic);
+      debugLog?.call('courier envelope OPENED from $originPeerID '
+          '(carried by $senderPeerID)');
+      await _dispatchNoisePayload(originPeerID, plaintext);
+      return;
+    } catch (_) {
+      // Not ours. That is the ordinary case — carry it.
+    }
+
+    final key = _courierKey(envelope.ciphertext);
+    if (couriers.accept(envelope, key)) {
+      debugLog?.call('carrying courier envelope for someone (copies='
+          '${envelope.copies})');
+      couriers.markHandedTo(key, senderPeerID);
+    }
+  }
+
+  /// A peer just became known: hand them any mail we carry for them, and give
+  /// them a share of anything that still has budget to spread.
+  Future<void> _courierEncounter(MeshPeer peer) async {
+    if (couriers.length == 0) return;
+    final staticKey = peer.noisePublicKey;
+    final recipient = _peerIdBytes(peer.peerID);
+    if (recipient == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Delivery: mail addressed to this peer, matched on the rotating tag.
+    if (staticKey != null && staticKey.length == 32) {
+      final tags = await CourierEnvelope.candidateTagsFor(
+        noiseStaticKey: staticKey,
+        nowMs: now,
+      );
+      for (final entry in couriers.forTags(tags)) {
+        final bytes = entry.value.envelope.encode();
+        if (bytes == null) continue;
+        try {
+          await _sendPacket(await _buildPacket(
+            type: MeshMessageType.courierEnvelope,
+            payload: bytes,
+            recipientID: recipient,
+            ttl: 0,
+          ));
+          // Delivered: stop carrying it. If the peer could not open it after
+          // all, the sender's own retries still cover the message.
+          couriers.drop(entry.key);
+          debugLog?.call('courier delivered to ${peer.peerID}');
+        } catch (_) {}
+      }
+    }
+
+    // Spray: hand a share of the remaining budget on, so the message keeps
+    // spreading toward a recipient neither of us has met. Only to a verified
+    // peer — an unverified one is a radio claiming a name, and telling it we
+    // carry mail is telling a stranger.
+    if (!CourierStore.mayCourier(
+      isVerified: peer.isVerified,
+      isSelf: peer.peerID == identity.peerID,
+      isRecipient: false,
+    )) {
+      return;
+    }
+    for (final entry in couriers.sprayableTo(peer.peerID)) {
+      final copies = entry.value.envelope.copies;
+      final share = CourierStore.sprayShare(copies);
+      if (share <= 0) continue;
+      final bytes = entry.value.envelope.withCopies(share).encode();
+      if (bytes == null) continue;
+      try {
+        await _sendPacket(await _buildPacket(
+          type: MeshMessageType.courierEnvelope,
+          payload: bytes,
+          recipientID: recipient,
+          ttl: 0,
+        ));
+        couriers.setCopies(entry.key, CourierStore.keepShare(copies));
+        couriers.markHandedTo(entry.key, peer.peerID);
+      } catch (_) {}
+    }
+  }
+
+  /// The peerID a Noise static key derives to — the first 16 hex chars of its
+  /// SHA-256 fingerprint, the same rule [NoiseIdentity] uses. Lets a key that
+  /// arrived inside a payload be matched against the peer table.
+  static String _peerIdForNoiseKey(Uint8List staticPublicKey) =>
+      _hex(NoiseCrypto.sha256(staticPublicKey)).substring(0, 16);
+
+  /// A stable key for an envelope, so the same mail arriving from two couriers
+  /// is carried once.
+  String _courierKey(Uint8List ciphertext) =>
+      _hex(NoiseCrypto.sha256(ciphertext)).substring(0, 32);
+
+  static Uint8List? _fromHex(String hex) {
+    if (hex.length.isOdd || hex.isEmpty) return null;
+    final out = Uint8List(hex.length ~/ 2);
+    for (var i = 0; i < out.length; i++) {
+      final b = int.tryParse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+      if (b == null) return null;
+      out[i] = b;
+    }
+    return out;
+  }
+
+  // ---- Gossip sync ----------------------------------------------------------
+
+  /// Files one of OUR public sends into the gossip store.
+  ///
+  /// The inbound path never sees our own packets (it drops self-echoes), so
+  /// without this a device would carry everyone's history except its own — and
+  /// the message a user actually sent in a dead spot would be the one thing it
+  /// could not serve to the peer who arrived a minute later.
+  void _rememberOwnPublic(BitchatPacket packet) {
+    if (!packet.isBroadcast || !GossipSync.isSyncable(packet.type)) return;
+    gossip.onPublicPacketSeen(packet);
+    _gossipDirty = true;
+  }
+
+  /// Asks each connected peer, on its own schedule, to reconcile public
+  /// history: "here is a compact set of what I hold — send me the rest".
+  ///
+  /// Directed rather than broadcast, and TTL 0 so it is never relayed: a sync
+  /// request is a question for the peer that can hear it, and flooding it would
+  /// ask the whole mesh a question only its neighbours can answer.
+  Future<void> _gossipTick() async {
+    if (!_running) return;
+    if (gossip.prune()) _gossipDirty = true;
+    // Mail we are carrying expires too — someone else's message is not worth
+    // holding forever.
+    couriers.prune();
+    // Delete consumed prekeys whose grace window has lapsed. This is where
+    // forward secrecy actually happens: until the private half is really gone,
+    // [LocalPrekeys.privateKeyFor] only declines to use it.
+    if (prekeys.prune()) onPrekeysChanged?.call(prekeys.encode());
+    if (_gossipDirty) {
+      _gossipDirty = false;
+      _persistGossipArchive();
+    }
+    final peerIds = _peers.keys.toList(growable: false);
+    if (peerIds.isEmpty) return;
+    for (final peerID in peerIds) {
+      if (!gossip.shouldAsk(peerID)) continue;
+      gossip.markAsked(peerID);
+      final recipient = _peerIdBytes(peerID);
+      if (recipient == null) continue;
+      try {
+        await _sendPacket(await _buildPacket(
+          type: MeshMessageType.requestSync,
+          payload: gossip.buildRequest(),
+          recipientID: recipient,
+          ttl: 0,
+        ));
+      } catch (_) {
+        // Best-effort: a failed sync round costs history, never the session.
+      }
+    }
+  }
+
+  /// Answers a peer's reconciliation request with whatever their filter says
+  /// they are missing.
+  ///
+  /// Responses go out DIRECTED and with TTL 0 — the requester asked, nobody
+  /// else did, and a replayed public message re-entering the flood would go
+  /// round the mesh a second time.
+  Future<void> _handleRequestSync(
+      BitchatPacket packet, String senderPeerID) async {
+    if (!gossip.shouldAnswer(senderPeerID)) {
+      debugLog?.call('  ↳ sync from $senderPeerID rate-limited');
+      return;
+    }
+    final request = RequestSyncPacket.decode(packet.payload);
+    if (request == null) {
+      debugLog?.call('  ↳ sync from $senderPeerID — undecodable');
+      return;
+    }
+    gossip.markAnswered(senderPeerID);
+    final missing = gossip.packetsMissingFrom(request);
+    if (missing.isEmpty) return;
+    debugLog?.call('  ↳ sync to $senderPeerID: ${missing.length} packet(s)');
+    final recipient = _peerIdBytes(senderPeerID);
+    for (final pkt in missing) {
+      try {
+        // Re-addressed to the requester: the original was a broadcast, and
+        // re-broadcasting it would hand it to peers who already have it.
+        await _sendPacket(BitchatPacket(
+          version: pkt.version,
+          type: pkt.type,
+          senderID: pkt.senderID,
+          recipientID: recipient,
+          timestamp: pkt.timestamp,
+          payload: pkt.payload,
+          signature: pkt.signature,
+          ttl: 0,
+        ));
+      } catch (_) {
+        // One packet failing must not abandon the rest of the round.
+      }
+      await Future<void>.delayed(MeshConstants.interFragmentDelay);
+    }
+  }
+
+  /// Sends a packet addressed to [peerID], or sends nothing at all when that
+  /// is not a real peerID.
+  ///
+  /// Deliberately never falls back to an unaddressed packet. Everything routed
+  /// through here is meant for ONE peer — a handshake, Noise ciphertext, a
+  /// profile — and [BitchatPacket] treats a null recipient as "not directed",
+  /// so a malformed id would quietly hand that traffic to the whole mesh.
+  Future<void> _sendDirected({
+    required String peerID,
+    required int type,
+    required Uint8List payload,
+    int? ttl,
+  }) async {
+    final recipient = _peerIdBytes(peerID);
+    if (recipient == null) {
+      debugLog?.call('refusing to send type $type to malformed peerID');
+      return;
+    }
+    await _sendPacket(await _buildPacket(
+      type: type,
+      payload: payload,
+      recipientID: recipient,
+      ttl: ttl,
+    ));
+  }
+
+  /// The 8 raw bytes of a 16-hex peerID, or null when it is not one.
+  static Uint8List? _peerIdBytes(String peerID) {
+    if (peerID.length != 16) return null;
+    final out = Uint8List(8);
+    for (var i = 0; i < 8; i++) {
+      final byte = int.tryParse(peerID.substring(i * 2, i * 2 + 2), radix: 16);
+      if (byte == null) return null;
+      out[i] = byte;
+    }
+    return out;
+  }
+
+  void _persistGossipArchive() {
+    final hook = onGossipArchiveChanged;
+    if (hook == null) return;
+    try {
+      hook(gossip.encodeArchive());
+    } catch (_) {}
+  }
+
   Future<BitchatPacket> _buildPacket({
     required int type,
     required Uint8List payload,
@@ -1129,15 +1886,9 @@ class MeshService {
     return chunks;
   }
 
-  Uint8List _peerIdBytes(String peerID) {
-    final out = Uint8List(8);
-    for (var i = 0; i < 8 && i * 2 + 1 < peerID.length; i++) {
-      out[i] = int.parse(peerID.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    return out;
-  }
-
-  String _hex(Uint8List bytes) =>
+  // Static so the static derivations above ([_peerIdForNoiseKey]) can use it;
+  // unqualified calls from instance methods resolve to it unchanged.
+  static String _hex(Uint8List bytes) =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 

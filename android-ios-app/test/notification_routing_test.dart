@@ -7,20 +7,42 @@ class _RecordingTarget implements NotificationRouteTarget {
   String? channel;
   String? pm;
   String? group;
+  String? thread;
+
+  /// Order matters: a thread only opens once its conversation has, so the
+  /// recorder keeps the sequence rather than just the last call.
+  final List<String> calls = [];
 
   @override
-  void openChannel(String c) => channel = c;
+  void openChannel(String c) {
+    channel = c;
+    calls.add('channel');
+  }
 
   @override
-  void openPM(String pubkey) => pm = pubkey;
+  void openPM(String pubkey) {
+    pm = pubkey;
+    calls.add('pm');
+  }
 
   @override
-  void openGroup(String groupId) => group = groupId;
+  void openGroup(String groupId) {
+    group = groupId;
+    calls.add('group');
+  }
+
+  @override
+  void openThread(String threadRoot) {
+    thread = threadRoot;
+    calls.add('thread');
+  }
 }
 
 void main() {
   const peer =
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const root =
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
   group('notification tap payload', () {
     test('round-trips the fields the routing needs', () {
@@ -41,6 +63,25 @@ void main() {
       expect(decoded.type, 'group');
       expect(decoded.route, '');
       expect(decoded.senderPubkey, '');
+    });
+
+    test('carries the thread a notification came from', () {
+      final decoded = decodeNotificationPayload(encodeNotificationPayload(
+        type: 'channel',
+        route: 'u4pruy',
+        senderPubkey: peer,
+        threadRoot: root,
+      ))!;
+      expect(decoded.threadRoot, root);
+    });
+
+    test('a payload written before threads still decodes', () {
+      // The thread half is read positionally, so an older three-field payload
+      // must decode to "no thread" rather than throwing.
+      final decoded = decodeNotificationPayload('nymnotif:pm|$peer|$peer')!;
+      expect(decoded.type, 'pm');
+      expect(decoded.route, peer);
+      expect(decoded.threadRoot, '');
     });
 
     test('ignores anything that is not one of ours', () {
@@ -106,6 +147,61 @@ void main() {
       openNotificationRoute(
           const NotificationRoute(type: 'call', route: 'group-9'), byGroup);
       expect(byGroup.group, 'group-9');
+    });
+
+    test('a thread notification opens the thread, after its conversation', () {
+      final t = _RecordingTarget();
+      expect(
+        openNotificationRoute(
+          const NotificationRoute(
+              type: 'channel', route: 'u4pruy', threadRoot: root),
+          t,
+        ),
+        isTrue,
+      );
+      expect(t.channel, 'u4pruy');
+      expect(t.thread, root);
+      // The thread view takes over the conversation's message list, so the
+      // conversation has to be open first.
+      expect(t.calls, ['channel', 'thread']);
+    });
+
+    test('a PM/group thread notification opens its thread too', () {
+      final pmTarget = _RecordingTarget();
+      openNotificationRoute(
+        const NotificationRoute(type: 'pm', route: peer, threadRoot: root),
+        pmTarget,
+      );
+      expect(pmTarget.calls, ['pm', 'thread']);
+
+      final groupTarget = _RecordingTarget();
+      openNotificationRoute(
+        const NotificationRoute(type: 'group', route: 'g1', threadRoot: root),
+        groupTarget,
+      );
+      expect(groupTarget.calls, ['group', 'thread']);
+    });
+
+    test('an ordinary message opens no thread', () {
+      final t = _RecordingTarget();
+      openNotificationRoute(
+        const NotificationRoute(type: 'channel', route: 'u4pruy'),
+        t,
+      );
+      expect(t.thread, isNull);
+      expect(t.calls, ['channel']);
+    });
+
+    test('a route that opens nothing never opens a thread either', () {
+      final t = _RecordingTarget();
+      expect(
+        openNotificationRoute(
+          const NotificationRoute(type: 'channel', route: '', threadRoot: root),
+          t,
+        ),
+        isFalse,
+      );
+      expect(t.calls, isEmpty);
     });
 
     test('routes nowhere rather than guessing when the target is empty', () {

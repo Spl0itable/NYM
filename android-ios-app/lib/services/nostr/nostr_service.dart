@@ -1494,6 +1494,20 @@ class NostrService {
     // ['e', rootId, '', 'root'] tag so other clients still see a normal
     // channel message while Nymchat groups it under its root (threads).
     String? threadRoot,
+    // The mesh sender outbox replays a message the radio already carried, so it
+    // publishes with the ORIGINAL send time rather than the moment relays came
+    // back: history keeps its order, and the sender's own optimistic echo still
+    // reconciles (the channel ingest matches a placeholder within 60s of the
+    // event) however long the entry sat queued. Null = now, the normal send.
+    int? createdAtSec,
+    // Extra tags merged in verbatim — the outbox's `['nymmesh', <id>]`, which
+    // lets a peer who already received this over the radio drop the Nostr copy.
+    List<List<String>> extraTags = const [],
+    // Return the SIGNED event without publishing it. Gateway mode hands that
+    // event to a peer who still has internet, so it must be byte-identical to
+    // what we would have published ourselves — same tags, same kind, same
+    // proof of work, same signature. The caller owns delivery from there.
+    bool buildOnly = false,
   }) async {
     // [signerOverride] is the pseudonymous-send path: a fresh per-message
     // ephemeral key (publishMessagePseudonymous) so the message is unlinkable to
@@ -1503,8 +1517,11 @@ class NostrService {
 
     final isGeo = geohash != null && geohash.isNotEmpty;
     final kind = isGeo ? EventKind.geoChannel : EventKind.namedChannel;
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final hasStamp = createdAtSec != null && createdAtSec > 0;
+    final nowSec =
+        hasStamp ? createdAtSec : DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final nowMs =
+        hasStamp ? createdAtSec * 1000 : DateTime.now().millisecondsSinceEpoch;
 
     final tags = <List<String>>[
       ['n', nym],
@@ -1515,6 +1532,7 @@ class NostrService {
       // NIP-30: declare any custom emoji used in the message so other clients
       // render them (messages.js `customEmojiTagsForContent`).
       ...emojiTags,
+      ...extraTags,
     ];
 
     // Channel messages carry the Nymchat NIP-13 PoW floor (and any higher user
@@ -1534,6 +1552,7 @@ class NostrService {
       difficulty,
     );
     final signed = await sig.sign(mined);
+    if (buildOnly) return signed;
 
     // Geohash channel messages (kind 20000 with a `g` tag) route through
     // GEO_EVENT so the proxy prioritizes the closest geo relays; the proxy

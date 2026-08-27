@@ -178,9 +178,22 @@ class StorageKeys {
   static String lastPmSyncFor(String pubkey) => 'nym_last_pm_sync_$pubkey';
   static const pendingGroupInvite = 'nym_pending_group_invite';
 
+  /// The mesh sender outbox: sends the Bluetooth mesh carried because the
+  /// internet route was down, replayed to Nostr when relays return.
+  static const meshOutbox = 'nym_mesh_outbox';
+
+  /// The gossip-sync public history this device carries, so the backlog it can
+  /// serve to a peer who missed it survives a restart.
+  static const meshGossipArchive = 'nym_mesh_gossip_archive';
+
+  /// This device's one-time mesh prekeys (private halves). Persisted so mail
+  /// sealed to a key we published before a restart can still be opened.
+  static const meshPrekeys = 'nym_mesh_prekeys';
+
   // Notifications / sync
   static const notificationsEnabled = 'nym_notifications_enabled';
   static const groupNotifyMentionsOnly = 'nym_group_notify_mentions_only';
+  static const threadNotifyMentionsOnly = 'nym_thread_notify_mentions_only';
   static const notifyFriendsOnly = 'nym_notify_friends_only';
   static const notificationLastRead = 'nym_notification_last_read';
   static const lastSettingsSyncTs = 'nym_last_settings_sync_ts';

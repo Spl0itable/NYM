@@ -141,6 +141,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
           AppNotificationRouteTarget(
             controller: ref.read(nostrControllerProvider),
             appState: ref.read(appStateProvider.notifier),
+            container: ProviderScope.containerOf(context, listen: false),
           ),
         );
         return;

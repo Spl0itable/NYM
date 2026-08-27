@@ -136,6 +136,176 @@ void main() {
     });
   });
 
+  group('a collapsed thread reply is off screen (threadReplyHidden)', () {
+    // The notification gate reads "the conversation is open" as "the user saw
+    // it". A reply collapsed inside a thread breaks that equivalence: it never
+    // renders in the conversation, only its root's reply-count row does.
+    // Getting this wrong cost an @mention/quote-reply landing in a thread its
+    // bell entry entirely.
+    AppStateNotifier openChannel(ProviderContainer c) {
+      final n = c.read(appStateProvider.notifier)..goLive('self', 'me#0001');
+      n.switchView(const ChatView.channel('room'));
+      n.state.messages['#room'] = [
+        _msg(_rootId, now),
+        _msg('b' * 64, now + 1, threadRoot: _rootId),
+        _msg('c' * 64, now + 2),
+      ];
+      return n;
+    }
+
+    bool hidden(AppStateNotifier n, ActiveThread? open, String? root) =>
+        threadReplyHidden(
+          state: n.state,
+          openThread: open,
+          storageKey: '#room',
+          threadRoot: root,
+        );
+
+    test('a reply whose root we hold is hidden while no thread is open', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(hidden(openChannel(c), null, _rootId), isTrue);
+    });
+
+    test('the same reply is visible once ITS thread is the open one', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(
+        hidden(
+          openChannel(c),
+          const ActiveThread(
+              view: ChatView.channel('room'), rootId: _rootId),
+          _rootId,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a reply stays hidden while a DIFFERENT thread is open', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(
+        hidden(
+          openChannel(c),
+          ActiveThread(
+              view: const ChatView.channel('room'), rootId: 'd' * 64),
+          _rootId,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a thread open in ANOTHER conversation does not unhide this reply',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(
+        hidden(
+          openChannel(c),
+          const ActiveThread(
+              view: ChatView.channel('other'), rootId: _rootId),
+          _rootId,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a top-level message is never hidden', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(hidden(openChannel(c), null, null), isFalse);
+    });
+
+    test('a reply whose root we never saw renders inline, so it is visible',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(appStateProvider.notifier)..goLive('self', 'me#0001');
+      n.switchView(const ChatView.channel('room'));
+      n.state.messages['#room'] = [
+        _msg('b' * 64, now + 1, threadRoot: _rootId)
+      ];
+      expect(hidden(n, null, _rootId), isFalse);
+    });
+
+    test('threads off means every reply renders inline', () {
+      appThreadsEnabled = false;
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(hidden(openChannel(c), null, _rootId), isFalse);
+    });
+  });
+
+  group('a thread the user started (threadRootIsOwn)', () {
+    // "Someone replied to you" only reaches a channel's bell through this: the
+    // flat channel rule is mention-only, so a plain reply under the user's own
+    // message would otherwise notify nothing at all.
+    Message own(String id, int ts) =>
+        _msg(id, ts)..isOwn = true;
+
+    test('a reply under the user\'s own message is in their thread', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(appStateProvider.notifier)..goLive('self', 'me#0001');
+      n.state.messages['#room'] = [
+        own(_rootId, now),
+        _msg('b' * 64, now + 1, threadRoot: _rootId),
+      ];
+      expect(
+        threadRootIsOwn(
+            state: n.state, storageKey: '#room', threadRoot: _rootId),
+        isTrue,
+      );
+    });
+
+    test("a reply under someone else's message is not", () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(appStateProvider.notifier)..goLive('self', 'me#0001');
+      n.state.messages['#room'] = [
+        _msg(_rootId, now),
+        _msg('b' * 64, now + 1, threadRoot: _rootId),
+      ];
+      expect(
+        threadRootIsOwn(
+            state: n.state, storageKey: '#room', threadRoot: _rootId),
+        isFalse,
+      );
+    });
+
+    test('a root we do not hold cannot be claimed', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(appStateProvider.notifier)..goLive('self', 'me#0001');
+      n.state.messages['#room'] = [_msg('b' * 64, now, threadRoot: _rootId)];
+      expect(
+        threadRootIsOwn(
+            state: n.state, storageKey: '#room', threadRoot: _rootId),
+        isFalse,
+      );
+    });
+
+    test('threads off means no message is a thread reply', () {
+      appThreadsEnabled = false;
+      expect(isThreadReplyMarker(_rootId), isFalse);
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(appStateProvider.notifier)..goLive('self', 'me#0001');
+      n.state.messages['#room'] = [own(_rootId, now)];
+      expect(
+        threadRootIsOwn(
+            state: n.state, storageKey: '#room', threadRoot: _rootId),
+        isFalse,
+      );
+    });
+
+    test('a marker is only a thread reply when it names a root', () {
+      expect(isThreadReplyMarker(_rootId), isTrue);
+      expect(isThreadReplyMarker(null), isFalse);
+      expect(isThreadReplyMarker(''), isFalse);
+    });
+  });
+
   group('flat-view filtering (visibleMessagesFor)', () {
     test('replies collapse into their thread when the root is present', () {
       final c = ProviderContainer();

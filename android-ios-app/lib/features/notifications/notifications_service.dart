@@ -69,6 +69,7 @@ class NotifyContext {
     this.isFriend = false,
     this.isBot = false,
     this.isBlocked = false,
+    this.isThreadReply = false,
     this.payload,
     this.eventId,
     this.timestampMs,
@@ -84,6 +85,11 @@ class NotifyContext {
   final bool isFriend;
   final bool isBot;
   final bool isBlocked;
+
+  /// True when the message landed inside a thread. A thread is judged by
+  /// `threadNotifyMentionsOnly`, not by the flat conversation's mentions-only
+  /// preference — see [shouldRecordNotification].
+  final bool isThreadReply;
 
   /// Opaque payload forwarded to [NotificationService] (e.g. a deep link).
   final String? payload;
@@ -147,6 +153,18 @@ enum NotifyKind { channel, pm, group }
 /// * channel: only an @-mention is recorded (PWA channel gate).
 /// * group + [groupMentionsOnly]: only a mention is recorded.
 /// * pm: always recorded (subject to the gates above).
+///
+/// A THREAD reply ([isThreadReply]) is judged by the thread's rules instead of
+/// the flat conversation's, because a thread is a side conversation the flat
+/// rules know nothing about:
+/// * [threadMentionsOnly] on → only an @-mention/quote-reply records, whatever
+///   the conversation is (the thread-scoped twin of [groupMentionsOnly]).
+/// * otherwise a reply records when it addresses the user ([isMention]) or
+///   landed in a thread they started ([isOwnThreadRoot]) — the latter being the
+///   only way a plain "someone replied to you" ever reaches a channel, whose
+///   flat rule is mention-only.
+/// * a PM thread is exempt from that narrowing: every message in a 1:1 is
+///   addressed to the user, so its replies record like any other PM.
 bool shouldRecordNotification({
   required NotifyKind kind,
   required bool isOwn,
@@ -158,6 +176,9 @@ bool shouldRecordNotification({
   bool isActiveView = false,
   bool friendsOnly = false,
   bool groupMentionsOnly = false,
+  bool isThreadReply = false,
+  bool isOwnThreadRoot = false,
+  bool threadMentionsOnly = false,
 }) {
   if (!notificationsEnabled) return false;
   if (isOwn) return false;
@@ -165,6 +186,14 @@ bool shouldRecordNotification({
   if (isBot) return false;
   if (isActiveView) return false;
   if (friendsOnly && !isFriend) return false;
+
+  if (isThreadReply) {
+    if (threadMentionsOnly) return isMention;
+    if (isMention || isOwnThreadRoot) return true;
+    // Nothing addressed the user; only a PM's thread still qualifies on the
+    // conversation's own terms.
+    return kind == NotifyKind.pm;
+  }
 
   switch (kind) {
     case NotifyKind.channel:
@@ -212,6 +241,9 @@ bool shouldNotify({
   bool isActiveView = false,
   bool friendsOnly = false,
   bool groupMentionsOnly = false,
+  bool isThreadReply = false,
+  bool isOwnThreadRoot = false,
+  bool threadMentionsOnly = false,
 }) {
   if (isHistorical) return false;
   return shouldRecordNotification(
@@ -225,6 +257,9 @@ bool shouldNotify({
     isActiveView: isActiveView,
     friendsOnly: friendsOnly,
     groupMentionsOnly: groupMentionsOnly,
+    isThreadReply: isThreadReply,
+    isOwnThreadRoot: isOwnThreadRoot,
+    threadMentionsOnly: threadMentionsOnly,
   );
 }
 
@@ -306,6 +341,7 @@ class NotificationsService {
     NotifyContext context = const NotifyContext(),
     bool notifyFriendsOnly = false,
     bool groupNotifyMentionsOnly = false,
+    bool threadNotifyMentionsOnly = false,
   }) async {
     final settings = _ref.read(settingsProvider);
     if (!settings.notificationsEnabled) return;
@@ -319,8 +355,15 @@ class NotificationsService {
         !context.isFriend) {
       return;
     }
-    // groupNotifyMentionsOnly: in a group, only mentions notify.
-    if (context.isGroup && groupNotifyMentionsOnly && !context.isMention) {
+    // A thread answers to `threadNotifyMentionsOnly` instead of the flat
+    // conversation's mentions-only preference: the two are separate settings
+    // and a thread reply is never judged by both.
+    if (context.isThreadReply) {
+      if (threadNotifyMentionsOnly && !context.isMention) return;
+    } else if (context.isGroup &&
+        groupNotifyMentionsOnly &&
+        !context.isMention) {
+      // groupNotifyMentionsOnly: in a group, only mentions notify.
       return;
     }
     if (_isReplayedOrSeen(title: title, body: body, context: context)) return;

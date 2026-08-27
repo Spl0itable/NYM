@@ -22,6 +22,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../features/pms/pm_logic.dart' show ReceiptInfo;
 import '../../models/message.dart';
+import '../../models/nostr_event.dart';
 import '../../services/mesh/mesh_events.dart';
 import '../../services/mesh/mesh_peer.dart';
 import '../../services/mesh/mesh_service.dart';
@@ -34,6 +35,8 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import 'mesh_controller.dart';
 import 'mesh_diagnostics.dart';
+import 'mesh_outbox.dart';
+import '../../services/mesh/protocol/nostr_carrier_packet.dart';
 
 /// The bare storage key of the mesh "Nearby" public channel (renders as
 /// `#mesh` — an ordinary channel in the sidebar's Channels list).
@@ -164,6 +167,63 @@ class MeshBridge {
     return peerIdForPubkey(view.id) == null;
   }
 
+  /// Restores the public history this device carries, and keeps it written.
+  ///
+  /// This is what makes a phone a town crier rather than a live relay: walk
+  /// between two mesh partitions, or relaunch hours later, and the backlog is
+  /// still there to hand to whoever missed it. Contents are signed public
+  /// broadcasts, already visible to anyone who was in radio range, so they are
+  /// stored as-is — nothing private ever reaches this store.
+  void _restoreGossipArchive() {
+    final kv = _ref.read(keyValueStoreProvider);
+    try {
+      _service.gossip
+          .decodeArchive(kv.getString(StorageKeys.meshGossipArchive));
+    } catch (_) {}
+    _service.onGossipArchiveChanged = (archive) {
+      try {
+        kv.setString(StorageKeys.meshGossipArchive, archive);
+      } catch (_) {}
+    };
+  }
+
+  /// Restores this device's one-time prekeys and keeps them written.
+  ///
+  /// The private halves MUST survive a restart: a sender who picked up our
+  /// published bundle before we closed will have sealed mail to one of those
+  /// keys, and a courier may hand it over hours later. Losing them turns
+  /// forward secrecy into lost mail.
+  void _restorePrekeys() {
+    final kv = _ref.read(keyValueStoreProvider);
+    try {
+      _service.prekeys.decode(kv.getString(StorageKeys.meshPrekeys));
+    } catch (_) {}
+    _service.onPrekeysChanged = (encoded) {
+      try {
+        kv.setString(StorageKeys.meshPrekeys, encoded);
+      } catch (_) {}
+    };
+  }
+
+  /// A gateway asked us to publish an event, or rebroadcast one it heard.
+  ///
+  /// Both directions verify before acting: a carried event is signed by its
+  /// ORIGINATOR, so a gateway that altered it — or invented it — produces
+  /// something the relays would reject and we refuse to show. A gateway is a
+  /// postbox, not an author.
+  void _onNostrCarrier(NostrCarrierPacket carrier, String fromPeerID) {
+    final event = carrier.event();
+    if (event == null) return;
+    unawaited(_ref
+        .read(nostrControllerProvider)
+        .handleMeshCarriedEvent(
+          event: event,
+          geohash: carrier.geohash,
+          publish: carrier.direction == NostrCarrierDirection.toGateway ||
+              carrier.direction == NostrCarrierDirection.toBridge,
+        ));
+  }
+
   void _loadGhostPins() {
     _ghostPinnedPms.addAll(
       _ref
@@ -192,6 +252,17 @@ class MeshBridge {
 
   void start() {
     _loadGhostPins();
+    _restoreGossipArchive();
+    // The courier gates need to know about ghosting, and only the bridge holds
+    // that state. Wiring them here keeps the refusal rules ([CourierStore.
+    // mayDeposit]) in one place rather than duplicated inside the radio layer.
+    _service.isGhostMode = () => _ref.read(ghostModeProvider).enabled;
+    _service.isGhostPinned = (staticKeyHex) {
+      final pubkey = _pubkeyForNoiseKey(staticKeyHex);
+      return pubkey != null && _ghostPinnedPms.contains(pubkey.toLowerCase());
+    };
+    _restorePrekeys();
+    _service.onNostrCarrier = _onNostrCarrier;
     MeshService.debugLog = MeshDiagnostics.instance.log;
     _subs.add(_service.peersStream.listen(_onPeers));
     _subs.add(_service.onPublicMessage.listen(_onPublic));
@@ -269,6 +340,24 @@ class MeshBridge {
   /// always-available peerID-derived pubkey ([meshStablePubkeyForPeerId]) —
   /// NOT the Noise key, which binds late (after the handshake) and so isn't
   /// known when a DM is opened first.
+  /// The conversation pubkey for a peer identified by its 32-byte Noise static
+  /// key (hex) — how a courier deposit names its recipient. Null when we have
+  /// never met that peer, in which case there is no pinned conversation to
+  /// protect and the deposit gate falls through to its other checks.
+  String? _pubkeyForNoiseKey(String staticKeyHex) {
+    if (staticKeyHex.length != 64) return null;
+    final bytes = Uint8List(32);
+    for (var i = 0; i < 32; i++) {
+      final b =
+          int.tryParse(staticKeyHex.substring(i * 2, i * 2 + 2), radix: 16);
+      if (b == null) return null;
+      bytes[i] = b;
+    }
+    // peerID is the first 16 hex chars of SHA-256 over the static key.
+    final peerID = _hex(NoiseCrypto.sha256(bytes)).substring(0, 16);
+    return _pubkeyByPeerId[peerID];
+  }
+
   String _pubkeyForPeerId(String peerID) {
     final peer = _service.peerById(peerID);
     final cached = _pubkeyByPeerId[peerID];
@@ -588,26 +677,262 @@ class MeshBridge {
   // ---- Outbound (from the canonical composer) ------------------------------
 
   /// Routes a composer send for the active mesh [view].
-  Future<void> sendFromComposer(ChatView view, String content) async {
+  Future<void> sendFromComposer(ChatView view, String content,
+      {String? threadRoot}) async {
     if (view.kind == ViewKind.channel) {
-      _app.sendLocal(content)?.viaMesh = true;
+      final echo = _app.sendLocal(content, threadRoot: threadRoot)
+        ?..viaMesh = true;
       final channel = '#${view.id.toLowerCase()}';
-      await _service.sendPublicMessage(
+      final meshId = await _service.sendPublicMessage(
         content,
         channel: view.id.toLowerCase() == kMeshNearbyChannel ? null : channel,
       );
       // The echo stays; the round-trip is deduped in ingestMeshChannelMessage.
+      _queueForNostr(
+        kind: MeshOutboxKind.channel,
+        target: view.id,
+        content: content,
+        threadRoot: threadRoot,
+        echo: echo,
+        meshMessageId: meshId,
+      );
     } else if (view.kind == ViewKind.pm) {
       _pinIfGhosted(view.id);
       final peerId = peerIdForPubkey(view.id);
       if (peerId == null) {
-        // Out of radio range. The echo stays local and nothing is published —
-        // for a pinned peer this is the fail-closed path, NOT a fallback.
-        _app.sendLocal(content)?.viaMesh = true;
+        // Out of radio range. The echo stays local and the radio publishes
+        // nothing — for a pinned peer this is the fail-closed path, NOT a
+        // fallback. It can still be queued for Nostr when the peer has a real
+        // identity there (the queue applies the same ghost/mesh-only rules), so
+        // an out-of-range send is not simply lost.
+        final echo = _app.sendLocal(content, threadRoot: threadRoot)
+          ?..viaMesh = true;
+        _queueForNostr(
+          kind: MeshOutboxKind.pm,
+          target: view.id,
+          content: content,
+          threadRoot: threadRoot,
+          echo: echo,
+        );
+        // Last resort: hand a sealed copy to peers who ARE in range, to carry
+        // and deliver if they meet the recipient. This is the only path that
+        // works when neither side has internet — the outbox above needs relays
+        // to come back, and the radio needs the recipient to walk into range.
+        unawaited(_depositWithCouriers(view.id, content, echo));
         return;
       }
       final id = await _service.sendPrivateMessage(peerId, content);
-      _app.sendLocal(content, nymMessageId: id)?.viaMesh = true;
+      final echo = _app.sendLocal(content,
+          nymMessageId: id, threadRoot: threadRoot)
+        ?..viaMesh = true;
+      _queueForNostr(
+        kind: MeshOutboxKind.pm,
+        target: view.id,
+        content: content,
+        threadRoot: threadRoot,
+        echo: echo,
+        meshMessageId: id,
+        nymMessageId: id,
+      );
+    }
+  }
+
+  /// Seals an out-of-range DM to the peer's Noise static key and hands copies
+  /// to nearby peers to carry.
+  ///
+  /// The payload is the SAME Noise transport payload a live session would have
+  /// carried, so a message delivered out of a courier's hands behaves exactly
+  /// like one that arrived over the air — including its delivery receipt.
+  ///
+  /// The refusal rules live in [MeshService.depositWithCouriers] /
+  /// [CourierStore.mayDeposit]: a ghost-pinned conversation and a ghosted
+  /// sender never deposit, because asking a stranger to carry mail is precisely
+  /// the link a ghost identity exists to prevent.
+  Future<void> _depositWithCouriers(
+      String pubkey, String content, Message? echo) async {
+    final staticKeyHex = _noiseKeyHexForPubkey(pubkey);
+    if (staticKeyHex == null) return;
+    try {
+      final payload = MeshService.privateMessagePayload(
+        messageId: echo?.nymMessageId ?? echo?.id ?? '',
+        content: content,
+      );
+      if (payload == null) return;
+      final handed = await _service.depositWithCouriers(
+        recipientStaticKeyHex: staticKeyHex,
+        payload: payload,
+      );
+      MeshDiagnostics.instance.log('courier deposit for '
+          '${_short(pubkey)}: $handed carrier(s)');
+    } catch (_) {
+      // Best-effort: a refused deposit leaves the message no worse off.
+    }
+  }
+
+  /// The Noise static key we last saw for a conversation pubkey, or null when
+  /// that peer has never been met over the radio (nothing to seal to).
+  String? _noiseKeyHexForPubkey(String pubkey) {
+    for (final entry in _pubkeyByPeerId.entries) {
+      if (entry.value.toLowerCase() != pubkey.toLowerCase()) continue;
+      final hex = _service.noiseKeyHexForPeer(entry.key);
+      if (hex != null && hex.length == 64) return hex;
+    }
+    return null;
+  }
+
+  /// Retains a mesh-carried send so it reaches Nostr once relays return.
+  ///
+  /// The radio delivers to whoever is in range NOW; everyone else — another
+  /// room, another device, anyone who reads this later — only ever sees the
+  /// message if it also reaches the relays. [NostrController.flushMeshOutbox]
+  /// publishes it on the next reconnect.
+  ///
+  /// Three things are never queued, and the exclusions matter more than the
+  /// feature:
+  ///  * a GHOST-PINNED PM. The peer met us as a ghost and knows us only as
+  ///    that; the Nostr copy signs with the real key and would hand them the
+  ///    link. `shouldSendOverMesh` fails such a send closed rather than falling
+  ///    through to Nostr for exactly this reason — the queue must not undo it.
+  ///  * a MESH-ONLY peer. Its pubkey is a local `sha256("mesh:<peerID>")`
+  ///    placeholder, not an identity anyone can receive at, so a gift wrap to
+  ///    it would encrypt to nothing and leak the conversation's existence for
+  ///    no delivery.
+  ///  * a send made while ONLINE. The composer already published it to Nostr
+  ///    directly, so queueing it would publish the same message twice.
+  void _queueForNostr({
+    required MeshOutboxKind kind,
+    required String target,
+    required String content,
+    required Message? echo,
+    String? threadRoot,
+    String? meshMessageId,
+    String? nymMessageId,
+  }) {
+    if (echo == null) return;
+    if (_online) return;
+    final id = target.toLowerCase();
+    if (kind == MeshOutboxKind.pm) {
+      if (_ghostPinnedPms.contains(id)) return;
+      if (_meshOnlyPmPubkeys.contains(id)) return;
+    }
+    try {
+      _ref.read(nostrControllerProvider).enqueueMeshOutbox(
+            MeshOutboxEntry(
+              kind: kind,
+              target: target,
+              content: content,
+              // The queue replays with the time the user actually sent, so the
+              // message keeps its place in the conversation.
+              createdAtSec: echo.createdAt,
+              localId: echo.id,
+              threadRoot: threadRoot,
+              meshMessageId: meshMessageId,
+              nymMessageId: nymMessageId,
+            ),
+          );
+    } catch (_) {
+      // Best-effort: a queue failure must never cost the radio send that
+      // already went out.
+    }
+    // Now sign the event this send would have published, and let BOTH delivery
+    // paths carry that same one: a gateway may publish it in a moment, and our
+    // own outbox may publish it hours later. Identical bytes mean an identical
+    // event id, so the relays treat the second as a duplicate rather than a
+    // second message.
+    //
+    // Deliberately after the enqueue rather than before it: signing mines proof
+    // of work, and the message must be durably queued the instant the radio
+    // carried it — not once the mining finishes.
+    unawaited(_signAndOfferToGateways(
+      kind: kind,
+      target: target,
+      content: content,
+      echo: echo,
+      threadRoot: threadRoot,
+      meshMessageId: meshMessageId,
+    ));
+  }
+
+  Future<void> _signAndOfferToGateways({
+    required MeshOutboxKind kind,
+    required String target,
+    required String content,
+    required Message echo,
+    String? threadRoot,
+    String? meshMessageId,
+  }) async {
+    final signed = await _buildOutboxEvent(
+      kind: kind,
+      target: target,
+      content: content,
+      echo: echo,
+      threadRoot: threadRoot,
+      meshMessageId: meshMessageId,
+    );
+    if (signed == null) return;
+    try {
+      _ref
+          .read(nostrControllerProvider)
+          .attachMeshOutboxSignedEvent(echo.id, signed.toJson());
+    } catch (_) {
+      // The entry replays the ordinary way without it.
+    }
+    // Ask anyone nearby who still has a signal to publish it now. The outbox
+    // waits for OUR internet; this does not have to. It stays a shortcut and
+    // never the only copy — the entry is queued either way, because nothing
+    // on the wire tells us whether a gateway succeeded.
+    await _askGateways(target, signed);
+  }
+
+  /// Builds and signs the event this send would have published, without
+  /// publishing it.
+  ///
+  /// Channels only. A PM replays as a gift wrap addressed to one pubkey, and
+  /// handing that to a stranger to post tells them we are talking to that
+  /// person — the same disclosure the courier gate exists to refuse. It also
+  /// returns null while ghosted: the event signs with the REAL key, so
+  /// publishing it would tie the epoch straight back to the npub.
+  Future<NostrEvent?> _buildOutboxEvent({
+    required MeshOutboxKind kind,
+    required String target,
+    required String content,
+    required Message echo,
+    String? threadRoot,
+    String? meshMessageId,
+  }) async {
+    if (kind != MeshOutboxKind.channel) return null;
+    if (_ref.read(ghostModeProvider).enabled) return null;
+    // No signed copy is not a failure: the outbox still replays this the
+    // ordinary way once our own internet returns.
+    return _ref.read(nostrControllerProvider).buildMeshOutboxEvent(
+          channelKey: target,
+          content: content,
+          createdAtSec: echo.createdAt,
+          threadRoot: threadRoot,
+          meshMessageId: meshMessageId,
+        );
+  }
+
+  /// Asks nearby peers to publish [event] for us.
+  ///
+  /// Verified peers only: an unverified one is a radio claiming a name, and
+  /// handing it our traffic tells a stranger we are here. The ask goes to all
+  /// of them rather than picking one, because nothing on the wire says which
+  /// peer has internet — a peer that has none simply declines.
+  Future<void> _askGateways(String geohash, NostrEvent event) async {
+    if (!_service.isRunning) return;
+    var asked = 0;
+    for (final peer in _service.peers) {
+      if (!peer.isVerified) continue;
+      final ok = await _service.carryToGateway(
+        gatewayPeerID: peer.peerID,
+        geohash: geohash,
+        event: event.toJson(),
+      );
+      if (ok) asked++;
+    }
+    if (asked > 0) {
+      MeshDiagnostics.instance.log('asked $asked peer(s) to publish for us');
     }
   }
 

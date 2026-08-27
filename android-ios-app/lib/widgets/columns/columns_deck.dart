@@ -262,6 +262,12 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     // relays.js:532/584) all defer to focused + at-bottom + visible.
     final notifier = ref.read(appStateProvider.notifier);
     notifier.columnsReadGate = _columnsReadGate;
+    // Ingest consults this to tell a reply the focused column is SHOWING (its
+    // thread is open) from one collapsed behind the root's reply-count row, so
+    // a collapsed one doesn't stamp the column read and silence its own
+    // notification ([AppStateNotifier.openThreadGate]).
+    notifier.openThreadGate =
+        () => mounted ? ref.read(activeThreadProvider) : null;
     _gateHost = notifier;
   }
 
@@ -273,6 +279,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final host = _gateHost;
     if (host != null && host.columnsReadGate == _columnsReadGate) {
       host.columnsReadGate = null;
+      host.openThreadGate = null;
     }
     _gateHost = null;
     _removeGhost();

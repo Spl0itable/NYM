@@ -166,6 +166,7 @@ class StorageSync {
       'swipeReactEmojiTs',
       'notificationsEnabled',
       'groupNotifyMentionsOnly',
+      'threadNotifyMentionsOnly',
       'notifyFriendsOnly',
       'syncMLSHistory',
       'seenCalls',
@@ -384,6 +385,8 @@ class StorageSync {
       }
       flat['groupNotifyMentionsOnly'] =
           kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
+      flat['threadNotifyMentionsOnly'] =
+          kv.getString(StorageKeys.threadNotifyMentionsOnly) == 'true';
       flat['notifyFriendsOnly'] =
           kv.getString(StorageKeys.notifyFriendsOnly) == 'true';
       // Device-spanning onboarding flags (settings.js:156-158).

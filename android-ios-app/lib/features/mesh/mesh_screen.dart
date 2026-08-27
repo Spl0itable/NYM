@@ -580,6 +580,16 @@ class _PeersList extends ConsumerWidget {
     );
   }
 
+  /// The probe's outcome, appended to the peer's monospace subtitle.
+  String _pingLabel(MeshPingState? ping) {
+    if (ping == null) return '';
+    if (ping.isWaiting) return '  • pinging…';
+    if (ping.lost) return '  • no reply';
+    final hops = ping.hops;
+    final hopLabel = hops == null ? '' : ', $hops hop${hops == 1 ? '' : 's'}';
+    return '  • ${ping.roundTripMs}ms$hopLabel';
+  }
+
   void _openPeer(BuildContext context, WidgetRef ref, MeshPeer peer) {
     final pubkey =
         ref.read(meshControllerProvider.notifier).bridge?.openPeerDm(peer);
@@ -612,6 +622,7 @@ class _PeersList extends ConsumerWidget {
       itemBuilder: (_, i) {
         final peer = peers[i];
         final seed = peer.nostrPubkey ?? peer.peerID;
+        final ping = mesh.pings[peer.peerID];
         return ListTile(
           leading: NymAvatar(
             seed: seed,
@@ -621,11 +632,36 @@ class _PeersList extends ConsumerWidget {
           ),
           title: _peerName(peer, colors),
           subtitle: Text(
-            peer.peerID + (peer.nostrLinkVerified ? '  • linked' : ''),
+            peer.peerID +
+                (peer.nostrLinkVerified ? '  • linked' : '') +
+                _pingLabel(ping),
             style: TextStyle(
                 color: colors.textDim, fontSize: 11, fontFamily: 'monospace'),
           ),
-          trailing: NymSvgIcon(NymIcons.lock, size: 16, color: colors.purple),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // A peer list says who is out there; it cannot say whether they
+              // are in the same room or three relays away. The echo can.
+              IconButton(
+                icon: NymSvgIcon(NymIcons.shareNodes,
+                    size: 16, color: colors.textDim),
+                tooltip: tr('Ping'),
+                // An IconButton defaults to a 48px tap target, which is wider
+                // than a trailing slot has to spare next to the lock.
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 34, minHeight: 34),
+                onPressed: ping?.isWaiting ?? false
+                    ? null
+                    : () => ref
+                        .read(meshControllerProvider.notifier)
+                        .ping(peer.peerID),
+              ),
+              NymSvgIcon(NymIcons.lock, size: 16, color: colors.purple),
+            ],
+          ),
           onTap: () => _openPeer(context, ref, peer),
         );
       },

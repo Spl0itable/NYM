@@ -92,7 +92,7 @@ class EventMapper {
     // actual sender (anti-spoof) and returns null when absent/mismatched.
     final fileOffer = parseFileOfferTag(e.tags, e.pubkey);
 
-    final threadRoot = _threadRootFromTags(e.tags);
+    final threadRoot = threadRootFromTags(e.tags);
 
     return Message(
       id: e.id,
@@ -127,7 +127,7 @@ class EventMapper {
   /// `['e', id, …, 'root']` tag wins, falling back to a `'reply'` marker.
   /// Only 64-char hex event ids are accepted; anything else is ignored so a
   /// foreign client's stray `e` tags can't hide a message behind a bogus root.
-  static String? _threadRootFromTags(List<List<String>> tags) {
+  static String? threadRootFromTags(List<List<String>> tags) {
     String? root;
     String? reply;
     for (final t in tags) {

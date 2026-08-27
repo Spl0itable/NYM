@@ -1111,6 +1111,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// column keeps accruing unread until it scrolls back to the bottom.
   bool Function(String storageKey)? columnsReadGate;
 
+  /// The thread currently open ([activeThreadProvider]), when one is showing.
+  /// Wired by the UI the same way [columnsReadGate] is, so ingest can tell a
+  /// reply the user is looking at from one collapsed behind its root's
+  /// reply-count row ([threadReplyHidden]) without a Riverpod dependency here.
+  /// Unwired (single view, tests, pre-boot) reads as "no thread open".
+  ActiveThread? Function()? openThreadGate;
+
   /// True when a NEW message for [storageKey] should be treated as SEEN (no
   /// unread bump, watermark advanced): single view → it is the active
   /// conversation; columns view → the deck's [columnsReadGate] says the
@@ -1126,6 +1133,18 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// (messages.js:546 sends `sendChannelReadReceipt` only when
   /// `_cvMarkColumnRead` says the message was seen).
   bool isConversationSeen(String storageKey) => _isConversationSeen(storageKey);
+
+  /// Whether [m] landed in a thread the user cannot see — collapsed behind its
+  /// root's reply-count row in [storageKey]. Such a reply must not advance the
+  /// conversation's read watermark: doing so lands its notification pre-viewed
+  /// (`_alreadySeenByWatermark`) and the bell badge never moves for a thread
+  /// @-mention, which is half of the bug [threadReplyHidden] exists to fix.
+  bool _hiddenThreadReply(String storageKey, Message m) => threadReplyHidden(
+        state: state,
+        openThread: openThreadGate?.call(),
+        storageKey: storageKey,
+        threadRoot: m.threadRoot,
+      );
 
   /// Clears [key]'s unread badge and stamps its read watermark to
   /// max(now, newest message) — the PWA's `clearUnreadCount`
@@ -1868,6 +1887,20 @@ class AppStateNotifier extends StateNotifier<AppState> {
       applyEditOrDefer(editId, e.content);
       return;
     }
+    // Cross-transport dedup. A `['nymmesh', <id>]` tag marks this event as the
+    // Nostr replay of a message the Bluetooth mesh already carried — the
+    // sender's outbox publishing, once their internet came back, what the radio
+    // delivered while it was down. Anyone who was in radio range already holds
+    // that message under the mesh copy's id, so registering the id here drops
+    // whichever copy arrives second. `add` returning false IS the "already
+    // held" answer, so this covers both orders: mesh first, or relay first and
+    // the radio copy arriving after.
+    final meshReplayId = e.tagValue('nymmesh');
+    if (meshReplayId != null &&
+        meshReplayId.isNotEmpty &&
+        !_seenIds.add(meshReplayId)) {
+      return;
+    }
     final m = EventMapper.channelMessage(e, selfPubkey: state.selfPubkey);
     if (m == null) return;
     // A backlog restore is historical by PROVENANCE regardless of the mapper's
@@ -2043,9 +2076,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final seen = _isConversationSeen(key);
     if (!seen && state.countsTowardUnread(m) && _isUnreadByWatermark(key, m)) {
       state.unreadCounts[key] = (state.unreadCounts[key] ?? 0) + 1;
-    } else if (seen && columnsReadGate != null) {
+    } else if (seen && columnsReadGate != null && !_hiddenThreadReply(key, m)) {
       // A seen column keeps its badge clear and its watermark pinned to the
-      // newest message (`_cvMarkColumnRead` → `_markChannelRead`).
+      // newest message (`_cvMarkColumnRead` → `_markChannelRead`) — but not for
+      // a reply the column keeps collapsed inside a thread, which was never on
+      // screen ([_hiddenThreadReply]).
       state.unreadCounts.remove(key);
       markChannelRead(key, m.createdAt);
     }
@@ -2623,7 +2658,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
         state.countsTowardUnread(m) &&
         _isUnreadByWatermark(peer, m)) {
       state.unreadCounts[peer] = (state.unreadCounts[peer] ?? 0) + 1;
-    } else if (seenPm && columnsReadGate != null) {
+    } else if (seenPm &&
+        columnsReadGate != null &&
+        !_hiddenThreadReply(key, m)) {
       state.unreadCounts.remove(peer);
       state.unreadCounts.remove(key);
       markChannelRead(peer, m.createdAt);
@@ -2680,7 +2717,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
       // `_recomputeUnreadCount` (keyword/heuristic-spam still count; see
       // [AppState.countsTowardUnread]) + the `created_at > lastRead` watermark.
       state.unreadCounts[key] = (state.unreadCounts[key] ?? 0) + 1;
-    } else if (seenGroup && columnsReadGate != null) {
+    } else if (seenGroup &&
+        columnsReadGate != null &&
+        !_hiddenThreadReply(key, m)) {
       state.unreadCounts.remove(key);
       markChannelRead(key, m.createdAt);
     }
@@ -5090,6 +5129,64 @@ Message? threadRootMessage(AppState s, String storageKey, String rootId) {
   return null;
 }
 
+/// True when a message is HIDDEN behind a COLLAPSED thread: it is a reply whose
+/// root we hold — so [visibleMessagesFor] keeps it out of the flat conversation
+/// and only the root's reply-count row shows for it — and whose thread view is
+/// not the one currently open.
+///
+/// Such a message never reaches the screen even while its conversation is on
+/// screen, so "this is the active view" must NOT be read as "the user saw it".
+/// Without the distinction, an @-mention or quote-reply landing in a thread of
+/// the open conversation was swallowed by the active-view gate: nothing in the
+/// notifications modal for a message that addressed the user directly.
+///
+/// [threadRoot] is the reply's marker ([Message.threadRoot] / the NIP-10 root
+/// tag) and [storageKey] the conversation it belongs to. A reply whose root we
+/// never saw renders inline (the "never lost" fallback in
+/// [visibleMessagesFor]), so it counts as visible like any other message — as
+/// does every reply when threads are off.
+bool threadReplyHidden({
+  required AppState state,
+  required ActiveThread? openThread,
+  required String storageKey,
+  required String? threadRoot,
+}) {
+  if (!appThreadsEnabled) return false;
+  if (threadRoot == null || threadRoot.isEmpty || storageKey.isEmpty) {
+    return false;
+  }
+  if (threadRootMessage(state, storageKey, threadRoot) == null) return false;
+  return openThread == null ||
+      openThread.rootId != threadRoot ||
+      openThread.view.storageKey != storageKey;
+}
+
+/// True when the root of [threadRoot]'s thread in [storageKey] is a message the
+/// USER wrote.
+///
+/// Opening a thread on your own message is joining a conversation, so its
+/// replies reach you the way a mention does. Without this a plain "someone
+/// replied to you" notified nothing at all in a channel, whose flat rule is
+/// mention-only — the reported bug. False when the root is not held locally
+/// (nothing to attribute) or threads are off.
+bool threadRootIsOwn({
+  required AppState state,
+  required String storageKey,
+  required String? threadRoot,
+}) {
+  if (!appThreadsEnabled) return false;
+  if (threadRoot == null || threadRoot.isEmpty || storageKey.isEmpty) {
+    return false;
+  }
+  return threadRootMessage(state, storageKey, threadRoot)?.isOwn ?? false;
+}
+
+/// Whether [threadRoot] marks this message as a reply inside a thread at all —
+/// the switch that hands its notification to the thread rules rather than the
+/// flat conversation's.
+bool isThreadReplyMarker(String? threadRoot) =>
+    appThreadsEnabled && threadRoot != null && threadRoot.isNotEmpty;
+
 /// Ordered messages for the active view (oldest first), via
 /// [visibleMessagesFor] — mirrors the PWA's `.message.blocked` hiding
 /// (messages.js §11) plus the `spamHit` term of the non-own hide branch
@@ -5337,6 +5434,7 @@ class NotificationEntry {
     this.eventId,
     this.senderPubkey,
     this.contextLabel,
+    this.threadRoot,
     this.viewed = false,
   }) : receivedAt = (receivedAt != null && receivedAt > 0) ? receivedAt : ts;
 
@@ -5374,6 +5472,11 @@ class NotificationEntry {
   /// .js:519-533). Null for PM/mention sources, which the panel labels from the
   /// type. Preferred by the panel over the type-derived label when present.
   final String? contextLabel;
+
+  /// The thread this notification came FROM, when it came from one — so tapping
+  /// the row opens that thread rather than the flat conversation the reply is
+  /// collapsed inside. Null for an ordinary conversation message.
+  final String? threadRoot;
   bool viewed;
 
   /// Serializes for the persisted history (N3). Mirrors the PWA's stored
@@ -5390,6 +5493,7 @@ class NotificationEntry {
         if (eventId != null) 'eventId': eventId,
         if (senderPubkey != null) 'senderPubkey': senderPubkey,
         if (contextLabel != null) 'contextLabel': contextLabel,
+        if (threadRoot != null) 'threadRoot': threadRoot,
         if (viewed) 'viewed': true,
       };
 
@@ -5413,10 +5517,14 @@ class NotificationEntry {
     String? ciRoute;
     String? ciEventId;
     String? ciPubkey;
+    String? ciThreadRoot;
     final ci = raw['channelInfo'];
     if (ci is Map) {
       if (ci['eventId'] is String) ciEventId = ci['eventId'] as String;
       if (ci['pubkey'] is String) ciPubkey = ci['pubkey'] as String;
+      // The PWA files the thread on `channelInfo` (nostr-core/pms/groups), so a
+      // synced entry written there still opens its thread here.
+      if (ci['threadRoot'] is String) ciThreadRoot = ci['threadRoot'] as String;
       String? str(String k) => ci[k] is String ? ci[k] as String : null;
       switch (ci['type']) {
         case 'pm':
@@ -5453,6 +5561,9 @@ class NotificationEntry {
           : ciPubkey,
       contextLabel:
           raw['contextLabel'] is String ? raw['contextLabel'] as String : null,
+      threadRoot: raw['threadRoot'] is String
+          ? raw['threadRoot'] as String
+          : ciThreadRoot,
       viewed: raw['viewed'] == true,
     );
   }
@@ -5776,6 +5887,7 @@ class NotificationHistoryNotifier
     String? eventId,
     String? senderPubkey,
     String? contextLabel,
+    String? threadRoot,
     int? receivedAtMs,
   }) {
     // The PWA's digest gate (`body.includes('10 recent messages:')`,
@@ -5801,6 +5913,7 @@ class NotificationHistoryNotifier
         eventId: eventId,
         senderPubkey: senderPubkey,
         contextLabel: contextLabel,
+        threadRoot: threadRoot,
       ));
       _pendingRecords.add(() => record(
             type: type,
@@ -5811,6 +5924,7 @@ class NotificationHistoryNotifier
             eventId: eventId,
             senderPubkey: senderPubkey,
             contextLabel: contextLabel,
+            threadRoot: threadRoot,
             receivedAtMs: observedAt,
           ));
       return;
@@ -5847,6 +5961,7 @@ class NotificationHistoryNotifier
       eventId: eventId,
       senderPubkey: senderPubkey,
       contextLabel: contextLabel,
+      threadRoot: threadRoot,
     );
     // N26: silence a notification already seen/dismissed on another device (its
     // key is in the synced seen-map), observed before the synced last-read

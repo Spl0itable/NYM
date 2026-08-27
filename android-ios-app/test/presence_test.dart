@@ -536,6 +536,100 @@ void main() {
     });
   });
 
+  // A thread is a side conversation the flat channel/PM/group rules know
+  // nothing about, so a reply inside one is judged by the thread's rules
+  // instead. Two failures this pins down: a plain reply to the user's OWN
+  // channel message notified nothing (the flat channel rule is mention-only),
+  // and every reply in a group thread buzzed (the flat group rule notifies on
+  // everything).
+  group('shouldNotify (thread rules)', () {
+    bool notify({
+      required NotifyKind kind,
+      bool isMention = false,
+      bool isOwnThreadRoot = false,
+      bool threadMentionsOnly = false,
+      bool groupMentionsOnly = false,
+      bool isThreadReply = true,
+    }) =>
+        shouldNotify(
+          kind: kind,
+          isOwn: false,
+          isHistorical: false,
+          notificationsEnabled: true,
+          isMention: isMention,
+          groupMentionsOnly: groupMentionsOnly,
+          isThreadReply: isThreadReply,
+          isOwnThreadRoot: isOwnThreadRoot,
+          threadMentionsOnly: threadMentionsOnly,
+        );
+
+    test('a reply in the user\'s own channel thread notifies', () {
+      expect(notify(kind: NotifyKind.channel, isOwnThreadRoot: true), isTrue);
+    });
+
+    test("a reply in someone else's channel thread does not", () {
+      expect(notify(kind: NotifyKind.channel), isFalse);
+    });
+
+    test('a mention in any thread notifies', () {
+      expect(notify(kind: NotifyKind.channel, isMention: true), isTrue);
+      expect(notify(kind: NotifyKind.group, isMention: true), isTrue);
+    });
+
+    test('an ordinary group thread reply does NOT notify', () {
+      // The flat group rule would notify on every message; a thread is a side
+      // conversation, so only what addresses the user gets through.
+      expect(notify(kind: NotifyKind.group), isFalse);
+    });
+
+    test('a PM thread reply always notifies — a 1:1 is addressed to you', () {
+      expect(notify(kind: NotifyKind.pm), isTrue);
+    });
+
+    test('threadMentionsOnly narrows every thread to mentions', () {
+      expect(
+        notify(
+            kind: NotifyKind.channel,
+            isOwnThreadRoot: true,
+            threadMentionsOnly: true),
+        isFalse,
+      );
+      expect(notify(kind: NotifyKind.pm, threadMentionsOnly: true), isFalse);
+      expect(
+        notify(
+            kind: NotifyKind.channel,
+            isMention: true,
+            threadMentionsOnly: true),
+        isTrue,
+      );
+    });
+
+    test('the group setting does not gate a thread reply', () {
+      // The two settings are separate; a thread answers to its own.
+      expect(
+        notify(
+            kind: NotifyKind.group,
+            isOwnThreadRoot: true,
+            groupMentionsOnly: true),
+        isTrue,
+      );
+    });
+
+    test('a message outside a thread keeps the flat rules', () {
+      expect(
+        notify(
+            kind: NotifyKind.group,
+            isThreadReply: false,
+            threadMentionsOnly: true),
+        isTrue,
+      );
+      expect(
+        notify(kind: NotifyKind.channel, isThreadReply: false),
+        isFalse,
+      );
+    });
+  });
+
   // Regression for the bug where PMs/group messages never reached the bell:
   // the PWA RECORDS every qualifying message to history regardless of age (a
   // fresh one loudly, an old/gift-wrapped one silently) — so the record gate

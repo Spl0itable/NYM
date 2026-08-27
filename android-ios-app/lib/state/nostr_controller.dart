@@ -27,6 +27,7 @@ import '../features/identity/pq_registry.dart';
 import '../features/identity/pq_root.dart';
 import '../features/mesh/ghost_mode.dart';
 import '../features/mesh/mesh_controller.dart';
+import '../features/mesh/mesh_outbox.dart';
 import '../features/commands/command_handler.dart';
 import '../features/commands/command_i18n.dart';
 import '../features/commands/command_registry.dart';
@@ -653,6 +654,11 @@ class NostrController {
       // relays.js:2766-2768).
       _lastD1BackfillAt = DateTime.now().millisecondsSinceEpoch;
       unawaited(_restoreAllChannelArchives());
+      // A session that queued mesh sends and was then killed comes back with a
+      // full outbox and no reconnect EDGE to fire on (relays connect during
+      // boot, before anything is listening). Flush once here so a restart is
+      // not the one way a queued message stays queued forever.
+      unawaited(flushMeshOutbox());
     } catch (e, st) {
       // Boot failed (e.g. no secure storage). Never strand the user on demo
       // data: if we never reached `goLive` (so the store is still the empty
@@ -719,6 +725,10 @@ class NostrController {
       // most likely moment a stuck DM finally lands (pms.js
       // `retryPendingDMsOnReconnect`, F02 auto-retry).
       _retryPendingDmsOnReconnect();
+      // Publish everything the Bluetooth mesh carried while the internet route
+      // was down. Until this existed those messages reached whoever was in
+      // radio range and nobody else, ever — see [flushMeshOutbox].
+      unawaited(flushMeshOutbox());
       // (Re)advertise our capability announcement. Driven from the connection
       // edge itself, NOT from the D1 backfill above — see
       // [schedulePqAnnouncement] for why that coupling was a bug.
@@ -1906,6 +1916,16 @@ class NostrController {
           .getString(StorageKeys.groupNotifyMentionsOnly) ==
       'true';
 
+  /// "Only notify for mentions in threads" — the thread-scoped twin of
+  /// [_groupNotifyMentionsOnly]. On, a reply in ANY thread (channel, PM or
+  /// group) only notifies when it @-mentions or quote-replies the user; off, a
+  /// reply in a thread the user started notifies too.
+  bool get _threadNotifyMentionsOnly =>
+      _ref
+          .read(keyValueStoreProvider)
+          .getString(StorageKeys.threadNotifyMentionsOnly) ==
+      'true';
+
   /// Whether the app is on screen. Backgrounded, nothing is "being viewed" —
   /// see [_isActiveView].
   bool _appInForeground = true;
@@ -1919,9 +1939,23 @@ class NostrController {
   /// feeds `shouldRecordNotification`, no bell entry either), which is precisely
   /// the case a notification exists for. And it gates the read receipts below:
   /// a backgrounded app must not tell the sender their message was read.
-  bool _isActiveView(String storageKey) =>
-      _appInForeground &&
-      _ref.read(appStateProvider).view.storageKey == storageKey;
+  ///
+  /// [threadRoot] is the message's thread marker, when it has one. A reply
+  /// collapsed inside a thread is OFF SCREEN even while its conversation is on
+  /// screen (only the root's reply-count row renders), so it must not count as
+  /// seen — see [threadReplyHidden]. Omit it and the check is the plain
+  /// conversation-is-open test, which is what the read-receipt callers want.
+  bool _isActiveView(String storageKey, {String? threadRoot}) {
+    if (!_appInForeground) return false;
+    final app = _ref.read(appStateProvider);
+    if (app.view.storageKey != storageKey) return false;
+    return !threadReplyHidden(
+      state: app,
+      openThread: _ref.read(activeThreadProvider),
+      storageKey: storageKey,
+      threadRoot: threadRoot,
+    );
+  }
 
   void _maybeNotifyChannel(NostrEvent e) {
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
@@ -1930,7 +1964,14 @@ class NostrController {
     final isBlocked = appState.blockedUsers.contains(e.pubkey);
     final key = EventMapper.channelKeyOf(e);
     final mention = _refersToSelf(e.content);
-    final isActive = key != null && _isActiveView(key);
+    final threadRoot = EventMapper.threadRootFromTags(e.tags);
+    // A mention that lands as a thread reply is invisible behind the root's
+    // reply-count row, so the active-view gate must not swallow it.
+    final isActive = key != null && _isActiveView(key, threadRoot: threadRoot);
+    final inThread = isThreadReplyMarker(threadRoot);
+    final ownThread = key != null &&
+        threadRootIsOwn(
+            state: appState, storageKey: key, threadRoot: threadRoot);
     // Record gate (history) vs alert gate (sound/popup). A historical channel
     // mention is still added to history silently (nostr-core.js:546-555:
     // `_addNotificationToHistory` in the `isHistorical` branch) — only the loud
@@ -1948,6 +1989,12 @@ class NostrController {
       isBot: isVerifiedBot(e.pubkey),
       isActiveView: isActive,
       friendsOnly: _notifyFriendsOnly,
+      // A channel's flat rule is mention-only, so a thread reply that merely
+      // answers the user's own message would fall through it — the thread rules
+      // are what let "someone replied to you" reach the bell at all.
+      isThreadReply: inThread,
+      isOwnThreadRoot: ownThread,
+      threadMentionsOnly: _threadNotifyMentionsOnly,
     );
     if (!record) return;
     // PWA footer context label for a channel source is `in #<geohash>`
@@ -1973,7 +2020,15 @@ class NostrController {
       route: channelRoute.isNotEmpty ? channelRoute : e.pubkey,
       eventId: e.id,
       tsMs: e.createdAt * 1000,
-      contextLabel: key != null ? tr('in {key}', {'key': key}) : null,
+      // A thread reply names the thread as well as the channel — a bare
+      // `in #abc` sends the user hunting for a message that is collapsed behind
+      // one of that channel's "N replies" rows.
+      contextLabel: key == null
+          ? null
+          : (inThread
+              ? tr('in a thread in {key}', {'key': key})
+              : tr('in {key}', {'key': key})),
+      threadRoot: inThread ? threadRoot : null,
       // `_silentForAlert` IS the live-arrival rule (10s here, as the PWA's
       // channel path has it) — and the catch-up watermark when one is running.
       // Keeping the old `!_isHistorical(...)` term alongside it re-imposed the
@@ -2002,6 +2057,9 @@ class NostrController {
             : (m.conversationPubkey != null
                 ? PmLogic.pmStorageKey(m.conversationPubkey!)
                 : ''));
+    final inThread = isThreadReplyMarker(m.threadRoot);
+    final ownThread = threadRootIsOwn(
+        state: appState, storageKey: key, threadRoot: m.threadRoot);
     // Record gate (history) — NOT gated on age, so backlog/gift-wrapped PMs and
     // group messages (which always arrive with an old `created_at`) still land
     // in the bell. This is the fix for PMs/group messages never appearing.
@@ -2015,9 +2073,16 @@ class NostrController {
       // A verified-bot sender (fresh Nymbot PM reply) is fully silent — the
       // PWA returns before sound/popup/history (notifications.js:14/126).
       isBot: m.isBot || isVerifiedBot(m.pubkey),
-      isActiveView: _isActiveView(key),
+      isActiveView: _isActiveView(key, threadRoot: m.threadRoot),
       friendsOnly: _notifyFriendsOnly,
       groupMentionsOnly: _groupNotifyMentionsOnly,
+      // A group thread is a side conversation: judging its replies by the flat
+      // "every group message notifies" rule turns each one into a buzz, so the
+      // thread rules take over. A PM's thread stays exempt — every message in a
+      // 1:1 is addressed to the user.
+      isThreadReply: inThread,
+      isOwnThreadRoot: ownThread,
+      threadMentionsOnly: _threadNotifyMentionsOnly,
     );
     if (!record) return;
     // PWA `treatAsHistorical = msg.isHistorical || ageMs > 30000` — drives the
@@ -2047,12 +2112,30 @@ class NostrController {
       route: isGroup ? (m.groupId ?? '') : m.pubkey,
       eventId: m.nymMessageId ?? m.id,
       tsMs: m.timestamp,
-      // Group footer label `in <GroupName>` (PWA `channelInfo`); PMs leave it
-      // null so the panel labels them 'PM' from the type.
-      contextLabel:
-          isGroup ? tr('in {name}', {'name': _groupNameFor(m.groupId)}) : null,
+      contextLabel: _messageContextLabel(
+          isGroup: isGroup, inThread: inThread, groupId: m.groupId),
+      threadRoot: inThread ? m.threadRoot : null,
       silent: treatAsHistorical,
     );
+  }
+
+  /// The bell footer label for a PM/group notification. A group names itself
+  /// (`in <GroupName>`); a PM leaves it null so the panel labels it 'PM' from
+  /// the type. A thread reply says so in both cases, so the user opens the
+  /// thread rather than scanning the flat conversation for a message that is
+  /// collapsed inside one.
+  String? _messageContextLabel({
+    required bool isGroup,
+    required bool inThread,
+    required String? groupId,
+  }) {
+    if (isGroup) {
+      final name = _groupNameFor(groupId);
+      return inThread
+          ? tr('in a thread in {name}', {'name': name})
+          : tr('in {name}', {'name': name});
+    }
+    return inThread ? tr('PM thread') : null;
   }
 
   /// Group display name for a notification title/context (falls back to "Group").
@@ -2083,14 +2166,19 @@ class NostrController {
     String? eventId,
     int? tsMs,
     String? contextLabel,
+    String? threadRoot,
     bool silent = false,
   }) {
     // The tap target, shared with the bell row so both open the same place.
     final tapRoute = route ?? senderPubkey;
+    // A notification raised BY a thread reply opens that thread, not just the
+    // conversation around it — otherwise the tap lands the user in front of the
+    // "N replies" row the message is hidden behind.
     final payload = encodeNotificationPayload(
       type: historyType,
       route: tapRoute,
       senderPubkey: senderPubkey,
+      threadRoot: threadRoot,
     );
     // One OS notification per conversation, replaced as it goes — keyed the same
     // way the bell routes, so `pm`/`reaction` from one peer collapse together.
@@ -2148,11 +2236,13 @@ class NostrController {
             body: body,
             notifyFriendsOnly: _notifyFriendsOnly,
             groupNotifyMentionsOnly: _groupNotifyMentionsOnly,
+            threadNotifyMentionsOnly: _threadNotifyMentionsOnly,
             context: NotifyContext(
               senderPubkey: senderPubkey,
               isFriend: isFriend,
               isMention: isMention,
               isGroup: isGroup,
+              isThreadReply: threadRoot != null && threadRoot.isNotEmpty,
               // The service gates on this too. It was never passed, so that
               // check could only ever read false — a backstop that backstopped
               // nothing. The central gate above already returned; this keeps
@@ -2189,9 +2279,54 @@ class NostrController {
             eventId: eventId,
             senderPubkey: senderPubkey,
             contextLabel: contextLabel,
+            threadRoot: threadRoot,
           );
     } catch (_) {
       // History store may be unavailable in teardown; alerting still happened.
+    }
+  }
+
+  /// Gateway mode: a signed Nostr event that reached us over the RADIO.
+  ///
+  /// Two directions, one rule. When [publish] is set, a mesh-only peer has
+  /// asked us to put their event on the relays because they have no internet
+  /// and we do — one phone with a signal is enough for the whole room.
+  /// Otherwise a gateway is rebroadcasting what it heard from the relays, so a
+  /// mesh-only device can READ a geohash channel and not only write to it.
+  ///
+  /// Either way the event is VERIFIED first. It is signed by its originator, so
+  /// a gateway that altered or invented one produces something the relays would
+  /// reject and we refuse to act on. Publishing an unverified event on
+  /// somebody's behalf would make this device the author of whatever a peer
+  /// felt like handing it.
+  Future<void> handleMeshCarriedEvent({
+    required Map<String, dynamic> event,
+    required String geohash,
+    required bool publish,
+  }) async {
+    final service = _service;
+    if (service == null) return;
+    NostrEvent parsed;
+    try {
+      parsed = NostrEvent.fromJson(event);
+    } catch (_) {
+      return;
+    }
+    if (!await service.verifyEvent(parsed)) {
+      debugPrint('[mesh] carried event failed verification — dropped');
+      return;
+    }
+    if (publish) {
+      // Someone else's message, signed by them, going out over our connection.
+      await service.pool.publish(parsed);
+      return;
+    }
+    // Inbound from a gateway: run it through the ordinary channel ingest so it
+    // renders, notifies and dedups exactly like an event off our own socket.
+    if (parsed.kind == EventKind.geoChannel ||
+        parsed.kind == EventKind.namedChannel) {
+      _ref.read(appStateProvider.notifier).ingestEvent(parsed);
+      _maybeNotifyChannel(parsed);
     }
   }
 
@@ -4227,6 +4362,288 @@ class NostrController {
 
   /// Outstanding sent-but-unacked PMs keyed by `nymMessageId`.
   final Map<String, _PendingDm> _pendingDms = <String, _PendingDm>{};
+
+  // ---- Mesh sender outbox --------------------------------------------------
+
+  /// Sends the Bluetooth mesh carried because the internet route was down.
+  /// Held until relays return, then published to Nostr so the message reaches
+  /// everyone who was not in radio range — see [MeshOutbox] and
+  /// [flushMeshOutbox]. A drop (TTL, cap, attempt ceiling) fails the bubble
+  /// rather than leaving it looking sent.
+  late final MeshOutbox _meshOutbox = MeshOutbox(onDropped: (localId) {
+    try {
+      _ref.read(appStateProvider.notifier).markOptimisticFailed(localId);
+    } catch (_) {}
+    _persistMeshOutbox();
+  });
+
+  bool _meshOutboxLoaded = false;
+  bool _flushingMeshOutbox = false;
+
+  /// Reads the persisted outbox once. A send queued in a previous session — the
+  /// app was killed while offline — has to survive the restart, or the queue
+  /// only ever covers the case where nothing went wrong.
+  void _loadMeshOutbox() {
+    if (_meshOutboxLoaded) return;
+    _meshOutboxLoaded = true;
+    try {
+      _meshOutbox.decode(
+          _ref.read(keyValueStoreProvider).getString(StorageKeys.meshOutbox));
+    } catch (_) {}
+  }
+
+  void _persistMeshOutbox() {
+    try {
+      unawaited(_ref
+          .read(keyValueStoreProvider)
+          .setString(StorageKeys.meshOutbox, _meshOutbox.encode()));
+    } catch (_) {}
+  }
+
+  /// Retains a composer send the mesh carried instead of Nostr, so it can be
+  /// republished once relays are reachable.
+  ///
+  /// The caller decides eligibility, and two exclusions are not negotiable:
+  /// a GHOST-PINNED peer knows us only as that ghost, and republishing under
+  /// the real key would tell them otherwise; a MESH-ONLY peer has no Nostr
+  /// identity to deliver to at all (its pubkey is a local
+  /// `sha256("mesh:<peerID>")` placeholder). [MeshBridge.sendFromComposer]
+  /// enforces both before calling this.
+  void enqueueMeshOutbox(MeshOutboxEntry entry) {
+    _loadMeshOutbox();
+    _meshOutbox.add(entry);
+    _persistMeshOutbox();
+  }
+
+  /// Records the event signed at send time against an entry already queued.
+  ///
+  /// The enqueue happens the instant the radio carried the message; signing
+  /// mines proof of work and lands a moment later. Ignored when the entry has
+  /// gone (already published, or dropped).
+  void attachMeshOutboxSignedEvent(String localId, Map<String, dynamic> event) {
+    _loadMeshOutbox();
+    if (_meshOutbox.attachSignedEvent(localId, event)) _persistMeshOutbox();
+  }
+
+  /// Publishes everything the outbox still holds, oldest first.
+  ///
+  /// Called on the relay reconnect edge ([_onConnectionChanged]) and once after
+  /// boot, which between them cover every way the internet can come back:
+  /// regaining signal mid-session, and launching online after a session that
+  /// queued while offline. Re-entrant calls are ignored — a flush already in
+  /// flight will publish anything a second call would have.
+  Future<void> flushMeshOutbox() async {
+    _loadMeshOutbox();
+    if (_flushingMeshOutbox) return;
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) return;
+    if (_ref.read(appStateProvider).connectedRelays == 0) return;
+    final due = _meshOutbox.due(DateTime.now().millisecondsSinceEpoch);
+    if (due.isEmpty) {
+      _persistMeshOutbox(); // A prune may have emptied it.
+      return;
+    }
+    _flushingMeshOutbox = true;
+    try {
+      for (final entry in due) {
+        final sent = await _publishMeshOutboxEntry(entry, service, identity);
+        if (sent) {
+          _meshOutbox.remove(entry.localId);
+        } else {
+          // `noteAttempt` drops (and fails the bubble) once the ceiling is hit.
+          _meshOutbox.noteAttempt(entry.localId);
+        }
+      }
+    } finally {
+      _flushingMeshOutbox = false;
+      _persistMeshOutbox();
+    }
+  }
+
+  /// The one place a mesh-carried channel send becomes a Nostr event.
+  ///
+  /// Shared by the replay (which publishes) and by gateway mode (which only
+  /// needs the signed bytes), so the two cannot drift into building different
+  /// events for the same message.
+  Future<NostrEvent?> _channelEventForOutbox({
+    required NostrService service,
+    required Identity identity,
+    required String channelKey,
+    required String content,
+    required int createdAtSec,
+    required bool buildOnly,
+    String? threadRoot,
+    String? meshMessageId,
+  }) {
+    final isGeo = _ref
+        .read(appStateProvider)
+        .channels
+        .any((c) => c.key == channelKey.toLowerCase() && c.isGeohash);
+    return service.publishChannelMessage(
+      buildOnly: buildOnly,
+      channelKey: channelKey,
+      content: content,
+      nym: identity.nym,
+      geohash: isGeo ? channelKey : null,
+      emojiTags: _ref
+          .read(liveCustomEmojiProvider.notifier)
+          .emojiTagsForContent(content),
+      powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
+      threadRoot: threadRoot,
+      createdAtSec: createdAtSec,
+      extraTags: [
+        if ((meshMessageId ?? '').isNotEmpty) ['nymmesh', meshMessageId!],
+      ],
+    );
+  }
+
+  /// Builds and signs the event a mesh-carried channel send would publish,
+  /// without publishing it.
+  ///
+  /// Gateway mode ([MeshBridge]) hands the result to a peer who still has
+  /// internet. Signed by us, so that peer is a postbox: it cannot alter or
+  /// forge what it publishes, and the relays would reject it if it tried.
+  /// Null when there is nothing to sign with, in which case the outbox still
+  /// replays the message the ordinary way once our own internet returns.
+  Future<NostrEvent?> buildMeshOutboxEvent({
+    required String channelKey,
+    required String content,
+    required int createdAtSec,
+    String? threadRoot,
+    String? meshMessageId,
+  }) async {
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) return null;
+    try {
+      return await _channelEventForOutbox(
+        service: service,
+        identity: identity,
+        channelKey: channelKey,
+        content: content,
+        createdAtSec: createdAtSec,
+        threadRoot: threadRoot,
+        meshMessageId: meshMessageId,
+        buildOnly: true,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Publishes an event exactly as it was signed, without rebuilding it.
+  ///
+  /// Returns the event on success, or null when it will not parse — in which
+  /// case the caller rebuilds rather than losing the message. Verification is
+  /// not needed here: we signed this ourselves and it never left the device.
+  Future<NostrEvent?> _republishSignedEvent(
+    Map<String, dynamic> raw,
+    NostrService service,
+  ) async {
+    try {
+      final event = NostrEvent.fromJson(raw);
+      var geo = '';
+      for (final t in event.tags) {
+        if (t.length >= 2 && t[0] == 'g') {
+          geo = t[1];
+          break;
+        }
+      }
+      if (event.kind == EventKind.geoChannel && geo.isNotEmpty) {
+        final closest = service
+            .closestGeoRelays(geo)
+            .map((r) => r.url)
+            .toList(growable: false);
+        await service.pool.publishGeo(event, closest);
+      } else {
+        await service.pool.publish(event);
+      }
+      return event;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Publishes one retained send. Returns whether it went out.
+  Future<bool> _publishMeshOutboxEntry(
+    MeshOutboxEntry entry,
+    NostrService service,
+    Identity identity,
+  ) async {
+    try {
+      switch (entry.kind) {
+        case MeshOutboxKind.channel:
+          // Prefer the event signed at send time. Gateway mode may already have
+          // carried this exact event to the relays, and republishing the same
+          // bytes yields the same id, so the relays treat the second copy as a
+          // duplicate rather than a second message.
+          final stashed = entry.signedEvent;
+          if (stashed != null) {
+            final replayed = await _republishSignedEvent(stashed, service);
+            if (replayed != null) {
+              _ref.read(appStateProvider.notifier).replaceOptimistic(
+                    entry.localId,
+                    replayed.id,
+                    realCreatedAt: replayed.createdAt,
+                  );
+              return true;
+            }
+            // Fall through and rebuild rather than lose the message.
+          }
+          final signed = await _channelEventForOutbox(
+            service: service,
+            identity: identity,
+            channelKey: entry.target,
+            content: entry.content,
+            createdAtSec: entry.createdAtSec,
+            threadRoot: entry.threadRoot,
+            meshMessageId: entry.meshMessageId,
+            buildOnly: false,
+          );
+          if (signed == null) return false;
+          // The mesh echo is still an `_optim_*` placeholder; give it the real
+          // event id so the relay's copy of our own message reconciles onto it
+          // instead of appending a second bubble.
+          _ref.read(appStateProvider.notifier).replaceOptimistic(
+                entry.localId,
+                signed.id,
+                realCreatedAt: signed.createdAt,
+              );
+          return true;
+        case MeshOutboxKind.pm:
+          final nymMessageId =
+              entry.nymMessageId ?? entry.meshMessageId ?? entry.localId;
+          final rumor = PmLogic.buildPmRumor(
+            selfPubkey: identity.pubkey,
+            recipientPubkey: entry.target,
+            content: entry.content,
+            nymMessageId: nymMessageId,
+            // Republished with the ORIGINAL send time, so the DM lands in the
+            // conversation where it was written rather than at the bottom.
+            nowSec: entry.createdAtSec,
+            nowMs: entry.createdAtSec * 1000,
+            extraTags: [
+              if ((entry.threadRoot ?? '').isNotEmpty)
+                ['nymthread', entry.threadRoot!],
+            ],
+          );
+          // `onWrap` is what mirrors the wrap into D1 (`pm-put` for our own
+          // copy, `pm-deposit` into the recipient's inbox). Without it a
+          // replayed DM would reach the relays and nothing else — and relays
+          // carry no history, so a recipient who is offline right now would
+          // never get it. The replay has to archive exactly like a live send.
+          await _publishDualPm(
+            rumor: rumor,
+            recipientPubkey: entry.target,
+            onWrap: _archiveSentWrap,
+          );
+          return true;
+      }
+    } catch (_) {
+      return false;
+    }
+  }
   Timer? _dmRetryTimer;
 
   /// Peers we've received a bitchat-format PM from (PWA `bitchatUsers`) — we
@@ -5321,7 +5738,7 @@ class NostrController {
     // always does). When online, everything — including #mesh — goes to Nostr.
     final meshBridge = _ref.read(meshControllerProvider.notifier).bridge;
     if (meshBridge != null && meshBridge.shouldSendOverMesh(view)) {
-      await meshBridge.sendFromComposer(view, trimmed);
+      await meshBridge.sendFromComposer(view, trimmed, threadRoot: threadRoot);
       return;
     }
 
@@ -10729,6 +11146,13 @@ class NostrController {
       try {
         kvStore.setString(
             StorageKeys.groupNotifyMentionsOnly, '$groupMentions');
+      } catch (_) {}
+    }
+    final threadMentions = p['threadNotifyMentionsOnly'];
+    if (threadMentions is bool) {
+      try {
+        kvStore.setString(
+            StorageKeys.threadNotifyMentionsOnly, '$threadMentions');
       } catch (_) {}
     }
     final friendsOnly = p['notifyFriendsOnly'];
