@@ -776,7 +776,9 @@
 
                 if (typeof window !== 'undefined' && !this._persistUnloadHooked) {
                     this._persistUnloadHooked = true;
-                    const flush = () => this.flushPendingPersists();
+                    // Unload-path flushes must run to completion NOW — the
+                    // page may be gone before a sliced continuation fires.
+                    const flush = () => this.flushPendingPersists({ sync: true });
                     // pagehide / beforeunload — desktop + most mobile.
                     window.addEventListener('pagehide', flush);
                     window.addEventListener('beforeunload', flush);
@@ -813,7 +815,8 @@
             }
         },
 
-        flushPendingPersists() {
+        flushPendingPersists(opts) {
+            const sync = !!(opts && opts.sync);
             if (this._pendingPersistTimer) {
                 clearTimeout(this._pendingPersistTimer);
                 this._pendingPersistTimer = null;
@@ -822,11 +825,34 @@
                 clearTimeout(this._pendingMsgPersistTimer);
                 this._pendingMsgPersistTimer = null;
             }
-            if (!this._pendingPersists || this._pendingPersists.size === 0) return;
-            const fns = Array.from(this._pendingPersists.values());
-            this._pendingPersists.clear();
-            for (const fn of fns) {
-                try { fn(); } catch (_) { }
+            // A previous sliced flush may have left a remainder; drain it first
+            // (order preserved), then whatever accumulated since.
+            const fns = this._persistFlushRemainder || [];
+            this._persistFlushRemainder = null;
+            if (this._pendingPersists && this._pendingPersists.size > 0) {
+                fns.push(...this._pendingPersists.values());
+                this._pendingPersists.clear();
+            }
+            if (fns.length === 0) return;
+            if (sync) {
+                for (const fn of fns) {
+                    try { fn(); } catch (_) { }
+                }
+                return;
+            }
+            // Timer-driven flushes are TIME-SLICED (same discipline as the
+            // relay-queue drain): during a catch-up dozens of conversations
+            // are dirty at once, and serialising them all in one synchronous
+            // burst was a single long main-thread task every debounce period.
+            const start = Date.now();
+            let i = 0;
+            for (; i < fns.length; i++) {
+                try { fns[i](); } catch (_) { }
+                if (Date.now() - start > 12 && i + 1 < fns.length) {
+                    this._persistFlushRemainder = fns.slice(i + 1);
+                    setTimeout(() => this.flushPendingPersists(), 0);
+                    return;
+                }
             }
         },
 
