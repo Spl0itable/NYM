@@ -1198,6 +1198,7 @@ html.nym-needs-setup #setupModal {
     padding: 12px;
     margin-bottom: 8px;
     display: none;
+    transition: border-radius var(--transition);
 }
 
 .upload-progress.active {

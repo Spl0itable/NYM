@@ -1817,6 +1817,7 @@ body.chat-bubbles .read-more-btn {
     border: 1px solid var(--glass-border);
     box-shadow: var(--shadow-lg);
     animation: quoteSlideIn 0.2s ease-out;
+    transition: border-radius var(--transition);
 }
 
 @keyframes quoteSlideIn {
@@ -1901,6 +1902,7 @@ body.chat-bubbles .read-more-btn {
     border: 1px solid var(--glass-border);
     box-shadow: var(--shadow-lg);
     animation: quoteSlideIn 0.2s ease-out;
+    transition: border-radius var(--transition);
 }
 
 .edit-preview-bar {
@@ -2368,9 +2370,39 @@ div.message-input .rich-md-quote {
     transition: border-radius var(--transition);
 }
 
+.input-wrapper:has(> .autocomplete-dropdown.active) .quote-preview,
+.input-wrapper:has(> .emoji-autocomplete.active) .quote-preview,
+.input-wrapper:has(> .command-palette.active) .quote-preview,
+.input-wrapper:has(> .autocomplete-dropdown.active) .edit-preview,
+.input-wrapper:has(> .emoji-autocomplete.active) .edit-preview,
+.input-wrapper:has(> .command-palette.active) .edit-preview {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.input-wrapper:has(> .autocomplete-dropdown.active) .upload-progress,
+.input-wrapper:has(> .emoji-autocomplete.active) .upload-progress,
+.input-wrapper:has(> .command-palette.active) .upload-progress,
+.input-wrapper:has(> .quote-preview:not(.nm-hidden)) .upload-progress,
+.input-wrapper:has(> .edit-preview:not(.nm-hidden)) .upload-progress {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
 .input-wrapper:has(> .autocomplete-dropdown.active) .media-preview-strip,
 .input-wrapper:has(> .emoji-autocomplete.active) .media-preview-strip,
-.input-wrapper:has(> .command-palette.active) .media-preview-strip {
+.input-wrapper:has(> .command-palette.active) .media-preview-strip,
+.input-wrapper:has(> .quote-preview:not(.nm-hidden)) .media-preview-strip,
+.input-wrapper:has(> .edit-preview:not(.nm-hidden)) .media-preview-strip,
+.input-wrapper:has(> .upload-progress.active) .media-preview-strip {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.media-preview-strip:not(.nm-hidden) + .format-toolbar,
+.input-wrapper:has(> .quote-preview:not(.nm-hidden)) .format-toolbar,
+.input-wrapper:has(> .edit-preview:not(.nm-hidden)) .format-toolbar,
+.input-wrapper:has(> .upload-progress.active) .format-toolbar {
     border-top-left-radius: 0;
     border-top-right-radius: 0;
 }
