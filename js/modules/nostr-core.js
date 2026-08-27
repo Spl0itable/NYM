@@ -394,6 +394,24 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            // Cross-transport dedup. A `['nymmesh', <id>]` tag marks this event
+            // as the Nostr replay of a message the Bluetooth mesh already
+            // carried — the sender's outbox publishing, once their internet
+            // came back, what the radio delivered while it was down. Anyone who
+            // was in radio range already holds it under the mesh copy's id, so
+            // registering the id here drops whichever copy arrives second: mesh
+            // first, or relay first and the radio copy arriving after.
+            const meshReplayTag = event.tags.find(t => t[0] === 'nymmesh' && t[1]);
+            if (meshReplayTag) {
+                if (!this._meshReplayIds) this._meshReplayIds = new Set();
+                if (this._meshReplayIds.has(meshReplayTag[1])) return;
+                this._meshReplayIds.add(meshReplayTag[1]);
+                // Bounded: this only ever grows on replayed events.
+                if (this._meshReplayIds.size > 2000) {
+                    this._meshReplayIds = new Set([...this._meshReplayIds].slice(-1000));
+                }
+            }
+
             // Drop messages to blocked channels so they never get cached in the DOM
             if (this.isChannelBlocked(geohash, geohash)) {
                 return;
@@ -586,9 +604,35 @@ Object.assign(NYM.prototype, {
                 const _isViewingChannel = !this.inPMMode &&
                     _notifStorageKey === _notifCurrentKey && !_threadHidden;
 
+                // A channel notifies on an @mention — plus, in a thread, on any
+                // reply to a thread the user started (`_threadReplyElevated`),
+                // which is the only way a plain "someone replied to you" ever
+                // reaches them here. `threadNotifyMentionsOnly` narrows a thread
+                // reply back to the mention half.
+                const _threadElevated = typeof this._threadReplyElevated === 'function' &&
+                    this._threadReplyElevated(message);
+                const _threadSuppressed = typeof this._threadReplySuppressed === 'function' &&
+                    this._threadReplySuppressed(message);
+                const _channelAddressesMe = !_threadSuppressed &&
+                    (this.isMentioned(message.content) || _threadElevated);
+                // The bell footer says WHERE it came from; a thread reply names
+                // the thread as well as the channel, so "in a thread in #abc"
+                // rather than a bare "#abc" the user then hunts through.
+                const _notifInThread = !!(message.threadRoot &&
+                    typeof this.threadsEnabled === 'function' && this.threadsEnabled());
+                const _channelNotifInfo = () => ({
+                    type: 'geohash',
+                    channel: geohash,
+                    geohash: geohash,
+                    id: event.id,
+                    eventId: event.id,
+                    pubkey: event.pubkey,
+                    ...(_notifInThread ? { inThread: true, threadRoot: message.threadRoot } : {})
+                });
+
                 const shouldNotify = !message.isOwn &&
                     !message._spamGated &&
-                    this.isMentioned(message.content) &&
+                    _channelAddressesMe &&
                     !this.blockedUsers.has(event.pubkey) &&
                     !isHistorical &&
                     !alreadyNotified &&
@@ -597,28 +641,13 @@ Object.assign(NYM.prototype, {
                 if (shouldNotify) {
                     // Mark as notified
                     this.channelNotificationTracking.get(channelKey).add(event.id);
-
-                    const channelInfo = {
-                        type: 'geohash',
-                        channel: geohash,
-                        geohash: geohash,
-                        id: event.id,
-                        eventId: event.id,
-                        pubkey: event.pubkey
-                    };
-                    this.showNotification(nym, message.content, channelInfo, event.created_at * 1000);
+                    this.showNotification(nym, message.content, _channelNotifInfo(), event.created_at * 1000);
                 }
 
                 if (isHistorical && !message.isOwn && !message._spamGated &&
-                    this.isMentioned(message.content) && !this.blockedUsers.has(event.pubkey)) {
-                    this._addNotificationToHistory(nym, message.content, {
-                        type: 'geohash',
-                        channel: geohash,
-                        geohash: geohash,
-                        id: event.id,
-                        eventId: event.id,
-                        pubkey: event.pubkey
-                    }, message.timestamp.getTime());
+                    _channelAddressesMe && !this.blockedUsers.has(event.pubkey)) {
+                    this._addNotificationToHistory(nym, message.content,
+                        _channelNotifInfo(), message.timestamp.getTime());
                 }
             }
         } else if (event.kind === 30078) {
@@ -2602,14 +2631,33 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null) {
+    // `opts` is the mesh sender outbox's replay seam (mesh-outbox.js): a message
+    // the radio already carried, republished once relays came back.
+    //   createdAt  — the ORIGINAL send time, so the message keeps its place in
+    //                history and the existing echo still reconciles (the ingest
+    //                matches a placeholder within 60s of the event) however long
+    //                it sat queued.
+    //   localId    — the echo the mesh send already displayed. Reused instead of
+    //                drawing a second bubble for the same message.
+    //   extraTags  — the `['nymmesh', <id>]` marker that lets a peer who already
+    //                received this over the radio drop the Nostr copy.
+    //   buildOnly  — return the SIGNED event instead of publishing it, and draw
+    //                no bubble. Gateway mode (mesh-ui.js) hands that event to a
+    //                peer who still has internet, so it must be byte-identical
+    //                to what we would have published ourselves — same tags, same
+    //                kind, same signature. Exempt from the connected check for
+    //                the obvious reason: it exists for when we are offline.
+    async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null, opts = null) {
         try {
-            if (!this.connected) {
+            const buildOnly = !!(opts && opts.buildOnly);
+            if (!this.connected && !buildOnly) {
                 throw new Error('Not connected to relay');
             }
 
-            const nowMs = Date.now();
-            const now = Math.floor(nowMs / 1000);
+            const replayAt = opts && typeof opts.createdAt === 'number' && opts.createdAt > 0
+                ? opts.createdAt : 0;
+            const nowMs = replayAt ? replayAt * 1000 : Date.now();
+            const now = replayAt || Math.floor(nowMs / 1000);
             const tags = [
                 ['n', this.nym],
                 ['ms', String(nowMs)]
@@ -2655,6 +2703,8 @@ Object.assign(NYM.prototype, {
                 tags.push(...this.imetaTagsForContent(wireContent));
             }
 
+            if (opts && Array.isArray(opts.extraTags)) tags.push(...opts.extraTags);
+
             let event = {
                 kind: kind,
                 created_at: now,
@@ -2663,7 +2713,10 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            const tempId = '_optim_' + Math.random().toString(36).slice(2) + nowMs.toString(36);
+            const replayId = opts && typeof opts.localId === 'string' && opts.localId
+                ? opts.localId : '';
+            const tempId = replayId
+                || ('_optim_' + Math.random().toString(36).slice(2) + nowMs.toString(36));
             const storageKey = geohash ? `#${geohash}` : channel;
             const optimisticMessage = {
                 id: tempId,
@@ -2684,7 +2737,18 @@ Object.assign(NYM.prototype, {
                 _storageKey: storageKey
             };
 
-            this.displayMessage(optimisticMessage);
+            if (buildOnly) {
+                // No bubble, no relay, no cosmetics timer: the caller owns
+                // delivery from here. PoW still applies — a gateway publishing
+                // for us hands the relays an event that must pass their rules.
+                const difficulty = this._effectivePowDifficulty();
+                if (difficulty > 0) event = await this._minePow(event, difficulty);
+                return await this.signEvent(event);
+            }
+
+            // A replay already has its bubble on screen from the mesh send;
+            // drawing another would show the same message twice.
+            if (!replayId) this.displayMessage(optimisticMessage);
             this.recordOwnActivity();
 
             (async () => {

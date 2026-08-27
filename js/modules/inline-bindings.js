@@ -233,6 +233,7 @@ window.nymHapticTap = function (ms) {
         'meshAddPeer':                function () { nym().addMeshPeer(); },
         'meshToggleGhost':            function () { var n = nym(); n.setMeshGhostMode(!(n._mesh && n._mesh.ghostEnabled)); },
         'meshForgetPeer':             function (_e, t) { nym().meshForgetPeer(t.dataset.peerId); },
+        'meshPingPeer':               function (_e, t) { nym().meshPingPeer(t.dataset.peerId); },
         'showGeohashExplorer':        function () { nym().showGeohashExplorer(); },
         'closeGeohashExplorer':       function () { nym().closeGeohashExplorer(); },
         'resetGlobeView':             function () { nym().resetGlobeView(); },
@@ -433,6 +434,7 @@ window.nymHapticTap = function (ms) {
         // Notifications modal toggles
         'toggleNotificationsEnabled': function (_e, t) { nym().toggleNotificationsEnabled(t.checked); },
         'toggleGroupMentionsOnly':    function (_e, t) { nym().toggleGroupMentionsOnly(t.checked); },
+        'toggleThreadMentionsOnly':   function (_e, t) { nym().toggleThreadMentionsOnly(t.checked); },
         'toggleNotifyFriendsOnly':    function (_e, t) { nym().toggleNotifyFriendsOnly(t.checked); },
 
         // Dynamically-rendered (innerHTML) handlers from JS modules

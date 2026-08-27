@@ -1535,6 +1535,10 @@ Object.assign(NYM.prototype, {
             // thread reply the open conversation keeps collapsed.
             const notifyForPM = () => {
                 if (this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author)) return;
+                // `threadNotifyMentionsOnly`: a thread hanging off a PM is still
+                // a thread, so a reply in one that neither @mentions nor
+                // quote-replies the user is held back like a group's would be.
+                if (this._threadReplySuppressed(msg)) return;
                 const ageMs = Date.now() - (tsSec * 1000);
                 const treatAsHistorical = msg.isHistorical || ageMs > 30000;
                 const pmChannelInfo = {
@@ -1542,7 +1546,11 @@ Object.assign(NYM.prototype, {
                     nym: msg.author,
                     pubkey: peerPubkey,
                     id: conversationKey,
-                    eventId: event.id
+                    eventId: event.id,
+                    // Names the thread in the bell footer ("PM thread"), so the
+                    // user knows to look inside one rather than at the flat PM.
+                    ...(msg.threadRoot && this.threadsEnabled()
+                        ? { inThread: true, threadRoot: msg.threadRoot } : {})
                 };
                 if (!treatAsHistorical) {
                     this.showNotification(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);

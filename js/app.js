@@ -802,6 +802,7 @@ class NYM {
         this._lastSettingsSyncTs = parseInt(localStorage.getItem('nym_last_settings_sync_ts') || '0', 10) || 0;
         this.notificationsEnabled = localStorage.getItem('nym_notifications_enabled') !== 'false';
         this.groupNotifyMentionsOnly = localStorage.getItem('nym_group_notify_mentions_only') === 'true';
+        this.threadNotifyMentionsOnly = localStorage.getItem('nym_thread_notify_mentions_only') === 'true';
         this.notifyFriendsOnly = localStorage.getItem('nym_notify_friends_only') === 'true';
         defineLazy('closedPMs', lazyStoredSet('nym_closed_pms'));
         defineLazy('leftGroups', lazyStoredSet('nym_left_groups'));
@@ -7126,6 +7127,10 @@ async function applyNostrSettings(s) {
     if (typeof s.groupNotifyMentionsOnly === 'boolean') {
         nym.groupNotifyMentionsOnly = s.groupNotifyMentionsOnly;
         localStorage.setItem('nym_group_notify_mentions_only', String(s.groupNotifyMentionsOnly));
+    }
+    if (typeof s.threadNotifyMentionsOnly === 'boolean') {
+        nym.threadNotifyMentionsOnly = s.threadNotifyMentionsOnly;
+        localStorage.setItem('nym_thread_notify_mentions_only', String(s.threadNotifyMentionsOnly));
     }
     if (typeof s.notifyFriendsOnly === 'boolean') {
         nym.notifyFriendsOnly = s.notifyFriendsOnly;

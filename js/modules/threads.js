@@ -89,6 +89,48 @@ Object.assign(NYM.prototype, {
         return !(at && at.rootId === message.threadRoot);
     },
 
+    // A thread is a conversation of its own, so the flat rules of the channel /
+    // PM / group it hangs under are the wrong ones to judge its replies by. Two
+    // predicates carry the difference, and both are no-ops for a message that
+    // is not a thread reply.
+
+    // True when the reply landed in a thread the USER started. Opening a thread
+    // on your own message is joining a conversation, so its replies reach you
+    // the way a mention does. Without this, replying under someone's message
+    // notified them of nothing at all: a channel only ever notified on an
+    // @mention, and the reply was collapsed out of sight.
+    _threadReplyRootIsMine(message) {
+        if (!message || !message.threadRoot) return false;
+        const list = this._threadListForMessage(message);
+        if (!list) return false;
+        const root = list.find(m =>
+            m !== message && this.threadKeyForMessage(m) === message.threadRoot);
+        if (!root) return false;
+        return !!root.isOwn || (!!this.pubkey && root.pubkey === this.pubkey);
+    },
+
+    // True when `threadNotifyMentionsOnly` holds this reply back: the setting is
+    // on and the reply neither @mentions nor quote-replies the user. It is the
+    // thread-scoped twin of `groupNotifyMentionsOnly`, and it applies wherever a
+    // thread hangs — channel, PM or group.
+    _threadReplySuppressed(message) {
+        if (!message || !message.threadRoot) return false;
+        if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
+        if (!this.threadNotifyMentionsOnly) return false;
+        return !this.isMentioned(message.content);
+    },
+
+    // True when this reply reaches the user whatever the conversation's own
+    // rules say — it is in a thread they started. An @mention already passes
+    // every gate, so only the thread-ownership half needs lifting here, and
+    // `threadNotifyMentionsOnly` turns it off.
+    _threadReplyElevated(message) {
+        if (!message || !message.threadRoot) return false;
+        if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
+        if (this.threadNotifyMentionsOnly) return false;
+        return this._threadReplyRootIsMine(message);
+    },
+
     // Reply-count lookup, cached per store list. The cache keys on the list's
     // identity and length so inserts (push/splice) and slice reassignments
     // both invalidate it naturally.
@@ -245,8 +287,6 @@ Object.assign(NYM.prototype, {
         }
         return '';
     },
-
-    // ---- Thread view (in place, same container + composer) ----------------
 
     // Open the thread for the message element/button `target` (hover button,
     // reply-count row, or long-press menu item).
@@ -477,6 +517,43 @@ Object.assign(NYM.prototype, {
                 this.navigateBack();
             }
         }
+    },
+
+    // Open the thread a bell-history entry came from. The notification names
+    // the thread it happened in, so tapping it must land IN that thread —
+    // dropping the user at the flat conversation leaves them hunting for the
+    // reply behind whichever "N replies" row it collapsed into.
+    //
+    // Returns false when the entry names no thread (or threads are off), so the
+    // caller keeps its plain open-the-conversation behaviour.
+    openThreadFromNotification(info) {
+        if (!info || !info.threadRoot || !this.threadsEnabled()) return false;
+        let ctx = null;
+        if (info.type === 'geohash') {
+            const key = info.geohash || info.channel || '';
+            if (key) {
+                ctx = {
+                    type: 'channel', channel: info.channel || key, geohash: info.geohash || '',
+                    storageKey: `#${key}`, isPM: false
+                };
+            }
+        } else if (info.type === 'pm' && info.pubkey) {
+            ctx = {
+                type: 'pm', pubkey: info.pubkey,
+                nym: info.nym || this.getNymFromPubkey(info.pubkey),
+                storageKey: this.getPMConversationKey(info.pubkey), isPM: true
+            };
+        } else if (info.type === 'group' && info.groupId) {
+            ctx = {
+                type: 'group', groupId: info.groupId,
+                storageKey: this.getGroupConversationKey(info.groupId), isPM: true
+            };
+        }
+        if (!ctx || !ctx.storageKey) return false;
+        // Same ordering as `_navOpenThread`: the caller has already switched the
+        // conversation, and the thread view takes the container from there.
+        this.openThreadView(info.threadRoot, ctx);
+        return true;
     },
 
     // Called by _navigateTo for 'thread' history entries: make sure the

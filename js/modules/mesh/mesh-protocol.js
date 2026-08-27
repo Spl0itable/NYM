@@ -30,11 +30,23 @@
         announce: 0x01,
         message: 0x02,
         leave: 0x03,
+        // Store-and-forward envelope carried by another peer on the sender's
+        // behalf. Opaque to whoever carries it (mesh-courier.js).
+        courierEnvelope: 0x04,
         noiseHandshake: 0x10,
         noiseEncrypted: 0x11,
         fragment: 0x20,
         requestSync: 0x21,
         fileTransfer: 0x22,
+        // A signed batch of one-time prekeys, gossiped mesh-wide so courier
+        // mail can be sealed to a key its owner DELETES after use.
+        prekeyBundle: 0x24,
+        // Directed echo request / reply — mesh diagnostics.
+        ping: 0x26,
+        pong: 0x27,
+        // Gateway mode: a signed Nostr event ferried between a mesh-only peer
+        // and a peer that has internet.
+        nostrCarrier: 0x28,
         voiceFrame: 0x29,
         nymProfileRequest: 0x50,
         nymProfileResponse: 0x51,

@@ -2488,12 +2488,16 @@
     <script defer src="js/modules/mesh/mesh-protocol.js"></script>
     <script defer src="js/modules/mesh/mesh-crypto.js"></script>
     <script defer src="js/modules/mesh/mesh-transport.js"></script>
+    <script defer src="js/modules/mesh/mesh-courier.js"></script>
+    <script defer src="js/modules/mesh/mesh-sync.js"></script>
+    <script defer src="js/modules/mesh/mesh-extras.js"></script>
     <script defer src="js/modules/mesh/mesh-service.js"></script>
     <script defer src="js/modules/messages.js"></script>
     <script defer src="js/modules/pms.js"></script>
     <script defer src="js/modules/groups.js"></script>
     <script defer src="js/modules/ui-context.js"></script>
     <script defer src="js/modules/mesh/mesh-ui.js"></script>
+    <script defer src="js/modules/mesh/mesh-outbox.js"></script>
     <script defer src="js/modules/init.js"></script>
     <script defer src="js/modules/emoji.js"></script>
     <script defer src="js/modules/reactions.js"></script>
@@ -2535,6 +2539,11 @@
                 <label class="nm-h-80">
                     <input type="checkbox" id="groupMentionsOnlyCheckbox" data-on-change="toggleGroupMentionsOnly" class="nm-h-79">
                     Only notify for mentions in group chats
+                </label>
+                <br>
+                <label class="nm-h-80">
+                    <input type="checkbox" id="threadMentionsOnlyCheckbox" data-on-change="toggleThreadMentionsOnly" class="nm-h-79">
+                    Only notify for mentions in threads
                 </label>
                 <br>
                 <label class="nm-h-80">

@@ -448,6 +448,8 @@ Object.assign(NYM.prototype, {
         if (checkbox) checkbox.checked = this.notificationsEnabled;
         const mentionsCheckbox = document.getElementById('groupMentionsOnlyCheckbox');
         if (mentionsCheckbox) mentionsCheckbox.checked = this.groupNotifyMentionsOnly;
+        const threadMentionsCheckbox = document.getElementById('threadMentionsOnlyCheckbox');
+        if (threadMentionsCheckbox) threadMentionsCheckbox.checked = this.threadNotifyMentionsOnly;
         const friendsOnlyCheckbox = document.getElementById('notifyFriendsOnlyCheckbox');
         if (friendsOnlyCheckbox) friendsOnlyCheckbox.checked = this.notifyFriendsOnly;
 
@@ -520,13 +522,25 @@ Object.assign(NYM.prototype, {
                 // Channel/context label
                 let contextHtml = '';
                 if (n.channelInfo) {
+                    // A thread reply says so: the flat conversation label alone
+                    // sends the user hunting for a message that is collapsed
+                    // behind one of its "N replies" rows.
+                    const inThread = !!n.channelInfo.inThread;
                     if (n.channelInfo.type === 'geohash') {
-                        contextHtml = `<span class="notification-item-context">in #${this.escapeHtml(n.channelInfo.geohash)}</span>`;
+                        const where = `#${this.escapeHtml(n.channelInfo.geohash)}`;
+                        contextHtml = inThread
+                            ? `<span class="notification-item-context">in a thread in ${where}</span>`
+                            : `<span class="notification-item-context">in ${where}</span>`;
                     } else if (n.channelInfo.type === 'group') {
                         const groupName = n.title.split(':')[0] || 'Group';
-                        contextHtml = `<span class="notification-item-context">in ${this.escapeHtml(groupName)}</span>`;
+                        const where = this.escapeHtml(groupName);
+                        contextHtml = inThread
+                            ? `<span class="notification-item-context">in a thread in ${where}</span>`
+                            : `<span class="notification-item-context">in ${where}</span>`;
                     } else if (n.channelInfo.type === 'pm') {
-                        contextHtml = `<span class="notification-item-context">PM</span>`;
+                        contextHtml = inThread
+                            ? `<span class="notification-item-context">PM thread</span>`
+                            : `<span class="notification-item-context">PM</span>`;
                     } else if (n.channelInfo.type === 'reaction') {
                         contextHtml = `<span class="notification-item-context">Reaction</span>`;
                     } else if (n.channelInfo.type === 'call') {
@@ -581,6 +595,11 @@ Object.assign(NYM.prototype, {
                             } else if (info.pubkey) {
                                 this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
                             }
+                        }
+                        // The conversation is open; if the notification came
+                        // from a thread, finish the trip and open that thread.
+                        if (info.threadRoot && typeof this.openThreadFromNotification === 'function') {
+                            this.openThreadFromNotification(info);
                         }
                         this.closeNotificationsModal();
                     };

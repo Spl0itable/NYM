@@ -1406,7 +1406,20 @@ Object.assign(NYM.prototype, {
         const notifyForGroup = () => {
             if (senderBlocked) return;
             if (msgType === 'group-invite') return;
-            if (this.groupNotifyMentionsOnly && !this.isMentioned(messageContent)) return;
+            // A thread reply is judged by the THREAD's rules, not the flat
+            // group's: it reaches the user when it addresses them (@mention or
+            // quote reply) or landed in a thread they started, and
+            // `threadNotifyMentionsOnly` narrows that to the first half. The
+            // flat "every group message notifies" rule is the wrong one here —
+            // a group thread is a side conversation, and running every reply in
+            // one through it turns each into a buzz.
+            if (msg.threadRoot && this.threadsEnabled()) {
+                if (this._threadReplySuppressed(msg)) return;
+                if (!this.isMentioned(messageContent) &&
+                    !this._threadReplyRootIsMine(msg)) return;
+            } else if (this.groupNotifyMentionsOnly && !this.isMentioned(messageContent)) {
+                return;
+            }
             const ageMs = Date.now() - (tsSec * 1000);
             const treatAsHistorical = msg.isHistorical || ageMs > 30000;
             const groupMsgChannelInfo = {
@@ -1414,7 +1427,10 @@ Object.assign(NYM.prototype, {
                 groupId,
                 id: groupConvKey,
                 pubkey: senderPubkey,
-                eventId: event.id
+                eventId: event.id,
+                // Names the thread in the bell footer ("in a thread in <group>").
+                ...(msg.threadRoot && this.threadsEnabled()
+                    ? { inThread: true, threadRoot: msg.threadRoot } : {})
             };
             if (!treatAsHistorical) {
                 this.showNotification(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
@@ -4081,6 +4097,16 @@ Object.assign(NYM.prototype, {
     toggleGroupMentionsOnly(enabled) {
         this.groupNotifyMentionsOnly = enabled;
         localStorage.setItem('nym_group_notify_mentions_only', String(enabled));
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
+    // The thread-scoped twin of `toggleGroupMentionsOnly`: with it on, a reply
+    // in ANY thread — channel, PM or group — only notifies when it @mentions or
+    // quote-replies the user, rather than also on every reply to a thread they
+    // started.
+    toggleThreadMentionsOnly(enabled) {
+        this.threadNotifyMentionsOnly = enabled;
+        localStorage.setItem('nym_thread_notify_mentions_only', String(enabled));
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 

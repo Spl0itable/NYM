@@ -932,6 +932,10 @@ Object.assign(NYM.prototype, {
 
             // Retry any pending DMs after network restore
             setTimeout(() => this.retryPendingDMsOnReconnect(), 3000);
+            // Publish whatever the Bluetooth mesh carried while the internet
+            // was down (mesh-outbox.js). Until this existed those messages
+            // reached whoever was in radio range and nobody else, ever.
+            setTimeout(() => this.flushMeshOutbox && this.flushMeshOutbox(), 3500);
         });
 
         window.addEventListener('offline', () => {
@@ -1098,6 +1102,7 @@ Object.assign(NYM.prototype, {
 
                 // Retry any pending DMs that haven't been delivered
                 setTimeout(() => this.retryPendingDMsOnReconnect(), 2000);
+                setTimeout(() => this.flushMeshOutbox && this.flushMeshOutbox(), 2500);
             }
         } catch (error) {
             //

@@ -5544,7 +5544,8 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
 
 .mesh-toggle,
 .mesh-add,
-.mesh-forget {
+.mesh-forget,
+.mesh-ping {
     background: rgb(from var(--primary) r g b / 0.1);
     border: 1px solid rgb(from var(--primary) r g b / 0.3);
     color: var(--text);
@@ -5566,9 +5567,18 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
     margin-left: auto;
 }
 
+.mesh-ping {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text-dim);
+    padding: 3px 9px;
+    flex: 0 0 auto;
+}
+
 .mesh-toggle:hover,
 .mesh-add:hover,
-.mesh-forget:hover {
+.mesh-forget:hover,
+.mesh-ping:hover {
     background: rgb(from var(--primary) r g b / 0.18);
 }
 
@@ -5637,6 +5647,8 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
     font-size: 11px;
     color: var(--text-dim);
     margin-left: auto;
+    min-width: 0;
+    text-align: right;
 }
 
 .mesh-empty {

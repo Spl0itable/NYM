@@ -9,6 +9,14 @@
 // binding is initialised by the time this runs.
 (function () {
     const MESH_CHANNEL = 'mesh';
+    const MESH_GOSSIP_KEY = 'nym_mesh_gossip_archive';
+    // The one-time keys this device has minted. A private half lost on
+    // reload is mail nobody can ever open, so it outlives the session.
+    const MESH_PREKEYS_KEY = 'nym_mesh_prekeys_v1';
+    // How long a probe waits before the row says so. A peer is in the list
+    // because we heard an announce, which may have been minutes and several
+    // moves ago; silence is an answer, not a hang.
+    const MESH_PING_TIMEOUT_MS = 10 * 1000;
 
     Object.assign(NYM.prototype, {
 
@@ -69,12 +77,31 @@
                 onPeersChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
                 onGhostChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
             });
+            // Keep the carried public history written down. This is what makes
+            // a device a town crier rather than a live relay: reload hours
+            // later, or walk between two mesh partitions, and the backlog is
+            // still there to hand to whoever missed it.
+            this._mesh.onGossipArchiveChanged = (archive) => {
+                try { localStorage.setItem(MESH_GOSSIP_KEY, archive); } catch (_) { }
+            };
+            this._mesh.onPrekeysChanged = (blob) => {
+                try { localStorage.setItem(MESH_PREKEYS_KEY, blob); } catch (_) { }
+            };
+            this._mesh.onNostrCarrier = (carrier, fromPeerID) =>
+                this._onMeshNostrCarrier(carrier, fromPeerID);
+            this._mesh.onPingResult = (result) => this._onMeshPingResult(result);
             return this._mesh;
         },
 
         async startMesh() {
             const mesh = this._meshService();
             await this._prepareMeshNostrLink(mesh);
+            try {
+                await mesh.restoreGossipArchive(localStorage.getItem(MESH_GOSSIP_KEY));
+            } catch (_) { }
+            try {
+                await mesh.restorePrekeys(localStorage.getItem(MESH_PREKEYS_KEY));
+            } catch (_) { }
             await mesh.start();
             this.addChannel(MESH_CHANNEL, MESH_CHANNEL);
             this._renderMeshPanel();
@@ -84,6 +111,14 @@
         async stopMesh() {
             if (!this._mesh) return;
             await this._mesh.stop();
+            // A round trip measured to a peer we can no longer reach is a
+            // stale number, not a reading.
+            if (this._meshPings) {
+                for (const held of this._meshPings.values()) {
+                    if (held.timeout) clearTimeout(held.timeout);
+                }
+                this._meshPings.clear();
+            }
             this._renderMeshPanel();
             this._renderMeshStatusRow();
         },
@@ -91,6 +126,75 @@
         async toggleMesh() {
             if (this._mesh && this._mesh.running) await this.stopMesh();
             else await this.startMesh();
+        },
+
+        /// A mesh-only peer asked us to publish an event, or a gateway is
+        /// rebroadcasting one it heard from the relays.
+        ///
+        /// Both directions VERIFY before acting. A carried event is signed by
+        /// its ORIGINATOR, so a gateway that altered it — or invented one —
+        /// produces something the relays would reject and we refuse to show.
+        /// Publishing an unverified event on somebody's behalf would make this
+        /// device the author of whatever a peer felt like handing it. A gateway
+        /// is a postbox, not an author.
+        async _onMeshNostrCarrier(carrier, fromPeerID) {
+            const D = window.NymMeshExtras.CARRIER_DIRECTION;
+            const event = window.NymMeshExtras.carrierEvent(carrier);
+            if (!event || typeof event.id !== 'string' || typeof event.sig !== 'string') return;
+            let ok = false;
+            try { ok = await this._verifyRelayEventAsync(event); } catch (_) { ok = false; }
+            if (!ok) {
+                this._meshLogLine(`carried event from ${fromPeerID} FAILED verification — dropped`);
+                return;
+            }
+            const outbound = carrier.direction === D.toGateway || carrier.direction === D.toBridge;
+            if (outbound) {
+                // Someone else's message, signed by them, going out over our
+                // connection. Refused when we have no connection either —
+                // pretending to be a gateway helps nobody.
+                if (!this.connected) return;
+                this.broadcastEvent(['EVENT', event]);
+                this.ensureGeoRelayDelivery(event, carrier.geohash);
+                this._meshLogLine(`published carried event for ${fromPeerID}`);
+                return;
+            }
+            // Inbound from a gateway: run it through the ORDINARY relay ingest
+            // so it renders, notifies and dedups exactly like an event off our
+            // own socket.
+            this.handleRelayMessage(['EVENT', 'mesh-carrier', event], 'mesh');
+        },
+
+        /// Asks nearby peers to publish `event` for us, so it reaches the
+        /// relays even though this device has no signal.
+        ///
+        /// Returns how many were ASKED, not how many published: nothing on the
+        /// wire says which peer has internet, and a peer that has none simply
+        /// declines. So the ask goes to every verified peer rather than picking
+        /// one, and the sender outbox still holds the message until our own
+        /// connection returns — gateway mode is a shortcut, never the only copy.
+        ///
+        /// Never while ghosted: the event is signed with the REAL key, so
+        /// publishing it would tie the epoch straight back to the npub — the
+        /// same reason the sender outbox refuses a ghost-pinned conversation.
+        async meshCarryToGateway(geohash, event) {
+            const mesh = this._mesh;
+            if (!mesh || !mesh.running || mesh.ghostEnabled) return 0;
+            let asked = 0;
+            for (const peer of mesh.peerList) {
+                // Verified only: an unverified peer is a radio claiming a name,
+                // and handing it our traffic tells a stranger we are here.
+                if (!peer.isVerified) continue;
+                if (await mesh.carryToGateway(peer.peerID, geohash, event)) asked++;
+            }
+            if (asked) this._meshLogLine(`asked ${asked} peer(s) to publish for us`);
+            return asked;
+        },
+
+        _meshLogLine(line) {
+            if (!this._meshLog) this._meshLog = [];
+            this._meshLog.push(new Date().toLocaleTimeString() + '  ' + line);
+            if (this._meshLog.length > 200) this._meshLog.shift();
+            this._renderMeshLog();
         },
 
         // Binds this device's mesh key to its Nostr identity so peers can match
@@ -146,6 +250,14 @@
             const channel = m.channel || MESH_CHANNEL;
             const seconds = Math.floor((m.timestampMs || Date.now()) / 1000);
             const pubkey = m.senderNostrPubkey || ('mesh:' + m.senderPeerID);
+            // Remember the mesh id: when the sender's internet comes back their
+            // outbox republishes this same message to Nostr carrying a
+            // `['nymmesh', id]` tag, and the channel ingest drops it rather than
+            // showing the words a second time.
+            if (m.id) {
+                if (!this._meshReplayIds) this._meshReplayIds = new Set();
+                this._meshReplayIds.add(m.id);
+            }
             this.displayMessage({
                 id: 'mesh-' + m.senderPeerID + '-' + (m.timestampMs || Date.now()) + '-' + (this._msgSeq || 0),
                 author: m.senderNickname,
@@ -229,8 +341,9 @@
         // mesh for our own packet, so the sender would otherwise see nothing.
         async _sendChannelOverMesh(content, channel) {
             const mesh = this._meshService();
+            let meshId = null;
             try {
-                await mesh.sendPublicMessage(content, channel === MESH_CHANNEL ? null : channel);
+                meshId = await mesh.sendPublicMessage(content, channel === MESH_CHANNEL ? null : channel);
             } catch (err) {
                 this.displaySystemMessage('Mesh send failed: ' + (err && err.message));
                 return;
@@ -239,8 +352,11 @@
                 this.displaySystemMessage('No mesh device in range — waiting for Bluetooth range.');
             }
             const now = Date.now();
+            // `_optim_` so the Nostr replay can reconcile onto this very bubble
+            // instead of drawing a second one (`_replaceOptimisticMessage`).
+            const localId = '_optim_mesh' + now.toString(36) + (this._msgSeq || 0);
             this.displayMessage({
-                id: 'mesh-own-' + now + '-' + (this._msgSeq || 0),
+                id: localId,
                 author: this.nym,
                 pubkey: this.pubkey,
                 content,
@@ -253,7 +369,58 @@
                 isOwn: true,
                 isMesh: true,
                 isPM: false,
+                _optimistic: true,
+                _storageKey: `#${channel}`,
             });
+            // The radio reached whoever is in range; the outbox is what reaches
+            // everyone else once the internet comes back. A send made while
+            // ONLINE is not queued — that message already went out both ways.
+            // `#mesh` is queued like any other channel: it is backed by a real
+            // kind-20000 channel, so the Nostr copy is where it belongs.
+            if (this.connected) return;
+            const entry = {
+                kind: 'channel',
+                target: channel,
+                content,
+                createdAt: Math.floor(now / 1000),
+                localId,
+                meshMessageId: meshId || null,
+            };
+            // Sign it ONCE, here, and let both delivery paths carry that same
+            // event. A gateway may publish it now and our own outbox may
+            // publish it later; identical bytes mean an identical event id, so
+            // the relays treat the second as a duplicate. Rebuilding it per
+            // path would differ by the proof-of-work nonce alone and put the
+            // message on the relays twice.
+            let signed = null;
+            try { signed = await this._meshBuildOutboxEvent(entry); } catch (_) { }
+            if (signed) entry.signedEvent = signed;
+            if (typeof this.meshOutboxQueue === 'function') this.meshOutboxQueue(entry);
+            // Then ask anyone nearby who still has a signal to publish it now.
+            // The outbox waits for OUR internet; this does not need to. It is a
+            // shortcut, never the only copy — the entry stays queued either way,
+            // because nothing on the wire tells us whether a gateway succeeded.
+            if (signed) this.meshCarryToGateway(channel, signed).catch(() => { });
+        },
+
+        /// Builds and signs the event this send would have published, without
+        /// publishing it or drawing a second bubble.
+        ///
+        /// Signed by US, so a gateway that carries it is a postbox: it cannot
+        /// alter or forge what it publishes, and the relays would reject it if
+        /// it tried.
+        async _meshBuildOutboxEvent(entry) {
+            if (!entry || entry.kind !== 'channel') return null;
+            if (typeof this.publishMessage !== 'function') return null;
+            const event = await this.publishMessage(
+                entry.content, entry.target, entry.target, null, entry.threadRoot || null,
+                {
+                    buildOnly: true,
+                    createdAt: entry.createdAt,
+                    localId: entry.localId,
+                    extraTags: entry.meshMessageId ? [['nymmesh', entry.meshMessageId]] : [],
+                });
+            return event && event.sig ? event : null;
         },
 
         //  panel 
@@ -278,7 +445,9 @@
             const peerRows = peers.length
                 ? peers.map(p => `<div class="mesh-peer">
                         <span class="mesh-peer-name">${esc(p.nickname || p.peerID)}</span>
-                        <span class="mesh-peer-meta">${esc(p.peerID)}${p.isVerified ? ' &middot; verified' : ''}${p.nostrLinkVerified ? ' &middot; linked' : ''}</span>
+                        <span class="mesh-peer-meta">${esc(p.peerID)}${p.isVerified ? ' &middot; verified' : ''}${p.nostrLinkVerified ? ' &middot; linked' : ''}${this._meshPingLabel(p.peerID)}</span>
+                        <button class="mesh-ping" data-action="meshPingPeer" data-peer-id="${esc(p.peerID)}" type="button"
+                            title="Measure the round trip and how many hops away this peer is">Ping</button>
                     </div>`).join('')
                 : '<div class="mesh-empty">No peers heard yet.</div>';
 
@@ -335,6 +504,54 @@
         meshForgetPeer(id) {
             if (!this._mesh) return;
             this._mesh.forgetPeer(id).then(() => this._renderMeshPanel());
+        },
+
+        /// Probes one peer. A peer list says who is out there; it cannot say
+        /// whether they are in the same room or three relays away. The echo can.
+        meshPingPeer(peerID) {
+            const mesh = this._mesh;
+            if (!mesh || !mesh.running || !peerID) return;
+            if (!this._meshPings) this._meshPings = new Map();
+            this._meshPings.set(peerID, { state: 'waiting' });
+            this._renderMeshPanel();
+            // No reply is an answer too: the peer is in our list because we
+            // heard an announce, which may have been minutes and several moves
+            // ago. Time it out rather than leaving the row waiting forever.
+            const timeout = setTimeout(() => {
+                const held = this._meshPings.get(peerID);
+                if (!held || held.state !== 'waiting') return;
+                this._meshPings.set(peerID, { state: 'lost' });
+                this._renderMeshPanel();
+            }, MESH_PING_TIMEOUT_MS);
+            this._meshPings.get(peerID).timeout = timeout;
+            mesh.ping(peerID).then((sent) => {
+                if (sent) return;
+                clearTimeout(timeout);
+                this._meshPings.set(peerID, { state: 'lost' });
+                this._renderMeshPanel();
+            });
+        },
+
+        _onMeshPingResult(result) {
+            if (!this._meshPings) this._meshPings = new Map();
+            const held = this._meshPings.get(result.peerID);
+            if (held && held.timeout) clearTimeout(held.timeout);
+            this._meshPings.set(result.peerID, {
+                state: 'ok', roundTripMs: result.roundTripMs, hops: result.hops,
+            });
+            this._meshLogLine(`pong from ${result.peerID} ${result.roundTripMs}ms`
+                + (result.hops === null ? '' : ` (${result.hops} hop${result.hops === 1 ? '' : 's'})`));
+            this._renderMeshPanel();
+        },
+
+        _meshPingLabel(peerID) {
+            const held = this._meshPings && this._meshPings.get(peerID);
+            if (!held) return '';
+            if (held.state === 'waiting') return ' &middot; pinging&hellip;';
+            if (held.state === 'lost') return ' &middot; no reply';
+            const hops = held.hops === null
+                ? '' : `, ${held.hops} hop${held.hops === 1 ? '' : 's'}`;
+            return ` &middot; ${held.roundTripMs}ms${hops}`;
         },
     });
 })();
