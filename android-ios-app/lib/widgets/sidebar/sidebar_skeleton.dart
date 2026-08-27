@@ -48,7 +48,11 @@ class SidebarSkeletonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    // RepaintBoundary: each row's shimmer repaints every frame of the 1.4s
+    // loop while the sidebar loads; the boundary keeps that invalidation
+    // inside the row instead of re-rasterizing the whole sidebar layer.
+    return RepaintBoundary(
+        child: Padding(
       // `margin: 2px 4px` (matches the real list rows).
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Container(
@@ -79,7 +83,7 @@ class SidebarSkeletonRow extends StatelessWidget {
           },
         ),
       ),
-    );
+    ));
   }
 }
 

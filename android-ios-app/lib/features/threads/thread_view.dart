@@ -39,12 +39,17 @@ void openMessageThread(WidgetRef ref, Message m,
     ref.read(appStateProvider.notifier).switchView(view);
   }
   // Post-frame: the view switch above may fire listeners that clear the
-  // active thread; setting it afterwards wins either order.
+  // active thread; setting it afterwards wins either order. Capture the
+  // NOTIFIER now — the view switch can dispose the widget whose `ref` this
+  // is before the frame ends (its message row unmounts with the old view),
+  // and reading through a disposed ref threw "Cannot use ref after the
+  // widget was disposed" every time a thread was opened cross-view.
   final target = ActiveThread(view: view, rootId: threadKeyForMessage(root));
+  final activeThread = ref.read(activeThreadProvider.notifier);
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    ref.read(activeThreadProvider.notifier).state = target;
+    activeThread.state = target;
   });
-  ref.read(activeThreadProvider.notifier).state = target;
+  activeThread.state = target;
 }
 
 ChatView? _viewForStorageKey(String key) {

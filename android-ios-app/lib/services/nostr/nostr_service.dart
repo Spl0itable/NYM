@@ -14,10 +14,9 @@ import '../../core/crypto/crypto_worker.dart';
 import '../../core/crypto/gift_wrap.dart' as giftwrap;
 import '../../core/crypto/isolate_verifier.dart';
 import '../../core/crypto/keys.dart' as keys;
-import '../../core/crypto/nip44.dart' as nip44;
+import '../../core/crypto/nym_sync_builder.dart';
 import '../../core/crypto/pow.dart';
 import '../../core/crypto/pq.dart' as pq;
-import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../features/identity/pq_registry.dart';
 import '../../features/messages/trust_graph.dart';
 import '../../models/channel.dart' as ch;
@@ -267,6 +266,18 @@ class NostrService {
   /// cold-boot archive/live replay of that history skips re-verification.
   static void seedVerifiedIds(Iterable<String> ids) =>
       _verifier.markVerified(ids);
+
+  /// The newest verified event ids, for persisting across launches (see
+  /// [IsolateVerifier.snapshotVerifiedIds]) — restored via [seedVerifiedIds] on
+  /// the next boot so the relay/D1 replay of reactions, profiles, presence and
+  /// out-of-cache history skips the expensive signature math.
+  static List<String> snapshotVerifiedIds({int max = 20000}) =>
+      _verifier.snapshotVerifiedIds(max: max);
+
+  /// Hook fired whenever a signature newly verifies (the persistable set grew).
+  /// The controller wires a debounced disk persist here.
+  static set onVerifiedIdsChanged(void Function()? cb) =>
+      _verifier.onNewVerified = cb;
 
   /// Seeds [wrapIds] as already-unwrapped (e.g. cached PM message ids, which
   /// ARE their wrap ids — see `_onGiftWrap`) so the cold-boot PM restore skips
@@ -2339,9 +2350,19 @@ class NostrService {
     // Builds both layers with whichever encryption is in play. Null when the
     // sealed plaintext outgrows what NIP-44 can carry, or the frame outgrows
     // what relays take.
+    //
+    // The construction runs OFF the main isolate wherever the keys allow it
+    // (see nym_sync_builder.dart — a CPU profile showed these publishes as
+    // the dominant recurring main-isolate cost during catch-up):
+    //  * a LOCAL key builds BOTH layers in one `compute` hop;
+    //  * a remote signer (NIP-46/extension) produces the inner NIP-44 and the
+    //    seal signature remotely as before, and only the WRAP layer — which
+    //    is keyed by a throwaway key generated here, never the identity key —
+    //    hops to the isolate.
+    // Any isolate failure falls back to the same construction inline.
     Future<NostrEvent?> build(
       Future<String> Function(String plaintext) seal,
-      Future<String> Function(String plaintext, Uint8List ephSk) wrap,
+      Uint8List? wrapKemPk,
     ) async {
       final sealed = await sig.sign(
         UnsignedEvent(
@@ -2354,23 +2375,21 @@ class NostrService {
       );
       final sealJson = jsonEncode(sealed.toJson());
       if (utf8.encode(sealJson).length > 65535) return null;
-      final ephSk = keys.generatePrivateKey();
-      final wrapped = schnorr.finalizeEvent(
-        UnsignedEvent(
-          pubkey: keys.getPublicKeyHex(ephSk),
-          createdAt: giftwrap.randomNow(),
-          kind: EventKind.giftWrap,
-          tags: [
-            ['p', self],
-            ['d', outerD],
-            ['k', 'nym-sync'],
-          ],
-          content: await wrap(sealJson, ephSk),
-        ),
-        ephSk,
-      );
-      if (jsonEncode(['EVENT', wrapped.toJson()]).length > 65000) return null;
-      return wrapped;
+      final job = <String, dynamic>{
+        'sealJson': sealJson,
+        'self': self,
+        'outerD': outerD,
+        if (wrapKemPk != null) 'kemPk': wrapKemPk,
+      };
+      Map<String, dynamic>? json;
+      try {
+        json = kIsWeb
+            ? await wrapNymSyncSealIsolate(job)
+            : await compute(wrapNymSyncSealIsolate, job);
+      } catch (_) {
+        json = await wrapNymSyncSealIsolate(job);
+      }
+      return json == null ? null : NostrEvent.fromJson(json);
     }
 
     // Settings are a self-addressed gift wrap like any other, and they carry
@@ -2386,14 +2405,41 @@ class NostrService {
     // nsec — so extension and NIP-46 accounts silently kept their settings,
     // conversation list and group keys on classical encryption.
     final selfKem = _pqSelfKeys.isEmpty ? null : _pqSelfKeys.first;
+
+    // LOCAL key: hand the WHOLE construction (inner NIP-44, pq2 layers,
+    // ML-KEM, both signatures, both size gates — including the hybrid →
+    // classical fallback) to one compute hop. Same output contract as the
+    // inline path below, which remains the remote-signer path and the
+    // fallback if the isolate hop fails.
+    if (sig is LocalSigner) {
+      try {
+        final job = <String, dynamic>{
+          'sk': keys.bytesToHex(sig.privkey),
+          'self': self,
+          'rumorJson': rumorJson,
+          'outerD': outerD,
+          if (selfKem != null) 'kemPk': selfKem.kemPk,
+        };
+        final json = kIsWeb
+            ? await buildNymSyncWrapIsolate(job)
+            : await compute(buildNymSyncWrapIsolate, job);
+        if (json == null) return null;
+        final wrapped = NostrEvent.fromJson(json);
+        await pool.publishDm(wrapped);
+        return wrapped;
+      } catch (_) {
+        // Isolate failure — build inline below instead.
+      }
+    }
+
     if (selfKem != null) {
       final wrapped = await build(
         // Outer seal: the signer (or the local key) produces the inner NIP-44.
         (pt) async => pq.pq2Seal(
             await sig.nip44Encrypt(self, pt), self, self, selfKem.kemPk),
-        // The wrap layer is ours by construction — a throwaway key we just
-        // generated — so the inner half never needs the signer here.
-        (pt, ephSk) => pq.pq2Encrypt(pt, ephSk, self, selfKem.kemPk),
+        // The wrap layer is ours by construction — a throwaway key generated
+        // in the isolate — so it never needs the signer.
+        selfKem.kemPk,
       );
       if (wrapped != null) {
         await pool.publishDm(wrapped);
@@ -2407,8 +2453,7 @@ class NostrService {
 
     final wrapped = await build(
       (pt) => sig.nip44Encrypt(self, pt),
-      (pt, ephSk) async =>
-          nip44.encrypt(pt, nip44.getConversationKey(ephSk, self)),
+      null, // classical wrap layer
     );
     if (wrapped == null) return null;
     await pool.publishDm(wrapped);

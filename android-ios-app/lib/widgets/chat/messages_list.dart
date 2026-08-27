@@ -13,6 +13,7 @@ import '../../features/translate/auto_translate.dart';
 import '../../features/reactions/reaction_picker.dart';
 import '../../models/channel.dart';
 import '../../models/message.dart';
+import '../../models/settings.dart';
 import '../../models/poll.dart';
 import '../../features/mesh/mesh_diagnostics.dart';
 import '../../state/app_state.dart';
@@ -114,6 +115,33 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   /// normalized [ItemPosition] edges into the PWA's pixel scroll distance.
   double _viewportHeight = 0;
 
+  /// Built [MessageGroup] widgets by unit key, reused VERBATIM when the
+  /// unit's inputs are unchanged. Element.update short-circuits on an
+  /// identical widget instance, so a display-revision bump (which re-runs
+  /// this whole list build) no longer rebuilds every visible row's deep
+  /// subtree — during a boot/resume catch-up that rebuild storm (each row
+  /// costs single-digit ms) saturated the UI thread and froze scrolling.
+  /// Inputs are compared by identity: messages and per-message reaction
+  /// lists are stable objects that are REPLACED when they change.
+  final Map<Key, _CachedUnitWidget> _unitWidgetCache = {};
+
+  /// The conversation the cache belongs to; a view switch clears it.
+  String? _unitCacheViewKey;
+
+  /// Cached widget for one render unit, with the inputs it was built from.
+  bool _sameEntries(
+      List<MessageGroupEntry> a, List<MessageGroupEntry> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!identical(a[i].message, b[i].message) ||
+          !identical(a[i].reactions, b[i].reactions) ||
+          a[i].mentioned != b[i].mentioned) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -183,6 +211,13 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final messages = ref.watch(messagesForCurrentViewProvider);
     final reactions = ref.watch(reactionsProvider);
     final polls = ref.watch(pollsForCurrentViewProvider);
+
+    // The unit-widget reuse cache is per conversation; a switch drops it (a
+    // different view's units share no keys, so keeping them only leaks).
+    if (_unitCacheViewKey != view.storageKey) {
+      _unitCacheViewKey = view.storageKey;
+      _unitWidgetCache.clear();
+    }
 
     // Auto-translate: proactively translate the loaded messages of the viewed
     // conversation — on entry, on backfill/reload, and as new messages arrive
@@ -387,14 +422,31 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                             unitKey = ValueKey('poll_${unit.poll.id}');
                           } else {
                             final group = unit as _GroupUnit;
-                            child = MessageGroup(
-                              entries: group.entries,
-                              settings: settings,
-                              onReactionPicker: (msg) =>
-                                  showReactionPicker(context, ref, msg),
-                            );
                             unitKey = ValueKey(
                                 'group_${group.entries.first.message.id}');
+                            // Reuse the identical widget instance when the
+                            // group's inputs are unchanged (see
+                            // [_unitWidgetCache]) so this row's subtree is
+                            // skipped entirely on unrelated list rebuilds.
+                            // The picker closure deliberately captures the
+                            // STATE's stable context (not the item builder's),
+                            // so a cache hit after this slot re-mounts can't
+                            // hold a defunct element.
+                            final cached = _unitWidgetCache[unitKey];
+                            if (cached != null &&
+                                identical(cached.settings, settings) &&
+                                _sameEntries(cached.entries, group.entries)) {
+                              child = cached.widget;
+                            } else {
+                              child = MessageGroup(
+                                entries: group.entries,
+                                settings: settings,
+                                onReactionPicker: (msg) => showReactionPicker(
+                                    this.context, ref, msg),
+                              );
+                              _unitWidgetCache[unitKey] = _CachedUnitWidget(
+                                  group.entries, settings, child);
+                            }
                           }
                           // `.messages-list { gap: 3px }` (styles-chat.css:1-7):
                           // a 3px flex gap between EVERY adjacent pair of list
@@ -636,6 +688,17 @@ class _PollUnit extends _RenderUnit {
 class _GroupUnit extends _RenderUnit {
   _GroupUnit(this.entries);
   final List<MessageGroupEntry> entries;
+}
+
+/// One memoized [MessageGroup] with the inputs it was built from, so an
+/// unchanged unit can be handed the IDENTICAL widget instance on the next
+/// list rebuild (Element.update skips identical widgets — the whole row
+/// subtree neither rebuilds nor relayouts). See `_unitWidgetCache`.
+class _CachedUnitWidget {
+  _CachedUnitWidget(this.entries, this.settings, this.widget);
+  final List<MessageGroupEntry> entries;
+  final Settings settings;
+  final Widget widget;
 }
 
 /// `.scroll-to-bottom-btn` (`styles-chat.css:9-43`): a 40×40 round glass FAB

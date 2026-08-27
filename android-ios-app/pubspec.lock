@@ -353,6 +353,22 @@ packages:
       url: "https://pub.dreamflow.cloud"
     source: hosted
     version: "4.11.1"
+  coinlib:
+    dependency: "direct main"
+    description:
+      name: coinlib
+      sha256: cdc00634f95637b052bcf056f92e1894012696b480e3161bc64ca7d981f7e058
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "5.0.0"
+  coinlib_flutter:
+    dependency: "direct main"
+    description:
+      name: coinlib_flutter
+      sha256: "4ac57248d6dafe8b580a7ec13c6790fce2fece542dd741eb7f7126a288bae9c6"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "5.0.1"
   collection:
     dependency: "direct main"
     description:
@@ -441,6 +457,14 @@ packages:
       url: "https://pub.dreamflow.cloud"
     source: hosted
     version: "1.0.0+7.7.0"
+  dart_base_x:
+    dependency: transitive
+    description:
+      name: dart_base_x
+      sha256: c8af4f6a6518daab4aa85bb27ee148221644e80446bb44117052b6f4674cdb23
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "1.0.0"
   dart_style:
     dependency: transitive
     description:
@@ -490,7 +514,7 @@ packages:
     source: hosted
     version: "1.3.3"
   ffi:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: ffi
       sha256: "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45"
@@ -824,6 +848,14 @@ packages:
       url: "https://pub.dreamflow.cloud"
     source: hosted
     version: "2.2.0"
+  hex:
+    dependency: transitive
+    description:
+      name: hex
+      sha256: "4e7cd54e4b59ba026432a6be2dd9d96e4c5205725194997193bf871703b82c4a"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "0.2.0"
   hotreloader:
     dependency: transitive
     description:

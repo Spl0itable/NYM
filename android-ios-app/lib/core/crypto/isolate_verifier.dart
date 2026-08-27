@@ -4,6 +4,7 @@ import 'dart:collection';
 import 'package:flutter/foundation.dart' show compute, kIsWeb;
 
 import '../../models/nostr_event.dart';
+import 'native_schnorr.dart';
 import 'schnorr.dart' as schnorr;
 
 /// Off-main-thread BIP340 signature verification for inbound relay events.
@@ -50,6 +51,21 @@ class IsolateVerifier {
   final List<Completer<bool>> _waiters = <Completer<bool>>[];
   bool _flushScheduled = false;
 
+  /// Whether a `compute` batch is currently running. Batches are SINGLE-FLIGHT:
+  /// while one runs, newly submitted events keep buffering and are flushed when
+  /// it returns. Without this, a boot/resume replay burst fanned out into
+  /// several concurrent isolates, each grinding ~12 ms/event BIP340 math —
+  /// saturating every core at once, which starved the UI/raster threads and
+  /// read as the whole app lagging. One batch at a time bounds verification to
+  /// ~one core; the verified-id cache (below) makes the steady-state replay
+  /// skip the math entirely.
+  bool _inFlight = false;
+
+  /// Invoked (fire-and-forget) whenever a signature ACTUALLY verified — i.e.
+  /// the verified-id cache gained an id it did not have. The owner uses this to
+  /// debounce-persist [snapshotVerifiedIds] so the cache survives a relaunch.
+  void Function()? onNewVerified;
+
   /// Ids of events whose BIP340 signature we have ALREADY verified this process.
   ///
   /// A Nostr event id is `sha256` of its serialized content, so an id uniquely
@@ -82,6 +98,17 @@ class IsolateVerifier {
     _evictVerified();
   }
 
+  /// The newest [max] verified ids (insertion/LRU order, oldest first) — the
+  /// slice worth persisting across launches. Restoring it via [markVerified]
+  /// on the next boot lets the relay/D1 replay of EVERYTHING seen before —
+  /// reactions, profiles, presence, vouches, history beyond the message-cache
+  /// caps — skip the ~12 ms/event signature math for a ~20 µs sha256 recheck.
+  List<String> snapshotVerifiedIds({int max = 20000}) {
+    final n = _verifiedIds.length;
+    if (n <= max) return List<String>.of(_verifiedIds);
+    return List<String>.of(_verifiedIds.skip(n - max));
+  }
+
   void _evictVerified() {
     while (_verifiedIds.length > verifiedCacheCap) {
       _verifiedIds.remove(_verifiedIds.first);
@@ -112,7 +139,10 @@ class IsolateVerifier {
     // inline. Native (where the jank lives) takes the batched isolate path.
     if (kIsWeb) {
       final ok = schnorr.verifyEvent(event);
-      if (ok) _rememberVerified(computedId);
+      if (ok) {
+        _rememberVerified(computedId);
+        onNewVerified?.call();
+      }
       return Future<bool>.value(ok);
     }
     final completer = Completer<bool>();
@@ -132,34 +162,46 @@ class IsolateVerifier {
 
   void _flush() {
     _flushScheduled = false;
-    if (_pending.isEmpty) return;
-    // Detach the current buffer so events arriving while the isolate runs start
-    // a fresh batch.
-    final batch = List<NostrEvent>.of(_pending);
-    final ids = List<String>.of(_pendingIds);
-    final waiters = List<Completer<bool>>.of(_waiters);
-    _pending.clear();
-    _pendingIds.clear();
-    _waiters.clear();
+    // Single-flight: while a batch runs, later arrivals keep buffering; the
+    // completion handler below re-flushes whatever accumulated.
+    if (_inFlight || _pending.isEmpty) return;
+    // Detach up to [maxBatch] events so a backlog that piled up during the
+    // previous batch still crosses the isolate boundary in bounded messages.
+    final take = _pending.length <= maxBatch ? _pending.length : maxBatch;
+    final batch = List<NostrEvent>.of(_pending.take(take));
+    final ids = List<String>.of(_pendingIds.take(take));
+    final waiters = List<Completer<bool>>.of(_waiters.take(take));
+    _pending.removeRange(0, take);
+    _pendingIds.removeRange(0, take);
+    _waiters.removeRange(0, take);
 
     final payload = <Map<String, dynamic>>[
       for (final e in batch) e.toJson(),
     ];
+    _inFlight = true;
     compute(verifyEventsBatch, payload).then((results) {
       // Positional alignment is contractual; guard defensively so a malformed
       // result length can never resolve an event to `true` by accident.
+      var anyNew = false;
       for (var i = 0; i < waiters.length; i++) {
         final ok = i < results.length && results[i] == true;
         // Cache a freshly-verified id so a later replay skips the isolate hop.
-        if (ok) _rememberVerified(ids[i]);
+        if (ok) {
+          _rememberVerified(ids[i]);
+          anyNew = true;
+        }
         if (!waiters[i].isCompleted) waiters[i].complete(ok);
       }
+      if (anyNew) onNewVerified?.call();
     }).catchError((Object _) {
       // Fail closed: an isolate failure drops the whole batch (unverified),
       // never admits it.
       for (final w in waiters) {
         if (!w.isCompleted) w.complete(false);
       }
+    }).whenComplete(() {
+      _inFlight = false;
+      if (_pending.isNotEmpty) _flush();
     });
   }
 }
@@ -171,7 +213,13 @@ class IsolateVerifier {
 /// Each verdict is independent and self-contained (`schnorr.verifyEvent`
 /// recomputes the id from the event's own fields and checks the signature), so
 /// a bad event in the batch can only fail its own slot.
-List<bool> verifyEventsBatch(List<Map<String, dynamic>> events) {
+///
+/// Loads native libsecp256k1 into THIS worker isolate first (per-isolate
+/// statics — the one-time dlopen is microseconds against a batch of
+/// signatures); where the library is unavailable [schnorr.verifyEvent] falls
+/// back to pure Dart, so the verdicts are the same either way.
+Future<List<bool>> verifyEventsBatch(List<Map<String, dynamic>> events) async {
+  await NativeSchnorr.ensureLoaded();
   final out = List<bool>.filled(events.length, false);
   for (var i = 0; i < events.length; i++) {
     try {

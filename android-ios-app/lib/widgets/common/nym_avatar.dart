@@ -129,6 +129,12 @@ class _NymAvatarState extends State<NymAvatar> {
               height: widget.size,
               fit: BoxFit.cover,
               gaplessPlayback: true,
+              // Decode at the avatar size, not the transferred photo's
+              // intrinsic size.
+              cacheWidth: (widget.size *
+                      MediaQuery.devicePixelRatioOf(context) *
+                      1.5)
+                  .ceil(),
               errorBuilder: (_, __, ___) => _identicon(context),
             ),
           );

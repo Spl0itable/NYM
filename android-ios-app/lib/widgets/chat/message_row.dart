@@ -3329,31 +3329,38 @@ class _AddReactionButtonState extends State<_AddReactionButton> {
       child: AnimatedScale(
         scale: _pressed ? 0.95 : 1.0,
         duration: const Duration(milliseconds: 120),
-        child: Opacity(
-          // `.add-reaction-btn { opacity: 0.6 }`, `:hover { opacity: 1 }`.
-          opacity: _pressed ? 1.0 : 0.6,
-          child: Container(
-            // `padding: 4px 8px`.
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              // bg white@0.04; `:hover` → primary@0.08.
+        // `.add-reaction-btn { opacity: 0.6 }`, `:hover { opacity: 1 }` —
+        // FOLDED into each color's alpha instead of an [Opacity] wrapper.
+        // Opacity forces a Canvas::saveLayer (an offscreen render target)
+        // every frame, and this pill sits on EVERY visible message row: the
+        // iOS DevTools trace showed ~23 saveLayers per rasterized frame, the
+        // dominant driver of the 15–60ms raster times behind the scroll jank.
+        // The fill, border and glyph don't overlap, so per-color alpha is
+        // visually identical to compositing the group at 0.6.
+        child: Container(
+          // `padding: 4px 8px`.
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            // bg white@0.04 (×0.6 rest dim); `:hover` → primary@0.08.
+            color: _pressed
+                ? c.primaryA(0.08)
+                : Colors.white.withValues(alpha: 0.04 * 0.6),
+            // `border-radius: 20px`.
+            borderRadius: const BorderRadius.all(Radius.circular(20)),
+            // 1px glass border (×0.6 rest dim); `:hover` → primary@0.3.
+            border: Border.all(
               color: _pressed
-                  ? c.primaryA(0.08)
-                  : Colors.white.withValues(alpha: 0.04),
-              // `border-radius: 20px`.
-              borderRadius: const BorderRadius.all(Radius.circular(20)),
-              // 1px glass border; `:hover` → primary@0.3.
-              border: Border.all(
-                color: _pressed ? c.primaryA(0.3) : c.glassBorder,
-              ),
+                  ? c.primaryA(0.3)
+                  : c.glassBorder
+                      .withValues(alpha: c.glassBorder.a * 0.6),
             ),
-            // `.add-reaction-btn svg { width:16px; height:16px; fill:var(--text) }`
-            // (reactions.js:570) — the smiley-with-plus glyph, tinted --text.
-            child: NymSvgIcon(
-              NymIcons.addReaction,
-              size: 16,
-              color: c.text,
-            ),
+          ),
+          // `.add-reaction-btn svg { width:16px; height:16px; fill:var(--text) }`
+          // (reactions.js:570) — the smiley-with-plus glyph, tinted --text.
+          child: NymSvgIcon(
+            NymIcons.addReaction,
+            size: 16,
+            color: _pressed ? c.text : c.text.withValues(alpha: c.text.a * 0.6),
           ),
         ),
       ),
@@ -5540,7 +5547,15 @@ class _LocalMediaBody extends StatelessWidget {
                 constraints: const BoxConstraints(
                     maxWidth: 260, maxHeight: 320, minWidth: 80),
                 child: Image.memory(bytes,
-                    fit: BoxFit.cover, gaplessPlayback: true),
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    // Decode at the tile size (×1.5 cover margin), not the
+                    // photo's intrinsic megapixels — the full bytes are kept
+                    // for the fullscreen tap above.
+                    cacheWidth: (260 *
+                            MediaQuery.devicePixelRatioOf(context) *
+                            1.5)
+                        .ceil()),
               ),
             ),
           );

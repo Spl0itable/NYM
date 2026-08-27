@@ -19,6 +19,10 @@ import '../features/nymbot/nymbot_providers.dart'
     show BotBuyRequest, botBuyRequestProvider, botChatControllerProvider;
 import '../features/onboarding/tutorial_overlay.dart';
 import '../services/location/geolocation.dart';
+import '../widgets/context_menu/context_menu_actions.dart';
+import '../widgets/context_menu/context_menu_panel.dart';
+import '../widgets/context_menu/group_context_menu_panel.dart';
+import '../core/utils/nym_utils.dart';
 import '../state/app_state.dart';
 import '../state/nostr_controller.dart';
 import '../state/settings_provider.dart';
@@ -77,6 +81,12 @@ class HomeShellState extends ConsumerState<HomeShell>
 
   /// Global x of the arming touch-down (the PWA's `swipeStartX`).
   double _edgeSwipeStartX = 0;
+
+  /// Which edge armed the tracked touch: the right one drives the thread.
+  bool _edgeSwipeFromRight = false;
+
+  /// The thread last closed, so a right-edge swipe can step back into it.
+  ActiveThread? _lastThread;
 
   @override
   void initState() {
@@ -186,9 +196,12 @@ class HomeShellState extends ConsumerState<HomeShell>
   void _edgePointerDown(PointerDownEvent e) {
     if (e.kind != PointerDeviceKind.touch) return;
     if (_edgeSwipePointer != null) return;
-    if (e.position.dx >= 50) return;
+    final width = MediaQuery.of(context).size.width;
+    final fromRight = e.position.dx > width - 50;
+    if (e.position.dx >= 50 && !fromRight) return;
     _edgeSwipePointer = e.pointer;
     _edgeSwipeStartX = e.position.dx;
+    _edgeSwipeFromRight = fromRight;
   }
 
   /// `touchmove`: net rightward displacement from the touch-down point
@@ -198,10 +211,68 @@ class HomeShellState extends ConsumerState<HomeShell>
   /// CLOSES an open drawer.
   void _edgePointerMove(PointerMoveEvent e) {
     if (e.pointer != _edgeSwipePointer) return;
+    // Right edge, travelling left: step back INTO the thread just left.
+    if (_edgeSwipeFromRight) {
+      if (_edgeSwipeStartX - e.position.dx > _sidebarSwipeThreshold) {
+        _edgeSwipePointer = null;
+        _reopenLastThread();
+      }
+      return;
+    }
     if (e.position.dx - _edgeSwipeStartX > _sidebarSwipeThreshold) {
       _edgeSwipePointer = null;
-      setState(() => _drawerOpen = !_drawerOpen);
+      // An open drawer closes first, as before. Otherwise a thread takes the
+      // gesture — backing out of it is what the header chevron does — and only
+      // with neither open does it reach the drawer.
+      if (_drawerOpen) {
+        setState(() => _drawerOpen = false);
+        return;
+      }
+      if (ref.read(activeThreadProvider) != null) {
+        ref.read(activeThreadProvider.notifier).state = null;
+        return;
+      }
+      setState(() => _drawerOpen = true);
     }
+  }
+
+  /// Right-edge swipe: back into the thread just left, or failing that the
+  /// conversation menu the PM/group header opens on tap.
+  void _reopenLastThread() {
+    if (_drawerOpen) return;
+    if (ref.read(activeThreadProvider) != null) return;
+    final app = ref.read(appStateProvider);
+    final thread = _lastThread;
+    if (appThreadsEnabled && thread != null && thread.view == app.view) {
+      if (threadRootMessage(app, thread.view.storageKey, thread.rootId) != null) {
+        ref.read(activeThreadProvider.notifier).state = thread;
+        return;
+      }
+      _lastThread = null;
+    }
+    _openConversationMenu(app);
+  }
+
+  /// What tapping a PM or group header does (chat_pane.dart). Channels have no
+  /// such menu, so the swipe does nothing there.
+  void _openConversationMenu(AppState app) {
+    final view = app.view;
+    if (view.kind == ViewKind.group) {
+      GroupContextMenuPanel.show(context, view.id);
+      return;
+    }
+    if (view.kind != ViewKind.pm || view.id.isEmpty) return;
+    final controller = ref.read(nostrControllerProvider);
+    ContextMenuPanel.show(
+      context,
+      target: CtxTarget(
+        pubkey: view.id,
+        nym: stripPubkeySuffix(app.users[view.id]?.nym ?? ''),
+        isSelf: view.id == app.selfPubkey,
+        isBot: controller.isVerifiedBot(view.id),
+        profileOnly: true,
+      ),
+    );
   }
 
   /// `touchend`/`touchcancel` → `this.swipeStartX = null` (unconditionally —
@@ -209,6 +280,7 @@ class HomeShellState extends ConsumerState<HomeShell>
   void _edgePointerEnd(PointerEvent e) {
     if (e.kind != PointerDeviceKind.touch) return;
     _edgeSwipePointer = null;
+    _edgeSwipeFromRight = false;
   }
 
   @override
@@ -271,6 +343,13 @@ class HomeShellState extends ConsumerState<HomeShell>
     // `onItemSelected`; this covers the context-menu path that bypasses it.
     // Guarded on a real view change (ChatView has value equality) so unrelated
     // rebuilds can't force the drawer shut while the user is browsing it.
+    // Whatever closes a thread — chevron, swipe, a quote jump — is what the
+    // right-edge swipe steps back into.
+    ref.listen(activeThreadProvider, (prev, next) {
+      if (prev != null && next == null) _lastThread = prev;
+      if (next != null) _lastThread = null;
+    });
+
     ref.listen(appStateProvider.select((s) => s.view), (prev, next) {
       if (prev != next && _narrow && _drawerOpen && mounted) {
         setState(() => _drawerOpen = false);
@@ -304,9 +383,19 @@ class HomeShellState extends ConsumerState<HomeShell>
           // `body::before` — always-on ambient corner glows + center vignette,
           // painted beneath the wallpaper (styles-core.css:130-144, with
           // ghost/light overrides). pointer-events:none.
-          Positioned.fill(child: _AmbientGlow(c: c, isGhost: isGhost)),
+          //
+          // Both background layers are RepaintBoundary-isolated: they are
+          // static full-screen vector paints (the tiled wallpaper patterns run
+          // hundreds of clip+shader cells), and without their own layers ANY
+          // repaint that climbs to this Stack — typing dots, load shimmer,
+          // composer pulses, snap-in entrances — re-rasterized both at the
+          // animation's frame rate. As cached layers they re-paint only when
+          // the theme/wallpaper actually changes.
+          Positioned.fill(
+            child: RepaintBoundary(child: _AmbientGlow(c: c, isGhost: isGhost)),
+          ),
           // `#wallpaperLayer` — fixed, behind all content, pointer-events:none.
-          const Positioned.fill(child: WallpaperLayer()),
+          const Positioned.fill(child: RepaintBoundary(child: WallpaperLayer())),
           Positioned.fill(
             child: isWide
                 ? _wide(context, useColumns)

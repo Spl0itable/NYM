@@ -6,6 +6,7 @@ import 'dart:async' show Timer;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -24,13 +25,14 @@ import '../../../state/app_state.dart';
 import '../../../state/nostr_controller.dart';
 import '../../../state/settings_provider.dart';
 import '../../../widgets/chat/messages_list.dart'
-    show messageListScrollerProvider;
+    show MessageListScroller, messageListScrollerProvider;
 import '../../../widgets/common/app_dialog.dart';
 import '../../../widgets/common/nym_avatar.dart';
 import '../../../widgets/context_menu/context_menu_actions.dart';
 import '../../../widgets/context_menu/context_menu_panel.dart';
 import '../../commands/command_handler.dart' show resolveTarget;
 import '../../i18n/i18n.dart';
+import '../../nymbot/nymbot_threads.dart' show threadChainFor;
 import '../../shop/cosmetics.dart';
 import '../inline_network_image.dart';
 import '../media_fallbacks.dart';
@@ -2218,8 +2220,21 @@ String _stripQuoteLines(String raw) => raw
     .replaceAll(_rxWs, ' ')
     .trim();
 
-/// `scoreHaystack` (messages.js:2695-2701): exact 1000 / contains 500 / long-
-/// prefix(80) 250 / else 0.
+/// Letters and digits only, lowercased — the normalized form both a rendered
+/// quote and a raw message reduce to identically. Unicode-aware, so non-Latin
+/// scripts normalize rather than vanishing.
+final RegExp _rxLooseStrip = RegExp(r'[^\p{L}\p{N}]+', unicode: true);
+String _loose(String s) => s.toLowerCase().replaceAll(_rxLooseStrip, '');
+
+/// `scoreHaystack` (messages.js): exact 1000 / contains 500 / long-prefix(80)
+/// 250, then the same three tiers on the normalized form (900/400/200).
+///
+/// The needle is the quote as RENDERED — markdown markers consumed by the
+/// parser (`**bold**` → `bold`), line breaks joined with nothing — while the
+/// haystack is the stored SOURCE text. Comparing only those two literal forms
+/// matched plain single-line prose and nothing else, so a quote of a formatted
+/// or multi-line message reported its original as missing. The normalized
+/// tiers sit below the literal ones so an exact match still wins.
 int _scoreHaystack(String haystack, String needle) {
   if (haystack.isEmpty) return 0;
   if (haystack == needle) return 1000;
@@ -2227,6 +2242,15 @@ int _scoreHaystack(String haystack, String needle) {
   if (needle.length > 20 &&
       haystack.contains(needle.substring(0, 80.clamp(0, needle.length)))) {
     return 250;
+  }
+  final looseNeedle = _loose(needle);
+  final looseHay = _loose(haystack);
+  if (looseNeedle.isEmpty || looseHay.isEmpty) return 0;
+  if (looseHay == looseNeedle) return 900;
+  if (looseNeedle.length >= 8 && looseHay.contains(looseNeedle)) return 400;
+  if (looseNeedle.length >= 20 &&
+      looseHay.contains(looseNeedle.substring(0, 60.clamp(0, looseNeedle.length)))) {
+    return 200;
   }
   return 0;
 }
@@ -2255,7 +2279,10 @@ Message? resolveQuotedMessage(
     final suffix = m.pubkey.length >= 4
         ? m.pubkey.substring(m.pubkey.length - 4).toLowerCase()
         : m.pubkey.toLowerCase();
-    if (quotedSuffix != null && suffix != quotedSuffix) return false;
+    // When the quote recorded a #suffix, that IS the identity — the nym beside
+    // it is only how it was spelled at quote time, so don't also demand the
+    // name agree.
+    if (quotedSuffix != null) return suffix == quotedSuffix;
     final trimmed = m.author.trim();
     final baseAuthor = stripPubkeySuffix(trimmed);
     if (quotedName.isNotEmpty &&
@@ -2450,11 +2477,71 @@ class _QuoteBox extends ConsumerWidget {
       messages,
       hostMessageId: hostMessageId,
     );
-    if (target == null) return; // not in the loaded set → bail (PWA parity)
-    final scroller = ref.read(messageListScrollerProvider(key));
-    if (scroller.scrollToMessage(target.id)) {
-      ref.read(flashedMessageProvider.notifier).flash(target.id);
+    // Nothing to jump to — say so instead of swallowing the tap, the way the
+    // PWA's `_scrollToQuotedMessage` does. Bound to the conversation the quote
+    // lives in, so under columns the notice lands in the right one. The
+    // notifier is captured rather than `ref`, so it survives the thread close
+    // below disposing this widget.
+    final app = ref.read(appStateProvider.notifier);
+    void reportUnavailable() => app.addSystemMessage(
+          tr('Original message is not available'),
+          storageKey: key,
+        );
+    if (target == null) {
+      reportUnavailable();
+      return;
     }
+    final scroller = ref.read(messageListScrollerProvider(key));
+    final flash = ref.read(flashedMessageProvider.notifier);
+    // A quote inside a thread usually points into that same thread, so try
+    // there first; only leave the thread when the message really is elsewhere.
+    final open = ref.read(activeThreadProvider);
+    final inThread = open != null && open.view.storageKey == key;
+    if (inThread &&
+        threadChainFor(ref.read(appStateProvider), key, open.rootId)
+            .any((m) => m.id == target.id)) {
+      if (scroller.scrollToMessage(target.id)) {
+        flash.flash(target.id);
+        return;
+      }
+    }
+    if (inThread) {
+      ref.read(activeThreadProvider.notifier).state = null;
+      _jumpWhenBound(scroller, flash, target.id, onGiveUp: reportUnavailable);
+      return;
+    }
+    if (scroller.scrollToMessage(target.id)) {
+      flash.flash(target.id);
+    } else {
+      reportUnavailable();
+    }
+  }
+
+  /// Retries the jump across a few frames: closing the thread view remounts the
+  /// conversation list, and [MessageListScroller] only rebinds its controller +
+  /// id→index map on that list's next build, so the first frame can still miss.
+  /// [onGiveUp] fires once the retries are spent.
+  static void _jumpWhenBound(
+    MessageListScroller scroller,
+    FlashedMessageNotifier flash,
+    String id, {
+    required VoidCallback onGiveUp,
+    int attempts = 8,
+  }) {
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (scroller.scrollToMessage(id)) {
+          flash.flash(id);
+        } else if (attempts > 1) {
+          _jumpWhenBound(scroller, flash, id,
+              onGiveUp: onGiveUp, attempts: attempts - 1);
+        } else {
+          onGiveUp();
+        }
+      })
+      // A post-frame callback only runs when a frame is actually scheduled;
+      // the retries would otherwise stall once the app goes idle.
+      ..scheduleFrame();
   }
 
   /// The `<span class="quote-author">author#suffix:</span>` header, splitting
@@ -3124,10 +3211,17 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
                         ],
                       ),
                       clipBehavior: Clip.antiAlias,
-                      child: Image.network(
-                        proxiedMedia(widget.urls[_index]),
+                      // CachedNetworkImage, NOT Image.network: the inline tile
+                      // already fetched this URL into the shared disk cache, so
+                      // the modal opens from disk instead of re-downloading the
+                      // media it is literally zoomed in on. Full-resolution
+                      // decode (no memCacheWidth) — this is the one surface
+                      // that wants native pixels.
+                      child: CachedNetworkImage(
+                        imageUrl: proxiedMedia(widget.urls[_index]),
+                        httpHeaders: InlineNetworkImage.imageFetchHeaders,
                         fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => const Icon(
+                        errorWidget: (_, __, ___) => const Icon(
                             Icons.broken_image,
                             color: Colors.white54,
                             size: 48),

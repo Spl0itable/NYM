@@ -251,6 +251,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
               child: CachedNetworkImage(
                 imageUrl: avatarUrl,
                 fit: BoxFit.cover,
+                memCacheWidth:
+                    (64 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
                 errorWidget: (_, __, ___) => _defaultGroupIcon(c),
               ),
             )
@@ -266,6 +268,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           ? CachedNetworkImage(
               imageUrl: bannerUrl,
               fit: BoxFit.cover,
+              // Group banners are user photos; decode at the menu-width strip.
+              memCacheWidth:
+                  (480 * MediaQuery.devicePixelRatioOf(context)).ceil(),
               errorWidget: (_, __, ___) => _defaultBanner(c),
             )
           : _defaultBanner(c),

@@ -79,30 +79,35 @@ class _MessageSkeletonState extends State<MessageSkeleton>
     // driven by the one shared `sk-shimmer` clock — so every placeholder, narrow
     // or wide, lights up in lockstep (not a single narrow band crossing the
     // column). We mirror that exactly: each shape paints its own clipped, moving
-    // full-width highlight (see `_bar`/`_avatar`). The whole row tree is rebuilt
-    // inside this AnimatedBuilder each tick so every shape re-reads `_t.value`.
-    return ClipRect(
-      child: AnimatedBuilder(
-        animation: _t,
-        builder: (context, _) {
-          // `.msg-skeleton { justify-content: flex-end }` — rows settle at the
-          // bottom, newest-style at the foot, like the reversed live list. The
-          // viewport-sized count deliberately overfills the pane (+3 rows), so
-          // the column is hosted in an inert reversed scrollable: bottom-
-          // anchored, top overflow clipped, no layout overflow.
-          final rows = widget.useBubbles
-              ? _bubbleRows(c, rowCount)
-              : _ircRows(c, rowCount);
-          return SingleChildScrollView(
-            reverse: true,
-            physics: const NeverScrollableScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: rows,
-            ),
-          );
-        },
+    // full-width highlight (see `_bar`/`_avatar`).
+    //
+    // PERF: the row tree is built ONCE — each shape is a [CustomPaint] whose
+    // painter listens to `_t` (`super(repaint: …)`), so a shimmer tick is a
+    // PAINT-only pass. The old shape of this widget rebuilt + laid out the
+    // whole multi-hundred-widget skeleton inside an AnimatedBuilder on every
+    // frame of the 1.4s loop — a constant CPU tax exactly during the
+    // first-load window this skeleton exists for. The RepaintBoundary keeps
+    // those 60fps repaints INSIDE the skeleton's own layer, so the wallpaper /
+    // ambient-glow layers beneath never re-rasterize for a shimmer tick.
+    //
+    // `.msg-skeleton { justify-content: flex-end }` — rows settle at the
+    // bottom, newest-style at the foot, like the reversed live list. The
+    // viewport-sized count deliberately overfills the pane (+3 rows), so
+    // the column is hosted in an inert reversed scrollable: bottom-
+    // anchored, top overflow clipped, no layout overflow.
+    final rows =
+        widget.useBubbles ? _bubbleRows(c, rowCount) : _ircRows(c, rowCount);
+    return RepaintBoundary(
+      child: ClipRect(
+        child: SingleChildScrollView(
+          reverse: true,
+          physics: const NeverScrollableScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: rows,
+          ),
+        ),
       ),
     );
   }
@@ -111,43 +116,15 @@ class _MessageSkeletonState extends State<MessageSkeleton>
   /// a full-WIDTH `linear-gradient(90deg, transparent, glass-border,
   /// transparent)` (stops 0 / .5 / 1) translated horizontally from
   /// `translateX(-100%)` to `translateX(100%)` as `_t` runs 0→1, clipped to the
-  /// shape. Painted over the shape's `bg-tertiary` base.
-  Widget _shimmer(NymColors c,
-      {required double width,
-      required double height,
-      BoxShape shape = BoxShape.rectangle}) {
-    // -1 → +1 of the shape width == translateX(-100%) → translateX(100%).
-    final dx = (_t.value * 2 - 1) * width;
-    final radius = shape == BoxShape.circle
-        ? BorderRadius.circular(height / 2) // 50%
-        : const BorderRadius.all(Radius.circular(6));
-    return ClipRRect(
-      borderRadius: radius,
-      child: Stack(
-        children: [
-          // base fill: `var(--bg-tertiary)`.
-          Positioned.fill(child: ColoredBox(color: c.bgTertiary)),
-          // moving highlight band, the width of the shape, offset by dx.
-          Positioned(
-            left: dx,
-            top: 0,
-            width: width,
-            height: height,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                  colors: [
-                    Colors.transparent,
-                    c.glassBorder,
-                    Colors.transparent
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
+  /// shape. Painted over the shape's `bg-tertiary` base — repaint-only, driven
+  /// by the shared clock through the painter's `repaint` listenable.
+  Widget _shimmer(NymColors c, {BoxShape shape = BoxShape.rectangle}) {
+    return CustomPaint(
+      painter: _ShimmerPainter(
+        t: _t,
+        base: c.bgTertiary,
+        highlight: c.glassBorder,
+        circle: shape == BoxShape.circle,
       ),
     );
   }
@@ -464,7 +441,7 @@ class _MessageSkeletonState extends State<MessageSkeleton>
     return SizedBox(
       width: width,
       height: height,
-      child: _shimmer(c, width: width, height: height),
+      child: _shimmer(c),
     );
   }
 
@@ -473,7 +450,7 @@ class _MessageSkeletonState extends State<MessageSkeleton>
     return SizedBox(
       width: size,
       height: size,
-      child: _shimmer(c, width: size, height: size, shape: BoxShape.circle),
+      child: _shimmer(c, shape: BoxShape.circle),
     );
   }
 
@@ -496,4 +473,47 @@ class _BubbleGroup {
   const _BubbleGroup(this.self, this.bubbles);
   final bool self;
   final List<List<int>> bubbles;
+}
+
+/// The `sk-shimmer` sweep for one shape, painted (not rebuilt) each tick:
+/// the `bg-tertiary` base under a full-width transparent→glassBorder→
+/// transparent band translated `-100% → +100%` of the shape width, clipped to
+/// the shape's rounded rect (6px, or a circle for avatars). `repaint: t` makes
+/// the animation a paint-only invalidation — no widget rebuild, no layout.
+class _ShimmerPainter extends CustomPainter {
+  _ShimmerPainter({
+    required this.t,
+    required this.base,
+    required this.highlight,
+    required this.circle,
+  }) : super(repaint: t);
+
+  final Animation<double> t;
+  final Color base;
+  final Color highlight;
+  final bool circle;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final radius = circle
+        ? Radius.circular(size.height / 2) // 50%
+        : const Radius.circular(6);
+    canvas.clipRRect(RRect.fromRectAndRadius(rect, radius));
+    canvas.drawRect(rect, Paint()..color = base);
+    // -1 → +1 of the shape width == translateX(-100%) → translateX(100%).
+    final dx = (t.value * 2 - 1) * size.width;
+    final band = Rect.fromLTWH(dx, 0, size.width, size.height);
+    canvas.drawRect(
+      band,
+      Paint()
+        ..shader = LinearGradient(
+          colors: [Colors.transparent, highlight, Colors.transparent],
+        ).createShader(band),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ShimmerPainter old) =>
+      old.base != base || old.highlight != highlight || old.circle != circle;
 }

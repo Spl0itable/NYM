@@ -145,32 +145,34 @@ void main() {
         );
 
     test('verifyEventsBatch returns one positionally-aligned verdict per event',
-        () {
+        () async {
       final good0 = signedEvent('zero');
       final good2 = signedEvent('two');
       final bad1 = forge(good0, 'tampered');
       // Order: valid, INVALID, valid. The verdict list must line up exactly.
-      final results = verifyEventsBatch(
+      final results = await verifyEventsBatch(
         [good0.toJson(), bad1.toJson(), good2.toJson()],
       );
       expect(results, [true, false, true]);
     });
 
     test('verifyEventsBatch agrees with synchronous verifyEvent element-wise',
-        () {
+        () async {
       final events = [
         signedEvent('a'),
         forge(signedEvent('b'), 'b!'),
         signedEvent('c'),
         signedEvent('d'),
       ];
-      final batch = verifyEventsBatch([for (final e in events) e.toJson()]);
+      final batch =
+          await verifyEventsBatch([for (final e in events) e.toJson()]);
       final sync = [for (final e in events) schnorr.verifyEvent(e)];
       expect(batch, sync);
     });
 
-    test('empty batch yields empty result (no drops, no spurious passes)', () {
-      expect(verifyEventsBatch(const []), isEmpty);
+    test('empty batch yields empty result (no drops, no spurious passes)',
+        () async {
+      expect(await verifyEventsBatch(const []), isEmpty);
     });
 
     test(

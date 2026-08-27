@@ -631,6 +631,7 @@ class ComposerMediaStrip extends StatelessWidget {
     this.onRemoveAttachment,
     this.onRetry,
     this.localPreviews = const {},
+    this.squareTop = false,
   });
 
   /// Attachments currently referenced by the draft (a pasted or typed URL).
@@ -649,15 +650,29 @@ class ComposerMediaStrip extends StatelessWidget {
   /// shows a thumbnail even before the Blossom server serves the blob back.
   final Map<String, Uint8List> localPreviews;
 
+  /// True while an anchored popup (command palette / autocomplete) is stacked
+  /// directly above the strip — same contract as [FormatToolbar.squareTop].
+  final bool squareTop;
+
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Container(
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: c.bgTertiary,
-        border: Border.all(color: c.glassBorder),
-        borderRadius: NymRadius.rmd,
+    // Same corner treatment as [FormatToolbar] (PWA `.media-preview-strip`,
+    // which mirrors `.format-toolbar`): rounded across the top only — the
+    // strip is the top face of the composer panel stack — and the top
+    // corners square off (animated) while a popup sits flush on it.
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(end: squareTop ? 0 : 16),
+      duration: NymMotion.transition,
+      curve: NymMotion.curve,
+      builder: (context, topRadius, child) => Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: c.bgTertiary,
+          border: Border.all(color: c.glassBorder),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(topRadius)),
+        ),
+        child: child,
       ),
       child: SizedBox(
         height: 56,
@@ -747,6 +762,10 @@ class _MediaThumb extends StatelessWidget {
         height: 56,
         fit: BoxFit.cover,
         gaplessPlayback: true,
+        // A camera-roll pick is a full-resolution photo; decode at the 56px
+        // chip size (×1.5 cover margin) instead.
+        cacheWidth:
+            (56 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
         errorBuilder: (_, __, ___) => _broken(c),
       );
     } else {
@@ -755,6 +774,8 @@ class _MediaThumb extends StatelessWidget {
         width: 56,
         height: 56,
         fit: BoxFit.cover,
+        cacheWidth:
+            (56 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
         errorBuilder: (_, __, ___) => _broken(c),
       );
     }

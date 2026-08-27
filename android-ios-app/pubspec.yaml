@@ -1,7 +1,7 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 3.75.543+267
+version: 3.75.543+275
 
 environment:
   sdk: ^3.6.0
@@ -17,6 +17,16 @@ dependencies:
 
   # Nostr / crypto
   bip340: ^0.3.0
+  # Native libsecp256k1 BIP340 verification (~100× the pure-Dart bip340 verify
+  # speed); coinlib_flutter bundles the shared library per platform. Pure-Dart
+  # bip340 remains the signing path and the verify fallback (see
+  # core/crypto/native_schnorr.dart).
+  coinlib: ^5.0.0
+  coinlib_flutter: ^5.0.1
+  # Direct FFI binding of secp256k1_ecdh (the library coinlib bundles) for
+  # NIP-44's raw-X ECDH — coinlib's own ecdh() hashes the point, which NIP-44
+  # can't use (see core/crypto/native_ecdh_ffi.dart).
+  ffi: ^2.1.0
   pointycastle: ^3.9.1
   cryptography: ^2.7.0
   elliptic: ^0.3.11

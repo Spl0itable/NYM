@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:bip340/bip340.dart' as bip340;
 import 'package:convert/convert.dart' as convert;
 
+import 'native_schnorr.dart';
+
 /// secp256k1 curve order (n). A valid private key scalar is in [1, n-1].
 final BigInt _secpN = BigInt.parse(
   'fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
@@ -42,8 +44,13 @@ Uint8List generatePrivateKey() {
 }
 
 /// Derives the 32-byte x-only (BIP340) public key for [privkey] and returns
-/// it as 64-char lowercase hex.
+/// it as 64-char lowercase hex. Native libsecp256k1 when loaded in this
+/// isolate (~30 µs); otherwise the pure-Dart bip340 derivation (~10 ms of
+/// BigInt point math — which profiled as the top main-isolate cost per
+/// ephemeral gift-wrap key once ECDH went native).
 String getPublicKeyHex(Uint8List privkey) {
+  final native = NativeSchnorr.xOnlyPubkeyHex(privkey);
+  if (native != null) return native;
   return bip340.getPublicKey(bytesToHex(privkey));
 }
 

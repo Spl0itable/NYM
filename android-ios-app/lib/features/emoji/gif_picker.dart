@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../messages/pausable_animated_image.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/api/api_client.dart';
 import '../../state/settings_provider.dart';
@@ -610,13 +611,22 @@ class _GifTileState extends State<_GifTile> {
                   children: [
                     Container(
                       color: Colors.white.withValues(alpha: 0.03),
-                      child: CachedNetworkImage(
+                      child: PausableAnimatedImage(
                         // Route Giphy GIFs through the media proxy so the user's
                         // IP is never exposed to the CDN (PWA getProxiedMediaUrl).
-                        imageUrl: proxiedMedia(widget.gif.url),
+                        // A gridful of ANIMATED GIFs decodes every frame; the
+                        // decode is capped to the ~half-width cell AND playback
+                        // pauses whenever the cell is off screen.
+                        image: CachedNetworkImageProvider(
+                          proxiedMedia(widget.gif.url),
+                          maxWidth:
+                              (240 * MediaQuery.devicePixelRatioOf(context))
+                                  .ceil(),
+                        ),
+                        visibilityKey: ValueKey('gifpick:${widget.gif.url}'),
                         fit: BoxFit.cover,
-                        placeholder: (_, __) => const SizedBox.shrink(),
-                        errorWidget: (_, __, ___) => Icon(Icons.broken_image,
+                        placeholder: const SizedBox.shrink(),
+                        errorBuilder: (_) => Icon(Icons.broken_image,
                             size: 18, color: c.textDim),
                       ),
                     ),

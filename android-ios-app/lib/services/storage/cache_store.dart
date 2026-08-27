@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_sqlcipher/sqflite.dart';
@@ -63,6 +64,15 @@ class CacheStore {
   static const String metaTrustedPubkeys = 'trustedPubkeys';
   static const String metaPoolShardLastSeen = 'poolShardLastSeen';
   static const String metaPqKeys = 'pqKeys';
+
+  /// Event ids whose BIP340 signatures verified in past sessions (bounded,
+  /// newest-biased — see `IsolateVerifier.snapshotVerifiedIds`). Restored at
+  /// boot so the relay/D1 replay of already-seen reactions, profiles, presence
+  /// and out-of-cache history skips the ~12 ms/event signature math that made
+  /// heavy accounts crawl on open/resume. Ids are public, content-bound
+  /// hashes; caching them weakens nothing (tampered content re-hashes to a
+  /// different id and misses the cache).
+  static const String metaVerifiedEventIds = 'verifiedEventIds';
 
   static const String _dbName = 'nym_cache.db';
   static const int _dbVersion = 2;
@@ -370,19 +380,22 @@ class CacheStore {
 
   Future<Map<String, List<Message>>> _loadAllMessages(String table) async {
     final rows = await _database.query(table, columns: ['key', 'json']);
-    final out = <String, List<Message>>{};
+    // Decode OFF the main isolate: a heavy account's boot hydration decodes
+    // tens of thousands of message maps, and doing that jsonDecode +
+    // Message.fromJson loop on the UI thread both janked the first seconds of
+    // the app AND made hydration lose the boot race against the relay
+    // connect gate — the empty stores then re-downloaded and re-rendered the
+    // whole history from the network. One compute hop per table keeps the
+    // main isolate free while the worker chews through the JSON.
+    final raw = <String, String>{};
     for (final r in rows) {
       final key = r['key'] as String?;
-      if (key == null || key.isEmpty) continue;
-      final List<Message> msgs;
-      try {
-        msgs = _decodeMessages(r['json'] as String?);
-      } catch (_) {
-        continue; // One corrupt record must not abort the whole hydration.
-      }
-      if (msgs.isNotEmpty) out[key] = msgs;
+      final json = r['json'] as String?;
+      if (key == null || key.isEmpty || json == null || json.isEmpty) continue;
+      raw[key] = json;
     }
-    return out;
+    if (raw.isEmpty) return {};
+    return compute(decodeMessageStores, raw);
   }
 
   /// Wipe the `pms` table (`clearPMCache`). Used when the user disables PM
@@ -406,6 +419,30 @@ class CacheStore {
             Message.fromJson(e.cast<String, dynamic>())..isHistorical = true);
       }
     }
+    return out;
+  }
+
+  /// `compute` entry point for [_loadAllMessages]: decodes every conversation's
+  /// JSON blob into [Message] lists in a worker isolate. Top-level (as
+  /// `compute` requires); per-record try/catch so one corrupt row can't abort
+  /// the whole hydration. Same historical-marking as [_decodeMessages].
+  static Map<String, List<Message>> decodeMessageStores(
+      Map<String, String> raw) {
+    final out = <String, List<Message>>{};
+    raw.forEach((key, json) {
+      try {
+        final decoded = jsonDecode(json);
+        if (decoded is! List) return;
+        final msgs = <Message>[
+          for (final e in decoded)
+            if (e is Map)
+              Message.fromJson(e.cast<String, dynamic>())..isHistorical = true,
+        ];
+        if (msgs.isNotEmpty) out[key] = msgs;
+      } catch (_) {
+        // Skip the corrupt record.
+      }
+    });
     return out;
   }
 
@@ -570,6 +607,86 @@ class CacheStore {
         'json': jsonEncode(entries),
         'lastTouched': _now(),
       },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pre-encoded flush path
+  // ---------------------------------------------------------------------------
+  //
+  // The periodic cache flush used to call the save* methods above directly,
+  // which jsonEncode whole conversations (up to 1000 messages each), every
+  // in-memory profile and every reaction tally ON THE MAIN ISOLATE — during a
+  // busy backfill that was hundreds of ms of solid UI-thread block every few
+  // seconds (the recurring scroll/sidebar freezes that "settle down" once the
+  // backfill stops dirtying keys). The flush now builds all of that JSON in a
+  // worker isolate via [encodeCacheFlush] and writes the finished strings
+  // through these thin row-insert variants.
+
+  /// Writes a channel row whose JSON was pre-encoded off-isolate. An empty
+  /// array deletes the row (same contract as [saveChannelMessages]).
+  Future<void> saveChannelMessagesJson(String key, String json,
+      [DatabaseExecutor? executor]) async {
+    if (key.isEmpty) return;
+    final db = executor ?? _database;
+    if (json.isEmpty || json == '[]') {
+      await db.delete('channels', where: 'key = ?', whereArgs: [key]);
+      return;
+    }
+    await db.insert(
+      'channels',
+      {'key': key, 'json': json, 'lastTouched': _now()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// [saveChannelMessagesJson]'s `pms` counterpart. The caller gates on
+  /// `settings.cachePMs` exactly like [savePmMessages].
+  Future<void> savePmMessagesJson(String key, String json,
+      [DatabaseExecutor? executor]) async {
+    if (key.isEmpty) return;
+    final db = executor ?? _database;
+    if (json.isEmpty || json == '[]') {
+      await db.delete('pms', where: 'key = ?', whereArgs: [key]);
+      return;
+    }
+    await db.insert(
+      'pms',
+      {'key': key, 'json': json, 'lastTouched': _now()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// [saveProfile] with the JSON (which already embeds kind0Ts) pre-encoded.
+  Future<void> saveProfileJson(String pubkey, String json, int kind0Ts,
+      [DatabaseExecutor? executor]) async {
+    if (pubkey.isEmpty) return;
+    await (executor ?? _database).insert(
+      'profiles',
+      {
+        'pubkey': pubkey,
+        'json': json,
+        'kind0Ts': kind0Ts,
+        'lastTouched': _now(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// [saveReactions] with the entries pre-encoded. `[]` deletes the row.
+  Future<void> saveReactionsJson(String messageId, String json,
+      [DatabaseExecutor? executor]) async {
+    if (messageId.isEmpty) return;
+    final db = executor ?? _database;
+    if (json.isEmpty || json == '[]') {
+      await db
+          .delete('reactions', where: 'messageId = ?', whereArgs: [messageId]);
+      return;
+    }
+    await db.insert(
+      'reactions',
+      {'messageId': messageId, 'json': json, 'lastTouched': _now()},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
@@ -855,4 +972,77 @@ class CachedBlob {
   final Uint8List bytes;
   final String? sourceUrl;
   final int? kind0Ts;
+}
+
+/// The full input of one periodic cache flush, shipped to a worker isolate so
+/// every byte of jsonEncode happens off the main thread. Plain model objects
+/// only (Message / UserProfile / reaction entry lists) — all isolate-sendable.
+class CacheFlushPayload {
+  const CacheFlushPayload({
+    this.channels = const {},
+    this.pms = const {},
+    this.profiles = const {},
+    this.reactions = const {},
+  });
+
+  /// storageKey → already-filtered, already-capped messages to persist.
+  final Map<String, List<Message>> channels;
+  final Map<String, List<Message>> pms;
+
+  /// pubkey → profile (only the ones that CHANGED since the last flush).
+  final Map<String, UserProfile> profiles;
+
+  /// messageId → reaction entries snapshot.
+  final Map<String, List<dynamic>> reactions;
+}
+
+/// [encodeCacheFlush]'s result: finished JSON strings per row, ready for the
+/// thin `save*Json` writers inside one transaction.
+class EncodedCacheFlush {
+  const EncodedCacheFlush({
+    required this.channels,
+    required this.pms,
+    required this.profiles,
+    required this.profileKind0Ts,
+    required this.reactions,
+  });
+
+  final Map<String, String> channels;
+  final Map<String, String> pms;
+  final Map<String, String> profiles;
+  final Map<String, int> profileKind0Ts;
+  final Map<String, String> reactions;
+}
+
+/// `compute` entry point: serializes a whole flush in a worker isolate.
+/// Mirrors exactly what the save* methods encode inline — including embedding
+/// `kind0Ts` inside the profile JSON (see [CacheStore.saveProfile]).
+EncodedCacheFlush encodeCacheFlush(CacheFlushPayload p) {
+  final channels = <String, String>{};
+  p.channels.forEach((key, msgs) {
+    channels[key] = jsonEncode([for (final m in msgs) m.toJson()]);
+  });
+  final pms = <String, String>{};
+  p.pms.forEach((key, msgs) {
+    pms[key] = jsonEncode([for (final m in msgs) m.toJson()]);
+  });
+  final profiles = <String, String>{};
+  final kind0Ts = <String, int>{};
+  p.profiles.forEach((pubkey, profile) {
+    final map = profile.toJson();
+    map['kind0Ts'] = profile.kind0Ts;
+    profiles[pubkey] = jsonEncode(map);
+    kind0Ts[pubkey] = profile.kind0Ts;
+  });
+  final reactions = <String, String>{};
+  p.reactions.forEach((id, entries) {
+    reactions[id] = jsonEncode(entries);
+  });
+  return EncodedCacheFlush(
+    channels: channels,
+    pms: pms,
+    profiles: profiles,
+    profileKind0Ts: kind0Ts,
+    reactions: reactions,
+  );
 }

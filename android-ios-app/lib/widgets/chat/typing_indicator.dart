@@ -271,7 +271,11 @@ class _TypingDotsState extends State<_TypingDots>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
+    // RepaintBoundary: the dots repaint every frame of the 1.2s loop for as
+    // long as anyone is typing; the boundary keeps that invalidation inside
+    // this tiny row instead of re-rasterizing the surrounding pane layer.
+    return RepaintBoundary(
+        child: AnimatedBuilder(
       animation: _ctrl,
       builder: (context, _) {
         return Row(
@@ -303,6 +307,6 @@ class _TypingDotsState extends State<_TypingDots>
           ],
         );
       },
-    );
+    ));
   }
 }

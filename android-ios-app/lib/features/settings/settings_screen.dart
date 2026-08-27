@@ -2644,8 +2644,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _GroupSpec(
           text: tr('Stay Connected in Background Disabled Enabled Keeps relay '
               'connections and the Bluetooth mesh running while the app is in '
-              'the background, so messages arrive without reopening it. Uses '
-              'more battery. Android shows a permanent notification while it '
+              'the background, so messages arrive without reopening it. Uses more '
+              'battery and data. Android shows a permanent notification while it '
               'is on; iOS limits how long connections can be held and, with '
               'identity encryption on, catches up only while the device has '
               'been unlocked at least once since it was powered on.'),
@@ -2653,7 +2653,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             label: tr('Stay Connected in Background'),
             hint: tr('Keeps relay connections and the Bluetooth mesh running '
                 'while the app is in the background, so messages arrive '
-                'without reopening it. Uses more battery. Android shows a '
+                'without reopening it. Uses more battery and data. Android shows a '
                 'permanent notification while it is on; iOS limits how long '
                 'connections can be held and, with identity encryption on, '
                 'catches up only while the device has been unlocked at least '

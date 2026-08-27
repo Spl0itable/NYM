@@ -11,6 +11,14 @@ Each released version corresponds to a tag on
 ## [3.75.543] - 2026-08-26
 
 ### Added
+- Nymbot works inside channel message threads. Opening a thread on one of its
+  messages and replying there continues the conversation with no `?` prefix or
+  `@Nymbot` mention needed, and Nymbot answers inside the thread instead of the
+  flat channel. The whole thread is sent as its context, so a game started or
+  continued in a thread (`?trivia`, `?wordle`, `?riddle`, `?anagram`) keeps its
+  state. In a thread rooted on someone else's message, `?commands` and
+  `@Nymbot` mentions still reach it and are answered in that thread; it only
+  replies unprompted once it is already the thread's last speaker.
 - Slack-style message threads across channels, PMs, and group chats. Tapping a
   message (or its "N replies" row under the reactions/zaps row) swaps the
   current view to the thread — the root message plus its replies — using the
@@ -24,6 +32,93 @@ Each released version corresponds to a tag on
   encrypted rumor.
 
 ### Fixed
+- Outgoing event signing (every send, read receipt, presence ping) now uses
+  native libsecp256k1 when available — the CPU profile showed the pure-Dart
+  path costing 10-20 ms of BigInt math ON THE UI THREAD per signature, which
+  is scroll-time jank whenever receipts fire. The gift-wrap worker isolates
+  load the native library too, so seal signing and seal verification inside
+  PM processing take the fast path as well.
+- The iOS scroll jank measured in the DevTools captures (a quarter to a third
+  of ALL frames blowing the raster budget, spikes to 60–127 ms) traced to
+  ~23 offscreen render passes (`Canvas::saveLayer`) per frame. The dominant
+  source was SVG icon tinting: a srcIn colorFilter forces vector_graphics to
+  saveLayer every icon, every frame, and 15–25 tinted icons are always on
+  screen (header, composer toolbar, the per-row add-reaction pills, badges).
+  Icons now tint via the SVG theme's `currentColor` — resolved at parse time,
+  rendered identically, no offscreen pass. The add-reaction pill's and the
+  composer translate button's resting `Opacity` dims are likewise folded
+  directly into their colors.
+- The fullscreen image viewer now opens media from the shared disk cache the
+  inline tile already populated, instead of re-downloading it with a separate
+  uncached fetch.
+- The "Stay Connected in Background" descriptions (settings and the network
+  stats modal) now say the mode uses more data as well as more battery.
+- Opening a thread from another conversation no longer throws a
+  "Cannot use ref after the widget was disposed" error storm: the post-frame
+  callback captured the tapping row's ref, which the view switch itself could
+  dispose before the frame ended. It now captures the provider notifier.
+- The whole-app freezes during the first minutes after opening (scroll not
+  responding, the sidebar stalling) are fixed at their two sources. The
+  periodic cache flush serialized every dirty conversation, every known
+  profile and every reaction tally to JSON on the UI thread every few seconds
+  while the catch-up backfill kept marking stores dirty — that now happens in
+  a worker isolate, writes only what actually changed, and the finished rows
+  are committed as before in one transaction. And the live relay inflow,
+  which rebuilt the visible message list for every arriving batch (many per
+  second during catch-up), is paced to at most ~6 list updates per second —
+  plus unchanged visible rows are now reused verbatim across those rebuilds
+  instead of being rebuilt from scratch each time.
+- Force-closing and reopening the app no longer visibly re-downloads and
+  re-renders the whole message history (and no longer re-uploads already-
+  archived PM wraps). Boot previously gave the local cache only 1.5 seconds
+  before connecting to relays; a heavy account's hydration — decoding tens of
+  thousands of cached messages, previously on the UI thread — lost that race,
+  so the app came up empty and re-fetched everything. Cache decoding now runs
+  in a worker isolate and the network waits for hydration to land.
+- Link previews no longer fire an unfurl request for every link-bearing
+  message the moment it scrolls into range — the card waits until it has been
+  on screen ~300ms, so flinging through history stops causing a burst of
+  network fetches and mid-scroll relayouts.
+- Event signature verification now uses the native libsecp256k1 library
+  (bundled per platform) instead of pure Dart — ~70 µs per event instead of
+  ~12 ms (~150×) — with the pure-Dart implementation kept as an automatic
+  fallback wherever the library is unavailable. Together with the persisted
+  verification cache this removes the boot/resume CPU grind entirely, first
+  run included.
+- Animated GIFs and animated custom emoji now pause whenever they are off
+  screen (scrolled away, behind another screen) instead of decoding frames
+  forever, and resume exactly where they froze when scrolled back — a chat
+  full of GIFs no longer keeps the CPU/GPU busy for as long as it is open.
+- Opening the app on an account with lots of history no longer pegs the CPU
+  for seconds while messages stream in. Signatures verified in past sessions
+  are now remembered on disk, so the boot/resume relay replay of already-seen
+  reactions, profiles, presence and history skips the ~12 ms-per-event
+  signature math (a seeded replay measures ~460× faster in the benchmark), and
+  verification batches now run one at a time instead of fanning out across
+  every core.
+- Images decode at the size they are shown instead of their full resolution:
+  avatars, inline media tiles, link previews, GIF-picker cells, banners and
+  composer thumbnails all cap their decode to the on-screen pixels, cutting
+  the decode CPU, GPU texture uploads and image-cache churn that made
+  media-heavy conversations stutter.
+- The loading skeleton no longer rebuilds its entire placeholder tree on every
+  animation frame — the shimmer is repaint-only now — and the wallpaper,
+  ambient glow, typing dots and skeletons each render in their own layer, so a
+  tiny animation can't force the full-screen background patterns to re-draw at
+  60fps.
+- Debug builds no longer collapse into a per-frame exception storm (and the
+  heavy lag it caused on startup as messages load) whenever a conversation
+  contains a custom `:shortcode:` emoji. The emoji's inline baseline-shift
+  render object read its `size` while the surrounding paragraph was still
+  laying out, which Flutter's debug asserts (before the framework's 3.41 fix,
+  flutter/flutter#176906) treat as an error — the thrown assert aborted the
+  paragraph's layout mid-flight and corrupted the whole message list into
+  re-throwing every frame. The baseline is now computed from a height recorded
+  during the render object's own layout pass, which is legal on every Flutter
+  version.
+- Tapping a quoted block inside an open thread now leaves the thread and jumps
+  to the original message in the conversation, instead of silently doing
+  nothing because the thread list never held it.
 - The app dialog (including the post-quantum `nympq1…` recovery-code paste
   prompt) now lifts above the soft keyboard instead of hiding its input
   behind it, matching the other keyboard-aware modals.

@@ -533,6 +533,11 @@ class ContextMenuPanel extends ConsumerWidget {
                 child: CachedNetworkImage(
                   imageUrl: bannerUrl,
                   fit: BoxFit.cover,
+                  // Profile banners are frequently multi-MB photos; decode at
+                  // the ~menu-width 140px strip (the fullscreen expand loads
+                  // its own full-res copy).
+                  memCacheWidth:
+                      (480 * MediaQuery.devicePixelRatioOf(context)).ceil(),
                   errorWidget: (_, __, ___) => const SizedBox.shrink(),
                 ),
               ),

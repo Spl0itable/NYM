@@ -645,11 +645,20 @@ class NymSvgIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Tint via the SVG theme's `currentColor`, NOT a srcIn colorFilter: a
+    // picture-level colorFilter makes vector_graphics wrap the draw in a
+    // Canvas::saveLayer (an offscreen render target) on EVERY frame — and
+    // with 15–25 icons visible (header, composer toolbar, the per-row
+    // reaction pills, badges) the iOS DevTools trace showed ~23 saveLayers
+    // per rasterized frame, the dominant driver of the 15–60ms raster times
+    // behind the scroll jank. Every icon in [NymIcons] paints exclusively
+    // with `currentColor` (fills are either `currentColor` or `none`), so
+    // resolving the color at parse time renders identically for free.
     return SvgPicture.string(
       svg,
       width: size,
       height: size,
-      colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+      theme: SvgTheme(currentColor: color),
     );
   }
 }

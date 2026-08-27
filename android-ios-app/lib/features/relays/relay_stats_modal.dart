@@ -223,7 +223,7 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                                     'Bluetooth mesh running while Nymchat is in '
                                     'the background, so messages and '
                                     'notifications arrive without opening it. '
-                                    'Uses more battery. On iOS the system '
+                                    'Uses more battery and data. On iOS the system '
                                     'decides when a suspended app may catch up, '
                                     'so notifications can lag; with identity '
                                     'encryption on, catch-up works only once '

@@ -11,6 +11,7 @@ import '../core/crypto/bitchat.dart' as bitchat;
 import '../core/crypto/gift_wrap.dart' as giftwrap;
 import '../core/crypto/keys.dart' as keys;
 import '../core/crypto/ml_kem.dart';
+import '../core/crypto/native_schnorr.dart';
 import '../core/crypto/pow.dart' as pow;
 import '../core/crypto/pq.dart' as pq;
 import '../core/crypto/schnorr.dart' as schnorr;
@@ -43,6 +44,7 @@ import '../services/notification_service.dart' show NotificationService;
 import '../features/shop/shop_controller.dart';
 import '../features/nymbot/bot_commands.dart';
 import '../features/nymbot/nymbot_providers.dart';
+import '../features/nymbot/nymbot_threads.dart';
 import '../features/p2p/p2p_models.dart';
 import '../features/p2p/p2p_service.dart';
 import '../features/pms/pm_logic.dart';
@@ -352,6 +354,12 @@ class NostrController {
     if (_settingsHydratedC.isCompleted) {
       _settingsHydratedC = Completer<void>();
     }
+    // Load native libsecp256k1 into the MAIN isolate (fire-and-forget; falls
+    // back to pure-Dart bip340 until/unless it resolves) so the few inline
+    // `schnorr.verifyEvent` call sites — build-integrity rows, the canary,
+    // emoji-pack checks — take the ~100× faster path. The batch verifier's
+    // worker isolates load it themselves (see `verifyEventsBatch`).
+    unawaited(NativeSchnorr.ensureLoaded());
     try {
       final kv = _ref.read(keyValueStoreProvider);
       // `secretWrite` routes identity-secret persistence through the vault
@@ -481,11 +489,21 @@ class NostrController {
       // the PWA's `_loadCustomEmojiCache`; live 30030/10030 events then top it up.
       _ref.read(liveCustomEmojiProvider);
 
-      // Hydrate channel/profile/reaction caches before connecting (raced
-      // ≤1500ms so a slow disk never blocks boot — mirrors app.js
-      // `Promise.race([hydrateFromCache(), 1500ms])`).
+      // Hydrate channel/profile/reaction caches before connecting. This gate
+      // MUST normally win: connecting with still-empty stores makes the relay
+      // replay re-download, re-verify, re-unwrap, re-UPLOAD (pm-put/deposit
+      // dedup is seeded from the hydrated PM store) and visibly re-render the
+      // entire history a heavy account already has on disk — the
+      // force-close-and-reopen "everything loads again" behavior. The old
+      // 1500ms race (mirroring app.js) lost on exactly those accounts: the
+      // hydration decode used to run on the main isolate and could take
+      // several seconds at tens of thousands of cached messages. Decode now
+      // runs in a worker isolate (CacheStore._loadAllMessages), so typical
+      // hydration is well under a second; the cap only exists so a
+      // pathologically broken disk can't hold the network offline forever,
+      // and a timed-out hydration still completes + seeds in the background.
       await _hydrateFromCache(appState).timeout(
-        const Duration(milliseconds: 1500),
+        const Duration(seconds: 10),
         onTimeout: () {},
       );
 
@@ -1184,6 +1202,9 @@ class NostrController {
     _deletedIdsPersistTimer = null;
     _pqKeysPersistTimer?.cancel();
     _pqKeysPersistTimer = null;
+    _verifiedIdsPersistTimer?.cancel();
+    _verifiedIdsPersistTimer = null;
+    NostrService.onVerifiedIdsChanged = null;
     _pqAnnounceTimer?.cancel();
     _pqAnnounceTimer = null;
     // Flush any pending debounced group-store / read-watermark writes before we
@@ -1508,13 +1529,34 @@ class NostrController {
   /// Relay-service handler (wired in place of a direct `onEvent: _onEvent`):
   /// buffers the event and schedules a coalesced flush so a connect burst is
   /// one rebuild, not N. See [_liveInboundBuffer].
+  /// Wall-clock of the last [_flushLiveInbound], for [_kLiveInboundMinGapMs].
+  int _lastLiveFlushMs = 0;
+
+  /// Minimum spacing between live-inbound flushes. During a boot/resume
+  /// catch-up the relay pipeline delivers many small verified batches per
+  /// second, and every flush costs a full message-list rebuild (a merge over
+  /// the whole conversation plus every visible row) — back-to-back flushes
+  /// saturated the UI thread, so scroll input and even the sidebar froze
+  /// until the inflow settled. Pacing the DRAIN (events simply wait in
+  /// [_liveInboundBuffer]; nothing observes them until ingested, so there is
+  /// no stale-state hazard) bounds that to ~6 rebuilds/s while keeping the
+  /// first event of a quiet period instant. The size cap still flushes a
+  /// large backlog immediately.
+  static const int _kLiveInboundMinGapMs = 150;
+
   void _enqueueLiveEvent(NostrEvent event) {
     _liveInboundBuffer.add(event);
     if (_liveInboundBuffer.length >= _kLiveInboundFlushCap) {
       _flushLiveInbound();
-    } else {
-      _liveInboundTimer ??= Timer(Duration.zero, _flushLiveInbound);
+      return;
     }
+    if (_liveInboundTimer != null) return;
+    final since =
+        DateTime.now().millisecondsSinceEpoch - _lastLiveFlushMs;
+    final delayMs =
+        since >= _kLiveInboundMinGapMs ? 0 : _kLiveInboundMinGapMs - since;
+    _liveInboundTimer =
+        Timer(Duration(milliseconds: delayMs), _flushLiveInbound);
   }
 
   /// Drains the live inbound buffer, replaying each event through [_onEvent]
@@ -1525,6 +1567,7 @@ class NostrController {
   void _flushLiveInbound() {
     _liveInboundTimer?.cancel();
     _liveInboundTimer = null;
+    _lastLiveFlushMs = DateTime.now().millisecondsSinceEpoch;
     if (_liveInboundBuffer.isEmpty) return;
     final batch = List<NostrEvent>.of(_liveInboundBuffer);
     _liveInboundBuffer.clear();
@@ -4589,6 +4632,28 @@ class NostrController {
   /// loudly — it makes the next message to every peer classical while their
   /// announcements are looked up again, which is invisible apart from a
   /// downgraded badge. See [PqRegistry.hydrate] for why restoring is safe.
+  /// Debounced (30s) persist of the verified-signature id cache
+  /// ([NostrService.snapshotVerifiedIds]) so the NEXT launch's relay/D1 replay
+  /// skips re-verifying everything this session already verified. The long
+  /// debounce keeps the boot flood from re-writing the (up to ~1.4 MB) row
+  /// every few seconds; the trailing write after the last verification covers
+  /// the tail. Rides the [_schedulePersistPqKeys] pattern.
+  Timer? _verifiedIdsPersistTimer;
+  void _schedulePersistVerifiedIds() {
+    if (_verifiedIdsPersistTimer != null) return;
+    if (PanicWipe.inProgress) return;
+    _verifiedIdsPersistTimer = Timer(const Duration(seconds: 30), () {
+      _verifiedIdsPersistTimer = null;
+      final cache = _cache;
+      if (cache == null || !cache.isOpen) return;
+      if (PanicWipe.inProgress) return;
+      unawaited(cache
+          .saveMetaSet(CacheStore.metaVerifiedEventIds,
+              NostrService.snapshotVerifiedIds().toSet())
+          .catchError((_) {}));
+    });
+  }
+
   Timer? _pqKeysPersistTimer;
   void _schedulePersistPqKeys() {
     if (_pqKeysPersistTimer != null) return;
@@ -8670,6 +8735,17 @@ class NostrController {
               if (m.id.isNotEmpty) m.id,
         ]);
       }
+      // Restore the persisted verified-signature ids from PAST sessions and
+      // keep persisting new ones (debounced). The message-cache seeding above
+      // only covers what the message stores hold; a heavy returning account
+      // also replays thousands of reactions, kind-0 profiles, presence and
+      // vouch events on every boot/resume, each costing ~12 ms of pure-Dart
+      // BIP340 math without this cache — several seconds of pegged CPU that
+      // read as the whole app lagging while history streamed in.
+      final verifiedIds =
+          await cache.loadMetaSet(CacheStore.metaVerifiedEventIds);
+      if (verifiedIds.isNotEmpty) NostrService.seedVerifiedIds(verifiedIds);
+      NostrService.onVerifiedIdsChanged = _schedulePersistVerifiedIds;
       if (!cachePms) unawaited(cache.clearPms());
       // Reactions hydrate AFTER messages so their tallies attach to rows that
       // now exist (same effective order as the PWA's single hydration pass).
@@ -8744,6 +8820,15 @@ class NostrController {
     });
   }
 
+  /// Profiles as of their last successful persist (by object identity —
+  /// profile updates replace the object), so a flush only writes CHANGED
+  /// profiles instead of re-serializing every known user each time.
+  final Map<String, UserProfile> _lastPersistedProfile = {};
+
+  /// Reaction rows as of their last successful persist (the encoded JSON), so
+  /// unchanged tallies are neither re-encoded into writes nor re-inserted.
+  final Map<String, String> _lastPersistedReactionJson = {};
+
   Future<void> _flush() async {
     // A flush scheduled before the panic fired must not re-persist the live
     // AppState into the just-shredded cache DB (panic.js `_cacheDisabled`).
@@ -8757,55 +8842,97 @@ class NostrController {
       final pmKeys = _dirtyPmKeys.toList();
       final reactionEntries =
           _ref.read(appStateProvider.notifier).reactionEntriesSnapshot();
+
+      // Assemble the payload on the main isolate (cheap: filters + list
+      // copies, no serialization), encode it in a WORKER isolate, then write
+      // the finished strings. The old flush jsonEncoded whole conversations,
+      // every profile and every reaction tally inline — during a backfill that
+      // was hundreds of ms of main-thread block every few seconds, felt as the
+      // recurring whole-app freezes (scroll, sidebar) that only stopped once
+      // the backfill settled.
+      final channelPayload = <String, List<Message>>{};
+      for (final key in channelKeys) {
+        final msgs = state.messages[key];
+        if (msgs == null) continue;
+        // Never persist an UNRECONCILED optimistic row (`_optim_*`): its id
+        // isn't the real event id, so on reload it re-hydrates as a stale
+        // placeholder that the merge loop can mis-pair (or that lingers if
+        // its real event has aged out of relay/D1 retention), re-injecting a
+        // duplicate. Only real, reconciled sends belong in the cache.
+        channelPayload[key] = _capChannel(msgs
+            .where((m) => !m.optimistic && !m.id.startsWith('_optim_'))
+            .toList());
+      }
+      final pmPayload = <String, List<Message>>{};
+      if (cachePms) {
+        for (final key in pmKeys) {
+          final msgs = state.messages[key];
+          if (msgs == null) continue;
+          // Transient Nymbot info bubbles never persist (the PWA's
+          // `_displayBotInfoMessage`/help/welcome rows are display-only —
+          // pms.js persists real messages via `persistPMMessages` but never
+          // these synthetic ids). Unreconciled optimistic rows are excluded
+          // for the same reason as channels (above).
+          pmPayload[key] = _capPm(msgs
+              .where((m) =>
+                  !m.optimistic &&
+                  !m.id.startsWith('_optim_') &&
+                  !m.id.startsWith('nymbot-info-') &&
+                  !m.id.startsWith('nymbot-help-') &&
+                  m.id != 'nymbot-welcome')
+              .toList());
+        }
+      }
+      // Only profiles that changed since their last persist (updates replace
+      // the profile object, so identity is the cheap change check).
+      final profilePayload = <String, UserProfile>{};
+      for (final entry in state.users.entries) {
+        final p = entry.value.profile;
+        if (p == null) continue;
+        if (identical(_lastPersistedProfile[entry.key], p)) continue;
+        profilePayload[entry.key] = p;
+      }
+
+      final encoded = await compute(
+          encodeCacheFlush,
+          CacheFlushPayload(
+            channels: channelPayload,
+            pms: pmPayload,
+            profiles: profilePayload,
+            reactions: reactionEntries,
+          ));
+
+      // Drop reaction rows whose encoded JSON is unchanged since last persist.
+      final changedReactions = <String, String>{};
+      encoded.reactions.forEach((id, json) {
+        if (_lastPersistedReactionJson[id] != json) {
+          changedReactions[id] = json;
+        }
+      });
+
       // Commit the whole flush as ONE transaction so a busy channel's hundreds
       // of channel/PM/profile/reaction rows don't queue up as hundreds of
       // separately-locked inserts (which tripped sqflite's 10s lock warning and
       // stalled D1 ingest). Dirty sets are cleared only after the tx succeeds.
       await cache.runInTransaction((txn) async {
-        for (final key in channelKeys) {
-          final msgs = state.messages[key];
-          if (msgs != null) {
-            // Never persist an UNRECONCILED optimistic row (`_optim_*`): its id
-            // isn't the real event id, so on reload it re-hydrates as a stale
-            // placeholder that the merge loop can mis-pair (or that lingers if
-            // its real event has aged out of relay/D1 retention), re-injecting a
-            // duplicate. Only real, reconciled sends belong in the cache.
-            final persistable =
-                msgs.where((m) => !m.optimistic && !m.id.startsWith('_optim_'));
-            await cache.saveChannelMessages(
-                key, _capChannel(persistable.toList()), txn);
-          }
+        for (final e in encoded.channels.entries) {
+          await cache.saveChannelMessagesJson(e.key, e.value, txn);
         }
-        for (final key in pmKeys) {
-          final msgs = state.messages[key];
-          if (msgs != null) {
-            // Transient Nymbot info bubbles never persist (the PWA's
-            // `_displayBotInfoMessage`/help/welcome rows are display-only —
-            // pms.js persists real messages via `persistPMMessages` but never
-            // these synthetic ids). Unreconciled optimistic rows are excluded for
-            // the same reason as channels (above).
-            final persistable = msgs
-                .where((m) =>
-                    !m.optimistic &&
-                    !m.id.startsWith('_optim_') &&
-                    !m.id.startsWith('nymbot-info-') &&
-                    !m.id.startsWith('nymbot-help-') &&
-                    m.id != 'nymbot-welcome')
-                .toList();
-            await cache.savePmMessages(key, _capPm(persistable),
-                enabled: cachePms, executor: txn);
-          }
+        for (final e in encoded.pms.entries) {
+          await cache.savePmMessagesJson(e.key, e.value, txn);
         }
-        for (final entry in state.users.entries) {
-          final p = entry.value.profile;
-          if (p != null) await cache.saveProfile(entry.key, p, txn);
+        for (final e in encoded.profiles.entries) {
+          await cache.saveProfileJson(
+              e.key, e.value, encoded.profileKind0Ts[e.key] ?? 0, txn);
         }
-        for (final e in reactionEntries.entries) {
-          await cache.saveReactions(e.key, e.value, txn);
+        for (final e in changedReactions.entries) {
+          await cache.saveReactionsJson(e.key, e.value, txn);
         }
       });
       _dirtyChannelKeys.clear();
       _dirtyPmKeys.clear();
+      profilePayload.forEach((pk, p) => _lastPersistedProfile[pk] = p);
+      changedReactions.forEach((id, j) => _lastPersistedReactionJson[id] = j);
       await cache.enforceLruLimits();
     } catch (e) {
       debugPrint('cache flush failed: $e');
@@ -11762,7 +11889,33 @@ class NostrController {
     if (body != text.trim() && (isBotCommand(body) || isNymbotMention(body))) {
       return true;
     }
-    return _quotedNymbotAuthor(text) != null && body.isNotEmpty;
+    if (_quotedNymbotAuthor(text) != null && body.isNotEmpty) return true;
+    // A plain reply inside a thread Nymbot rooted or last spoke in continues
+    // that conversation the same way a quote-reply does (threads.js) — without
+    // this a guess typed into a game's thread never reaches the bot.
+    return body.isNotEmpty && _threadBotTarget() != null;
+  }
+
+  /// The open thread's root when the composer replies into one in the CURRENT
+  /// channel view, else null — the same gate [_sendMessageContent] applies, so
+  /// a send is never mis-threaded after a view switch.
+  String? _composerThreadRoot() {
+    if (!appThreadsEnabled) return null;
+    final view = _ref.read(appStateProvider).view;
+    if (view.kind != ViewKind.channel) return null;
+    final at = _ref.read(activeThreadProvider);
+    return (at != null && at.view == view) ? at.rootId : null;
+  }
+
+  /// The Nymbot message the OPEN thread's next plain reply would answer, or
+  /// null when the composer isn't in a channel thread the bot is part of.
+  /// Read before the outgoing message is published, so the bot is still the
+  /// thread's last speaker.
+  Message? _threadBotTarget() {
+    final rootId = _composerThreadRoot();
+    if (rootId == null) return null;
+    final state = _ref.read(appStateProvider);
+    return threadBotReplyTarget(state, state.view.storageKey, rootId);
   }
 
   /// The non-quoted remainder of a composed message (the PWA's
@@ -11811,8 +11964,20 @@ class NostrController {
     if (author != null) {
       conversation.add({'author': author, 'text': buf.join('\n').trim()});
     }
-    return conversation;
+    // Take the wire envelope off Nymbot's own turns; shown it as history the
+    // model writes it itself.
+    final out = <Map<String, String>>[];
+    for (final e in conversation) {
+      final isBot = _rxNymbotAuthor.hasMatch((e['author'] ?? '').trim());
+      final text = isBot ? threadEntryText(e['text'] ?? '', isBot: true) : (e['text'] ?? '');
+      if (text.trim().isEmpty) continue;
+      out.add({'author': e['author']!, 'text': text});
+    }
+    return out;
   }
+
+  static final RegExp _rxNymbotAuthor =
+      RegExp(r'^nymbot(?:#[0-9a-f]{4})?$', caseSensitive: false);
 
   /// Routes a channel message to Nymbot: resolves `@Nymbot …` / a reply-quote
   /// of a Nymbot message to `?ask`/`?guess` (commands.js:14-35), gathers the
@@ -11852,11 +12017,25 @@ class NostrController {
       }
     }
 
+    // The thread the composer is replying into, if any — what the worker tags
+    // the reply with so the answer lands back in the thread. Set for ANY thread
+    // (a `?command` typed under someone else's message is answered in place
+    // too), unlike [threadTarget] below which gates the implicit routing.
+    final threadRoot = _composerThreadRoot();
+    // The open thread's Nymbot message, resolved BEFORE the outgoing message is
+    // published so the bot is still the thread's last speaker.
+    final threadTarget = _threadBotTarget();
+
     // Reply to a Nymbot message without an explicit command → ?ask, or ?guess
     // when the quoted message carries a wordplay game token (commands.js:28-35).
+    // A plain reply in the bot's thread routes the same way, reading the token
+    // off the thread's newest game message instead of a quote (threads.js).
+    final gameTokenRe = RegExp(r'\[gc:[A-Za-z0-9+/=]+\]');
     if (_quotedNymbotAuthor(rawText) != null && !content.startsWith('?')) {
-      final hasGameToken = RegExp(r'\[gc:[A-Za-z0-9+/=]+\]').hasMatch(rawText);
-      content = (hasGameToken ? '?guess ' : '?ask ') + content;
+      content = (gameTokenRe.hasMatch(rawText) ? '?guess ' : '?ask ') + content;
+    } else if (threadTarget != null && !content.startsWith('?')) {
+      content = (gameTokenRe.hasMatch(threadTarget.content) ? '?guess ' : '?ask ') +
+          content;
     }
 
     final parsed = parseBotCommand(content);
@@ -11872,10 +12051,17 @@ class NostrController {
     final storageKey = view.storageKey;
     final cmd = parsed.name;
 
-    // Reply-chain conversation context for ?ask / ?guess (commands.js:42-45).
+    // Conversation context for ?ask / ?guess (commands.js:42-45): the whole
+    // thread when the message came from one (a thread IS the conversation, and
+    // a game's [gc:] token lives further up it), otherwise the reply chain.
     var conversation = const <Map<String, String>>[];
     if (cmd == 'ask' || cmd == 'guess') {
-      conversation = _extractQuoteChain(rawText);
+      if (threadRoot != null) {
+        conversation = threadBotConversation(
+            _ref.read(appStateProvider), storageKey, threadRoot,
+            exclude: rawText);
+      }
+      if (conversation.isEmpty) conversation = _extractQuoteChain(rawText);
     }
 
     // Channel context for the AI-aware commands (commands.js:46-191). A `?ask`
@@ -11928,6 +12114,10 @@ class NostrController {
         'publishedContent': rawText,
         'channelMessages': channelMessages,
         'activeUsers': activeUsers,
+        // The thread the command came from: the worker echoes it as a NIP-10
+        // marked root on the signed reply so it lands in the thread instead of
+        // the flat channel (bot.js). Omitted outside a thread.
+        if (threadRoot != null) 'threadRoot': threadRoot,
         'lang': LocalizationService.instance.language,
       });
       final event = data['event'];

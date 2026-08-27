@@ -8,6 +8,7 @@ import 'package:pointycastle/stream/chacha7539.dart';
 import 'package:pointycastle/api.dart' show KeyParameter, ParametersWithIV;
 
 import 'keys.dart';
+import 'native_ecdh.dart';
 
 /// NIP-44 v2 implementation (HKDF-SHA256 + ChaCha20 + HMAC-SHA256).
 ///
@@ -51,7 +52,15 @@ Uint8List _hkdfExpand(Uint8List prk, Uint8List info, int length) {
 
 /// secp256k1 ECDH on x-only pubkeys: lift [pubkeyHex] to the point with even
 /// y, multiply by [privkey], and return the 32-byte big-endian x coordinate.
+///
+/// Native libsecp256k1 when it loads in this isolate (~50 µs — see
+/// [NativeEcdh]); otherwise the pure-Dart pointycastle multiply below (~15 ms
+/// of BigInt math, which a CPU profile showed dominating the main isolate
+/// during settings-sync and gift-wrap publishes). Both agree on every result
+/// and on rejecting invalid inputs.
 Uint8List _ecdhSharedX(Uint8List privkey, String pubkeyHex) {
+  final native = NativeEcdh.sharedX(privkey: privkey, pubkeyHex: pubkeyHex);
+  if (native != null) return native;
   // Compressed, even-y encoding: 0x02 || x.
   final compressed = hexToBytes('02${pubkeyHex.padLeft(64, '0')}');
   final point = _secp.curve.decodePoint(compressed);

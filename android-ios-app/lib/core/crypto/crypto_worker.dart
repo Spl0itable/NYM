@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart'
 
 import '../../models/nostr_event.dart';
 import 'gift_wrap.dart' as giftwrap;
+import 'native_schnorr.dart';
 import 'keys.dart' as keys;
 
 /// Off-main-thread NIP-59 gift-wrap **wrap** + **unwrap** for the local-key
@@ -137,6 +138,9 @@ Map<String, dynamic> _encodeWrapJob({
 Future<List<Map<String, dynamic>?>> unwrapBatchIsolate(
   List<Map<String, dynamic>> jobs,
 ) async {
+  // Native libsecp256k1 for the per-wrap seal verify (and any signing) in
+  // THIS worker isolate; falls back to pure Dart when unavailable.
+  await NativeSchnorr.ensureLoaded();
   final out = List<Map<String, dynamic>?>.filled(jobs.length, null);
   for (var i = 0; i < jobs.length; i++) {
     try {
@@ -170,6 +174,8 @@ Future<List<Map<String, dynamic>?>> unwrapBatchIsolate(
 Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
   List<Map<String, dynamic>> jobs,
 ) async {
+  // Native signing for the seal/wrap layers in this worker isolate.
+  await NativeSchnorr.ensureLoaded();
   final out = List<Map<String, dynamic>?>.filled(jobs.length, null);
   for (var i = 0; i < jobs.length; i++) {
     try {

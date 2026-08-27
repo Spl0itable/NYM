@@ -35,11 +35,15 @@ class ShopSvgIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // currentColor theming instead of a srcIn colorFilter: the filter forces
+    // a Canvas::saveLayer per icon per frame (see NymSvgIcon), and flair
+    // glyphs render on every message row of a flair-wearing user. All shop
+    // glyphs paint exclusively with `currentColor`, so this is identical.
     return SvgPicture.string(
       svg,
       width: size,
       height: size,
-      colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+      theme: SvgTheme(currentColor: color),
     );
   }
 }

@@ -4,8 +4,11 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
+import 'package:flutter/foundation.dart' show compute, kIsWeb;
 
 import '../../core/constants/storage_keys.dart';
+import '../../core/crypto/keys.dart' as keys;
+import '../../core/crypto/nym_sync_builder.dart';
 import '../../models/settings.dart';
 import '../../core/crypto/pq.dart' as pq;
 import '../../features/identity/pq_registry.dart' show pqSelfCandidates;
@@ -2626,6 +2629,28 @@ class StorageSync {
           ? await _pqSelfKeyCandidates()
           : const <({Uint8List kemSk, Uint8List kemPk})>[];
       final selfKem = candidates.isEmpty ? null : candidates.first;
+      // LOCAL key: run the whole seal (inner NIP-44 + optional pq2 layer,
+      // ML-KEM included) off the main isolate — these blobs re-encrypt on
+      // every changed category during catch-up, and the CPU profile showed
+      // them as recurring main-thread jank (see nym_sync_builder.dart). Any
+      // failure falls through to the inline signer path below.
+      if (signer is LocalSigner) {
+        try {
+          final job = <String, dynamic>{
+            'sk': keys.bytesToHex(signer.privkey),
+            'self': _pubkey,
+            'plaintext': plaintext,
+            if (allowPq && _pqSealToSelf && selfKem != null)
+              'kemPk': selfKem.kemPk,
+          };
+          final blob = kIsWeb
+              ? await encryptToSelfIsolate(job)
+              : await compute(encryptToSelfIsolate, job);
+          if (blob != null) return blob;
+        } catch (_) {
+          // Inline below.
+        }
+      }
       if (allowPq && _pqSealToSelf && selfKem != null) {
         try {
           // Layered, not combined: the outer layer is keyed from the KEM

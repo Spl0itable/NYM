@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/core/constants/event_kinds.dart';
+import 'package:nym_bar/core/crypto/isolate_verifier.dart';
 import 'package:nym_bar/core/crypto/keys.dart' as keys;
 import 'package:nym_bar/core/crypto/schnorr.dart' as schnorr;
 import 'package:nym_bar/models/message.dart';
@@ -97,6 +98,49 @@ void main() {
     // ignore: avoid_print
     print('HYDRATE: ${channels * perChannel} messages across $channels '
         'channels in ${sw.elapsedMilliseconds}ms');
+  });
+
+  test('IsolateVerifier replay: cold verify vs persisted-cache relaunch',
+      () async {
+    final sk = keys.generatePrivateKey();
+    final pk = keys.getPublicKeyHex(sk);
+    const n = 40;
+    final events = <NostrEvent>[];
+    for (var i = 0; i < n; i++) {
+      final e = NostrEvent(
+        pubkey: pk,
+        createdAt: 1700000000 + i,
+        kind: EventKind.namedChannel,
+        tags: [
+          ['d', 'room'],
+        ],
+        content: 'replayed event $i',
+      );
+      e.id = e.computeId();
+      e.sig = schnorr.signId(e.id, sk);
+      events.add(e);
+    }
+
+    // Session 1: everything is new — full batched BIP340 verification.
+    final v1 = IsolateVerifier();
+    final sw1 = Stopwatch()..start();
+    final ok1 = await Future.wait([for (final e in events) v1.verify(e)]);
+    sw1.stop();
+    expect(ok1.every((b) => b), isTrue);
+
+    // "Relaunch": a fresh verifier seeded with the persisted snapshot — the
+    // boot replay of the same events must skip the signature math.
+    final v2 = IsolateVerifier()..markVerified(v1.snapshotVerifiedIds());
+    final sw2 = Stopwatch()..start();
+    final ok2 = await Future.wait([for (final e in events) v2.verify(e)]);
+    sw2.stop();
+    expect(ok2.every((b) => b), isTrue);
+
+    // ignore: avoid_print
+    print('REPLAY: cold verify $n events = ${sw1.elapsedMilliseconds}ms; '
+        'seeded relaunch replay = ${sw2.elapsedMilliseconds}ms');
+    expect(sw2.elapsedMilliseconds * 10 < sw1.elapsedMilliseconds + 10, isTrue,
+        reason: 'the seeded replay must be far cheaper than cold verification');
   });
 
   test('AppState channel-message ingest throughput (live/backfill burst)', () {

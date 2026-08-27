@@ -29,6 +29,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 
+import 'pausable_animated_image.dart';
+
 /// True when [url] looks like an SVG (by extension, ignoring any query string),
 /// including the proxied form `…/api/proxy?url=<encoded …/foo.svg>`.
 bool isSvgUrl(String url) {
@@ -38,6 +40,51 @@ bool isSvgUrl(String url) {
   final q = Uri.tryParse(url)?.queryParameters['url'];
   if (q != null && RegExp(r'\.svg(\?|#|$)').hasMatch(q.toLowerCase())) {
     return true;
+  }
+  return false;
+}
+
+/// True when [url] names a format that ANIMATES (by extension, like
+/// [isSvgUrl] — including the proxied `url=` form). Only clearly-animated
+/// extensions are matched: `.gif` / `.apng`. Animated WebP can't be told from
+/// static WebP by URL; the in-memory path sniffs its bytes instead
+/// ([looksAnimatedImageBytes]).
+bool isAnimatedImageUrl(String url) {
+  if (url.isEmpty) return false;
+  final rx = RegExp(r'\.(gif|apng)(\?|#|$)');
+  if (rx.hasMatch(url.toLowerCase())) return true;
+  final q = Uri.tryParse(url)?.queryParameters['url'];
+  return q != null && rx.hasMatch(q.toLowerCase());
+}
+
+/// True when [bytes] begin like an animated image: any GIF (`GIF8…` — GIFs in
+/// chat are effectively always animated, and a static GIF through the
+/// pausable path renders identically), or a WebP whose VP8X header carries
+/// the animation flag.
+bool looksAnimatedImageBytes(Uint8List bytes) {
+  if (bytes.length >= 4 &&
+      bytes[0] == 0x47 && // G
+      bytes[1] == 0x49 && // I
+      bytes[2] == 0x46 && // F
+      bytes[3] == 0x38) {
+    return true;
+  }
+  // RIFF....WEBP + VP8X chunk with the animation bit (0x02) set.
+  if (bytes.length >= 21 &&
+      bytes[0] == 0x52 && // R
+      bytes[1] == 0x49 && // I
+      bytes[2] == 0x46 && // F
+      bytes[3] == 0x46 && // F
+      bytes[8] == 0x57 && // W
+      bytes[9] == 0x45 && // E
+      bytes[10] == 0x42 && // B
+      bytes[11] == 0x50 && // P
+      bytes[12] == 0x56 && // V
+      bytes[13] == 0x50 && // P
+      bytes[14] == 0x38 && // 8
+      bytes[15] == 0x58) {
+    // X
+    return (bytes[20] & 0x02) != 0;
   }
   return false;
 }
@@ -362,9 +409,31 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
     );
   }
 
+  /// The decode-width cap (physical px) for the current display box, or null
+  /// when the caller gave no finite width/height (full-size surfaces like the
+  /// fullscreen viewer, which want the native resolution).
+  ///
+  /// Without a cap every raster decodes at its INTRINSIC size — a 12MP photo
+  /// shown in a 300px tile, a 2MP avatar in a 40px circle — costing tens of MB
+  /// of decode + GPU texture upload EACH, evicting the whole ImageCache (so
+  /// scrolled-away rows re-decode on every pass) and hammering both CPU and
+  /// GPU exactly while messages stream in. Capping the decode to the on-screen
+  /// physical size is the single biggest lever on that. Only ONE dimension is
+  /// ever passed to the codec so the aspect ratio is always preserved
+  /// (width preferred, else height); [BoxFit.cover] gets a 1.5× margin so the
+  /// crop of a non-matching aspect ratio can't render soft.
+  int? _decodeCacheWidth(BuildContext context) {
+    final logical = (widget.width ?? widget.height);
+    if (logical == null || !logical.isFinite || logical <= 0) return null;
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
+    final cover = widget.fit == BoxFit.cover ? 1.5 : 1.0;
+    return (logical * dpr * cover).ceil();
+  }
+
   @override
   Widget build(BuildContext context) {
     final url = _effectiveUrl;
+    final cacheWidth = _decodeCacheWidth(context);
     // The in-memory http path handles BOTH svg and raster (and never touches the
     // sqflite-backed disk cache). Use it for SVG-looking URLs and whenever the
     // caller opts out of the disk cache ([memoryOnly], i.e. emoji).
@@ -393,11 +462,34 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
             );
           }
           if (d.raster != null) {
+            // Animated GIF / animated-WebP: visibility-gated playback so a
+            // pile of animated emoji only burns frame decodes while actually
+            // on screen (see [PausableAnimatedImage]).
+            if (looksAnimatedImageBytes(d.raster!)) {
+              ImageProvider provider = MemoryImage(d.raster!);
+              if (cacheWidth != null) {
+                provider = ResizeImage(provider,
+                    width: cacheWidth, allowUpscaling: false);
+              }
+              return PausableAnimatedImage(
+                image: provider,
+                visibilityKey: ValueKey('anim-mem:$url'),
+                width: widget.width,
+                height: widget.height,
+                fit: widget.fit,
+                placeholder: widget.placeholder,
+                errorBuilder: _fallback,
+              );
+            }
             return Image.memory(
               d.raster!,
               width: widget.width,
               height: widget.height,
               fit: widget.fit,
+              // Decode at the display size, not the intrinsic size (see
+              // [_decodeCacheWidth]). Applies per-frame for animated GIF/WebP
+              // emoji, which otherwise decode every frame at full resolution.
+              cacheWidth: cacheWidth,
               gaplessPlayback: true,
               errorBuilder: (ctx, _, __) => _fallback(ctx),
             );
@@ -406,12 +498,33 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
         },
       );
     }
+    // Animated media (`.gif`/`.apng` — Giphy picks, GIF spam): same
+    // disk-cached provider, but rendered through the visibility-gated player
+    // so offscreen GIFs stop decoding frames instead of animating forever.
+    if (isAnimatedImageUrl(url)) {
+      return PausableAnimatedImage(
+        image: CachedNetworkImageProvider(
+          url,
+          headers: InlineNetworkImage.imageFetchHeaders,
+          maxWidth: cacheWidth,
+        ),
+        visibilityKey: ValueKey('anim-net:$url'),
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        placeholder: widget.placeholder,
+        errorBuilder: _fallback,
+      );
+    }
     return CachedNetworkImage(
       imageUrl: url,
       httpHeaders: InlineNetworkImage.imageFetchHeaders,
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
+      // Decode at the display size (see [_decodeCacheWidth]); the disk cache
+      // still stores the original bytes, so nothing is lost across surfaces.
+      memCacheWidth: cacheWidth,
       placeholder:
           widget.placeholder == null ? null : (_, __) => widget.placeholder!,
       errorWidget: (ctx, _, __) => _fallback(ctx),
@@ -455,9 +568,31 @@ class _RenderEmojiBaselineDrop extends RenderProxyBox {
     markNeedsLayout();
   }
 
+  /// Height recorded during [performLayout], because the baseline getter below
+  /// MUST NOT read [size]: the paragraph queries a placeholder's baseline
+  /// during ITS OWN performLayout, and on Flutter < 3.41 (before upstream
+  /// fix flutter#176906) a RenderBox that isn't the paragraph's direct child
+  /// (this one sits under a Padding) may not read its size in that scope —
+  /// the debug assert threw MID-LAYOUT of every emoji-bearing paragraph,
+  /// aborting it before placeholder dimensions were set and corrupting the
+  /// whole message-list subtree into a per-frame exception storm
+  /// ("RenderBox.size accessed beyond the scope…", "dimensions != null",
+  /// "RenderBox was not laid out…") — the app-wide lag while messages load.
+  double _layoutHeight = 0.0;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    _layoutHeight = size.height; // own size during own layout: always legal
+  }
+
   @override
   double? computeDistanceToActualBaseline(TextBaseline baseline) =>
-      size.height - _drop;
+      _layoutHeight - _drop;
+
+  @override
+  double? computeDryBaseline(BoxConstraints constraints, TextBaseline baseline) =>
+      getDryLayout(constraints).height - _drop;
 }
 
 /// Paints a pre-compiled SVG [ui.Picture] (sized to its intrinsic viewport; the

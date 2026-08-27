@@ -64,4 +64,44 @@ void main() {
     e2.sig = '0' * 128;
     expect(await v.verify(e2), isFalse);
   });
+
+  test('snapshotVerifiedIds round-trips into a fresh verifier (relaunch seed)',
+      () async {
+    final v = IsolateVerifier();
+    final ids = [for (var i = 0; i < 5; i++) _event('m$i').computeId()];
+    v.markVerified(ids);
+
+    final snapshot = v.snapshotVerifiedIds();
+    expect(snapshot.toSet(), ids.toSet());
+
+    // A fresh verifier (a relaunch) seeded with the snapshot trusts the same
+    // content ids without re-running the signature math.
+    final v2 = IsolateVerifier()..markVerified(snapshot);
+    final e = _event('m3');
+    e.id = e.computeId();
+    e.sig = '0' * 128; // would fail a real check — proves the skip
+    expect(await v2.verify(e), isTrue);
+  });
+
+  test('snapshotVerifiedIds keeps the NEWEST ids when over the cap', () {
+    final v = IsolateVerifier();
+    v.markVerified(['a' * 64, 'b' * 64, 'c' * 64]);
+    final snap = v.snapshotVerifiedIds(max: 2);
+    expect(snap, ['b' * 64, 'c' * 64]);
+  });
+
+  test('onNewVerified fires only when the cache actually gains an id',
+      () async {
+    final v = IsolateVerifier();
+    var fired = 0;
+    v.onNewVerified = () => fired++;
+
+    // Cache-hit path: seeded id → no new verification, no callback.
+    final e = _event('cached');
+    e.id = e.computeId();
+    e.sig = '0' * 128;
+    v.markVerified([e.id]);
+    expect(await v.verify(e), isTrue);
+    expect(fired, 0);
+  });
 }
