@@ -906,36 +906,15 @@ Object.assign(NYM.prototype, {
             container.appendChild(el);
         };
 
-        const run = () => {
-            this._loadUnfurlCache();
-            for (const href of hrefs) {
-                const hit = this._unfurlCache.get(href);
-                if (hit && Date.now() - hit.at <= (hit.data ? this.UNFURL_TTL_MS : this.UNFURL_MISS_TTL_MS)) {
-                    paint(hit.data);
-                    continue;
-                }
-                this.unfurlUrl(href).then(paint).catch(() => { });
+        this._loadUnfurlCache();
+        for (const href of hrefs) {
+            const hit = this._unfurlCache.get(href);
+            if (hit && Date.now() - hit.at <= (hit.data ? this.UNFURL_TTL_MS : this.UNFURL_MISS_TTL_MS)) {
+                paint(hit.data);
+                continue;
             }
-        };
-
-        // Defer the unfurls until the message actually nears the viewport:
-        // opening a conversation renders a 50-message window, and unfurling
-        // every link in it immediately fired a burst of proxy requests for
-        // messages the user may never scroll to. Cached hits paint the moment
-        // the message first shows; anything else fetches then.
-        if (typeof IntersectionObserver !== 'function') { run(); return; }
-        if (!this._unfurlObserver) {
-            this._unfurlObserver = new IntersectionObserver((entries) => {
-                for (const en of entries) {
-                    if (!en.isIntersecting) continue;
-                    this._unfurlObserver.unobserve(en.target);
-                    const cb = en.target._unfurlRun;
-                    if (cb) { en.target._unfurlRun = null; cb(); }
-                }
-            }, { rootMargin: '200px' });
+            this.unfurlUrl(href).then(paint).catch(() => { });
         }
-        messageEl._unfurlRun = run;
-        this._unfurlObserver.observe(messageEl);
     },
 
     setupEventListeners() {

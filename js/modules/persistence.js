@@ -412,11 +412,6 @@
         },
 
         async _hydrateDedupSets() {
-            // Idempotent + run-once: init() awaits this EARLY (before the
-            // relays can connect) and hydrateFromCache still calls it in its
-            // normal sequence; the second call is a no-op.
-            if (this._dedupSetsHydrated) return;
-            this._dedupSetsHydrated = true;
             try {
                 const meta = await this._cacheGetAll('meta');
                 try { await this._hydratePqKeys(meta); } catch (_) { }
