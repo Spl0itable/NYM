@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <!-- Fallback CSP, matching index.html: no inline styles or scripts, so the
+         page's look and its one script live in /css and /js like the app's. -->
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>404 — Nymchat</title>
+    <meta name="description" content="This Nymchat page doesn't exist. Open the app instead.">
+    <meta name="robots" content="noindex, follow">
+    <meta name="theme-color" content="#0a0a0f" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f5f5f2" media="(prefers-color-scheme: light)">
+    <meta name="color-scheme" content="dark light">
+    <link rel="icon" type="image/x-icon" href="https://nymchat.app/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymchat.app/images/android-chrome-192x192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymchat.app/images/android-chrome-192x192.png">
+    <link rel="stylesheet" href="/css/404.css">
+    <script src="/js/404.js" defer></script>
+</head>
+
+<body>
+    <main class="nf">
+        <pre class="nf-art nf-art-404" role="img" aria-label="404">
+____________/\\\________/\\\\\\\_______________/\\\____        
+ __________/\\\\\______/\\\/////\\\___________/\\\\\____       
+  ________/\\\/\\\_____/\\\____\//\\\________/\\\/\\\____      
+   ______/\\\/\/\\\____\/\\\_____\/\\\______/\\\/\/\\\____     
+    ____/\\\/__\/\\\____\/\\\_____\/\\\____/\\\/__\/\\\____    
+     __/\\\\\\\\\\\\\\\\_\/\\\_____\/\\\__/\\\\\\\\\\\\\\\\_   
+      _\///////////\\\//__\//\\\____/\\\__\///////////\\\//__  
+       ___________\/\\\_____\///\\\\\\\/_____________\/\\\____ 
+        ___________\///________\///////_______________\///_____ </pre>
+
+        <h1 class="nf-title">This channel doesn't exist</h1>
+
+        <pre class="nf-art nf-art-window" role="img" aria-label="An empty chat channel called #404 with nobody in it. Someone types &quot;anyone here?&quot;, then &quot;hello?&quot;, then trails off, and a tumbleweed rolls through the geohash.">
+ <span class="nf-frame">,---------------------------------------------.</span>
+ <span class="nf-frame">|</span>  <span class="nf-chan">#404</span>                           0 nyms here <span class="nf-frame">|</span>
+ <span class="nf-frame">|---------------------------------------------|</span>
+ <span class="nf-frame">|</span>                                             <span class="nf-frame">|</span>
+ <span class="nf-frame">|</span>  <span class="nf-nym">&lt;you&gt;</span>  anyone here?                        <span class="nf-frame">|</span>
+ <span class="nf-frame">|</span>  <span class="nf-nym">&lt;you&gt;</span>  hello?                              <span class="nf-frame">|</span>
+ <span class="nf-frame">|</span>  <span class="nf-nym">&lt;you&gt;</span>  ...                                 <span class="nf-frame">|</span>
+ <span class="nf-frame">|</span>                                             <span class="nf-frame">|</span>
+ <span class="nf-frame">|</span>  <span class="nf-sys">* a tumbleweed rolls through the geohash *</span> <span class="nf-frame">|</span>
+ <span class="nf-frame">|</span>                                             <span class="nf-frame">|</span>
+ <span class="nf-frame">'---------------------------------------------'</span></pre>
+
+        <p class="nf-quip" id="nfQuip">Nothing here is stored, logged, or found. Two of those are on purpose.</p>
+
+        <p class="nf-term">
+            <span class="nf-prompt">nym@mesh:~$</span> locate <span class="nf-path" id="nfPath">this page</span><span
+                class="nf-cursor" aria-hidden="true">█</span>
+        </p>
+
+        <div class="nf-actions">
+            <a class="nf-btn nf-btn-primary" href="/">Open Nymchat</a>
+            <button class="nf-btn" type="button" id="nfBack" hidden>Go back</button>
+            <a class="nf-btn" href="https://nymchat.app/docs/">Knowledge base</a>
+        </div>
+    </main>
+</body>
+
+</html>

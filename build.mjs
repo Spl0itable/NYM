@@ -171,6 +171,11 @@ async function run() {
   await emit('index.html', indexOut);
   manifestFiles['/index.html'] = sha256b64(Buffer.from(indexOut));
 
+  // 404.html
+  const notFoundHtml = rewriteHtml(await fs.readFile(path.join(root, '404.html'), 'utf8'));
+  const notFoundOut = await minifyHtml(notFoundHtml, htmlMinifyOptions);
+  await emit('404.html', notFoundOut);
+
   // robots.txt verbatim.
   await emit('robots.txt', await fs.readFile(path.join(root, 'robots.txt')));
 
@@ -260,6 +265,8 @@ async function run() {
 /i18n/*
   Cache-Control: public, max-age=86400
 /index.html
+  Cache-Control: no-cache
+/404.html
   Cache-Control: no-cache
 /
   Cache-Control: no-cache
