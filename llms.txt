@@ -1,0 +1,60 @@
+# Nymchat
+
+> Nymchat (NYM, "Nostr Ynstant Messenger") is an ephemeral, pseudonymous chat
+> client built on the Nostr protocol and bridged with Bitchat over Bluetooth
+> mesh. Public geohash and named channels are unencrypted Nostr events; private
+> messages and group chats are end-to-end encrypted with NIP-17 gift wraps plus
+> a hybrid ML-KEM-768 post-quantum key agreement. No account and no
+> registration: pick a nym and start chatting, or log in with an existing
+> Nostr key.
+
+This file is for AI agents and other automated readers. Everything served from
+this origin is the client — a single HTML page plus content-hashed JS and CSS —
+so there is no page-per-topic to crawl and a sitemap says almost nothing. The
+prose an agent would actually want lives on the apex domain and in the source
+repository, and this file points at both.
+
+Nothing here is gated. Messages never touch this origin in a form anyone but
+the recipient can read, so the app being fully readable costs its users nothing.
+
+## The app
+
+- [Nymchat web client](https://web.nymchat.app/): the Progressive Web App itself. Ephemeral by default; the identity, settings and message history it holds live in the browser, not on a server.
+- [Version](https://web.nymchat.app/version.json): the live app version as `{"version":"v..."}`.
+- [Build manifest](https://web.nymchat.app/build-manifest.json): source commit, a SHA-256 of every served asset, and the `bundleHash` over that set. The app re-hashes its own running bundle against this and checks the result against signed GitHub attestations.
+- [Bundle hash](https://web.nymchat.app/bundle-hash.txt): just the `bundleHash`, for scripted comparison against a local `npm run build`.
+
+## Documentation
+
+- [Knowledge base](https://nymchat.app/docs/): user-facing documentation, on the apex domain.
+- [README](https://raw.githubusercontent.com/Spl0itable/NYM/main/README.md): the complete reference in markdown — every feature, the protocol details, the command list, the Nymbot, build verification and the warrant canary. Read this one if you read only one.
+- [Source](https://github.com/Spl0itable/NYM): the repository this site is built from, AGPL-3.0.
+- [Post-quantum root spec](https://github.com/Spl0itable/NYM/blob/main/docs/PQ-ROOT-SPEC.md): the normative description of the hybrid key agreement and its test vectors.
+
+## Protocol
+
+- Geohash channels are Nostr `kind 20000` ephemeral events with a `['g', geohash]` tag; named channels are `kind 23333` with a `['d', channel]` tag. Both carry `['n', nym]` for the nickname.
+- Private messages and group chats are [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) `kind 14` rumors, sealed and wrapped in [NIP-59](https://github.com/nostr-protocol/nips/blob/master/59.md) `kind 1059` gift wraps under one-time sender keys with randomized timestamps. Groups send one wrap per member and are capped at 100 members.
+- The NIP-44 conversation key is replaced by a transcript-binding hybrid of secp256k1 ECDH and [ML-KEM-768](https://csrc.nist.gov/pubs/fips/203/final), on the wire as `pq1.<base64url(kem_ciphertext)>.<NIP-44 v2 payload>`. Security is `max(classical, post-quantum)`; it protects confidentiality, not authentication. Peers announce the capability with a signed replaceable `kind 30078` event tagged `nym-pq`, and clients without one keep receiving standard NIP-17.
+- Reactions are `kind 7` ([NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md)) with a `['k', originalKind]` tag; zaps are `kind 9735` ([NIP-57](https://github.com/nostr-protocol/nips/blob/master/57.md)).
+- The Bluetooth LE mesh is wire-compatible with [Bitchat](https://bitchat.free): Noise XX sessions per peer, store-and-forward relaying, and announces carrying a `nostrLink` that maps a mesh peer to its Nostr identity.
+
+## Security and transparency
+
+- [security.txt](https://web.nymchat.app/.well-known/security.txt): vulnerability disclosure contact (RFC 9116).
+- [Security policy](https://github.com/Spl0itable/NYM/blob/main/SECURITY.md): what to report and how.
+- [Warrant canary](https://github.com/Spl0itable/NYM/blob/main/canary.json): signed, on a fixed schedule, anchored to a recent Bitcoin block height and hash so it cannot have been pre-signed in bulk. A stale, unsigned or missing canary is itself the signal.
+
+## Legal
+
+- [Terms of Service](https://nymchat.app/terms/)
+- [Privacy Policy](https://nymchat.app/privacy/)
+- [DMCA](https://nymchat.app/dmca/)
+- [License](https://github.com/Spl0itable/NYM/blob/main/LICENSE): GNU AGPL-3.0-only.
+
+## Optional
+
+- [Contact](https://nymchat.app/contact/): operated by 21 Million LLC.
+- [Android app on Zapstore](https://zapstore.dev/apps/com.nym.bar): the native Flutter build, published with a signed NIP-82 `kind 3063` event carrying the APK's SHA-256 so an install can be verified off-device.
+- [Mobile source](https://github.com/Spl0itable/NYM/tree/main/android-ios-app): the iOS and Android client, sharing the protocol and post-quantum test fixtures with the PWA.
+- [robots.txt](https://web.nymchat.app/robots.txt) and [sitemap.xml](https://web.nymchat.app/sitemap.xml): both deliberately minimal, and both explain why in comments.

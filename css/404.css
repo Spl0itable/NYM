@@ -108,7 +108,7 @@ body::before {
 }
 
 .nf-art-404 {
-    font-size: min(3.7vw, 22px);
+    font-size: min(2.3vw, 15px);
     color: var(--nf-primary);
     text-shadow: 0 0 12px var(--nf-glow);
 }
@@ -158,7 +158,6 @@ body::before {
     justify-content: center;
     gap: 6px;
     font-size: clamp(11px, 3.1vw, 13px);
-    /* A long path shouldn't push the line off a phone screen. */
     max-width: 100%;
     min-width: 0;
     color: var(--nf-dim);

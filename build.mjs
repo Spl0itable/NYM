@@ -183,6 +183,12 @@ async function run() {
   // real sitemap is on the apex domain.
   await emit('sitemap.xml', await fs.readFile(path.join(root, 'sitemap.xml')));
 
+  // llms.txt verbatim — the markdown pointer file for AI agents and other
+  // automated readers. This origin is one page of client code, so a crawler
+  // finds nothing useful; llms.txt says what the app is and links to the
+  // documentation, source and protocol details that live elsewhere.
+  await emit('llms.txt', await fs.readFile(path.join(root, 'llms.txt')));
+
   // _redirects verbatim — the retired /static/*.html pages point at their
   // replacements on the apex domain, which app builds already in users' hands
   // still link to.
@@ -276,6 +282,8 @@ async function run() {
   Cache-Control: no-cache
 /version.json
   Cache-Control: public, max-age=300
+/llms.txt
+  Cache-Control: public, max-age=3600
 `;
   await emit('_headers', headers.replace(/\s*$/, '') + cacheRules);
 

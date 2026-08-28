@@ -12,4 +12,7 @@
 User-agent: *
 Allow: /
 
+# A markdown summary for AI agents and other automated readers, since crawling
+# a single-page client tells them nothing: https://web.nymchat.app/llms.txt
+
 Sitemap: https://web.nymchat.app/sitemap.xml
