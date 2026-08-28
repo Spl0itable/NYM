@@ -4,6 +4,13 @@
 // used for the auto-translation footer to match the native app.
 const NYM_TRANSLATE_ICON_SVG = '<svg class="autotr-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>';
 
+// What one batched translate request may carry. Mirrors the backend's own
+// limits (TRANSLATE_BATCH_MAX / TRANSLATE_BATCH_BYTES in functions/api/proxy.js)
+// and sits under them, so an over-large batch is a bug here rather than a 400
+// from there.
+const NYM_TRANSLATE_BATCH_MAX = 25;
+const NYM_TRANSLATE_BATCH_CHARS = 16000;
+
 // Full set of languages supported by Google Translate.
 const NYM_TRANSLATE_LANGUAGES = [
     { code: 'af', name: 'Afrikaans' }, { code: 'sq', name: 'Albanian' },
@@ -383,6 +390,53 @@ Object.assign(NYM.prototype, {
             translatedText,
             detectedLanguage: data.detectedLanguage || 'auto',
         };
+    },
+
+    // Several strings in one request. The proxy takes `texts` and answers with
+    // `translations` in the same order (TRANSLATE_BATCH_MAX / _BYTES in
+    // functions/api/proxy.js bound the size). Used where a whole vocabulary is
+    // fetched at once — choosing a language used to fire one request per command
+    // and trickle through sixty of them.
+    //
+    // The single-string path is the one the edge caches, so this is for lists a
+    // client fetches once, not for message translation.
+    async _doTranslateBatch(texts, targetLang) {
+        const base = this._getProxyBaseUrl();
+        if (!base) throw new Error('Translation is unavailable: no API host configured');
+        const resp = await fetch(`${base}?action=translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ texts, source: 'auto', target: targetLang }),
+        });
+        const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('application/json')) {
+            throw new Error(`Translation failed (${resp.status})`);
+        }
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        if (!Array.isArray(data.translations)) throw new Error('Translation failed: not a batch');
+        return data.translations;
+    },
+
+    // Split a list into requests the proxy will accept: at most
+    // NYM_TRANSLATE_BATCH_MAX strings and NYM_TRANSLATE_BATCH_CHARS characters.
+    _translateBatches(texts) {
+        const out = [];
+        let batch = [];
+        let chars = 0;
+        for (const text of texts) {
+            const len = String(text || '').length;
+            if (batch.length && (batch.length >= NYM_TRANSLATE_BATCH_MAX
+                || chars + len > NYM_TRANSLATE_BATCH_CHARS)) {
+                out.push(batch);
+                batch = [];
+                chars = 0;
+            }
+            batch.push(text);
+            chars += len;
+        }
+        if (batch.length) out.push(batch);
+        return out;
     },
 
     async translatePoll(pollId) {

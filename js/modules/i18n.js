@@ -24,6 +24,15 @@ const NYM_I18N_SKIP_SELECTOR = [
     '.notification-item-author', '.file-offer-name', '.shop-item-name',
     '.command-name', '.help-cmd-name', '.translate-dropdown-name',
     '.translate-lang-option', '.emoji-name', '.hashtag',
+    // Language names are endonyms — "shqip", "አማርኛ", "Cebuano". Translating one
+    // is wrong on its face, and the two pickers between them hold 130-odd of
+    // them: repopulating a list used to enqueue every name at high priority,
+    // ahead of the UI the user is actually looking at.
+    '#translateLanguageSelect', '#uiLanguageSelect', '.translate-lang-grid',
+    // Same for the rows of the translate dropdown: the star's aria-label
+    // ("Favorite Cebuano") interpolates one of those names, so the list used to
+    // send its own 130 labels off to be translated every time it rendered.
+    '.translate-dropdown-item',
     '.custom-emoji', 'code', 'pre', 'kbd', 'samp',
     '[data-no-i18n]', '.notranslate', '[translate="no"]', '[contenteditable="true"]',
 ].join(',');
@@ -31,10 +40,17 @@ const NYM_I18N_SKIP_SELECTOR = [
 // Attributes carrying visible UI text worth translating.
 const NYM_I18N_ATTRS = ['placeholder', 'data-placeholder', 'title', 'aria-label'];
 
+// Volatile parts of a string — {placeholders} and embedded numbers — replaced
+// with sentinels to form a cache key. ONE regex, applied in a single pass:
+// tokenizing braces and numbers in two passes re-tokenized the sentinel just
+// written ("+{n} more" -> "+PLHPLH1PLHPLH more"), which no fill could put the
+// number back into, so the sentinel reached the screen. i18n/strings.mjs keeps
+// the same expression so the pre-translated pack is keyed identically.
+const NYM_I18N_TOKEN_RE = /\{[^}]+\}|\d[\d.,:/%+-]*/g;
+
 Object.assign(NYM.prototype, {
 
-    // ---- language + cache state -------------------------------------------
-
+    // language + cache state 
     getUiLanguage() {
         if (this.settings && typeof this.settings.uiLanguage === 'string') return this.settings.uiLanguage;
         try { return localStorage.getItem('nym_ui_language') || ''; } catch (_) { return ''; }
@@ -56,31 +72,40 @@ Object.assign(NYM.prototype, {
         return obj;
     },
 
-    // Seed the cache from the pre-translated pack shipped with the build
-    async _i18nPrimeFromPack(lang) {
-        if (!lang || lang === 'en') return;
-        this._i18nPacked = this._i18nPacked || new Set();
-        if (this._i18nPacked.has(lang)) return;
-        this._i18nPacked.add(lang);
-        try {
-            const res = await fetch(`/i18n/${encodeURIComponent(lang)}.json`, { cache: 'force-cache' });
-            // A build published without a cache simply has no pack. That is not
-            // an error — it is the old behaviour.
-            if (!res.ok) return;
-            const pack = await res.json();
-            if (!pack || typeof pack !== 'object') return;
-            const cache = this._i18nLoadCache(lang);
-            let added = 0;
-            for (const [source, translated] of Object.entries(pack)) {
-                if (typeof translated !== 'string' || !translated) continue;
-                if (typeof cache[source] === 'string') continue;
-                cache[source] = translated;
-                added++;
+    // Seed the cache from the pre-translated pack shipped with the build.
+    // Concurrent callers share one fetch, and a failed fetch is NOT remembered:
+    // a language primed while the device was offline would otherwise translate
+    // its whole UI one string at a time for the rest of the session.
+    _i18nPrimeFromPack(lang) {
+        if (!lang || lang === 'en') return Promise.resolve();
+        const inflight = this._i18nPackFetches || (this._i18nPackFetches = {});
+        if (inflight[lang]) return inflight[lang];
+        const done = (async () => {
+            try {
+                const res = await fetch(`/i18n/${encodeURIComponent(lang)}.json`, { cache: 'force-cache' });
+                // A build published without a cache simply has no pack. That is
+                // not an error — it is the old behaviour. It is also not worth
+                // asking for again this session.
+                if (!res.ok) return;
+                const pack = await res.json();
+                if (!pack || typeof pack !== 'object') return;
+                const cache = this._i18nLoadCache(lang);
+                let added = 0;
+                for (const [key, translated] of Object.entries(pack)) {
+                    if (typeof translated !== 'string' || !translated) continue;
+                    if (typeof cache[key] === 'string') continue;
+                    cache[key] = translated;
+                    added++;
+                }
+                if (added) this._i18nSaveCache(lang);
+            } catch (_) {
+                // Offline or blocked — drop the memo so the next language switch
+                // (or the next boot) tries again.
+                delete inflight[lang];
             }
-            if (added) this._i18nSaveCache(lang);
-        } catch (_) {
-            // Offline, blocked, or malformed — fall back to translating live.
-        }
+        })();
+        inflight[lang] = done;
+        return done;
     },
 
     _i18nSaveCache(lang) {
@@ -93,8 +118,7 @@ Object.assign(NYM.prototype, {
         }, 800);
     },
 
-    // ---- skip / collection ------------------------------------------------
-
+    // skip / collection 
     _i18nElSkipped(el) {
         if (!el || el.nodeType !== 1) return true;
         try { if (el.closest(NYM_I18N_SKIP_SELECTOR)) return true; } catch (_) { }
@@ -150,21 +174,31 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // ---- translation ------------------------------------------------------
-
     // Normalize a string into a stable cache KEY by replacing volatile tokens
     // ({placeholders} and embedded numbers) with sentinels, returning the token
     // values so they can be substituted back after translation. This makes
     // frequently-updated strings like "42 active nyms" / "43 active nyms" share
     // a single cached translation, so re-renders don't flip between the English
     // and translated forms while a new count is fetched.
+    //
+    // Whitespace collapses first: the served markup is minified, so a paragraph
+    // written across three source lines reaches the DOM as one space-separated
+    // run, and a key that kept the newlines matched neither the pre-translated
+    // pack nor the same string rendered from JS.
     _i18nMakeKey(core) {
         const tokens = [];
-        const key = core
-            .replace(/\{[^}]+\}/g, (m) => { tokens.push(m); return `PLH${tokens.length - 1}PLH`; })
-            .replace(/\d[\d.,:/%+-]*/g, (m) => { tokens.push(m); return `PLH${tokens.length - 1}PLH`; });
+        const key = String(core).replace(/\s+/g, ' ').trim().replace(NYM_I18N_TOKEN_RE, (m) => {
+            tokens.push(m);
+            return `PLH${tokens.length - 1}PLH`;
+        });
         return { key, tokens };
     },
+
+    // A raw English string as this cache keys it. Callers holding source strings
+    // (the tutorial script, i18nPrioritize) go through here so they look the
+    // same up as the DOM sweep does — otherwise a string the pack already
+    // carries is queued and translated all over again.
+    _i18nKeyOf(text) { return this._i18nMakeKey(text).key; },
 
     _i18nFill(template, tokens) {
         if (!tokens.length) return template;
@@ -179,7 +213,6 @@ Object.assign(NYM.prototype, {
         return translatedText;
     },
 
-    // ---- background translation queue -------------------------------------
     // Translation runs as a non-blocking background process so the app is
     // usable immediately after a language is chosen. On-screen and dynamically
     // rendered strings (e.g. the tutorial) are enqueued at high priority and
@@ -318,6 +351,11 @@ Object.assign(NYM.prototype, {
     // Apply whatever is currently cached to the live DOM (no network).
     _i18nApplyVisible(lang) {
         if (!lang || lang === 'en') return;
+        // A job started before a language switch still lands afterwards, and
+        // re-applying its language here painted the previous one back over the
+        // new one — pick Spanish, then French, and the French page filled back
+        // in with Spanish as the old queue drained.
+        if (lang !== this.getUiLanguage()) return;
         const textNodes = [];
         const attrTargets = [];
         this._i18nCollect(document.body, textNodes, attrTargets);
@@ -353,13 +391,13 @@ Object.assign(NYM.prototype, {
     i18nPrioritize(sources) {
         const lang = this.getUiLanguage();
         if (!lang || lang === 'en' || !Array.isArray(sources)) return;
-        this._i18nEnqueue(sources, 'hi', lang);
+        this._i18nEnqueue(sources.map(s => this._i18nKeyOf(s)), 'hi', lang);
     },
 
     _i18nApplyTextNode(node, lang) {
         const cache = this._i18nCacheStore()[lang];
         if (!cache) return;
-        const raw = node.nodeValue;
+        const raw = this._i18nSourceText(node);
         const m = raw.match(/^(\s*)([\s\S]*?)(\s*)$/);
         const { key, tokens } = this._i18nMakeKey(m[2]);
         const tpl = cache[key];
@@ -379,7 +417,7 @@ Object.assign(NYM.prototype, {
         const cache = this._i18nCacheStore()[lang];
         if (!cache) return;
         const { el, attr } = target;
-        const raw = el.getAttribute(attr);
+        const raw = this._i18nSourceAttr(el, attr);
         if (raw == null) return;
         const { key, tokens } = this._i18nMakeKey(raw.trim());
         const tpl = cache[key];
@@ -387,14 +425,25 @@ Object.assign(NYM.prototype, {
         const translated = this._i18nFill(tpl, tokens);
         const store = el.__i18nAttrOrig || (el.__i18nAttrOrig = {});
         if (store[attr] == null) store[attr] = raw;
-        if (raw !== translated) el.setAttribute(attr, translated);
+        if (el.getAttribute(attr) !== translated) el.setAttribute(attr, translated);
+    },
+
+    // The English a node or attribute started as. Once translated, its own text
+    // is NO LONGER a source string: reading it back is how a string the pack had
+    // just supplied got sent to the translation proxy a second time — the whole
+    // on-screen modal, in the language it had already been rendered in. Every
+    // read for keying or applying goes through here.
+    _i18nSourceText(node) {
+        return node.__i18nOrig != null ? node.__i18nOrig : node.nodeValue;
+    },
+    _i18nSourceAttr(el, attr) {
+        const kept = el.__i18nAttrOrig ? el.__i18nAttrOrig[attr] : null;
+        return kept != null ? kept : el.getAttribute(attr);
     },
 
     // Key of a text node's trimmed core (for missing-detection).
-    _i18nNodeKey(node) { return this._i18nMakeKey(node.nodeValue.trim()).key; },
-    _i18nAttrKey(el, attr) { return this._i18nMakeKey((el.getAttribute(attr) || '').trim()).key; },
-
-    // ---- public entry points ----------------------------------------------
+    _i18nNodeKey(node) { return this._i18nMakeKey(this._i18nSourceText(node).trim()).key; },
+    _i18nAttrKey(el, attr) { return this._i18nMakeKey((this._i18nSourceAttr(el, attr) || '').trim()).key; },
 
     // Switch the UI language. lang '' or 'en' restores English. This is
     // non-blocking: cached strings swap in instantly and any misses are
@@ -465,7 +514,9 @@ Object.assign(NYM.prototype, {
             try { seen = localStorage.getItem('nym_tutorial_seen') === 'true'; } catch (_) { }
             if (!seen && typeof window.nymTutorialStrings === 'function') {
                 const tutorialStrings = window.nymTutorialStrings();
-                if (tutorialStrings && tutorialStrings.length) this._i18nEnqueue(tutorialStrings, 'hi', lang);
+                if (tutorialStrings && tutorialStrings.length) {
+                    this._i18nEnqueue(tutorialStrings.map(s => this._i18nKeyOf(s)), 'hi', lang);
+                }
             }
         } catch (_) { }
 
@@ -493,8 +544,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // ---- dynamic UI (MutationObserver) ------------------------------------
-
+    // dynamic UI (MutationObserver) 
     _i18nStartObserver() {
         if (this._i18nObserver) return;
         this._i18nSelfWrites = new WeakSet();
@@ -609,8 +659,6 @@ Object.assign(NYM.prototype, {
         if (text) text.textContent = this._i18nIndicatorLabel();
         row.classList.add('visible');
     },
-
-    // ---- init + boot -------------------------------------------------------
 
     // Called during app init: if a non-English UI language is stored, apply it
     // from cache immediately and translate any misses in the background.

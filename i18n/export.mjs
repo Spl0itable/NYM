@@ -65,6 +65,17 @@ for (const lang of languages) {
 }
 
 console.log(`${counts.total} source strings -> ${outDir}`);
+// These packs are keyed by the raw English string, which is what the Flutter
+// runtime looks up — unlike the web packs the build writes, which are keyed the
+// way js/modules/i18n.js keys its cache. Do not converge the two.
+if (counts.dartKind === 'mirror') {
+  console.warn(
+    `  read from android-ios-app/, this repository's release mirror — it can be a`
+    + `\n  release behind. Check out flutter-app beside this repository (or set`
+    + `\n  NYM_FLUTTER_CATALOG) to export against the live catalog.`);
+} else if (counts.dartKind === 'none') {
+  console.warn('  no Flutter string catalog found — exporting index.html strings only.');
+}
 if (written === 0) {
   console.log('  nothing to export — run `npm run i18n` first.');
   process.exit(1);

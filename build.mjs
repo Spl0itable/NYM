@@ -49,20 +49,35 @@ const htmlMinifyOptions = {
 
 // Writes one pack per language whose cache covers at least one source string.
 // Returns a short line for the build summary.
+//
+// The pack is keyed the way the RUNTIME looks a string up (i18n/strings.mjs's
+// makeKey — whitespace collapsed, numbers and {placeholders} as sentinels), not
+// by the raw English of the cache. Shipped raw, roughly a fifth of every pack
+// was keys no client would ever ask for, and every one of those strings was
+// re-translated on the user's own connection.
 async function emitI18nPacks() {
   let languages;
   let sources;
+  let counts;
+  let packEntry;
+  let makeKey;
   try {
-    ({ sources } = await (await import('./i18n/strings.mjs')).loadSources());
+    const strings = await import('./i18n/strings.mjs');
+    ({ packEntry, makeKey } = strings);
+    ({ sources, counts } = await strings.loadSources());
     languages = await (await import('./i18n/languages.mjs')).loadLanguages();
   } catch (err) {
     return `i18n packs: skipped (${err.message})`;
   }
 
+  // Only strings still in the app: a stale entry would ship a translation for
+  // copy that no longer exists, and grow the pack every user downloads.
   const live = new Set(sources);
+  const liveKeys = new Set(sources.map((s) => makeKey(s).key));
+
   let written = 0;
-  let complete = 0;
   let bytes = 0;
+  let covered = 0;
   for (const lang of languages) {
     let cache;
     try {
@@ -70,13 +85,18 @@ async function emitI18nPacks() {
     } catch {
       continue; // No cache for this language yet.
     }
-    // Only strings still in the app: a stale entry would ship a translation for
-    // copy that no longer exists, and grow the pack every user downloads.
     const pack = {};
     let have = 0;
     for (const [source, translated] of Object.entries(cache)) {
       if (!live.has(source) || typeof translated !== 'string' || !translated) continue;
-      pack[source] = translated;
+      // Null when the translation cannot be templated back (a localised numeral,
+      // a dropped placeholder). Those stay live-translated rather than ship
+      // something that would render a sentinel on screen.
+      const entry = packEntry(source, translated);
+      if (!entry) continue;
+      const [key, value] = entry;
+      if (pack[key] != null) continue; // sources that collapse to one key
+      pack[key] = value;
       have++;
     }
     if (have === 0) continue;
@@ -84,10 +104,22 @@ async function emitI18nPacks() {
     await emit(path.join('i18n', `${lang.code}.json`), body);
     written++;
     bytes += body.length;
-    if (have === sources.length) complete++;
+    covered += have / liveKeys.size;
   }
-  if (written === 0) return 'i18n packs: none (run `npm run i18n`)';
-  return `i18n packs: ${written} languages (${complete} complete), `
+
+  // Where the strings came from. A build machine only checks out this
+  // repository, so this is normally the in-repo release mirror; saying which
+  // makes a pack that is missing the newest copy visible in the build log
+  // rather than only on someone's screen.
+  const from = counts.dartKind === 'none'
+    ? 'markup only — no Flutter catalog found, so app strings are not covered'
+    : `${counts.total} strings (${counts.dartKind} catalog + markup)`;
+  if (written === 0) return `i18n packs: none (run \`npm run i18n\`) — ${from}`;
+  // Coverage rather than a "complete" count: entries whose translation cannot be
+  // templated back are dropped on purpose, so no pack is ever literally
+  // complete, and a count of zero read like a broken pipeline.
+  return `i18n packs: ${written} languages from ${from}, `
+    + `${((covered / written) * 100).toFixed(0)}% of strings covered, `
     + `${(bytes / written / 1024).toFixed(0)} KB each on average`;
 }
 

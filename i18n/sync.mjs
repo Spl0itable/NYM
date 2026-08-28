@@ -15,8 +15,24 @@ const targets = languages.filter((l) => !wanted || wanted.has(l.code));
 
 console.log(
   `${counts.total} source strings `
-  + `(${counts.dart} from ${counts.dartPath}, ${counts.html} from index.html), `
+  + `(${counts.dart} from ${counts.dartPath || 'no Flutter catalog'}, `
+  + `${counts.html} from index.html), `
   + `${targets.length} languages`);
+
+// The sync is where translations are PAID for, so an incomplete corpus here
+// costs more than it does in the build: a string missing now is one nobody
+// pre-translates until the next run.
+if (counts.dartKind === 'mirror') {
+  console.warn(
+    `\nReading the app strings from android-ios-app/, this repository's release`
+    + `\nmirror — it can be a release behind, so strings added since the last`
+    + `\nmirror update will not be translated. Check out flutter-app beside this`
+    + `\nrepository (or set NYM_FLUTTER_CATALOG) to sync against the live catalog.\n`);
+} else if (counts.dartKind === 'none') {
+  console.warn(
+    `\nNo Flutter string catalog found, so only index.html is being translated`
+    + `\n(tried: ${counts.triedPaths.join(', ')}).\n`);
+}
 
 if (unknownEntities.length > 0) {
   // Left encoded, these produce source strings the runtime will never match,

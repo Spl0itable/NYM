@@ -4,14 +4,51 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const HTML = new URL('../index.html', import.meta.url);
+const COMMANDS = new URL('../js/modules/commands.js', import.meta.url);
+const COMMAND_I18N = new URL('../js/modules/command-i18n.js', import.meta.url);
 
-/// Where the Flutter catalog is read from. Defaults to a sibling checkout of
-/// the flutter-app repository, which is the usual layout; override with
-/// NYM_FLUTTER_CATALOG to point somewhere else.
-export const flutterCatalogPath = () =>
-  process.env.NYM_FLUTTER_CATALOG
-  || fileURLToPath(new URL(
-    '../../flutter-app/lib/features/i18n/app_strings_catalog.dart', import.meta.url));
+/// The command phrases, read from the two modules that define them. Missing
+/// files are not fatal — the corpus simply loses that section.
+async function loadCommandVocabulary() {
+  try {
+    const [commands, i18n] = await Promise.all([
+      readFile(COMMANDS, 'utf8'),
+      readFile(COMMAND_I18N, 'utf8'),
+    ]);
+    return parseCommandVocabulary(commands, i18n);
+  } catch (_) {
+    return [];
+  }
+}
+
+/// Where the Flutter catalog is read from, best first. A sibling checkout of
+/// the flutter-app repository is the authoring layout and always wins; the
+/// release mirror in this repository is the fallback, because a build machine
+/// (CI, Cloudflare Pages) only ever checks out this repository — and a build
+/// that cannot see a catalog used to ship NO packs at all, which is far worse
+/// than shipping ones a release behind. Override either with
+/// NYM_FLUTTER_CATALOG.
+export function catalogCandidates() {
+  const out = [];
+  if (process.env.NYM_FLUTTER_CATALOG) {
+    out.push({ kind: 'override', path: process.env.NYM_FLUTTER_CATALOG });
+  }
+  out.push({
+    kind: 'sibling',
+    path: fileURLToPath(new URL(
+      '../../flutter-app/lib/features/i18n/app_strings_catalog.dart', import.meta.url)),
+  });
+  out.push({
+    kind: 'mirror',
+    path: fileURLToPath(new URL(
+      '../android-ios-app/lib/features/i18n/app_strings_catalog.dart', import.meta.url)),
+  });
+  return out;
+}
+
+/// The catalog the next [loadSources] would read. Kept for callers that only
+/// want to name the file.
+export const flutterCatalogPath = () => catalogCandidates()[0].path;
 
 /// Elements whose contents are never prose. Mirrors the runtime's skip list
 /// (`NYM_I18N_SKIP_SELECTOR`, js/modules/i18n.js) for the cases a regex can see.
@@ -61,12 +98,17 @@ export function parseDartCatalog(source) {
 /// The visible text and translatable attributes in the app shell's markup.
 export function parseHtml(source) {
   let html = source;
+  // Skipped elements become a TAG, not a space. A space merged the text on
+  // either side into one source string, but the browser sees two text nodes —
+  // so a sentence with an inline <code> in it ("… two spellings — <code>npub1…
+  // </code> and hex — …") was extracted as one string the DOM could never ask
+  // for, and every fragment of it was translated live, forever.
   for (const tag of SKIP_ELEMENTS) {
-    html = html.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>`, 'gi'), ' ');
+    html = html.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>`, 'gi'), '<skipped/>');
     // Self-closing / unterminated forms leave the opening tag behind; the tag
     // stripper below removes it.
   }
-  html = html.replace(/<!--[\s\S]*?-->/g, ' ');
+  html = html.replace(/<!--[\s\S]*?-->/g, '<skipped/>');
 
   const out = [];
 
@@ -86,6 +128,45 @@ export function parseHtml(source) {
   for (const chunk of html.split(/<[^>]*>/)) {
     const value = decodeEntities(chunk).trim();
     if (isTranslatable(value)) out.push(value);
+  }
+  return out;
+}
+
+/// The slash/question command vocabulary, as the runtime asks for it.
+///
+/// `cmdI18nEnsure` (js/modules/command-i18n.js) translates one short phrase per
+/// canonical command to build typeable aliases — "help", "private message",
+/// "nickname". Sixty-odd of them, and nothing pre-translated them, so choosing a
+/// language fired sixty requests at the proxy before the app had said anything.
+/// Mirrors `_cmdI18nCanonical`: alias entries and one-character tokens are not
+/// translated, and NYM_CMD_SOURCE decides the phrase (null means "leave it").
+export function parseCommandVocabulary(commandsSource, commandI18nSource) {
+  const overrides = new Map();
+  const start = commandI18nSource.indexOf('const NYM_CMD_SOURCE = {');
+  if (start >= 0) {
+    const block = commandI18nSource.slice(start, commandI18nSource.indexOf('\n};', start));
+    for (const m of block.matchAll(/'([^']+)'\s*:\s*(?:'((?:[^'\\]|\\.)*)'|(null))/g)) {
+      overrides.set(m[1], m[3] ? null : m[2].replace(/\\'/g, "'"));
+    }
+  }
+
+  const out = [];
+  const seen = new Set();
+  for (const table of ['botCommands', 'botPMCommands', 'commands']) {
+    const at = commandsSource.indexOf(`this.${table} = {`);
+    if (at < 0) continue;
+    const block = commandsSource.slice(at, commandsSource.indexOf('\n        };', at));
+    // One entry per line, anchored at the indentation, so a token that appears
+    // inside a handler body is not mistaken for a command.
+    for (const m of block.matchAll(/^\s+'([/?][^']+)':(.*)$/gm)) {
+      const [, token, rest] = m;
+      if (/\baliasOf\b/.test(rest)) continue;
+      if (token.length <= 2) continue;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      const phrase = overrides.has(token) ? overrides.get(token) : token.slice(1);
+      if (phrase && isTranslatable(phrase)) out.push(phrase);
+    }
   }
   return out;
 }
@@ -139,32 +220,128 @@ function decodeEntities(text) {
     .replace(/&([a-z]+);/gi, (whole, name) => ENTITIES[name] ?? whole);
 }
 
+/// Whitespace, as the runtime sees it. The served markup is minified with
+/// `collapseWhitespace`, so a string the author wrapped over three source lines
+/// reaches the DOM as one space-separated run. Extracting it verbatim produced a
+/// key no text node could ever equal, so those strings — the long onboarding
+/// paragraphs, mostly — were never found in the pack.
+export const collapseSpace = (text) => String(text).replace(/\s+/g, ' ').trim();
+
+/// Placeholders and embedded numbers, matched in ONE pass so a sentinel this
+/// replacement just wrote is never itself tokenised — two passes turned
+/// "+{n} more" into "+PLHPLH1PLHPLH more", which no fill could put a number
+/// back into. Mirrors NYM_I18N_TOKEN_RE in js/modules/i18n.js.
+const TOKEN_RE = /\{[^}]+\}|\d[\d.,:/%+-]*/g;
+
+/// A source string as the runtime KEYS it (`_i18nMakeKey`, js/modules/i18n.js):
+/// whitespace collapsed, then {placeholders} and embedded numbers swapped for
+/// PLH sentinels so "42 active nyms" and "43 active nyms" share one entry.
+/// The cache is keyed by the raw English string — that is what the Flutter app
+/// and the sync both use — so the conversion happens here, when the pack is
+/// built, rather than in either client.
+export function makeKey(core) {
+  const tokens = [];
+  const key = collapseSpace(core).replace(TOKEN_RE, (m) => {
+    tokens.push(m);
+    return `PLH${tokens.length - 1}PLH`;
+  });
+  return { key, tokens };
+}
+
+/// One cache entry as the pack ships it: `[key, template]`, both in the form the
+/// runtime looks up and fills in. Returns null when the translation cannot be
+/// templated — a translator that localised a numeral or dropped a {placeholder}
+/// leaves nothing to substitute back, and a template that renders a sentinel or
+/// a stale number on screen is worse than the live translation the client falls
+/// back to.
+export function packEntry(source, translated) {
+  if (typeof source !== 'string' || typeof translated !== 'string') return null;
+  const { key, tokens } = makeKey(source);
+  const value = collapseSpace(translated);
+  if (!key || !value) return null;
+  if (tokens.length === 0) return [key, value];
+
+  // Find each of the source's tokens in the translation and put a sentinel where
+  // it sits. Matching the literal token rather than re-tokenising the
+  // translation keeps the near misses a translator introduces — a trailing full
+  // stop on a year, an ellipsis after a number — and the digit guard stops a
+  // short token from being found inside a longer number. Position is not
+  // assumed: a translation is free to reorder what it was given.
+  const claimed = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    let at = -1;
+    for (let from = 0; from <= value.length - token.length;) {
+      const found = value.indexOf(token, from);
+      if (found < 0) break;
+      const end_ = found + token.length;
+      const splitsANumber = /\d/.test(value[found - 1] || '') || /\d/.test(value[end_] || '');
+      const taken = claimed.some((c) => found < c.end && end_ > c.at);
+      if (!splitsANumber && !taken) { at = found; break; }
+      from = found + 1;
+    }
+    // Nowhere to substitute back into: the translator dropped the placeholder
+    // ("Added {nym} as a friend" -> "Agregado como un amigo") or localised it
+    // ("{options}" -> "{opciones}"). Shipping that would put a name-less or
+    // sentinel-carrying string on screen, so the client translates it live —
+    // where the sentinel form is what gets sent, and survives.
+    if (at < 0) return null;
+    claimed.push({ at, end: at + token.length, index: i });
+  }
+
+  claimed.sort((a, b) => a.at - b.at);
+  let template = '';
+  let cursor = 0;
+  for (const slot of claimed) {
+    template += value.slice(cursor, slot.at) + `PLH${slot.index}PLH`;
+    cursor = slot.end;
+  }
+  return [key, template + value.slice(cursor)];
+}
+
 /// Every source string, deduped and sorted so a re-run produces no spurious
 /// diff in the committed cache.
+///
+/// The Flutter catalog is looked for in each of [catalogCandidates] in turn.
+/// Missing entirely, this returns the markup's strings alone rather than
+/// throwing: a pack covering half the app still spares every user half the
+/// translation requests, and `counts.dartKind` tells the caller what it got so
+/// it can say so.
 export async function loadSources({ catalogPath } = {}) {
-  const dartPath = catalogPath || flutterCatalogPath();
-  let dartSrc;
-  try {
-    dartSrc = await readFile(dartPath, 'utf8');
-  } catch (err) {
-    throw new Error(
-      `cannot read the Flutter string catalog at ${dartPath}\n`
-      + `  It lives in the flutter-app repository — check it out beside this one,\n`
-      + `  or set NYM_FLUTTER_CATALOG to its app_strings_catalog.dart.\n`
-      + `  (android-ios-app/ in this repo is a read-only release mirror and is\n`
-      + `  deliberately NOT used: packs built from it would be a release behind.)`);
+  const candidates = catalogPath
+    ? [{ kind: 'override', path: catalogPath }]
+    : catalogCandidates();
+
+  let dartSrc = null;
+  let dartPath = null;
+  let dartKind = 'none';
+  const tried = [];
+  for (const candidate of candidates) {
+    try {
+      dartSrc = await readFile(candidate.path, 'utf8');
+      dartPath = candidate.path;
+      dartKind = candidate.kind;
+      break;
+    } catch (_) {
+      tried.push(candidate.path);
+    }
   }
+
   const htmlSrc = await readFile(HTML, 'utf8');
-  const fromDart = parseDartCatalog(dartSrc);
+  const fromDart = dartSrc ? parseDartCatalog(dartSrc) : [];
   const fromHtml = parseHtml(htmlSrc);
-  const all = new Set([...fromDart, ...fromHtml]);
+  const fromCommands = await loadCommandVocabulary();
+  const all = new Set([...fromDart, ...fromHtml, ...fromCommands]);
   return {
     sources: [...all].sort(),
     counts: {
       dart: fromDart.length,
       html: fromHtml.length,
+      commands: fromCommands.length,
       total: all.size,
       dartPath,
+      dartKind,
+      triedPaths: tried,
     },
     unknownEntities: undecodedEntities(htmlSrc),
   };

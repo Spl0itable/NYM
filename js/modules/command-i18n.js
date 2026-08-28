@@ -131,22 +131,62 @@ Object.assign(NYM.prototype, {
         if (!lang || lang === 'en') return;
         if (this._cmdI18nBusy === lang) return;
         const cache = this._cmdI18nCache(lang);
-        const pending = this._cmdI18nCanonical().filter((cmd) => {
+        let pending = this._cmdI18nCanonical().filter((cmd) => {
             if (cache[cmd] != null) return false;
             return this._cmdI18nSource(cmd) != null;
         });
         if (!pending.length) return;
+
+        // The command phrases are part of the pre-translated corpus, so the pack
+        // the UI cache was primed from usually already has them. Taking those
+        // first is what turns "sixty requests the moment a language is picked"
+        // into none at all.
+        const landedFromPack = this._cmdI18nTakeFromPack(pending, cache, lang);
+        if (landedFromPack.length) {
+            this._cmdI18nSaveCache(lang);
+            this._cmdI18nCacheRev = (this._cmdI18nCacheRev || 0) + 1;
+            const took = new Set(landedFromPack);
+            pending = pending.filter((cmd) => !took.has(cmd));
+        }
+        if (!pending.length) return;
+
         this._cmdI18nBusy = lang;
+        const stillHere = () => (this.getUiLanguage ? this.getUiLanguage() : '') === lang;
         const run = async () => {
             let landed = 0;
-            for (const cmd of pending) {
-                if ((this.getUiLanguage ? this.getUiLanguage() : '') !== lang) break;
-                const source = this._cmdI18nSource(cmd);
+            // Whatever the pack is missing goes out in batches rather than one
+            // request per command, which used to trickle through sixty of them.
+            // _translateBatches partitions in order, so slicing the command list
+            // by each batch's length keeps phrase and command aligned.
+            const phrases = pending.map((cmd) => this._cmdI18nSource(cmd));
+            let at = 0;
+            for (const batch of this._translateBatches(phrases)) {
+                const commands = pending.slice(at, at + batch.length);
+                at += batch.length;
+                if (!stillHere()) break;
+                let results = null;
                 try {
-                    const res = await this._doTranslate(source, lang);
-                    const out = res && res.translatedText;
-                    if (out && out.trim()) { cache[cmd] = out.trim(); landed++; }
-                } catch (_) { /* retried on the next call */ }
+                    results = await this._doTranslateBatch(batch, lang);
+                } catch (_) {
+                    results = null;
+                }
+                if (results) {
+                    commands.forEach((cmd, i) => {
+                        const out = results[i];
+                        if (typeof out === 'string' && out.trim()) { cache[cmd] = out.trim(); landed++; }
+                    });
+                    continue;
+                }
+                // A batch the proxy would not take falls back to the
+                // single-string path, which is also the one it edge-caches.
+                for (let i = 0; i < commands.length; i++) {
+                    if (!stillHere()) break;
+                    try {
+                        const res = await this._doTranslate(batch[i], lang);
+                        const out = res && res.translatedText;
+                        if (out && out.trim()) { cache[commands[i]] = out.trim(); landed++; }
+                    } catch (_) { /* retried on the next call */ }
+                }
             }
             if (landed) {
                 this._cmdI18nSaveCache(lang);
@@ -155,6 +195,27 @@ Object.assign(NYM.prototype, {
             this._cmdI18nBusy = null;
         };
         run();
+    },
+
+    // Fill what the pre-translated UI pack already carries. Returns the commands
+    // it answered for.
+    _cmdI18nTakeFromPack(pending, cache, lang) {
+        if (typeof this._i18nLoadCache !== 'function') return [];
+        const ui = this._i18nLoadCache(lang);
+        if (!ui) return [];
+        const took = [];
+        for (const cmd of pending) {
+            const source = this._cmdI18nSource(cmd);
+            if (!source) continue;
+            const key = typeof this._i18nMakeKey === 'function'
+                ? this._i18nMakeKey(source).key : source;
+            const hit = ui[key];
+            if (typeof hit === 'string' && hit.trim()) {
+                cache[cmd] = hit.trim();
+                took.push(cmd);
+            }
+        }
+        return took;
     },
 
     // public helpers 
