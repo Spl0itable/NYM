@@ -200,11 +200,24 @@
 
 Object.assign(NYM.prototype, {
 
-    showGeohashExplorer() {
+    /// Opens the explorer. With [focusGeohash], the map zooms to that cell and
+    /// opens its info panel once the map exists — the "show me where this
+    /// channel is" entry point used by the channel header's location line.
+    showGeohashExplorer(focusGeohash) {
         const modal = document.getElementById('geohashExplorerModal');
         if (!modal) return;
         modal.style.display = 'flex';
-        setTimeout(() => this.initializeGeohashMap(), 30);
+        const gh = (typeof focusGeohash === 'string' && this.isValidGeohash(focusGeohash))
+            ? focusGeohash.toLowerCase() : null;
+        setTimeout(() => {
+            // initializeGeohashMap is async and builds `this.geohashMap`; the
+            // focus has to wait for it or it zooms nothing.
+            Promise.resolve(this.initializeGeohashMap()).then(() => {
+                if (gh && typeof this._selectGeohashCell === 'function') {
+                    this._selectGeohashCell(gh);
+                }
+            }).catch(() => { });
+        }, 30);
         // Quietly pull recent-activity counts from D1 so the globe reflects real
         // activity (especially the default 24h view) without loading messages.
         if (typeof this.fetchGeohashActivityFromD1 === 'function') {
@@ -1220,7 +1233,13 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    decodeGeohash(geohash) {
+    /// The geohash cell's BOUNDS, not just its centre.
+    ///
+    /// A geohash names a rectangle, and a short one names an enormous rectangle
+    /// — `gc` is roughly 1250 km x 625 km. Callers that need to reason about
+    /// the area (rather than pick a single point in it) need the box, so the
+    /// bit-walk lives here once and `decodeGeohash` takes the centre of it.
+    decodeGeohashBounds(geohash) {
         const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
         const bounds = {
             lat: [-90, 90],
@@ -1247,6 +1266,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        return bounds;
+    },
+
+    decodeGeohash(geohash) {
+        const bounds = this.decodeGeohashBounds(geohash);
         return {
             lat: (bounds.lat[0] + bounds.lat[1]) / 2,
             lng: (bounds.lng[0] + bounds.lng[1]) / 2

@@ -6,12 +6,27 @@ const NYM_NOTIFICATION_ICON = 'https://nymchat.app/images/NYM-icon.png';
 // future. An event carrying a created_at ahead of us (sender clock skew, or a
 // relay/proxy re-stamping cached history on replay) would otherwise sort above
 // every real notification and stay there until its own future time aged out of
-// the 24h window — the "old notification stuck at the top" report. Missing or
-// non-positive falls back to now, as before.
-function _clampNotifTs(timestamp) {
-    const now = Date.now();
-    const ts = (typeof timestamp === 'number' && timestamp > 0) ? timestamp : now;
-    return ts > now ? now : ts;
+// the 24h window.
+//
+// The ceiling is `observedAt` — when THIS device first saw the notification —
+// and never a fresh `Date.now()`. That distinction is the whole fix. Clamping
+// to "now" is only correct once: it is recomputed on every boot, so a
+// future-dated entry is re-stamped to each new "now", stays permanently the
+// newest thing in the list, and pins itself to the top looking brand new. That
+// is the same trap `EventMapper`/`correctedCreatedAt` document for channel
+// messages ("an archived event gets re-stamped to the new now on every reload
+// ... so it never settles and always sorts as newest"), where the fix was to
+// anchor to a value that does not move. `receivedAt` is that value here: it is
+// stamped once when the entry is created, persisted with it, and carried
+// across the cross-device sync, so this function is idempotent — re-running it
+// on a stored entry returns what it returned last time.
+//
+// A missing/non-positive timestamp still falls back to the observation time.
+function _clampNotifTs(timestamp, observedAt) {
+    const ceiling = (typeof observedAt === 'number' && observedAt > 0)
+        ? observedAt : Date.now();
+    const ts = (typeof timestamp === 'number' && timestamp > 0) ? timestamp : ceiling;
+    return ts > ceiling ? ceiling : ts;
 }
 
 Object.assign(NYM.prototype, {
@@ -33,14 +48,18 @@ Object.assign(NYM.prototype, {
             titleToShow = `${baseTitle}#${suffix}`;
         }
 
-        // Clamped at now: a sender with a fast clock — or a pool/proxy that
-        // re-stamps an ephemeral event's created_at forward when it replays
-        // cached history — hands us a FUTURE timestamp, and the modal sorts
-        // newest-first, so that one entry pins itself to the top of the bell
-        // for as long as its (future) time stays inside the 24h window. The
+        // viewed compares against when WE received the notification, not the
+        // event's created_at — otherwise a delayed event with an older
+        // created_at would be auto-marked viewed after the modal was opened.
+        // It is also the STABLE ceiling the timestamp is clamped to; see
+        // _clampNotifTs for why a fresh Date.now() is the wrong one.
+        const receivedAt = Date.now();
+        // A sender with a fast clock — or a pool/proxy that re-stamps an
+        // ephemeral event's created_at forward when it replays cached history —
+        // hands us a FUTURE timestamp, and the modal sorts newest-first. The
         // message list already clamps the same way (nostr-core.js
         // `correctedCreatedAt`); the bell never did.
-        const ts = _clampNotifTs(timestamp);
+        const ts = _clampNotifTs(timestamp, receivedAt);
         const eventId = channelInfo?.eventId || '';
 
         // Dedup against existing history before adding (live + replay paths
@@ -57,10 +76,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // viewed compares against when WE received the notification, not the
-        // event's created_at — otherwise a delayed event with an older
-        // created_at would be auto-marked viewed after the modal was opened.
-        const receivedAt = Date.now();
         const entry = {
             title: titleToShow,
             body: body,
@@ -151,7 +166,8 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
             titleToShow = `${baseTitle}#${suffix}`;
         }
-        const ts = _clampNotifTs(timestamp);
+        const receivedAt = Date.now();
+        const ts = _clampNotifTs(timestamp, receivedAt);
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         if (ts < cutoff24h) return;
         const eventId = channelInfo?.eventId || '';
@@ -163,7 +179,6 @@ Object.assign(NYM.prototype, {
             return false;
         });
         if (isDupe) return;
-        const receivedAt = Date.now();
         const entry = {
             title: titleToShow,
             body: body,
@@ -241,11 +256,17 @@ Object.assign(NYM.prototype, {
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-            // Repair entries written before the clamp: a future-dated one is
-            // already pinned to the top of somebody's bell, and it would stay
-            // there for as long as its own timestamp is ahead of us.
+            // Repair entries written before the clamp, against each entry's OWN
+            // recorded observation time. Clamping to a fresh Date.now() here is
+            // what made the stuck entry look brand new: every boot re-stamped
+            // it later, so it was always the newest row in the list. An entry
+            // with no `receivedAt` (written before that field existed) is left
+            // alone rather than given a moving one — it ages out of the 24h
+            // window on its own.
             for (const n of parsed) {
-                if (n && typeof n.timestamp === 'number') n.timestamp = _clampNotifTs(n.timestamp);
+                if (!n || typeof n.timestamp !== 'number') continue;
+                if (typeof n.receivedAt !== 'number' || n.receivedAt <= 0) continue;
+                n.timestamp = _clampNotifTs(n.timestamp, n.receivedAt);
             }
             return parsed.filter(n => n.timestamp > cutoff24h);
         } catch { return []; }

@@ -3114,6 +3114,14 @@ Object.assign(NYM.prototype, {
             this.pmConversations.get(pubkey).nym = clean;
         }
 
+        // Column view composes its header title once, when the column is built,
+        // so without this a PM column opened before the peer's kind 0 landed
+        // kept showing the placeholder nym. Runs after the memory update above,
+        // which is where the title reads the name from.
+        if (typeof this._cvRefreshColumnTitles === 'function') {
+            this._cvRefreshColumnTitles(pubkey);
+        }
+
         // Update sidebar DOM item if present
         const item = document.querySelector(`.pm-item[data-pubkey="${pubkey}"]`);
         if (item) {

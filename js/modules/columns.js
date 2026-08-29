@@ -505,6 +505,29 @@ Object.assign(NYM.prototype, {
         return `${title}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
     },
 
+    // Repaint column headers (and the mobile tab rows) after the data a title
+    // is derived from changes — a kind 0 profile landing for a PM peer, a group
+    // rename. A column's title is otherwise composed once when the column is
+    // built and only recomposed on navigate, so a PM column opened before its
+    // peer's profile arrived kept the placeholder nym for the whole session.
+    // Pass a [pubkey] to limit the repaint to that peer's columns.
+    _cvRefreshColumnTitles(pubkey) {
+        if (!this._cvActive || !Array.isArray(this._cvColumns)) return;
+        for (const col of this._cvColumns) {
+            if (pubkey && !(col.type === 'pm' && col.pubkey === pubkey)) continue;
+            if (!col.headerEl) continue;
+            const titleEl = col.headerEl.querySelector('.cv-col-title');
+            if (!titleEl) continue;
+            const html = this._cvColTitleHtml(col);
+            if (titleEl.innerHTML !== html) titleEl.innerHTML = html;
+        }
+        // The mobile tab sheet carries the same titles; it reconciles rather
+        // than rebuilds, so this is cheap and keeps the two in step.
+        if (this._cvTabsOverlay && this._cvTabsOverlay.classList.contains('active')) {
+            this._cvBuildTabsRows();
+        }
+    },
+
     _cvRenderColumn(col) {
         if (!col.listEl) return;
         const isPM = col.type !== 'channel';

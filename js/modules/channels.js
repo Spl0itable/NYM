@@ -1083,12 +1083,36 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const locWrap = document.createElement('div');
             locWrap.className = 'channel-location';
 
+            // Opens OUR geohash explorer, zoomed to this cell, instead of
+            // handing the user off to geohash.es — which is a third party we
+            // don't control, currently erroring on its own map provider's API
+            // key, and unnecessary: the cell's bounds are decoded locally
+            // (`decodeGeohashBoundsRaw`) and the explorer already draws the
+            // map from data we ship. Kept as an <a> with a real href so it
+            // still reads and behaves as a link (middle-click, focus ring,
+            // the existing `.channel-location-link` styling); the href is the
+            // in-app channel URL rather than an external destination.
             const link = document.createElement('a');
-            link.setAttribute('href', `https://www.geohash.es/decode?geohash=${encodeURIComponent(safeGeohash.toLowerCase())}`);
-            link.setAttribute('target', '_blank');
-            link.setAttribute('rel', 'noopener');
+            // The class the retry sweep looks the header up by
+            // (`_paintPlaceEverywhere`). It was never set — the CSS styles this
+            // element as `.channel-location a`, so nothing pointed out that the
+            // selector matched nothing — which meant a header that first
+            // painted raw coordinates was never repainted when the place name
+            // finally resolved. Independent of the backoff bug, and the reason
+            // the header stayed on coordinates even when the sidebar row did
+            // update.
+            link.className = 'channel-location-link';
+            const ghLower = safeGeohash.toLowerCase();
+            link.setAttribute('href', `#${encodeURIComponent(ghLower)}`);
+            link.setAttribute('title', 'Show this location on the map');
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (typeof this.showGeohashExplorer === 'function') {
+                    this.showGeohashExplorer(ghLower);
+                }
+            });
 
-            const cached = this._loadGeohashPlaceCache().get(safeGeohash.toLowerCase());
+            const cached = this._loadGeohashPlaceCache().get(ghLower);
             this._fillLocationLink(link, cached || 'Loading location...');
             locWrap.appendChild(link);
 
@@ -1279,6 +1303,106 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }, 1000);
     },
 
+    /// How precise a question to ask about a cell.
+    ///
+    /// Nominatim's `zoom` selects the granularity of the answer (3 country,
+    /// 5 state, 8 county, 10 city). Asking a CITY-level question about a cell
+    /// 1250 km across is a category error: a 2-character geohash covers whole
+    /// countries, so the useful answer is the country, not whichever hamlet
+    /// happens to sit under the centre pixel.
+    _geoPlaceZoomFor(geohash) {
+        const n = (geohash || '').length;
+        if (n <= 2) return 5;   // ~1250km — state/country
+        if (n <= 4) return 8;   // ~40km — county
+        return 10;              // ~5km and finer — city
+    },
+
+    /// Points to ask about, in order, for one geohash.
+    ///
+    /// The centre first, then the four quarter-points of the cell. This is what
+    /// makes short geohashes resolvable at all: a cell's centre very often
+    /// falls in WATER even when the cell is mostly land — `gc` spans Ireland
+    /// and part of Britain but centres on the Irish Sea, `dh` centres in the
+    /// Gulf of Mexico, `9e` in the Pacific. Reverse geocoding open water
+    /// returns no city and no country, which the caller reads as a miss, so
+    /// those channels sat on raw coordinates no matter how many times the
+    /// backoff retried — every retry asked the same unanswerable point.
+    ///
+    /// Only walked until something answers, so a normal land-centred geohash
+    /// still costs exactly one request.
+    _geoPlaceProbePoints(geohash) {
+        const zoom = this._geoPlaceZoomFor(geohash);
+        let b;
+        try { b = this.decodeGeohashBounds(geohash); } catch (_) { return []; }
+        const [latLo, latHi] = b.lat;
+        const [lngLo, lngHi] = b.lng;
+        const at = (fx, fy) => ({
+            lat: latLo + (latHi - latLo) * fy,
+            lng: lngLo + (lngHi - lngLo) * fx,
+            zoom
+        });
+        return [
+            at(0.5, 0.5),
+            at(0.25, 0.25), at(0.75, 0.25),
+            at(0.25, 0.75), at(0.75, 0.75)
+        ];
+    },
+
+    /// "City, Country" out of a reverse-geocode response, or '' when the point
+    /// has no name. Falls back to the state/region when there is no
+    /// city-level feature — which is the normal shape of a coarse-zoom answer
+    /// for a large cell, and beats reporting nothing.
+    _geoPlaceFromAddress(data) {
+        const addr = (data && data.address) || {};
+        const city = addr.city || addr.town || addr.village || addr.county
+            || addr.state || addr.region || addr.territory || '';
+        const country = addr.country || '';
+        return [city, country].filter(x => x).join(', ');
+    },
+
+    /// The bundled Natural Earth country polygons, decoded once and kept.
+    ///
+    /// Fetched lazily — only when a lookup has actually failed — so a session
+    /// that never hits an unnamed cell never pays for it. The globe keeps its
+    /// own copy behind a worker; this is deliberately independent so the place
+    /// fallback works whether or not the explorer was ever opened.
+    _loadWorldPlaceFeatures() {
+        if (!this._worldPlaceFeatures) {
+            this._worldPlaceFeatures = fetch('/data/countries-110m.json', { cache: 'force-cache' })
+                .then(r => r.ok ? r.json() : null)
+                .then(j => (j && window.NymGeoDecode) ? window.NymGeoDecode.decodeWorld(j) : [])
+                .catch(() => []);
+        }
+        return this._worldPlaceFeatures;
+    },
+
+    /// What to show when the geocoder can name nothing in a cell.
+    ///
+    /// Some cells genuinely have no address: `12` is the Antarctic plateau,
+    /// `zxnjj` is open Arctic Ocean. Falling back to raw coordinates told the
+    /// user nothing they could read. This answers from the map data the app
+    /// already ships — the same countries file the globe draws — so it needs
+    /// no network and cannot fail on somebody else's outage.
+    ///
+    /// Deliberately NOT written into the place cache: it is a display fallback,
+    /// not a resolved place, and caching it would end the search for a real
+    /// name exactly the way caching "Unknown location" once did.
+    async _geoPlaceDescribeRegion(geohash) {
+        try {
+            const feats = await this._loadWorldPlaceFeatures();
+            if (!feats || !feats.length || !window.NymGeoDecode) return '';
+            const c = this.decodeGeohash(geohash);
+            return window.NymGeoDecode.describeRegion(feats, c.lat, c.lng) || '';
+        } catch (_) { return ''; }
+    },
+
+    /// The best label available for a cell with no geocoded name: a described
+    /// region if we can work one out locally, else the raw coordinates.
+    async _geoPlaceFallbackLabel(geohash) {
+        const described = await this._geoPlaceDescribeRegion(geohash);
+        return described || this.getGeohashLocation(geohash) || '';
+    },
+
     async _resolveGeohashPlaceName(geohash) {
         const key = String(geohash || '').toLowerCase();
         if (!key) return 'Unknown location';
@@ -1286,7 +1410,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (cache.has(key)) return cache.get(key);
         // A recorded miss short-circuits only while its backoff is unexpired.
         if (Date.now() < this._geoPlaceRetryAt(key)) {
-            return this.getGeohashLocation(geohash) || '';
+            return this._geoPlaceFallbackLabel(geohash);
         }
 
         // Collapse concurrent callers for the same geohash (the header and its
@@ -1296,12 +1420,26 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (existing) return existing;
 
         const p = this._geoPlaceRun(async () => {
-            const coords = this.decodeGeohash(geohash);
-            const data = await this.fetchGeocode(coords.lat, coords.lng, 10);
-            const addr = (data && data.address) || {};
-            const city = addr.city || addr.town || addr.village || addr.county || '';
-            const country = addr.country || '';
-            return [city, country].filter(x => x).join(', ');
+            // Probes are SEQUENTIAL and, on the direct-to-Nominatim path,
+            // spaced: `_geoPlaceRun` only paces one lookup against the next, so
+            // without this a five-probe walk would fire five requests back to
+            // back and break the 1/s limit this browser is bound by. Through
+            // the proxy there is no gap to keep — it is Nominatim's client, not
+            // us, and it edge-caches each point for a day.
+            const viaProxy = typeof this._getProxyBaseUrl === 'function' && !!this._getProxyBaseUrl();
+            let first = true;
+            for (const pt of this._geoPlaceProbePoints(geohash)) {
+                if (!first && !viaProxy) {
+                    const gap = (this._geoPlaceLastAt || 0) + this._GEO_PLACE_MIN_INTERVAL_MS - Date.now();
+                    if (gap > 0) await new Promise(r => setTimeout(r, gap));
+                }
+                first = false;
+                this._geoPlaceLastAt = Date.now();
+                const data = await this.fetchGeocode(pt.lat, pt.lng, pt.zoom);
+                const place = this._geoPlaceFromAddress(data);
+                if (place) return place;
+            }
+            return '';
         })
             .then(place => {
                 this._geoPlaceInflight.delete(key);
@@ -1312,7 +1450,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 // let a later attempt still find a name.
                 if (!place) {
                     this._geoPlaceNoteMiss(key);
-                    return this.getGeohashLocation(geohash) || '';
+                    return this._geoPlaceFallbackLabel(geohash);
                 }
                 cache.set(key, place);
                 this._saveGeohashPlaceCache();

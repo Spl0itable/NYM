@@ -6377,13 +6377,19 @@ async function applyNostrSettingsAdditive(s) {
             };
             let changed = false;
             let seenAdded = false;
-            const nowMs = Date.now();
             for (const n of s.notificationHistory) {
                 if (!n || typeof n.timestamp !== 'number') continue;
                 // A device with a fast clock (or one running a build without the
                 // clamp) syncs future-dated entries; adopting one pins it to the
-                // top of this device's bell too.
-                if (n.timestamp > nowMs) n.timestamp = nowMs;
+                // top of this device's bell too. Clamp to the ORIGIN device's
+                // recorded observation time, which rides along in the payload —
+                // clamping to our own "now" would re-stamp the entry later on
+                // every sync round, which is the re-stamping loop this whole
+                // fix exists to end.
+                if (typeof n.receivedAt === 'number' && n.receivedAt > 0
+                    && n.timestamp > n.receivedAt) {
+                    n.timestamp = n.receivedAt;
+                }
                 if (n.timestamp <= cutoff) continue;
                 const existing = findLocalMatch(n);
                 if (existing) {
