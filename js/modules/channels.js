@@ -1633,7 +1633,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Force a re-render of the active channel when its container is empty but the
     // message store has been populated (e.g. by a D1 restore landing late).
     _repaintActiveChannelIfEmpty(names) {
-        if (this.inPMMode || this._cvActive) return;
+        // Column view has no single active container: every open channel column
+        // can be sitting on its "No recent messages" note while the archive it
+        // was waiting for lands. Repaint each one the restore actually filled.
+        if (this._cvActive) {
+            // Not just the columns this restore names: the same replay feeds
+            // every open channel, and a column only needs repainting if its DOM
+            // has actually fallen behind its store (_cvColumnBehind).
+            this._cvReconcileColumns();
+            return;
+        }
+        if (this.inPMMode) return;
         const activeKey = this.currentGeohash || this.currentChannel;
         if (!activeKey || !names.includes(String(activeKey).toLowerCase())) return;
         const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;

@@ -367,6 +367,94 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // The profile card's nym block: name, suffix, flair, supporter/verified/friend
+    // badges and any developer / bot / owner / moderator label. Extracted so that
+    // opening the card and REFRESHING it after a kind 0 lands build the same
+    // markup — the card used to bake in whatever nym the clicked row happened to
+    // carry, and never changed it again.
+    _ctxNymHtml(pubkey, baseNym, suffix) {
+        const flairHtml = this.getFlairForUser(pubkey);
+        const userShopItems = this.getUserShopItems(pubkey);
+        const supporterBadge = userShopItems?.supporter ?
+            `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>` : '';
+        const verifiedBadge = this.isVerifiedDeveloper(pubkey)
+            ? `<span class="verified-badge nm-ctx-1" title="${this.verifiedDeveloper.title}">✓</span>`
+            : this.isVerifiedBot(pubkey)
+                ? '<span class="verified-badge nm-ctx-1" title="Nymchat Bot">✓</span>'
+                : '';
+        const ctxFriendBadge = pubkey !== this.pubkey && this.isFriend(pubkey)
+            ? '<span class="friend-badge" title="Friend"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" class="nm-ctx-2"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" /><line x1="13" y1="6" x2="13" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg></span>'
+            : '';
+        let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}${verifiedBadge}${ctxFriendBadge}`;
+        if (this.isVerifiedDeveloper(pubkey)) {
+            nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
+        } else if (this.isVerifiedBot(pubkey)) {
+            nymHtml += `<div class="context-menu-dev-label">Nymchat Bot</div>`;
+        }
+        // Show "Group Owner" or "Moderator" badge for the user in the current group
+        if (this.inPMMode && this.currentGroup) {
+            const grp = this.groupConversations.get(this.currentGroup);
+            if (grp && grp.createdBy === pubkey) {
+                nymHtml += `<div class="context-menu-owner-label">Group Owner</div>`;
+            } else if (grp && Array.isArray(grp.mods) && grp.mods.includes(pubkey)) {
+                nymHtml += `<div class="context-menu-owner-label">Moderator</div>`;
+            }
+        }
+        return nymHtml;
+    },
+
+    _applyCtxBanner(bannerUrl) {
+        const img = document.getElementById('ctxBannerImg');
+        const menu = document.getElementById('contextMenu');
+        if (!img) return;
+        if (bannerUrl) {
+            img.src = bannerUrl;
+            img.style.display = 'block';
+            img.style.cursor = 'pointer';
+            img.onerror = function () {
+                this.onerror = null;
+                this.style.display = 'none';
+                if (menu) menu.classList.remove('has-banner');
+            };
+            if (menu) menu.classList.add('has-banner');
+        } else {
+            img.style.display = 'none';
+            if (menu) menu.classList.remove('has-banner');
+        }
+    },
+
+    updateRenderedProfileCard(pubkey) {
+        if (!pubkey) return;
+        if (!this.contextMenuData || this.contextMenuData.pubkey !== pubkey) return;
+
+        this._applyCtxBanner(this.getBannerUrl(pubkey));
+
+        const ctxBio = document.getElementById('ctxBio');
+        if (ctxBio) {
+            const bio = this.getBio(pubkey);
+            if (ctxBio.textContent !== bio) ctxBio.textContent = bio;
+        }
+
+        const ctxAvatarNym = document.getElementById('ctxAvatarNym');
+        if (ctxAvatarNym) {
+            // The live nym, not the one the clicked row carried when the card
+            // was opened.
+            const baseNym = this.stripPubkeySuffix(
+                this.parseNymFromDisplay(this.getNymFromPubkey(pubkey)));
+            const html = this._ctxNymHtml(pubkey, baseNym, this.getPubkeySuffix(pubkey));
+            if (ctxAvatarNym.innerHTML !== html) ctxAvatarNym.innerHTML = html;
+            if (this.contextMenuData) this.contextMenuData.nym = baseNym;
+        }
+    },
+
+    // Kept as the banner-specific entry point (users.js calls it when a banner
+    // blob finishes downloading, which says nothing about the other fields).
+    updateRenderedBanner(pubkey) {
+        if (!pubkey) return;
+        if (!this.contextMenuData || this.contextMenuData.pubkey !== pubkey) return;
+        this._applyCtxBanner(this.getBannerUrl(pubkey));
+    },
+
     showContextMenu(e, nym, pubkey, content = null, messageId = null, profileOnly = false, reactionId = null, backToGroupId = null) {
         e.preventDefault();
         e.stopPropagation();
@@ -388,24 +476,9 @@ Object.assign(NYM.prototype, {
         const ctxBackBtn = document.getElementById('ctxBackBtn');
         if (ctxBackBtn) ctxBackBtn.classList.toggle('nm-hidden', !backToGroupId);
 
-        // Populate banner if available
-        const ctxBannerImg = document.getElementById('ctxBannerImg');
-        const bannerUrl = this.getBannerUrl(pubkey);
-        if (ctxBannerImg) {
-            if (bannerUrl) {
-                ctxBannerImg.src = bannerUrl;
-                ctxBannerImg.style.display = 'block';
-                ctxBannerImg.style.cursor = 'pointer';
-                ctxBannerImg.onerror = function () {
-                    this.style.display = 'none';
-                    menu.classList.remove('has-banner');
-                };
-                menu.classList.add('has-banner');
-            } else {
-                ctxBannerImg.style.display = 'none';
-                menu.classList.remove('has-banner');
-            }
-        }
+        // Populate banner if available. Shared with the late-arrival path so a
+        // banner landing after the card is open lands identically.
+        this._applyCtxBanner(this.getBannerUrl(pubkey));
 
         // Populate avatar header
         const ctxAvatarImg = document.getElementById('ctxAvatarImg');
@@ -416,34 +489,7 @@ Object.assign(NYM.prototype, {
             ctxAvatarImg.onerror = function () { this.onerror = null; this.src = fallback; };
         }
         if (ctxAvatarNym) {
-            const flairHtml = this.getFlairForUser(pubkey);
-            const userShopItems = this.getUserShopItems(pubkey);
-            const supporterBadge = userShopItems?.supporter ?
-                `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>` : '';
-            const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-                ? `<span class="verified-badge nm-ctx-1" title="${this.verifiedDeveloper.title}">✓</span>`
-                : this.isVerifiedBot(pubkey)
-                    ? '<span class="verified-badge nm-ctx-1" title="Nymchat Bot">✓</span>'
-                    : '';
-            const ctxFriendBadge = pubkey !== this.pubkey && this.isFriend(pubkey)
-                ? '<span class="friend-badge" title="Friend"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" class="nm-ctx-2"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" /><line x1="13" y1="6" x2="13" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg></span>'
-                : '';
-            let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}${verifiedBadge}${ctxFriendBadge}`;
-            if (this.isVerifiedDeveloper(pubkey)) {
-                nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
-            } else if (this.isVerifiedBot(pubkey)) {
-                nymHtml += `<div class="context-menu-dev-label">Nymchat Bot</div>`;
-            }
-            // Show "Group Owner" or "Moderator" badge for the user in the current group
-            if (this.inPMMode && this.currentGroup) {
-                const grp = this.groupConversations.get(this.currentGroup);
-                if (grp && grp.createdBy === pubkey) {
-                    nymHtml += `<div class="context-menu-owner-label">Group Owner</div>`;
-                } else if (grp && Array.isArray(grp.mods) && grp.mods.includes(pubkey)) {
-                    nymHtml += `<div class="context-menu-owner-label">Moderator</div>`;
-                }
-            }
-            ctxAvatarNym.innerHTML = nymHtml;
+            ctxAvatarNym.innerHTML = this._ctxNymHtml(pubkey, baseNym, suffix);
         }
 
         // Populate the full public key block in the user's chosen format

@@ -2,6 +2,28 @@
 
 Object.assign(NYM.prototype, {
 
+    _cvNormaliseDesc(desc) {
+        if (!desc || desc.type !== 'channel') return desc;
+        const id = desc.geohash || desc.channel;
+        if (!id) return desc;
+        const reg = this.channels && this.channels.get(id);
+        if (reg && (reg.channel !== desc.channel || (reg.geohash || '') !== (desc.geohash || ''))) {
+            return { ...desc, channel: reg.channel, geohash: reg.geohash || '' };
+        }
+        if (reg) return desc;
+        // Not registered yet (columns can activate before the sidebar fills):
+        // the sidebar row shipped in the page, and a stored `#id` history, both
+        // prove the channel is the geohash-keyed kind.
+        if (!desc.geohash) {
+            const item = typeof document !== 'undefined'
+                ? document.querySelector(`.channel-item[data-geohash="${id}"]`) : null;
+            if (item || (this.messages && this.messages.has(`#${id}`))) {
+                return { ...desc, channel: id, geohash: id };
+            }
+        }
+        return desc;
+    },
+
     _cvColKey(desc) {
         if (!desc) return null;
         if (desc.type === 'channel') return desc.geohash ? `#${desc.geohash}` : desc.channel;
@@ -69,7 +91,11 @@ Object.assign(NYM.prototype, {
         // nodes don't trip the global dedupe and leave columns empty.
         const mc = document.getElementById('messagesContainer');
         if (mc) { mc.innerHTML = ''; mc.dataset.lastChannel = ''; }
-        this._cvSeedIfNeeded();
+        try {
+            this._cvSeedIfNeeded();
+        } catch (e) {
+            console.warn('[NYM] Column seeding failed:', e && e.message);
+        }
         if (!this._cvColumns.length) this._cvSeedDefaults();
         this._cvRenderAll();
         const firstChannel = this._cvColumns.find(c => c.type === 'channel');
@@ -77,6 +103,8 @@ Object.assign(NYM.prototype, {
         const first = this._cvColumns[0];
         if (first) this._cvFocusColumn(first.id);
         this._cvRebuildHeaderDots();
+        this._cvScheduleReconcile(600);
+        setTimeout(() => this._cvScheduleReconcile(0), 2500);
     },
 
     _cvDisable() {
@@ -216,6 +244,7 @@ Object.assign(NYM.prototype, {
     cvAddColumn(desc, opts = {}) {
         const { render = true, save = true, focus = true } = opts;
         if (this.settings && this.settings.groupChatPMOnlyMode && desc && desc.type === 'channel') return;
+        desc = this._cvNormaliseDesc(desc);
         const key = this._cvColKey(desc);
         if (!key) return;
         const existing = this._cvColumns.find(c => c.key === key);
@@ -273,6 +302,7 @@ Object.assign(NYM.prototype, {
     // column; otherwise add a new column. Mirrors single-view nav history so
     // the back/forward buttons drive column navigation too.
     _cvOpenConversation(desc, opts = {}) {
+        desc = this._cvNormaliseDesc(desc);
         const key = this._cvColKey(desc);
         if (!key) return;
         if (window.innerWidth <= 1024 && typeof this.closeSidebar === 'function') this.closeSidebar();
@@ -329,6 +359,7 @@ Object.assign(NYM.prototype, {
 
     // Repurpose an existing column to show a different conversation in place.
     _cvNavigateColumn(col, desc) {
+        desc = this._cvNormaliseDesc(desc);
         this._cvKeyToList.delete(col.key);
         col.type = desc.type;
         col.channel = desc.channel; col.geohash = desc.geohash || '';
@@ -528,6 +559,49 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _cvColumnBehind(col) {
+        if (!col || !col.listEl) return false;
+        const isPM = col.type !== 'channel';
+        const store = isPM
+            ? this.getFilteredPMMessages(col.key)
+            : this.getFilteredMessages(col.key);
+        const pageSize = isPM ? this.pmPageSize : this.channelPageSize;
+        const expected = Math.min(store.length, pageSize);
+        const rows = col.listEl.querySelectorAll('.message[data-message-id]');
+        // Short of what the store can fill: always behind, whatever the user is
+        // looking at — this is the empty/stub column case.
+        if (rows.length < expected) return true;
+        if (!rows.length || !store.length) return false;
+        // Same count but a different newest message: the store gained history
+        // the column never saw. Only repaint when the column is pinned to the
+        // bottom, so reconciling never yanks a column the user is reading.
+        if (col._atBottom === false) return false;
+        const newest = store[store.length - 1];
+        const newestId = (newest.isPM && newest.nymMessageId) ? newest.nymMessageId : newest.id;
+        return rows[rows.length - 1].dataset.messageId !== newestId;
+    },
+
+    // Repaint every column whose DOM no longer matches its store. Idempotent
+    // and cheap when nothing has changed, so it is safe to call from any of the
+    // points where the store may have been filled behind the view's back.
+    _cvReconcileColumns() {
+        if (!this._cvActive || !Array.isArray(this._cvColumns)) return;
+        for (const col of this._cvColumns) {
+            if (this._cvColumnBehind(col)) this._cvRenderColumn(col);
+        }
+    },
+
+    // Coalesce reconcile requests from the several callers that can fire in a
+    // burst during boot (per-key hydration merges, a D1 restore finishing).
+    _cvScheduleReconcile(delay = 150) {
+        if (!this._cvActive) return;
+        if (this._cvReconcileTimer) clearTimeout(this._cvReconcileTimer);
+        this._cvReconcileTimer = setTimeout(() => {
+            this._cvReconcileTimer = null;
+            try { this._cvReconcileColumns(); } catch (_) { }
+        }, delay);
+    },
+
     _cvRenderColumn(col) {
         if (!col.listEl) return;
         const isPM = col.type !== 'channel';
@@ -626,7 +700,11 @@ Object.assign(NYM.prototype, {
         const channelItems = document.querySelectorAll('.channel-item');
         const pmItems = document.querySelectorAll('.pm-item');
         if (col.type === 'channel') {
-            channelItems.forEach(i => i.classList.toggle('active', i.dataset.channel === col.channel && (i.dataset.geohash || '') === (col.geohash || '')));
+            // Match on `geohash || channel` — the identity addChannel keys the
+            // sidebar on. Requiring BOTH halves to line up meant one stale half
+            // in a column desc silently dropped the highlight.
+            const colId = col.geohash || col.channel;
+            channelItems.forEach(i => i.classList.toggle('active', (i.dataset.geohash || i.dataset.channel) === colId));
             pmItems.forEach(i => i.classList.remove('active'));
         } else if (col.type === 'pm') {
             channelItems.forEach(i => i.classList.remove('active'));
@@ -837,7 +915,7 @@ Object.assign(NYM.prototype, {
                 const desc = { type: 'pm', pubkey, nym: conv.nym };
                 if (open.has(this._cvColKey(desc))) continue;
                 const src = this.getAvatarUrl(pubkey);
-                out.push({ label: conv.nym || 'Direct message', icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" alt="" width="20" height="20">`, desc });
+                out.push({ label: conv.nym || 'Direct message', icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(pubkey)}" alt="" width="20" height="20">`, desc });
             }
         }
         if (this.groupConversations) {

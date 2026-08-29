@@ -546,10 +546,11 @@ Object.assign(NYM.prototype, {
                 if (old) URL.revokeObjectURL(old);
                 const objectUrl = URL.createObjectURL(blob);
                 this.bannerBlobCache.set(pubkey, objectUrl);
-                // Update context menu banner if open for this user
-                const ctxBanner = document.getElementById('ctxBannerImg');
-                if (ctxBanner && this.contextMenuData?.pubkey === pubkey) {
-                    ctxBanner.src = objectUrl;
+                // Repaint the open profile card THROUGH _applyCtxBanner: setting
+                // src alone left the <img> hidden whenever the card had opened
+                // before the banner was known.
+                if (typeof this.updateRenderedBanner === 'function') {
+                    this.updateRenderedBanner(pubkey);
                 }
                 if (typeof this.persistBannerBlob === 'function') {
                     const ts = (this._kind0Ts && this._kind0Ts.get(pubkey)) || null;

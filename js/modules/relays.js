@@ -637,6 +637,12 @@ Object.assign(NYM.prototype, {
                     if (typeof this._markVisibleGroupMessagesRead === 'function') {
                         this._markVisibleGroupMessagesRead();
                     }
+                    // History can arrive while the tab is backgrounded, where a
+                    // column's own render hooks may never have run. Coming back
+                    // is the natural moment to make each column match its store.
+                    if (typeof this._cvScheduleReconcile === 'function') {
+                        this._cvScheduleReconcile(0);
+                    }
                     if (typeof this._cvMarkVisibleColumnsRead === 'function') {
                         this._cvMarkVisibleColumnsRead();
                     }

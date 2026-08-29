@@ -845,6 +845,10 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
+                if (typeof this.updateRenderedProfileCard === 'function') {
+                    this.updateRenderedProfileCard(pubkey);
+                }
+
                 // Resolve any pending fetchProfileDirect calls for this pubkey
                 this._resolveProfileCallbacks(pubkey);
             } catch (e) {

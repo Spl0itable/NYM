@@ -699,6 +699,7 @@ class NYM {
         applyColumnsWallpaper(this.settings.columnsWallpaper === true);
         this.channelSubscriptionBatchSize = 15;
         this.channelMessageLimit = 1000;
+        this.channelHistoryMaxAgeMs = 24 * 60 * 60 * 1000;
         this.channelPageSize = 50;
         this.channelLoadMoreSize = 50;
         this.channelRenderedStart = new Map();

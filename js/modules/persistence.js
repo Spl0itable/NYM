@@ -236,6 +236,31 @@
             return ser;
         },
 
+        _mergeCachedMessages(existing, cached) {
+            if (!Array.isArray(existing) || existing.length === 0) return cached;
+            if (!Array.isArray(cached) || cached.length === 0) return existing;
+            const seen = new Set();
+            for (const m of existing) {
+                if (!m) continue;
+                if (m.id) seen.add(m.id);
+                if (m.nymMessageId) seen.add(m.nymMessageId);
+            }
+            const merged = existing.slice();
+            for (const m of cached) {
+                if (!m) continue;
+                if ((m.id && seen.has(m.id)) || (m.nymMessageId && seen.has(m.nymMessageId))) continue;
+                if (m.id) seen.add(m.id);
+                if (m.nymMessageId) seen.add(m.nymMessageId);
+                merged.push(m);
+            }
+            if (merged.length === existing.length) return existing;
+            const cmp = typeof this._compareMessages === 'function'
+                ? (a, b) => this._compareMessages(a, b)
+                : (a, b) => (a.created_at || 0) - (b.created_at || 0);
+            merged.sort(cmp);
+            return merged;
+        },
+
         _hydrateMessage(m) {
             // Convert serialised timestamp back to Date if needed
             if (m.timestamp && !(m.timestamp instanceof Date)) {
@@ -590,20 +615,21 @@
                 const loadedChannelKeys = [];
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
-                    if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
-                    const msgs = [];
+                    let msgs = [];
                     for (const m of c.messages) {
                         await breathe();
                         msgs.push(this._hydrateMessage(m));
                     }
-                    // Re-check: breathe() hands the event loop back, so a live
-                    // relay event may have created this key while we yielded.
-                    // The pre-loop guard is no longer enough on its own —
-                    // overwriting here would drop a just-received message.
-                    if (this.messages.has(c.key) && this.messages.get(c.key).length > 0) continue;
-                    this.messages.set(c.key, msgs);
+                    // A cache written before the window rule, or simply left
+                    // unopened for a day, must not put aged-out history back
+                    // into memory.
+                    msgs = this._pruneChannelWindow(msgs);
+                    if (!msgs.length) { this._cacheDelete('channels', c.key); continue; }
+                    this.messages.set(c.key, this._mergeCachedMessages(this.messages.get(c.key), msgs));
                     loadedChannelKeys.push(c.key);
                 }
+
+                if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile();
 
                 for (const key of loadedChannelKeys) {
                     const msgs = this.messages.get(key);
@@ -647,17 +673,16 @@
                             if (pmVaultOn && this._vaultKey) migrateKeys.push(p.key);
                         }
                         if (!Array.isArray(rawMsgs)) continue;
-                        if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
                         const msgs = [];
                         for (const m of rawMsgs) {
                             await breathe();
                             msgs.push(this._hydrateMessage(m));
                         }
-                        // Re-check after yielding, as above.
-                        if (this.pmMessages.has(p.key) && this.pmMessages.get(p.key).length > 0) continue;
-                        this.pmMessages.set(p.key, msgs);
+                        // Merged, not skipped — same reason as the channels above.
+                        this.pmMessages.set(p.key, this._mergeCachedMessages(this.pmMessages.get(p.key), msgs));
                     }
                     for (const k of migrateKeys) this.persistPMMessages(k);
+                    if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile();
                     // Rebuild peer-format sets from cached messages — receipt
                     // sending and reply wrapping consult these, and relay copies
                     // are dedup-dropped so they never repopulate after a reload
@@ -674,9 +699,36 @@
                     this.clearPMCache().catch(() => { });
                 }
 
+                // Ids we still hold a message for, after the channel window
+                // prune above. A reaction row whose target is gone is dead
+                // weight that nothing can ever render, and for a pruned public
+                // channel message it is exactly the aged-out kind 7 the window
+                // is meant to drop — so it is deleted rather than reloaded.
+                const heldIds = new Set();
+                for (const list of this.messages.values()) {
+                    for (const m of (list || [])) {
+                        await breathe();
+                        if (!m) continue;
+                        if (m.id) heldIds.add(m.id);
+                        if (m.nymMessageId) heldIds.add(m.nymMessageId);
+                    }
+                }
+                for (const list of this.pmMessages.values()) {
+                    for (const m of (list || [])) {
+                        await breathe();
+                        if (!m) continue;
+                        if (m.id) heldIds.add(m.id);
+                        if (m.nymMessageId) heldIds.add(m.nymMessageId);
+                    }
+                }
+
                 for (const r of reactions) {
                     await breathe();
                     if (!r || !r.messageId || !Array.isArray(r.entries)) continue;
+                    if (!heldIds.has(r.messageId)) {
+                        this._cacheDelete('reactions', r.messageId);
+                        continue;
+                    }
                     if (this.reactions.has(r.messageId)) continue;
                     const emojiMap = new Map();
                     for (const [emoji, reactors] of r.entries) {
@@ -716,6 +768,7 @@
                 this._refreshActiveViewsAfterHydration();
             }
 
+            if (typeof this.startChannelWindowPrune === 'function') this.startChannelWindowPrune();
             this._trimAllStores().catch(() => { });
         },
 
@@ -870,6 +923,33 @@
             }
         },
 
+        // The oldest created_at (seconds) a public channel message may have and
+        // still be kept. Public channel history is a rolling 24-hour window —
+        // see channelHistoryMaxAgeMs in app.js for why.
+        _channelWindowFloorSec() {
+            const maxAge = this.channelHistoryMaxAgeMs || (24 * 60 * 60 * 1000);
+            return Math.floor((Date.now() - maxAge) / 1000);
+        },
+
+        // Drop channel messages that have aged out of the 24-hour window, then
+        // pin back any thread ROOT the survivors still reply to. Without that
+        // pin an in-window reply whose root has aged out reflows INLINE, as a
+        // top-level message with a thread affordance that dead-ends — the same
+        // failure _withPinnedThreadRoots exists to prevent for the count-based
+        // window. A root kept this way is the context for a live thread, not
+        // stale history.
+        _pruneChannelWindow(messages) {
+            if (!Array.isArray(messages) || messages.length === 0) return messages;
+            const floor = this._channelWindowFloorSec();
+            let anyOld = false;
+            for (const m of messages) {
+                if (m && (m.created_at || 0) < floor) { anyOld = true; break; }
+            }
+            if (!anyOld) return messages;
+            const kept = messages.filter(m => m && (m.created_at || 0) >= floor);
+            return this._withPinnedThreadRoots(messages, kept, m => m.id);
+        },
+
         // Keep thread ROOTS in the persisted window: the window is a plain
         // last-N slice, so a root older than the window drops off while its
         // replies stay — and after a reload those replies can never re-thread
@@ -904,9 +984,16 @@
                     return;
                 }
                 const limit = this.channelMessageLimit || 100;
-                let trimmed = messages.length > limit ? messages.slice(-limit) : messages;
+                // Age first, then the count cap — a channel quiet for a day must
+                // not write back a full window of messages that have all aged out.
+                const inWindow = this._pruneChannelWindow(messages);
+                let trimmed = inWindow.length > limit ? inWindow.slice(-limit) : inWindow;
                 // Channel thread keys are event ids (threadKeyForMessage).
-                trimmed = this._withPinnedThreadRoots(messages, trimmed, m => m.id);
+                trimmed = this._withPinnedThreadRoots(inWindow, trimmed, m => m.id);
+                if (!trimmed.length) {
+                    this._cacheDelete('channels', key);
+                    return;
+                }
                 this._cachePut('channels', {
                     key,
                     messages: trimmed.map(m => this._serialiseMessage(m))
@@ -1018,6 +1105,62 @@
                 this._cachePut('reactions', { messageId, entries });
                 this._scheduleTrim();
             });
+        },
+
+        pruneChannelHistoryWindow() {
+            if (!this.messages || typeof this._pruneChannelWindow !== 'function') return 0;
+            let dropped = 0;
+            for (const [key, messages] of this.messages) {
+                if (!Array.isArray(messages) || messages.length === 0) continue;
+                const kept = this._pruneChannelWindow(messages);
+                if (kept === messages || kept.length === messages.length) continue;
+                const keptIds = new Set();
+                for (const m of kept) { if (m && m.id) keptIds.add(m.id); }
+                for (const m of messages) {
+                    if (!m || !m.id || keptIds.has(m.id)) continue;
+                    dropped++;
+                    this._dropChannelMessageSideTables(m);
+                }
+                this.messages.set(key, kept);
+                if (typeof this.persistChannelMessages === 'function') {
+                    this.persistChannelMessages(key);
+                }
+            }
+            if (dropped) {
+                // The views hold their own rendered copies; columns reconcile
+                // against the store, single view re-renders the open channel.
+                if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
+                if (typeof this._refreshActiveViewsAfterHydration === 'function') {
+                    this._refreshActiveViewsAfterHydration();
+                }
+            }
+            return dropped;
+        },
+
+        // Everything else keyed by a dropped channel message's id.
+        _dropChannelMessageSideTables(m) {
+            const ids = [m.id];
+            if (m.nymMessageId && m.nymMessageId !== m.id) ids.push(m.nymMessageId);
+            for (const id of ids) {
+                if (this.reactions && this.reactions.delete(id)) {
+                    this._cacheDelete('reactions', id);
+                }
+                if (this.renderedMessageIds) this.renderedMessageIds.delete(id);
+            }
+            const el = typeof document !== 'undefined'
+                ? document.querySelector(`.message[data-message-id="${String(m.id).replace(/"/g, '\\"')}"]`)
+                : null;
+            if (el) el.remove();
+        },
+
+        // Run the sweep at boot (after hydration) and on a long interval, so a
+        // tab left open overnight converges on the window instead of holding
+        // history no other client can see.
+        startChannelWindowPrune() {
+            if (this._channelWindowPruneTimer) return;
+            const run = () => { try { this.pruneChannelHistoryWindow(); } catch (_) { } };
+            run();
+            this._channelWindowPruneTimer = setInterval(run, 15 * 60 * 1000);
         },
 
         persistDedupSets() {

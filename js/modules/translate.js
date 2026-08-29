@@ -220,13 +220,6 @@ Object.assign(NYM.prototype, {
     },
 
     // The language messages get translated into.
-    //
-    // There is no "pick a language" prompt any more. Every user chooses one at
-    // first run (the UI-language picker, i18n.js), and that pick is adopted as
-    // the translation target — so asking again on the first translation was
-    // asking a question already answered, and it interrupted the very action
-    // the user had just taken. The UI language is the fallback for anyone whose
-    // setting predates that, and English the fallback for that.
     _effectiveTranslateLanguage() {
         const saved = this.settings && this.settings.translateLanguage;
         if (saved) return saved;
@@ -234,43 +227,112 @@ Object.assign(NYM.prototype, {
         return ui || 'en';
     },
 
-    // Translate a message and show the result inline below the original message.
-    // Uses the CF proxy when available, falls back to calling Google Translate directly.
-    async translateMessage(content, messageId) {
-        const targetLang = this._effectiveTranslateLanguage();
+    // In-memory only, like the auto-translate cache: it survives re-renders,
+    // not reloads.
+    _manualTrCache() {
+        return this._manualTranslations || (this._manualTranslations = new Map());
+    },
 
+    // Bounded, least-recently-rendered evicted first — a long session in a busy
+    // channel would otherwise hold one entry per translation for the life of
+    // the page.
+    _recordManualTranslation(msgId, rec) {
+        if (!msgId) return;
+        const cache = this._manualTrCache();
+        cache.delete(msgId);          // re-insert so eviction stays LRU
+        cache.set(msgId, rec);
+        while (cache.size > 500) cache.delete(cache.keys().next().value);
+    },
+
+    _forgetManualTranslation(msgId) {
+        if (msgId && this._manualTranslations) this._manualTranslations.delete(msgId);
+    },
+
+    // The text `translateMessage` would send for this row, recomputed from the
+    // REBUILT element so an edited message doesn't get its old translation back.
+    _manualTrSourceFor(messageEl) {
+        const contentEl = messageEl && messageEl.querySelector('.message-content');
+        if (!contentEl) return null;
+        return this._manualTrPlainText(this._extractNonQuotedText(contentEl));
+    },
+
+    // Put a recorded translation back on a row that was just (re)built. Safe to
+    // call for every message on every render: no record, or one already on
+    // screen, is a no-op.
+    _reapplyManualTranslation(messageEl) {
+        if (!messageEl || !this._manualTranslations || !this._manualTranslations.size) return;
+        const msgId = messageEl.getAttribute('data-message-id');
+        if (!msgId) return;
+        const rec = this._manualTranslations.get(msgId);
+        if (!rec) return;
+        if (messageEl.querySelector(':scope > .message-translation')) return;
+        // An edit replaced the text this translation was of — drop it rather
+        // than show a translation of something the message no longer says.
+        const source = this._manualTrSourceFor(messageEl);
+        if (source !== rec.source) { this._forgetManualTranslation(msgId); return; }
+        this._manualTrElement(messageEl).innerHTML = rec.html;
+        // Touch for LRU: a translation still on screen is the last one to evict.
+        this._recordManualTranslation(msgId, rec);
+    },
+
+    // The row's `.message-translation` block, created below the content if the
+    // row doesn't have one yet.
+    _manualTrElement(msgEl) {
+        let el = msgEl.querySelector('.message-translation');
+        if (!el) {
+            el = document.createElement('div');
+            el.className = 'message-translation';
+            const contentEl = msgEl.querySelector('.message-content') || msgEl;
+            contentEl.after(el);
+        }
+        return el;
+    },
+
+    // What actually gets sent for a manual translation. Extracted so the
+    // re-apply path can recompute it from a rebuilt row and compare.
+    _manualTrPlainText(content) {
         // Strip HTML blockquote tags entirely (with their contents) so the
         // quoted reply doesn't pollute language detection. The quote may be in
         // the user's own language while the new reply is in another, and Google
         // would otherwise detect the dominant language and skip the reply.
-        let plainText = content.replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, ' ');
+        let plainText = String(content || '').replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, ' ');
         // Strip remaining HTML tags
         plainText = plainText.replace(/<[^>]+>/g, '');
         // Strip plain-text quote lines ("> ..." style) for the same reason
         plainText = plainText.split('\n').filter(line => !line.trim().startsWith('>')).join('\n').trim();
+        if (!plainText) return '';
+        // Strip trailing timestamp (e.g. "12:34 PM", "3:05 AM", "23:59")
+        return plainText.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+    },
 
+    async translateMessage(content, messageId) {
+        const targetLang = this._effectiveTranslateLanguage();
+
+        const plainText = this._manualTrPlainText(content);
         if (!plainText) {
             this.displaySystemMessage('No text to translate.');
             return;
         }
 
-        // Strip trailing timestamp (e.g. "12:34 PM", "3:05 AM", "23:59")
-        plainText = plainText.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
+        // Resolved fresh each time it is needed rather than captured once: a
+        // render during the request (a conversation reopening, a column
+        // repainting) replaces the row, and the captured node would be detached
+        // by the time the answer arrived — the translation went nowhere.
+        const rowFor = () => (messageId
+            ? document.querySelector(`[data-message-id="${String(messageId).replace(/"/g, '\\"')}"]`)
+            : null);
 
-        // Find the message element to append translation
-        const msgEl = messageId ? document.querySelector(`[data-message-id="${messageId}"]`) : null;
+        // Recorded as it is rendered, so any later render can put it back. The
+        // loading state is recorded too — a row rebuilt mid-request comes back
+        // saying "Translating..." rather than blank.
+        const paint = (html) => {
+            this._recordManualTranslation(messageId, { lang: targetLang, source: plainText, html });
+            const row = rowFor();
+            if (row) this._manualTrElement(row).innerHTML = html;
+            return !!row;
+        };
 
-        // Show loading state
-        if (msgEl) {
-            let translationEl = msgEl.querySelector('.message-translation');
-            if (!translationEl) {
-                translationEl = document.createElement('div');
-                translationEl.className = 'message-translation';
-                const contentEl = msgEl.querySelector('.message-content') || msgEl;
-                contentEl.after(translationEl);
-            }
-            translationEl.innerHTML = '<span class="translation-loading">Translating...</span>';
-        }
+        const hadRow = paint('<span class="translation-loading">Translating...</span>');
 
         try {
             const { translatedText, detectedLanguage: detectedLang } =
@@ -280,31 +342,29 @@ Object.assign(NYM.prototype, {
             // language already matches the target.
             const isNoop = !translatedText || !translatedText.trim() || translatedText.trim() === plainText.trim();
 
-            if (msgEl) {
-                let translationEl = msgEl.querySelector('.message-translation');
-                if (!translationEl) {
-                    translationEl = document.createElement('div');
-                    translationEl.className = 'message-translation';
-                    const contentEl = msgEl.querySelector('.message-content') || msgEl;
-                    contentEl.after(translationEl);
-                }
+            if (hadRow || rowFor()) {
                 if (isNoop) {
-                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> <span class="translation-error">Already in ${this.escapeHtml(this._languageName(targetLang))} (nothing to translate)</span>`;
+                    paint(`<span class="translation-icon">🌐</span> <span class="translation-error">Already in ${this.escapeHtml(this._languageName(targetLang))} (nothing to translate)</span>`);
                 } else {
                     const langLabel = detectedLang !== 'auto' && detectedLang !== targetLang
                         ? `<span class="translation-lang">${this.escapeHtml(this._languageName(detectedLang))} → ${this.escapeHtml(this._languageName(targetLang))}</span>` : '';
-                    translationEl.innerHTML = `<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText).replace(/\n/g, '<br>')} ${langLabel}`;
+                    paint(`<span class="translation-icon">🌐</span> ${this.escapeHtml(translatedText).replace(/\n/g, '<br>')} ${langLabel}`);
                 }
             } else if (isNoop) {
+                this._forgetManualTranslation(messageId);
                 this.displaySystemMessage(`Nothing to translate (already in ${this._languageName(targetLang)}).`);
             } else {
+                this._forgetManualTranslation(messageId);
                 this.displaySystemMessage(`Translation: ${translatedText}`);
             }
         } catch (err) {
-            if (msgEl) {
-                const translationEl = msgEl.querySelector('.message-translation');
-                if (translationEl) translationEl.innerHTML = '<span class="translation-error">Translation failed</span>';
-            }
+            // A failure is NOT recorded: the next render should leave the row
+            // clean so the user can ask again, not replay a stale error for the
+            // rest of the session.
+            this._forgetManualTranslation(messageId);
+            const row = rowFor();
+            const translationEl = row && row.querySelector('.message-translation');
+            if (translationEl) translationEl.innerHTML = '<span class="translation-error">Translation failed</span>';
             this.displaySystemMessage('Translation failed: ' + (err.message || 'Unknown error'));
         }
     },
@@ -929,6 +989,12 @@ Object.assign(NYM.prototype, {
             const s = this.settings || {};
             const on = !!(s.autoTranslate && s.translateLanguage);
             const els = document.querySelectorAll('[data-message-id]');
+            // Manual translations come back whether or not auto-translate is
+            // on — they are the user's own explicit action, not a setting.
+            // `.message` rows only: the hover reaction button carries the same
+            // data-message-id and must never receive a translation block.
+            document.querySelectorAll('.message[data-message-id]')
+                .forEach(el => this._reapplyManualTranslation(el));
             if (!on) {
                 els.forEach(el => {
                     if (el._autoTr) this._restoreAutoTranslation(el);
@@ -937,6 +1003,7 @@ Object.assign(NYM.prototype, {
                 });
                 return;
             }
+
             const type = this.inPMMode ? (this.currentGroup ? 'group' : 'pm') : 'channel';
             // Bound the batch so switching this on in a long backlog doesn't
             // fire hundreds of requests at once.

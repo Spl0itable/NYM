@@ -1156,6 +1156,12 @@ Object.assign(NYM.prototype, {
 
         this._updateBubbleGrouping(messageEl);
 
+        // Put back a translation the user asked for by hand. A fresh render
+        // rebuilds the row without its `.message-translation`, and nothing
+        // re-issues a manual translation the way auto-translate re-queues
+        // itself — so without this the user's translation just disappeared.
+        if (typeof this._reapplyManualTranslation === 'function') this._reapplyManualTranslation(messageEl);
+
         // Auto-translate on-screen messages that aren't already in the user's
         // translation language (gated by the auto-translate settings).
         if (typeof this._maybeAutoTranslate === 'function') this._maybeAutoTranslate(messageEl, message);
@@ -3545,13 +3551,7 @@ Object.assign(NYM.prototype, {
             const container = document.getElementById('messagesContainer');
 
             if (this._cvActive && Array.isArray(this._cvColumns)) {
-                for (const col of this._cvColumns) {
-                    if (!col || !col.listEl) continue;
-                    const isPM = col.type !== 'channel';
-                    const stored = (isPM ? this.pmMessages.get(col.key) : this.messages.get(col.key)) || [];
-                    const domCount = col.listEl.querySelectorAll('.message[data-message-id]').length;
-                    if (stored.length > domCount) this._cvRenderColumn(col);
-                }
+                this._cvReconcileColumns();
                 return;
             }
 
