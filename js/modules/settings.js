@@ -1138,20 +1138,24 @@ Object.assign(NYM.prototype, {
         if (status === 'locked' && typeof this.maybeShowPqUpgradeNotice === 'function') {
             try { this.maybeShowPqUpgradeNotice(); } catch (_) { }
         }
-        // Only §6.4 writes. A locked device must never publish a record.
-        if (status === 'generated') {
+        // Only §6.4 writes, plus the repair case: we hold the root and the
+        // account has no record row, which is what an earlier launch leaves
+        // behind when its record write failed. Without the retry every other
+        // device reads "no record" and mints a rival root. A locked device
+        // must never publish one.
+        if (status === 'generated' || status === 'publish-record') {
             try { await this.pqRootPublishRecord(); } catch (_) { }
         }
         // The boot announcement went out without a key, because until now we
         // did not know whether one existed. Publish the real one.
-        if (status === 'adopted' || status === 'generated') {
+        if (status === 'adopted' || status === 'generated' || status === 'publish-record') {
             try { await this.publishPqAnnouncement(); } catch (_) { }
         }
         return {
             // A row we could not open still counts: the branch below destroys
             // rows when it believes nothing opened.
             found: !!record || !!rowPresent,
-            adopted: status === 'adopted' || status === 'generated'
+            adopted: status === 'adopted' || status === 'generated' || status === 'publish-record'
         };
     },
 

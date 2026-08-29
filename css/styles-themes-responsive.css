@@ -592,6 +592,30 @@ body.light-mode div.message-input {
     color: #000000 !important;
 }
 
+select option,
+select optgroup,
+datalist option {
+    background-color: var(--bg);
+    color: #ffffff;
+}
+
+body.light-mode select option,
+body.light-mode select optgroup,
+body.light-mode datalist option {
+    background-color: var(--bg);
+    color: #000000;
+}
+
+select option:disabled,
+select optgroup:disabled {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+body.light-mode select option:disabled,
+body.light-mode select optgroup:disabled {
+    color: rgba(0, 0, 0, 0.4);
+}
+
 body.light-mode .icon-btn {
     border-color: rgba(0, 0, 0, 0.1);
     background: rgba(0, 0, 0, 0.03);

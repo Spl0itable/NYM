@@ -269,20 +269,28 @@ Object.assign(NYM.prototype, {
             }
             toFetch.push(pk);
         }
-        const batch = toFetch.slice(0, 100);
-        if (!batch.length) return found;
+        if (!toFetch.length) return found;
+        // profile-get caps a request at 100 pubkeys (storage.js). Slicing to the
+        // first 100 and dropping the rest meant a busy channel's overflow was
+        // never looked up at all — those authors kept the "nym" fallback until
+        // something happened to re-queue them. Walk the whole list in batches.
         const records = [];
-        try {
-            const resp = await this._storageApiStream('profile-get', { pubkeys: batch }, false);
-            await this._readNdjsonStream(resp, (item) => {
-                if (!Array.isArray(item) || item.length < 2) return;
-                const pk = item[0];
-                const rec = item[1];
-                if (!rec || !rec.event) return;
-                records.push([pk, rec]);
-            });
-        } catch (_) {
-            return found;
+        for (let start = 0; start < toFetch.length; start += 100) {
+            const batch = toFetch.slice(start, start + 100);
+            try {
+                const resp = await this._storageApiStream('profile-get', { pubkeys: batch }, false);
+                await this._readNdjsonStream(resp, (item) => {
+                    if (!Array.isArray(item) || item.length < 2) return;
+                    const pk = item[0];
+                    const rec = item[1];
+                    if (!rec || !rec.event) return;
+                    records.push([pk, rec]);
+                });
+            } catch (_) {
+                // Whatever this batch would have supplied stays "missing", so
+                // the caller's relay fallback picks it up.
+                break;
+            }
         }
         // Verify in small slices off the stream callback so a 100-profile batch
         // doesn't block the main thread
@@ -641,7 +649,15 @@ Object.assign(NYM.prototype, {
                 if (shouldNotify) {
                     // Mark as notified
                     this.channelNotificationTracking.get(channelKey).add(event.id);
-                    this.showNotification(nym, message.content, _channelNotifInfo(), event.created_at * 1000);
+                    // `message._ms`, not the raw created_at: the message list
+                    // renders the skew-corrected time (`correctedCreatedAt`)
+                    // and the bell must agree with it. A future created_at —
+                    // a fast sender clock, or a pool re-stamping cached
+                    // history on replay — otherwise gave the bell entry a
+                    // timestamp ahead of every real one, pinning it to the
+                    // top of a modal that sorts newest-first.
+                    this.showNotification(nym, message.content, _channelNotifInfo(),
+                        message._ms || message.timestamp.getTime());
                 }
 
                 if (isHistorical && !message.isOwn && !message._spamGated &&
@@ -2037,7 +2053,31 @@ Object.assign(NYM.prototype, {
             if (found && found.size) missing = pubkeys.filter(pk => !found.has(pk));
         } catch (_) { }
         if (missing.length === 0) return;
-        if (this._getApiHost && this._getApiHost()) return;
+
+        // D1 only ever holds a profile its OWNER mirrored there (`profile-set`
+        // is authenticated), so a pubkey it has never heard of — an external
+        // Nostr user, or a Nymchat user who has not published since the mirror
+        // shipped — is a normal D1 miss, not an absent profile. This used to
+        // bail out whenever `_getApiHost()` was truthy, which on an http(s)
+        // page is ALWAYS: the relay fallback below was dead code, and every D1
+        // miss stayed on the "nym" fallback with no avatar and no lud16 (hence
+        // no zaps). `sendRequestToFewRelays` routes through the pool in relay
+        // proxy mode and directly otherwise, so the REQ is valid in both — the
+        // same thing `fetchOwnProfileFromRelaysOneShot` already does for us.
+        //
+        // Rate-limited per pubkey, because a genuinely profile-less author
+        // re-queues on EVERY message they post: without this a busy channel
+        // would turn one REQ per author into one REQ per message.
+        if (!this._profileRelayAttemptAt) this._profileRelayAttemptAt = new Map();
+        const nowMs = Date.now();
+        missing = missing.filter(pk => nowMs - (this._profileRelayAttemptAt.get(pk) || 0) >= 5 * 60 * 1000);
+        if (missing.length === 0) return;
+        for (const pk of missing) this._profileRelayAttemptAt.set(pk, nowMs);
+        // Bounded like the other per-pubkey maps; Map keeps insertion order so
+        // the evicted entry is the oldest attempt.
+        while (this._profileRelayAttemptAt.size > 5000) {
+            this._profileRelayAttemptAt.delete(this._profileRelayAttemptAt.keys().next().value);
+        }
 
         const run = () => {
             const subId = 'batch-profile-' + Math.random().toString(36).slice(2);

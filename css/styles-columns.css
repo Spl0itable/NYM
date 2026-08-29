@@ -29,7 +29,7 @@ body.columns-mode:not(.chat-bubbles) .cv-list .message {
     gap: 5px;
 }
 
-body.columns-mode .cv-list .message-content img,
+body.columns-mode .cv-list .message-content img:not(.avatar-message):not(.custom-emoji),
 body.columns-mode .cv-list .message-content video,
 body.columns-mode .cv-list .message-content .video-container,
 body.columns-mode .cv-list .message-content .link-preview {

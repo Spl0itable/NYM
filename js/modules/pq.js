@@ -311,7 +311,8 @@
         /// Spec §6. `record` is the decrypted `nymchat-pq-root` payload, or
         /// null when the account has none. Returns 'unavailable' (no local
         /// key), 'adopted', 'locked' (record we cannot open — do not generate,
-        /// do not announce) or 'generated'.
+        /// do not announce), 'publish-record' (we hold the root but the account
+        /// has no record row, so the caller must write one) or 'generated'.
         /// `rowPresent` is the D1 row's existence, independent of whether it
         /// decrypted. A row we cannot read is still proof a root exists, and
         /// generating over it splits the account.
@@ -336,11 +337,17 @@
                 return 'locked';
             }
 
-            // No record, but we hold a root already (the write has not
-            // landed yet). Keep it rather than rolling a second one.
+            // No record, but we hold a root already. Either the write has not
+            // landed yet, or an earlier launch generated the root and its
+            // record write FAILED (offline, a rate limit, a 401) — and nothing
+            // ever retried it. That second case is the one that strands an
+            // upgraded account: with no record row, every other device reads
+            // §6.4 and mints a RIVAL root, and the first device to see the
+            // other's record then goes 'locked' and stops announcing a key at
+            // all. So say which case this is and let the caller re-publish.
             if (mine) {
                 this._pqRootLocked = false;
-                return 'adopted';
+                return 'publish-record';
             }
             // Bytes are there, this session just cannot see them.
             if (this._pqRootUnreadable) {
@@ -611,10 +618,19 @@
         /// once per pending window.
         schedulePqAnnouncement() {
             if (this._pqAnnounceTimer) return;
-            this._pqAnnounceTimer = setTimeout(() => {
+            this._pqAnnounceTimer = setTimeout(async () => {
                 this._pqAnnounceTimer = null;
                 try {
                     if (!this.pubkey) return;
+                    // §6 is answered by ONE completed settings read, and until
+                    // it is, publishPqAnnouncement withholds the ML-KEM key.
+                    // A boot read that failed (offline launch, a flaky
+                    // /api/storage, a signer that was not ready) therefore left
+                    // the whole session announcing `nym:1` with no `pk`/`pk2`,
+                    // and nothing re-asked — so every peer fell back to
+                    // classical NIP-17/NIP-44 until the next reload happened to
+                    // get a good read. Every connect is a chance to settle it.
+                    await this.pqRootRetryIfUnsettled();
                     // Not gated on pqEnabled(): every Nymchat client announces
                     // itself, post-quantum or not, because the announcement is
                     // also what tells peers to skip the Bitchat wrap.
@@ -624,6 +640,23 @@
                     this.maybeShowPqUpgradeNotice();
                 } catch (_) { }
             }, PQ_ANNOUNCE_DELAY_MS);
+        },
+
+        /// Re-asks §6 when the boot settings read never answered it.
+        ///
+        /// `pqRootEnsure` runs in exactly one place — a completed
+        /// `settingsLoadFromD1` — so a read that failed leaves `pqRootSettled()`
+        /// false for the rest of the session and no root is ever generated or
+        /// announced. Bounded to one attempt a minute so a persistently
+        /// unreachable API is not hammered on every reconnect.
+        async pqRootRetryIfUnsettled() {
+            if (typeof this.pqRootSettled !== 'function' || this.pqRootSettled()) return false;
+            if (typeof this.settingsLoadFromD1 !== 'function') return false;
+            const now = Date.now();
+            if (this._pqRootRetryAt && now - this._pqRootRetryAt < 60000) return false;
+            this._pqRootRetryAt = now;
+            try { await this.settingsLoadFromD1(); } catch (_) { }
+            return this.pqRootSettled();
         },
 
         /// Republishes on a daily cadence so the 7-day expiry never lapses

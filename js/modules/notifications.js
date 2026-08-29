@@ -2,6 +2,18 @@
 
 const NYM_NOTIFICATION_ICON = 'https://nymchat.app/images/NYM-icon.png';
 
+// A notification's time is when the thing HAPPENED, and nothing happens in the
+// future. An event carrying a created_at ahead of us (sender clock skew, or a
+// relay/proxy re-stamping cached history on replay) would otherwise sort above
+// every real notification and stay there until its own future time aged out of
+// the 24h window — the "old notification stuck at the top" report. Missing or
+// non-positive falls back to now, as before.
+function _clampNotifTs(timestamp) {
+    const now = Date.now();
+    const ts = (typeof timestamp === 'number' && timestamp > 0) ? timestamp : now;
+    return ts > now ? now : ts;
+}
+
 Object.assign(NYM.prototype, {
 
     showNotification(title, body, channelInfo = null, timestamp = null) {
@@ -21,7 +33,14 @@ Object.assign(NYM.prototype, {
             titleToShow = `${baseTitle}#${suffix}`;
         }
 
-        const ts = (typeof timestamp === 'number' && timestamp > 0) ? timestamp : Date.now();
+        // Clamped at now: a sender with a fast clock — or a pool/proxy that
+        // re-stamps an ephemeral event's created_at forward when it replays
+        // cached history — hands us a FUTURE timestamp, and the modal sorts
+        // newest-first, so that one entry pins itself to the top of the bell
+        // for as long as its (future) time stays inside the 24h window. The
+        // message list already clamps the same way (nostr-core.js
+        // `correctedCreatedAt`); the bell never did.
+        const ts = _clampNotifTs(timestamp);
         const eventId = channelInfo?.eventId || '';
 
         // Dedup against existing history before adding (live + replay paths
@@ -132,7 +151,7 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
             titleToShow = `${baseTitle}#${suffix}`;
         }
-        const ts = (typeof timestamp === 'number' && timestamp > 0) ? timestamp : Date.now();
+        const ts = _clampNotifTs(timestamp);
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         if (ts < cutoff24h) return;
         const eventId = channelInfo?.eventId || '';
@@ -222,6 +241,12 @@ Object.assign(NYM.prototype, {
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+            // Repair entries written before the clamp: a future-dated one is
+            // already pinned to the top of somebody's bell, and it would stay
+            // there for as long as its own timestamp is ahead of us.
+            for (const n of parsed) {
+                if (n && typeof n.timestamp === 'number') n.timestamp = _clampNotifTs(n.timestamp);
+            }
             return parsed.filter(n => n.timestamp > cutoff24h);
         } catch { return []; }
     },

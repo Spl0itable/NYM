@@ -1187,6 +1187,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // race once kept its coordinates until the sidebar happened to rebuild.
     _scheduleGeoPlaceSweep() {
         if (this._geoPlaceSweepTimer || !this._geoPlacePending || this._geoPlacePending.size === 0) return;
+        // Only keys that can still fire automatically are worth a timer; the
+        // exhausted ones stay in `pending` waiting for a forced retry (an app
+        // resume), so scheduling on their behalf would spin forever.
+        const anyRetryable = [...this._geoPlacePending]
+            .some(k => this._geoPlaceRetryAt(k) !== Infinity);
+        if (!anyRetryable) return;
         this._geoPlaceSweepTimer = setTimeout(() => {
             this._geoPlaceSweepTimer = null;
             this.refreshUnresolvedPlaces();
@@ -1203,9 +1209,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (cache.has(key)) { pending.delete(key); continue; }
             const retryAt = this._geoPlaceRetryAt(key);
             if (retryAt === Infinity) {
-                // Give up only on the automatic sweep; an explicit retry (the
-                // user reopening the app) still gets one more chance.
-                if (!force) { pending.delete(key); continue; }
+                // Out of automatic attempts: SKIP it, don't drop it. Dropping
+                // is what broke the "an explicit retry still gets one more
+                // chance" contract — the sweep evicted the key, so the
+                // visibilitychange retry below found an empty set and the row
+                // kept its raw coordinates for the rest of the session.
+                if (!force) continue;
                 this._geoPlaceMisses.delete(key);
             } else if (now < retryAt && !force) {
                 continue;
