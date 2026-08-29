@@ -839,6 +839,10 @@ Object.assign(NYM.prototype, {
                     if (typeof this.updateNotificationModalProfile === 'function') {
                         this.updateNotificationModalProfile(pubkey, truncatedName);
                     }
+
+                    if (typeof this.updateUserList === 'function') {
+                        this.updateUserList();
+                    }
                 }
 
                 // Resolve any pending fetchProfileDirect calls for this pubkey
