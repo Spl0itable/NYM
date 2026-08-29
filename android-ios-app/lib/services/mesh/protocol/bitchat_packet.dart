@@ -198,8 +198,9 @@ class BinaryProtocol {
     final direct = _decodeCore(data);
     if (direct != null) return direct;
     final unpadded = MessagePadding.unpad(data);
-    if (identical(unpadded, data) || unpadded.length == data.length)
+    if (identical(unpadded, data) || unpadded.length == data.length) {
       return null;
+    }
     return _decodeCore(unpadded);
   }
 

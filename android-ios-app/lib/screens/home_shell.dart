@@ -616,10 +616,15 @@ class _AmbientGlowPainter extends CustomPainter {
       final m = math.max(f, 1 - f);
       final rx = math.sqrt2 * m * size.width;
       final ry = math.sqrt2 * m * size.height;
-      final matrix = Matrix4.identity()
-        ..translate(center.dx, center.dy)
-        ..scale(1.0, ry / rx)
-        ..translate(-center.dx, -center.dy);
+      // Composed from the non-mutating constructors rather than a
+      // `..translate()/..scale()` cascade: the mutating helpers are deprecated
+      // on current SDKs, and the typed replacements they point at do not exist
+      // on the oldest SDK pubspec allows — the exact range trap
+      // pq_badge_paint_test guards `lib/` against (by name, so this comment
+      // deliberately does not spell them). This composition works at both ends.
+      final matrix = Matrix4.translationValues(center.dx, center.dy, 0.0) *
+          Matrix4.diagonal3Values(1.0, ry / rx, 1.0) *
+          Matrix4.translationValues(-center.dx, -center.dy, 0.0);
       canvas.drawRect(
         rect,
         Paint()

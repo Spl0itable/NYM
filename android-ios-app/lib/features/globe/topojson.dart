@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -60,6 +61,10 @@ class CityPoint {
   /// `properties.pop_max` (or pop_min), 0 if absent.
   final int pop;
 }
+
+/// Path to the bundled world map TopoJSON. Lives here, next to the decoder that
+/// consumes it, so the globe and the place-name fallback name the same file.
+const String kWorldTopoAsset = 'assets/data/countries-110m.json';
 
 /// Decodes the bundled `countries-110m.json` (world-atlas TopoJSON) into a list
 /// of [GeoFeature], sorted largest-area first — a faithful Dart port of
@@ -296,4 +301,126 @@ GeoFeature _annotate(String name, List<List<List<List<double>>>> polys) {
     centroid: [cx, cy],
     area: largestArea.isFinite ? largestArea : 0,
   );
+}
+
+// -----------------------------------------------------------------------------
+// Naming a place from the bundled map data alone (no network)
+// -----------------------------------------------------------------------------
+
+/// Point-in-polygon (ray casting) over one ring of `[lng, lat]` points.
+bool _pointInRing(List<List<double>> ring, double lng, double lat) {
+  var inside = false;
+  for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    final xi = ring[i][0], yi = ring[i][1];
+    final xj = ring[j][0], yj = ring[j][1];
+    final dy = (yj - yi) == 0 ? 1e-12 : (yj - yi);
+    if ((yi > lat) != (yj > lat) && lng < (xj - xi) * (lat - yi) / dy + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/// Inside the feature's outer ring and outside every hole.
+bool pointInFeature(GeoFeature feat, double lng, double lat) {
+  final b = feat.bounds;
+  if (b.length == 4 &&
+      (lng < b[0] || lng > b[2] || lat < b[1] || lat > b[3])) {
+    return false;
+  }
+  for (final poly in feat.polygons) {
+    if (poly.isEmpty || !_pointInRing(poly[0], lng, lat)) continue;
+    var inHole = false;
+    for (var h = 1; h < poly.length; h++) {
+      if (_pointInRing(poly[h], lng, lat)) {
+        inHole = true;
+        break;
+      }
+    }
+    if (!inHole) return true;
+  }
+  return false;
+}
+
+/// The country containing this point, or ''. Walked smallest-first (the decoder
+/// sorts largest-area first) so an enclave wins over the country whose bounding
+/// box merely contains it.
+String countryAt(List<GeoFeature> features, double lat, double lng) {
+  for (var i = features.length - 1; i >= 0; i--) {
+    if (pointInFeature(features[i], lng, lat)) return features[i].name;
+  }
+  return '';
+}
+
+double _haversineKm(double lat1, double lng1, double lat2, double lng2) {
+  const r = 6371.0, rad = math.pi / 180;
+  final dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
+  final a = math.pow(math.sin(dLat / 2), 2) +
+      math.cos(lat1 * rad) *
+          math.cos(lat2 * rad) *
+          math.pow(math.sin(dLng / 2), 2);
+  return 2 * r * math.asin(math.min(1.0, math.sqrt(a)));
+}
+
+/// Nearest country to a point at sea. Measured to the nearest polygon VERTEX
+/// rather than the nearest edge — at 110m resolution the error is far below the
+/// thresholds this feeds, and it keeps the scan a flat loop.
+({String name, double km}) nearestCountry(
+    List<GeoFeature> features, double lat, double lng) {
+  var best = '';
+  var bestKm = double.infinity;
+  for (final feat in features) {
+    final b = feat.bounds;
+    if (b.length == 4) {
+      // Cheap reject: if even the bbox edge nearest in latitude is farther than
+      // the best so far, the polygon cannot beat it.
+      final dLat = lat < b[1] ? b[1] - lat : (lat > b[3] ? lat - b[3] : 0.0);
+      if (dLat * 111 > bestKm) continue;
+    }
+    for (final poly in feat.polygons) {
+      for (final ring in poly) {
+        for (final pt in ring) {
+          final km = _haversineKm(lat, lng, pt[1], pt[0]);
+          if (km < bestKm) {
+            bestKm = km;
+            best = feat.name;
+          }
+        }
+      }
+    }
+  }
+  return (name: best, km: bestKm);
+}
+
+/// A human description of somewhere the geocoder could not name, from the map
+/// data the app already ships. Never coordinates.
+///
+/// Deliberately conservative about water. The two polar oceans are named
+/// because their extent is unambiguous; everywhere else at sea is described by
+/// what it is near, rather than by a basin name, because the
+/// Atlantic/Pacific/Indian boundaries are irregular enough (the Gulf of Mexico
+/// is Atlantic despite sitting west of Panama; the South China Sea is Pacific
+/// despite sitting at the Indian Ocean's longitudes) that a hand-drawn table
+/// would state some of them confidently and wrongly.
+///
+/// A 1:1 port of `describeRegion` in `js/geo-decode.js`; the two must agree.
+String describeRegion(List<GeoFeature> features, double lat, double lng) {
+  if (features.isEmpty) return '';
+  final land = countryAt(features, lat, lng);
+  if (land.isNotEmpty) return land;
+  // Natural Earth's Antarctica ring is CLIPPED at ~-85.6 and never closes
+  // around the pole, so plate-carrée point-in-polygon reports "not land" for
+  // the entire polar cap — every longitude at -85 and below. Below that clip
+  // line there is nothing but continent.
+  if (lat <= -85.5) return 'Antarctica';
+  // Proximity BEFORE the polar names, so a point just off the Antarctic or
+  // Greenland coast says which coast rather than naming the whole ocean.
+  final near = nearestCountry(features, lat, lng);
+  if (near.name.isNotEmpty && near.km <= 300) {
+    return 'Off the coast of ${near.name}';
+  }
+  if (lat >= 66.5) return 'Arctic Ocean';
+  if (lat <= -60) return 'Southern Ocean';
+  if (near.name.isNotEmpty && near.km <= 1200) return 'Ocean near ${near.name}';
+  return 'Open ocean';
 }

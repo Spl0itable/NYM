@@ -1,7 +1,7 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 3.75.543+283
+version: 3.75.543+286
 
 environment:
   sdk: ^3.6.0
@@ -113,6 +113,12 @@ dev_dependencies:
   build_runner: ^2.4.13
   riverpod_lint: ^2.3.13
   sqflite_common_ffi: ^2.3.0
+  # Imported directly by wallpaper_cache_test's fake path provider. They arrive
+  # transitively via path_provider, but a direct import needs a direct
+  # dependency (`depend_on_referenced_packages`) or the version it compiles
+  # against is whatever another package happens to pull in.
+  path_provider_platform_interface: any
+  plugin_platform_interface: any
 
 flutter:
   uses-material-design: true

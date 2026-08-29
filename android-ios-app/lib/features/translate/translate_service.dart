@@ -90,8 +90,8 @@ class TranslateService {
     //    (`translate.js:302-307`).
     final translatable = <_Chunk>[];
     for (var i = 0; i < parts.length; i++) {
-      if (i.isOdd)
-        continue; // odd indices are preserved tokens — leave verbatim.
+      // Odd indices are preserved tokens — leave them verbatim.
+      if (i.isOdd) continue;
       final part = parts[i];
       if (part.trim().isEmpty) continue;
       final m = _rxEdgeWhitespace.firstMatch(part)!;

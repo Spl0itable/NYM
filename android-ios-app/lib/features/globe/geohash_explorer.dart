@@ -25,8 +25,6 @@ import 'topojson.dart';
 /// button group collapses into a `<select>`).
 const double kGlobeNarrowBreakpoint = 768;
 
-/// Path to the bundled world map TopoJSON (`countries-110m.json`).
-const String kWorldTopoAsset = 'assets/data/countries-110m.json';
 
 /// Path to the bundled admin-1 (state/province) GeoJSON (F2/F3).
 const String kAdmin1Asset =
@@ -88,14 +86,19 @@ final globePrefsProvider =
 /// Selecting (Join) a geohash pops this route with the lowercase geohash string
 /// so the caller can open that channel: `Navigator.push<String>(...)`.
 class GeohashExplorer extends ConsumerStatefulWidget {
-  const GeohashExplorer({super.key});
+  const GeohashExplorer({super.key, this.focusGeohash});
+
+  /// Open zoomed to this cell, with its info panel already showing — the
+  /// "show me where this channel is" entry point used by the chat header's
+  /// location line. Null opens the default world view.
+  final String? focusGeohash;
 
   /// A non-opaque modal route (F11): the app stays visible behind a
   /// `rgba(0,0,0,0.4)` scrim while the explorer card floats over it, matching
   /// the PWA's centered `.geohash-explorer-modal` overlay (instead of a full
   /// opaque page transition). Resolves to the chosen lowercase geohash (or null
   /// if dismissed), so callers keep using `Navigator.push<String>(...)`.
-  static Route<String> route() {
+  static Route<String> route({String? focusGeohash}) {
     return PageRouteBuilder<String>(
       opaque: false,
       // The scrim is painted by the Scaffold below (which has a `context` and
@@ -106,7 +109,7 @@ class GeohashExplorer extends ConsumerStatefulWidget {
       barrierColor: Colors.transparent,
       barrierDismissible: false,
       transitionDuration: const Duration(milliseconds: 180),
-      pageBuilder: (_, __, ___) => const GeohashExplorer(),
+      pageBuilder: (_, __, ___) => GeohashExplorer(focusGeohash: focusGeohash),
       transitionsBuilder: (_, animation, __, child) =>
           FadeTransition(opacity: animation, child: child),
     );
@@ -120,6 +123,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   GeoView _view = const GeoView();
   List<GeoFeature> _features = const [];
   Size _lastSize = Size.zero;
+
+  /// Whether [GeohashExplorer.focusGeohash] has been framed yet (once only).
+  bool _focusApplied = false;
 
   // --- Lazy detail layers (F2/F3/F4) ---------------------------------------
   // Admin-1 borders/labels + city dots/labels are loaded on demand once the
@@ -623,7 +629,17 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
         if (size != _lastSize) {
           _lastSize = size;
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) setState(() => _view = _view.clamped(size));
+            if (!mounted) return;
+            setState(() => _view = _view.clamped(size));
+            // A requested focus can only be honoured once the map has a size
+            // to frame the cell against, so it rides the first real layout.
+            // Guarded by `_focusApplied` so a later resize doesn't yank the
+            // camera back after the user has panned away.
+            final focus = widget.focusGeohash;
+            if (!_focusApplied && focus != null && focus.isNotEmpty) {
+              _focusApplied = true;
+              _selectCell(focus, size);
+            }
           });
         }
 

@@ -22,6 +22,12 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/services.dart' show rootBundle;
+
+import '../../features/globe/geo_projection.dart' show geohashBounds;
+import '../../features/globe/topojson.dart'
+    show GeoFeature, decodeWorldTopoJson, describeRegion, kWorldTopoAsset;
 import '../../models/channel.dart';
 import '../../services/api/api_client.dart';
 import '../../services/storage/key_value_store.dart';
@@ -35,6 +41,12 @@ const int kGeohashPlaceMax = 500;
 const int kGeohashPlaceConcurrency = 4;
 
 const String kGeohashPlaceKey = 'nym_geohash_places';
+
+/// How many points inside a cell one lookup ATTEMPT may ask about: the centre,
+/// then the four quarter-points. See `_probePoints` for why more than one is
+/// needed. An attempt stops at the first point that answers, so a land-centred
+/// geohash still costs a single request; this is the ceiling, not the cost.
+const int kGeohashPlaceProbes = 5;
 
 /// A geocode with no city/country is usually transient (rate limit, partial
 /// response) but is sometimes real — a mid-ocean cell has no name. So a miss is
@@ -106,6 +118,51 @@ class GeohashPlaceCache {
   /// this returns something.
   String? cached(String geohash) => _cache[geohash.toLowerCase()];
 
+  /// The bundled Natural Earth country polygons, decoded once and kept.
+  ///
+  /// Loaded lazily — only once a lookup has actually failed — so a session that
+  /// never hits an unnamed cell never pays for it. Decoded on a background
+  /// isolate, like the globe does.
+  Future<List<GeoFeature>>? _worldFeatures;
+
+  Future<List<GeoFeature>> _loadWorldFeatures() {
+    return _worldFeatures ??= () async {
+      try {
+        final jsonStr = await rootBundle.loadString(kWorldTopoAsset);
+        return await compute(decodeWorldTopoJson, jsonStr);
+      } catch (_) {
+        return const <GeoFeature>[];
+      }
+    }();
+  }
+
+  /// What to show when the geocoder can name nothing in a cell.
+  ///
+  /// Some cells genuinely have no address: `12` is the Antarctic plateau,
+  /// `zxnjj` is open Arctic Ocean. Falling back to raw coordinates told the
+  /// user nothing they could read. This answers from the map data the app
+  /// already ships — the same countries file the globe draws — so it needs no
+  /// network and cannot fail on somebody else's outage.
+  ///
+  /// Deliberately NOT written into [_cache]: it is a display fallback, not a
+  /// resolved place, and caching it would end the search for a real name
+  /// exactly the way caching "Unknown location" once did.
+  Future<String> describeRegionFor(String geohash) async {
+    final b = geohashBounds(geohash.toLowerCase());
+    if (b == null) return '';
+    try {
+      final feats = await _loadWorldFeatures();
+      if (feats.isEmpty) return '';
+      return describeRegion(
+        feats,
+        (b.latLo + b.latHi) / 2,
+        (b.lngLo + b.lngHi) / 2,
+      );
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// When a missed [geohash] may be looked up again. `null` once the attempt
   /// cap is reached, meaning the cell is accepted as having no name.
   DateTime? retryAt(String geohash) {
@@ -167,18 +224,12 @@ class GeohashPlaceCache {
     }
     _active++;
     try {
-      final coords = decodeGeohash(key);
-      final data = await _api.geocode(coords.lat, coords.lng, zoom: 10);
-      final addr = (data['address'] as Map?) ?? const {};
-      String s(Object? v) => v is String ? v : '';
-      final city = [
-        s(addr['city']),
-        s(addr['town']),
-        s(addr['village']),
-        s(addr['county']),
-      ].firstWhere((x) => x.isNotEmpty, orElse: () => '');
-      final country = s(addr['country']);
-      final place = [city, country].where((x) => x.isNotEmpty).join(', ');
+      String place = '';
+      for (final pt in _probePoints(key)) {
+        final data = await _api.geocode(pt.lat, pt.lng, zoom: pt.zoom);
+        place = _placeFromAddress(data);
+        if (place.isNotEmpty) break;
+      }
       if (place.isEmpty) {
         // A non-answer, not a place. Recording it as one is what pinned a row
         // to "Unknown location" permanently.
@@ -198,6 +249,72 @@ class GeohashPlaceCache {
       _inflight.remove(key);
       if (_waiters.isNotEmpty) _waiters.removeAt(0).complete();
     }
+  }
+
+  /// How precise a question to ask about a cell.
+  ///
+  /// Nominatim's `zoom` selects the granularity of the answer (3 country,
+  /// 5 state, 8 county, 10 city). Asking a CITY-level question about a cell
+  /// 1250 km across is a category error: a 2-character geohash covers whole
+  /// countries, so the useful answer is the country.
+  static int _zoomFor(String geohash) {
+    final n = geohash.length;
+    if (n <= 2) return 5; // ~1250km — state/country
+    if (n <= 4) return 8; // ~40km — county
+    return 10; // ~5km and finer — city
+  }
+
+  /// Points to ask about, in order: the centre, then the cell's four
+  /// quarter-points.
+  ///
+  /// This is what makes short geohashes resolvable at all. A cell's centre very
+  /// often falls in WATER even when the cell is mostly land — `gc` spans
+  /// Ireland and part of Britain but centres on the Irish Sea, `dh` centres in
+  /// the Gulf of Mexico, `9e` in the Pacific. Reverse geocoding open water
+  /// returns no city and no country, which reads as a miss, so those rows sat
+  /// on raw coordinates however many times the backoff retried — every retry
+  /// asked the same unanswerable point.
+  ///
+  /// Only walked until something answers, so a land-centred geohash still costs
+  /// exactly one request.
+  static List<({double lat, double lng, int zoom})> _probePoints(
+      String geohash) {
+    final zoom = _zoomFor(geohash);
+    final b = geohashBounds(geohash);
+    if (b == null) return const [];
+    ({double lat, double lng, int zoom}) at(double fx, double fy) => (
+          lat: b.latLo + (b.latHi - b.latLo) * fy,
+          lng: b.lngLo + (b.lngHi - b.lngLo) * fx,
+          zoom: zoom,
+        );
+    final points = [
+      at(0.5, 0.5),
+      at(0.25, 0.25),
+      at(0.75, 0.25),
+      at(0.25, 0.75),
+      at(0.75, 0.75),
+    ];
+    assert(points.length == kGeohashPlaceProbes);
+    return points;
+  }
+
+  /// "City, Country" out of a reverse-geocode response, or '' when the point
+  /// has no name. Falls back to the state/region when there is no city-level
+  /// feature — the normal shape of a coarse-zoom answer for a large cell.
+  static String _placeFromAddress(Map<String, dynamic> data) {
+    final addr = (data['address'] as Map?) ?? const {};
+    String s(Object? v) => v is String ? v : '';
+    final city = [
+      s(addr['city']),
+      s(addr['town']),
+      s(addr['village']),
+      s(addr['county']),
+      s(addr['state']),
+      s(addr['region']),
+      s(addr['territory']),
+    ].firstWhere((x) => x.isNotEmpty, orElse: () => '');
+    final country = s(addr['country']);
+    return [city, country].where((x) => x.isNotEmpty).join(', ');
   }
 }
 

@@ -424,8 +424,9 @@ class AppState {
     if (isFriend(m.pubkey)) return false;
     if (nymchatPubkeys.contains(m.pubkey)) return false;
     // _isPubkeyGated: trusted via dev/bot identity or earned trust.
-    if (verifiedDeveloper != null && m.pubkey == verifiedDeveloper)
+    if (verifiedDeveloper != null && m.pubkey == verifiedDeveloper) {
       return false;
+    }
     if (verifiedBots.contains(m.pubkey)) return false;
     if (trustedPubkeys.contains(m.pubkey)) return false;
     return true;
@@ -1955,8 +1956,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
           matchIdx = i; // a live placeholder — the just-sent message; take it.
           break;
         }
-        if (matchIdx < 0)
+        if (matchIdx < 0) {
           matchIdx = i; // remember the first failed as fallback.
+        }
       }
     }
     if (matchIdx >= 0) {
@@ -5479,6 +5481,35 @@ class NotificationEntry {
   final String? threadRoot;
   bool viewed;
 
+  /// A copy with [ts] pulled back to [receivedAt] — when this entry was first
+  /// OBSERVED. Repairs a future-dated entry read from the persisted blob or
+  /// from another device's synced copy, which would otherwise sort above every
+  /// real notification.
+  ///
+  /// The ceiling is deliberately [receivedAt] and never a fresh `now`.
+  /// Clamping to `now` is correct exactly once: it is recomputed on every
+  /// hydrate, so the entry is re-stamped later each launch, stays permanently
+  /// the newest row, and pins itself to the top looking brand new — the same
+  /// moving-ceiling trap `EventMapper` documents for channel messages, where
+  /// the fix was to anchor to a value that does not move. [receivedAt] is
+  /// stamped once, persisted, and synced, so this is idempotent: re-running it
+  /// on a stored entry returns what it returned last time. An entry that never
+  /// carried one defaults it to [ts] (see the constructor), making this a
+  /// no-op rather than a re-stamp.
+  NotificationEntry clampedToObserved() => NotificationEntry(
+        type: type,
+        title: title,
+        body: body,
+        ts: ts > receivedAt ? receivedAt : ts,
+        receivedAt: receivedAt,
+        route: route,
+        eventId: eventId,
+        senderPubkey: senderPubkey,
+        contextLabel: contextLabel,
+        threadRoot: threadRoot,
+        viewed: viewed,
+      );
+
   /// Serializes for the persisted history (N3). Mirrors the PWA's stored
   /// notification objects (`nym_notification_history`, notifications.js:228) —
   /// `timestamp` is the PWA field name so a value written by either client
@@ -5713,7 +5744,10 @@ class NotificationHistoryNotifier
         final e = NotificationEntry.fromJson(item);
         if (e == null) continue;
         if (now - e.ts >= _maxAgeMs) continue; // 24h window
-        entries.add(e);
+        // Written before the clamp above, or synced from a device that still
+        // lacks it. Repaired against the entry's OWN observation time, not
+        // this launch's clock — see [NotificationEntry.clampedToObserved].
+        entries.add(e.ts > e.receivedAt ? e.clampedToObserved() : e);
       }
       if (entries.isEmpty || !mounted) return;
       entries.sort((a, b) => b.ts.compareTo(a.ts)); // newest first
@@ -5930,7 +5964,20 @@ class NotificationHistoryNotifier
       return;
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    final stamp = ts ?? now;
+    // A notification's time is when the thing HAPPENED, and nothing happens in
+    // the future — but an event's `created_at` can be ahead of us (a sender
+    // whose clock runs fast, or a pool/proxy re-stamping an ephemeral event
+    // forward when it replays cached history, which is exactly why
+    // `EventMapper` clamps the display timestamp). The panel sorts
+    // newest-first, so one future-dated entry pins itself to the top of the
+    // bell and stays there until its own time ages out of the 24h window.
+    //
+    // Clamped to this entry's OBSERVATION time, which is then stored on it, so
+    // the value survives as-is: re-clamping it on a later hydrate is a no-op
+    // rather than a fresh, later stamp.
+    final observedAt = receivedAtMs ?? now;
+    final raw = ts ?? observedAt;
+    final stamp = raw > observedAt ? observedAt : raw;
     // The PWA's `_addNotificationToHistory` age gate (notifications.js:135):
     // an event older than the 24h bell window never lands, no matter which
     // path delivered it — the caller-side silent gate isn't the only defense.
@@ -5956,7 +6003,7 @@ class NotificationHistoryNotifier
       title: title,
       body: body,
       ts: stamp,
-      receivedAt: receivedAtMs ?? now,
+      receivedAt: observedAt,
       route: route,
       eventId: eventId,
       senderPubkey: senderPubkey,
@@ -5978,10 +6025,17 @@ class NotificationHistoryNotifier
       entry.viewed = true;
       if (_rememberSeen(entry)) _persistSeenKeys();
     }
+    // The store's documented order is newest-first (`_hydrate` and
+    // `mergeHistory` both sort that way). A plain prepend broke it for a
+    // BACKLOG record — a D1 backfill or reconnect replay lands older than what
+    // is already here — and the two things that read the list positionally
+    // then went wrong: the `_cap` trim below drops from the tail, so it could
+    // evict a NEWER entry than the one just inserted, and `historyForSync`
+    // takes the first 100 by position rather than the newest 100.
     final kept = [
       entry,
       ...state.entries.where((e) => now - e.ts < _maxAgeMs),
-    ];
+    ]..sort((a, b) => b.ts.compareTo(a.ts));
     if (kept.length > _cap) kept.removeRange(_cap, kept.length);
     final unread = _countUnread(kept);
     state = NotificationHistoryState(entries: kept, unread: unread);
@@ -6312,8 +6366,14 @@ class NotificationHistoryNotifier
     var changed = false;
     var seenAdded = false;
     for (final raw in incoming) {
-      final n = NotificationEntry.fromJson(raw);
+      var n = NotificationEntry.fromJson(raw);
       if (n == null || n.ts <= cutoff) continue;
+      // A device with a fast clock (or one on a build without the clamp) syncs
+      // future-dated entries; adopting one pins it to the top here too. Clamp
+      // to the ORIGIN device's observation time, which rides along in the
+      // payload — clamping to our own clock would re-stamp the entry later on
+      // every sync round.
+      if (n.ts > n.receivedAt) n = n.clampedToObserved();
       final existing = findLocalMatch(n);
       if (existing != null) {
         if (n.viewed && !existing.viewed) {

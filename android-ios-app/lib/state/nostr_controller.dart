@@ -2009,6 +2009,7 @@ class NostrController {
     // labels it via the `in #<key>` contextLabel.
     final channelRoute =
         key != null ? (key.startsWith('#') ? key.substring(1) : key) : '';
+    final notifTsMs = EventMapper.effectiveMsOf(e);
     _dispatchNotification(
       title: _nymDisplayFor(e.pubkey),
       // Quote replies lead with the quoted message; show the reply itself.
@@ -2019,7 +2020,14 @@ class NostrController {
       historyType: channelRoute.isNotEmpty ? 'channel' : 'mention',
       route: channelRoute.isNotEmpty ? channelRoute : e.pubkey,
       eventId: e.id,
-      tsMs: e.createdAt * 1000,
+      // The mapper's clamped time, not the raw `created_at`: the message list
+      // renders the clamped one, and a future-dated event (fast sender clock,
+      // or a pool re-stamping cached history forward on replay) would otherwise
+      // give the bell entry a timestamp ahead of every real notification —
+      // pinning it to the top of a panel that sorts newest-first — and make the
+      // `_silentForAlert` age test below read it as live, so an hours-old
+      // backfilled mention alerted out loud.
+      tsMs: notifTsMs,
       // A thread reply names the thread as well as the channel — a bare
       // `in #abc` sends the user hunting for a message that is collapsed behind
       // one of that channel's "N replies" rows.
@@ -2036,7 +2044,7 @@ class NostrController {
       // recovered was silent by construction: minutes old, hence "historical",
       // hence no alert. PMs were unaffected because their rule was replaced
       // rather than OR-ed, which is why they notified and mentions did not.
-      silent: _silentForAlert(e.createdAt * 1000),
+      silent: _silentForAlert(notifTsMs),
     );
   }
 
@@ -3321,8 +3329,9 @@ class NostrController {
     }
     // The announcement may still be in flight; fill the verdict in rather
     // than leaving the opening message of a conversation marked legacy.
-    if (m.pqEncrypted) _resolvePqRootVerdict(m.conversationPubkey ?? m.pubkey,
-        m.nymMessageId);
+    if (m.pqEncrypted) {
+      _resolvePqRootVerdict(m.conversationPubkey ?? m.pubkey, m.nymMessageId);
+    }
     // Resolve the display author against the users map — the PWA's
     // `author: isOwn ? this.nym : this.getNymFromPubkey(senderPubkey)`
     // (pms.js:1258 via the `peerName` resolution at :1321). `mapPmRumor` is
@@ -8726,8 +8735,9 @@ class NostrController {
         }
       } catch (_) {}
     }
-    if (ids.isNotEmpty || times.isNotEmpty)
+    if (ids.isNotEmpty || times.isNotEmpty) {
       appState.mergeLeftGroups(ids, times);
+    }
   }
 
   /// Persists the live left-group state to KV — the PWA's `_saveLeftGroups()`

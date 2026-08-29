@@ -181,8 +181,9 @@ class MeshService {
     final fromPeer = _peers[peerID]?.noisePublicKey;
     if (fromPeer != null && fromPeer.length == 32) return _hex(fromPeer);
     final fromSession = _noise.remoteStaticKey(peerID);
-    if (fromSession != null && fromSession.length == 32)
+    if (fromSession != null && fromSession.length == 32) {
       return _hex(fromSession);
+    }
     return null;
   }
 

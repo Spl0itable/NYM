@@ -139,10 +139,26 @@ Future<void> _zap(
   Message message,
   String baseNym,
 ) async {
-  final user = ref.read(usersProvider)[message.pubkey];
-  final lnAddr = user?.profile?.lightningAddress;
+  // Cache-first, then a kind-0 fetch (D1, then relays) — the same resolve the
+  // quick-zap button and the context menu already use
+  // (`resolveLightningAddressForZap`). Reading only the local `users` map, as
+  // this did, reported "cannot receive zaps" for anyone whose profile had not
+  // been ingested yet — which is most senders in a channel you just opened.
+  final notifier = ref.read(appStateProvider.notifier);
+  notifier.addSystemMessage(
+      tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
+  final String? lnAddr;
+  try {
+    lnAddr = await ref
+        .read(nostrControllerProvider)
+        .resolveLightningAddressForZap(message.pubkey);
+  } catch (_) {
+    notifier.addSystemMessage(
+        tr('Failed to check if @{nym} can receive zaps', {'nym': baseNym}));
+    return;
+  }
   if (lnAddr == null || lnAddr.isEmpty) {
-    ref.read(appStateProvider.notifier).addSystemMessage(tr(
+    notifier.addSystemMessage(tr(
         '@{user} cannot receive zaps (no lightning address set)',
         {'user': baseNym}));
     return;

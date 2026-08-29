@@ -123,6 +123,10 @@ Future<void> main() async {
   out['stableId'] = MeshMessageIdentity.stableId(
       senderIdHex: a.peerID, timestampMs: 1750000000123, content: ' hello mesh ');
 
-    print('BEGIN_VECTORS' + jsonEncode(out) + 'END_VECTORS');
+    // The whole point of this test is to print the vectors for a human to copy
+    // into the PWA's checker, so the print stays — it is the output, not a
+    // stray debug line.
+    // ignore: avoid_print
+    print('BEGIN_VECTORS${jsonEncode(out)}END_VECTORS');
   });
 }

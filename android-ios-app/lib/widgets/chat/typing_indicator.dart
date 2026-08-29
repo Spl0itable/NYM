@@ -55,8 +55,9 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final out = <String>[];
     app.typing.forEach((k, expiry) {
-      if (k.startsWith(prefix) && expiry > now)
+      if (k.startsWith(prefix) && expiry > now) {
         out.add(k.substring(prefix.length));
+      }
     });
     return out;
   }

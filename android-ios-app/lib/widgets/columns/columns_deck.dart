@@ -1226,8 +1226,16 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   }
 
   /// Resolves a column's title (`_cvColTitle`).
-  String _columnTitle(BuildContext context, _ColumnDesc d) {
-    final app = ref.read(appStateProvider);
+  String _columnTitle(BuildContext context, _ColumnDesc d) =>
+      _titleFromState(ref.read(appStateProvider), d);
+
+  /// The title text for [d], as a pure function of app state.
+  ///
+  /// Pulled out so the widget below can WATCH exactly this value while the
+  /// read-only callers (the remove-column confirm, the avatar seed) keep
+  /// reading it once. Every source here is live: a PM peer's nym arrives with
+  /// their kind 0, long after the column was built, and a group can be renamed.
+  static String _titleFromState(AppState app, _ColumnDesc d) {
     switch (d.kind) {
       case _ColumnKind.channel:
         return '#${d.geohash.isNotEmpty ? d.geohash : d.channel}';
@@ -1255,7 +1263,23 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   /// by the column header (columns.js:394), and the tabs-sheet rows (:903-904).
   Widget _columnTitleWidget(
       BuildContext context, _ColumnDesc d, TextStyle style) {
-    final title = _columnTitle(context, d);
+    // Wrapped in a Consumer so the title SUBSCRIBES to the state it renders.
+    // It was composed with `ref.read` inside the deck's build, which subscribes
+    // to nothing — so a PM column opened before its peer's kind 0 arrived kept
+    // the placeholder nym until the deck happened to rebuild for some unrelated
+    // reason. A Consumer also keeps the watch inside a real build scope: this
+    // method is handed to child widgets as a `titleOf` callback, and calling
+    // the State's own `ref.watch` from another element's build is not valid.
+    // `select` narrows the rebuild to an actual title change rather than every
+    // app-state emission.
+    return Consumer(builder: (context, ref, _) {
+      final title = ref.watch(appStateProvider.select((s) => _titleFromState(s, d)));
+      return _columnTitleContent(context, ref, d, style, title);
+    });
+  }
+
+  Widget _columnTitleContent(BuildContext context, WidgetRef ref, _ColumnDesc d,
+      TextStyle style, String title) {
     if (d.kind != _ColumnKind.pm || d.pubkey.isEmpty) {
       return Text(title,
           maxLines: 1, overflow: TextOverflow.ellipsis, style: style);
@@ -1265,8 +1289,11 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final controller = ref.read(nostrControllerProvider);
     final isDev = controller.isVerifiedDeveloper(d.pubkey);
     final isBot = !isDev && controller.isVerifiedBot(d.pubkey);
-    final isFriend = ref.read(appStateProvider).friends.contains(d.pubkey);
-    final cosmetics = ref.read(userCosmeticsProvider(d.pubkey));
+    // Watched for the same reason as the title: befriending someone, or their
+    // flair arriving, has to repaint the header it is drawn into.
+    final isFriend = ref.watch(
+        appStateProvider.select((s) => s.friends.contains(d.pubkey)));
+    final cosmetics = ref.watch(userCosmeticsProvider(d.pubkey));
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

@@ -2325,8 +2325,9 @@ class StorageSync {
     final rawLast = data['last'];
     if (rawLast is Map) {
       rawLast.forEach((name, ts) {
-        if (ts is num && ts > 0)
+        if (ts is num && ts > 0) {
           last[name.toString().toLowerCase()] = ts.toInt();
+        }
       });
     }
     return ChannelActivityResult(activity: activity, last: last);

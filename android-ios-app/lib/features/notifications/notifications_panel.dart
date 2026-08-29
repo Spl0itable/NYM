@@ -26,6 +26,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/chat/message_row.dart' show formatTime;
 import '../calls/call_nym.dart';
 import '../i18n/i18n.dart';
 import 'notification_route_target.dart';
@@ -616,8 +617,12 @@ class _NotificationRow extends ConsumerStatefulWidget {
   final bool isLast;
   final VoidCallback onTap;
 
-  /// `Jun 23, 14:05` — `toLocaleString({month, day, hour, minute})`.
-  String _formatTime(int ms) {
+  /// `Jun 23, 2:05 PM` — `toLocaleString({month, day, hour, minute})`.
+  ///
+  /// The clock half honours the user's `timeFormat` setting, like every other
+  /// timestamp in the app ([formatTime]). It used to be hardcoded 24-hour, so
+  /// the bell showed `14:05` even on the default 12-hour setting.
+  String _formatTime(int ms, String timeFormat) {
     const months = [
       'Jan',
       'Feb',
@@ -633,9 +638,7 @@ class _NotificationRow extends ConsumerStatefulWidget {
       'Dec'
     ];
     final d = DateTime.fromMillisecondsSinceEpoch(ms);
-    final hh = d.hour.toString().padLeft(2, '0');
-    final mm = d.minute.toString().padLeft(2, '0');
-    return '${months[d.month - 1]} ${d.day}, $hh:$mm';
+    return '${months[d.month - 1]} ${d.day}, ${formatTime(d, timeFormat)}';
   }
 
   /// The footer context label (`.notification-item-context`) from the entry
@@ -797,7 +800,10 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
                                     TextStyle(color: c.textDim, fontSize: 11)),
                             const SizedBox(width: 6),
                           ],
-                          Text(widget._formatTime(entry.ts),
+                          Text(
+                              widget._formatTime(entry.ts,
+                                  ref.watch(settingsProvider
+                                      .select((s) => s.timeFormat))),
                               style: TextStyle(color: c.textDim, fontSize: 11)),
                         ],
                       ),

@@ -162,10 +162,12 @@ void main() {
           await CourierEnvelope.candidateTagsFor(noiseStaticKey: bPub, nowMs: now);
       expect(tags, hasLength(3));
       final day = CourierEnvelope.epochDayFor(now);
+      // `equals` and not the bare value: `contains` compares with `==`, and two
+      // Uint8Lists holding identical bytes are never `==`.
       expect(
         tags,
-        contains(await CourierEnvelope.recipientTagFor(
-            noiseStaticKey: bPub, epochDay: day - 1)),
+        contains(equals(await CourierEnvelope.recipientTagFor(
+            noiseStaticKey: bPub, epochDay: day - 1))),
       );
     });
   });

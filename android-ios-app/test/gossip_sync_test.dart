@@ -212,11 +212,19 @@ void main() {
     });
 
     test('type flags are little-endian with trailing zeros trimmed', () {
-      final flags = SyncTypeFlags.publicMessages;
-      expect(flags.toBytes(), _bytes([0x03])); // bits 0 and 1
+      expect(SyncTypeFlags.masked(3).toBytes(), _bytes([0x03])); // bits 0, 1
       expect(SyncTypeFlags.decode(_bytes([0x03]))!.rawValue, 3);
       expect(SyncTypeFlags.decode(Uint8List(0)), isNull);
       expect(SyncTypeFlags.decode(Uint8List(9)), isNull);
+    });
+
+    test('the public set asks for prekey bundles too', () {
+      // Announce + public message + prekey bundle (bit 9), so the set spills
+      // into a second byte — and the low byte still comes first.
+      final flags = SyncTypeFlags.publicMessages;
+      expect(flags.toBytes(), _bytes([0x03, 0x02]));
+      expect(SyncTypeFlags.decode(flags.toBytes())!.rawValue, flags.rawValue);
+      expect(flags.contains(MeshMessageType.prekeyBundle), isTrue);
     });
 
     test('an unknown type bit is dropped, never held as phantom membership',

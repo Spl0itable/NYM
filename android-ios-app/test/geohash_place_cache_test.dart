@@ -91,7 +91,10 @@ void main() {
       for (var i = 0; i < kGeohashPlaceMaxAttempts; i++) {
         await cache.resolve('7zzz', force: true);
       }
-      expect(calls, kGeohashPlaceMaxAttempts);
+      // One ATTEMPT is a walk over the cell's probe points, and this mock
+      // answers nothing anywhere, so every attempt exhausts the walk. What is
+      // being asserted is the number of attempts, not of requests.
+      expect(calls, kGeohashPlaceMaxAttempts * kGeohashPlaceProbes);
       expect(cache.retryAt('7zzz'), isNull,
           reason: 'a genuinely unnamed cell stops being retried');
       expect(cache.shouldRetry('7zzz'), isFalse);
@@ -115,7 +118,11 @@ void main() {
       await cache.resolve('dr5r');
       await cache.resolve('dr5r');
       await cache.resolve('dr5r');
-      expect(calls, 1, reason: 'the backoff must hold between attempts');
+      // ONE attempt got made — the other two were held by the backoff. That
+      // attempt walked the cell's probe points because nothing answered
+      // anywhere in it.
+      expect(calls, kGeohashPlaceProbes,
+          reason: 'the backoff must hold between attempts');
     });
 
     test('a network failure is a retryable miss too', () async {
@@ -140,7 +147,11 @@ void main() {
         api: ApiClient(
           client: MockClient((_) async {
             calls++;
-            return calls == 1 ? _addr({}) : _addr({'city': 'Berlin', 'country': 'Germany'});
+            // The whole FIRST attempt misses — every probe point in the cell —
+            // and the retry then finds a name.
+            return calls <= kGeohashPlaceProbes
+                ? _addr({})
+                : _addr({'city': 'Berlin', 'country': 'Germany'});
           }),
           baseUrl: 'https://h/api/proxy',
         ),

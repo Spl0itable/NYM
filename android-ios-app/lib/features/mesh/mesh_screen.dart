@@ -514,7 +514,15 @@ class _StatusBar extends ConsumerWidget {
           GhostModeButton(colors: colors),
           Switch(
             value: enabled,
-            activeColor: colors.primary,
+            // `activeColor` is deprecated on current SDKs and its
+            // `activeThumbColor` replacement does not exist on the oldest one
+            // pubspec allows. A `thumbColor` resolver is neither, and is what
+            // theme_gallery_screen already uses.
+            thumbColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.selected)
+                  ? colors.primary
+                  : null,
+            ),
             onChanged: (v) =>
                 ref.read(settingsProvider.notifier).setMeshEnabled(v),
           ),

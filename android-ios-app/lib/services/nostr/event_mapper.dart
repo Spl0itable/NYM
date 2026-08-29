@@ -26,6 +26,27 @@ class EventMapper {
     return null;
   }
 
+  /// The event's authoritative display/age time in milliseconds — the same
+  /// value [channelMessage] stamps on the [Message] it builds.
+  ///
+  /// Exposed because callers that only hold the raw event (the notification
+  /// gate, say) must agree with what the message list renders. `createdAt` on
+  /// its own can be in the FUTURE — a sender whose clock runs fast, or a
+  /// proxy/relay that re-stamps an ephemeral event forward when it replays
+  /// cached history — and using it raw makes an old backfilled message look
+  /// newer than everything real.
+  static int effectiveMsOf(NostrEvent e) {
+    final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final nowSec = nowMs ~/ 1000;
+    final storedAtMs = e.storedAt > 0 ? e.storedAt : 0;
+    final future = e.createdAt > nowSec + 60;
+    final ceilingMs =
+        (future && storedAtMs > 0 && storedAtMs < nowMs) ? storedAtMs : nowMs;
+    final createdAt = future ? ceilingMs ~/ 1000 : e.createdAt;
+    return ms > 0 ? (ms < ceilingMs ? ms : ceilingMs) : createdAt * 1000;
+  }
+
   /// Maps a channel message event (kind 20000/23333) to a [Message].
   /// [selfPubkey] marks ownership. Returns null if the event isn't a valid
   /// channel message.

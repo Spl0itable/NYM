@@ -57,8 +57,9 @@ class ZapLogic {
   /// Parses the sats amount from a bolt11 invoice string (zaps.js
   /// `parseAmountFromBolt11`). Returns null when malformed or out of bounds.
   static int? parseAmountFromBolt11(String? bolt11) {
-    if (bolt11 == null || bolt11.length < 6 || bolt11.length > 4096)
+    if (bolt11 == null || bolt11.length < 6 || bolt11.length > 4096) {
       return null;
+    }
     final m = RegExp(r'^lnbc(\d{1,15})([munp])', caseSensitive: false)
         .firstMatch(bolt11);
     if (m == null) return null;

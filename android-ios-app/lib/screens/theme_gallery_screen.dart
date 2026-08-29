@@ -78,8 +78,9 @@ class ThemeGalleryScreen extends ConsumerWidget {
                   Switch(
                     value: settings.transparencyEnabled,
                     thumbColor: WidgetStateProperty.resolveWith((states) {
-                      if (states.contains(WidgetState.selected))
+                      if (states.contains(WidgetState.selected)) {
                         return c.primary;
+                      }
                       return null;
                     }),
                     onChanged: ctrl.setTransparencyEnabled,

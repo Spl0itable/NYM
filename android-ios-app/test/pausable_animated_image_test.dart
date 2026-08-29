@@ -67,7 +67,13 @@ void main() {
           height: 400,
           child: ListView(
             controller: scroll,
-            cacheExtent: 2000, // keep the item MOUNTED while scrolled away
+            // Keep the item MOUNTED while it is scrolled away. `cacheExtent`
+            // is deprecated on current SDKs, but its `scrollCacheExtent`
+            // replacement was added after v3.41 and does not exist on the
+            // oldest SDK pubspec allows — the same range trap
+            // pq_badge_paint_test guards `lib/` against. The info stays.
+            // ignore: deprecated_member_use
+            cacheExtent: 2000,
             children: [
               PausableAnimatedImage(
                 image: provider,
@@ -132,7 +138,13 @@ void main() {
           height: 400,
           child: ListView(
             controller: scroll,
-            cacheExtent: 2000, // keep the item MOUNTED while scrolled away
+            // Keep the item MOUNTED while it is scrolled away. `cacheExtent`
+            // is deprecated on current SDKs, but its `scrollCacheExtent`
+            // replacement was added after v3.41 and does not exist on the
+            // oldest SDK pubspec allows — the same range trap
+            // pq_badge_paint_test guards `lib/` against. The info stays.
+            // ignore: deprecated_member_use
+            cacheExtent: 2000,
             children: [
               PausableAnimatedImage(
                 image: provider,
