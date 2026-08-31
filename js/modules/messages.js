@@ -57,6 +57,19 @@ Object.assign(NYM.prototype, {
         return (createdAtSec || 0) * 1000;
     },
 
+    _stableClampMs(id, tsMs) {
+        if (!Number.isFinite(tsMs)) return tsMs;
+        const now = Date.now();
+        if (tsMs <= now) return tsMs;
+        if (!id) return now;
+        if (!this._eventTimeCeilings) this._eventTimeCeilings = new Map();
+        const prev = this._eventTimeCeilings.get(id);
+        if (Number.isFinite(prev) && prev > 0) return prev;
+        this._eventTimeCeilings.set(id, now);
+        if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
+        return now;
+    },
+
     // True only when the message has an authentic sub-second 'ms' tag
     // (not the floor-to-second fallback _extractEventMs synthesises).
     _hasRealMsTag(m) {
@@ -408,11 +421,10 @@ Object.assign(NYM.prototype, {
                 for (const m of msgs) {
                     if (m.pubkey === pubkey) this.displayMessage(m);
                 }
+                if (typeof this.clearUnreadCount === 'function') this.clearUnreadCount(key);
             } else {
                 this.channelDOMCache.delete(key);
-            }
-            if (typeof this.updateUnreadCount === 'function') {
-                this.updateUnreadCount(key);
+                if (typeof this.refreshUnreadCount === 'function') this.refreshUnreadCount(key);
             }
             if (this.geohashMap && key.startsWith('#') &&
                 this.isValidGeohash && this.isValidGeohash(key.substring(1))) {
@@ -674,8 +686,9 @@ Object.assign(NYM.prototype, {
         if (!this._bulkAppending && (container._skelTimer || container._emptyNote)) this._clearMessageSkeleton(container);
 
         // Clamp timestamp to now so messages never appear in the future
-        const now = new Date();
-        const displayTimestamp = message.timestamp > now ? now : message.timestamp;
+        const _clampedMs = this._stableClampMs(message.id, message.timestamp.getTime());
+        const displayTimestamp = _clampedMs === message.timestamp.getTime()
+            ? message.timestamp : new Date(_clampedMs);
 
         const time = this.settings.showTimestamps ?
             displayTimestamp.toLocaleTimeString('en-US', {
@@ -1436,6 +1449,7 @@ Object.assign(NYM.prototype, {
         }
 
         this._attachLinkPreviews(messageEl);
+        if (typeof this._attachNostrCards === 'function') this._attachNostrCards(messageEl);
         this._attachMediaFallbacks(messageEl);
     },
 
@@ -3689,14 +3703,15 @@ Object.assign(NYM.prototype, {
         const modal = document.createElement('div');
         modal.className = 'reactors-modal timestamp-popup';
         const powHtml = this._timestampPopupPowHtml(anchorEl);
+        const copyHtml = this._timestampPopupCopyHtml(anchorEl);
         modal.innerHTML =
-            `<div class="timestamp-popup-body">${this.escapeHtml(fullTime)}</div>${powHtml}`;
+            `<div class="timestamp-popup-body">${this.escapeHtml(fullTime)}</div>${powHtml}${copyHtml}`;
         document.body.appendChild(modal);
         this.timestampPopup = modal;
 
         const rect = anchorEl.getBoundingClientRect();
         const right = Math.max(4, window.innerWidth - rect.right);
-        const approxHeight = powHtml ? 130 : 90;
+        const approxHeight = (powHtml ? 130 : 90) + (copyHtml ? 40 : 0);
         const verticalDecl = (rect.top > approxHeight + 20)
             ? `bottom:${window.innerHeight - rect.top + 6}px;`
             : `top:${rect.bottom + 6}px;`;
@@ -3707,6 +3722,24 @@ Object.assign(NYM.prototype, {
         const scroller = document.getElementById('messagesContainer');
         if (scroller) scroller.addEventListener('scroll', onScroll, { passive: true, capture: true });
         window.addEventListener('scroll', onScroll, { passive: true, capture: true });
+    },
+
+    /// The copy-reference section of the timestamp popup, or '' when the row
+    /// carries no real event id (an optimistic echo, a system line, a poll).
+    _timestampPopupCopyHtml(anchorEl) {
+        const row = anchorEl && anchorEl.closest ? anchorEl.closest('.message') : null;
+        if (!row || !row.dataset) return '';
+        const id = row.dataset.messageId || '';
+        if (!/^[0-9a-f]{64}$/i.test(id)) return '';
+        if (typeof this.neventForMessage !== 'function') return '';
+        const hints = typeof this._nostrRefRelayHints === 'function'
+            ? this._nostrRefRelayHints() : [];
+        const nevent = this.neventForMessage(id, row.dataset.pubkey || '', hints);
+        if (!nevent) return '';
+        return '<div class="timestamp-popup-copy">' +
+            `<button type="button" class="timestamp-copy-btn" data-action="copyNostrEventRef" data-nostr-copy="${this.escapeHtml(nevent)}">Copy nevent</button>` +
+            `<button type="button" class="timestamp-copy-btn" data-action="copyNostrEventRef" data-nostr-copy="${this.escapeHtml(id)}">Copy event ID</button>` +
+            '</div>';
     },
 
     /// The proof-of-work section of the timestamp popup, or '' when PoW does not

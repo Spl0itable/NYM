@@ -403,6 +403,13 @@ Object.assign(NYM.prototype, {
         return nymHtml;
     },
 
+    // Show/hide the profile card's banner. Opening the card and a banner
+    // ARRIVING while it is open have to do exactly the same thing, and they used
+    // not to: the open path set src + display + the has-banner class, while the
+    // late path (cacheBannerImage's blob finishing) set src alone — onto an
+    // <img> the open path had already hidden because the profile carried no
+    // banner yet. The banner then never appeared, however long the card stayed
+    // up; only closing and reopening it worked.
     _applyCtxBanner(bannerUrl) {
         const img = document.getElementById('ctxBannerImg');
         const menu = document.getElementById('contextMenu');
@@ -423,6 +430,17 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // Profile data that arrives AFTER the card is on screen. The card populates
+    // every field once, at open, from whatever was known then; a kind 0 landing
+    // a moment later changed nothing on it. Avatars were the exception — they
+    // ride the global img[data-avatar-pubkey] sweep (_flushAvatarUpdates), which
+    // is exactly why they never showed this bug — so this covers the rest:
+    // banner, bio, and the nym block (name, flair, badges), each of which
+    // renders in this one place and had no equivalent.
+    //
+    // The lightning address needs nothing here: it is not displayed on the card,
+    // and the zap option's visibility does not depend on knowing it — the click
+    // path awaits waitForLightningAddress, which the same kind 0 resolves.
     updateRenderedProfileCard(pubkey) {
         if (!pubkey) return;
         if (!this.contextMenuData || this.contextMenuData.pubkey !== pubkey) return;

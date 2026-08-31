@@ -580,6 +580,7 @@ class NYM {
         this.relayTimeout = 2000;
         this.eventDeduplication = new Map();
         this._shardLastSeenAt = new Map();
+        this._eventTimeCeilings = new Map();
         this._reconnectingShards = new Set();
         this._poolEventBaselines = new Map();
         this.reconnectingRelays = new Set();
@@ -699,6 +700,13 @@ class NYM {
         applyColumnsWallpaper(this.settings.columnsWallpaper === true);
         this.channelSubscriptionBatchSize = 15;
         this.channelMessageLimit = 1000;
+        // Public channel history is a rolling 24-hour window, matching what the
+        // rest of the stack will actually give back: the D1 archive read floors
+        // `channel-get` at CHANNEL_TTL_MS (functions/api/storage.js) and the
+        // relay filters ask for `since: now - 86400` (relays.js). Anything older
+        // that survives locally can never be re-fetched, so it is history only
+        // this one device has — it is pruned from memory and from the cache
+        // rather than shown indefinitely on one client and nowhere else.
         this.channelHistoryMaxAgeMs = 24 * 60 * 60 * 1000;
         this.channelPageSize = 50;
         this.channelLoadMoreSize = 50;

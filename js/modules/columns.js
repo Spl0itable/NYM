@@ -2,6 +2,14 @@
 
 Object.assign(NYM.prototype, {
 
+    // A channel's identity across the app is `geohash || channel`, and its
+    // message store key is `#geohash` when it has one. A saved column desc can
+    // carry a stale half of that pair — {channel:'nymchat', geohash:''} for a
+    // channel every other surface registers as geohash 'nymchat' — and the
+    // column then keys on 'nymchat' while its messages store under '#nymchat':
+    // the column renders nothing, no message ever routes to it, and the sidebar
+    // row never lights up. Reconcile the desc against whatever already knows
+    // the real pair before the key is derived from it.
     _cvNormaliseDesc(desc) {
         if (!desc || desc.type !== 'channel') return desc;
         const id = desc.geohash || desc.channel;
@@ -91,6 +99,12 @@ Object.assign(NYM.prototype, {
         // nodes don't trip the global dedupe and leave columns empty.
         const mc = document.getElementById('messagesContainer');
         if (mc) { mc.innerHTML = ''; mc.dataset.lastChannel = ''; }
+        // Seeding touches the channel registry, the relays and the D1 archive.
+        // Anything it throws must not cost the columns their first paint and
+        // their focus: an unpainted column stays empty for the whole session
+        // (nothing re-renders it), and an unfocused one leaves currentChannel
+        // pointing at whatever the boot last set, so the composer, the header
+        // and the sidebar highlight all name a different conversation.
         try {
             this._cvSeedIfNeeded();
         } catch (e) {
@@ -103,6 +117,9 @@ Object.assign(NYM.prototype, {
         const first = this._cvColumns[0];
         if (first) this._cvFocusColumn(first.id);
         this._cvRebuildHeaderDots();
+        // The store is still filling at this point — cache hydration may not
+        // have finished, and the D1 archive has only just been asked for. Two
+        // settle passes catch whatever lands after this first paint.
         this._cvScheduleReconcile(600);
         setTimeout(() => this._cvScheduleReconcile(0), 2500);
     },
@@ -216,6 +233,14 @@ Object.assign(NYM.prototype, {
             this._cvColumns = [];
             for (const d of saved) this.cvAddColumn(d, { render: false, save: false, focus: false });
             this._cvSeeded = true;
+            // Deliberately NOT saving here. _cvSaveLayout reaches
+            // nostrSettingsSave, and seeding runs inside _cvEnable during boot,
+            // before the synced settings have necessarily loaded — writing from
+            // here would publish a layout built from whatever is in memory at
+            // that moment, and anything it threw would abort _cvEnable before
+            // it painted or focused a single column. The in-memory repair is
+            // what makes the columns work; the stored copy is rewritten by the
+            // next ordinary layout change.
         }
     },
 
@@ -559,6 +584,17 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    // A column is painted once, when it is built, and then only ever appended to
+    // by displayMessage. Anything that fills the store WITHOUT going through
+    // displayMessage leaves it behind with no second chance — the IndexedDB
+    // hydration merge writes straight into `this.messages`, and a D1 archive
+    // replay whose event ids are already in the boot-restored dedup sets is
+    // dropped before it reaches the render path at all. Either one lands a
+    // reloaded column showing only the handful of genuinely new events that
+    // arrived after it was built, while single view (which re-renders from the
+    // store on every open) shows the whole history. Reconciling closes that
+    // gap wherever the race lands, instead of relying on one repaint firing at
+    // exactly the right moment.
     _cvColumnBehind(col) {
         if (!col || !col.listEl) return false;
         const isPM = col.type !== 'channel';

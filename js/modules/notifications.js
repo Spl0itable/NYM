@@ -540,7 +540,10 @@ Object.assign(NYM.prototype, {
                 if (!n.viewed) item.classList.add('notification-item-unread');
                 if (n.channelInfo) item.style.cursor = 'pointer';
                 const dt = new Date(n.timestamp);
-                const time = dt.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                const time = dt.toLocaleString([], {
+                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                    hour12: this.settings.timeFormat === '12hr'
+                });
 
                 // Build avatar + nym + flair like channel messages
                 const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';

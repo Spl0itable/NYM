@@ -4446,6 +4446,123 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     overflow: hidden;
 }
 
+.nostr-ref {
+    color: var(--primary);
+    cursor: pointer;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+    border-bottom: 1px dotted currentColor;
+}
+
+.nostr-ref:hover {
+    filter: brightness(1.15);
+}
+
+.nostr-ref-raw {
+    color: inherit;
+    cursor: default;
+    border-bottom: none;
+    font-family: inherit;
+    font-size: inherit;
+}
+
+.nostr-card-container {
+    margin-top: 8px;
+}
+
+.nostr-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    border: 1px solid var(--glass-border, var(--border));
+    border-left: 2px solid var(--primary);
+    border-radius: var(--radius-sm, 8px);
+    background: rgba(255, 255, 255, 0.03);
+    max-width: 400px;
+    transition: background 0.15s ease;
+}
+
+.nostr-card[data-action],
+.nostr-ref {
+    cursor: pointer;
+}
+
+.nostr-card[data-action]:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.nostr-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.nostr-card-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.nostr-card-ident {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.nostr-card-author {
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nostr-card-channel,
+.nostr-card-nip05 {
+    font-size: 0.72em;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nostr-card-kind {
+    font-size: 0.68em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.nostr-card-time {
+    font-size: 0.7em;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
+.nostr-card-body {
+    font-size: 0.85em;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+
+.nostr-card-body.nostr-card-empty {
+    color: var(--text-dim);
+    font-style: italic;
+}
+
 .pm-suggestion-follow-badge {
     font-size: 10px;
     color: var(--primary);

@@ -209,8 +209,7 @@ Object.assign(NYM.prototype, {
         const pollCreatedAt = Math.floor(created_at) || 0;
         const timestamp = new Date(pollCreatedAt * 1000);
         // Clamp timestamp to now so polls never appear in the future
-        const now = new Date();
-        const displayTimestamp = timestamp > now ? now : timestamp;
+        const displayTimestamp = new Date(this._stableClampMs(pollId, timestamp.getTime()));
         messageEl.dataset.timestamp = displayTimestamp.getTime();
         messageEl.dataset.createdAt = pollCreatedAt;
         messageEl.dataset.ms = pollCreatedAt * 1000; // no millisecond stamp; sort at the second boundary

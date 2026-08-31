@@ -220,6 +220,13 @@ Object.assign(NYM.prototype, {
     },
 
     // The language messages get translated into.
+    //
+    // There is no "pick a language" prompt any more. Every user chooses one at
+    // first run (the UI-language picker, i18n.js), and that pick is adopted as
+    // the translation target — so asking again on the first translation was
+    // asking a question already answered, and it interrupted the very action
+    // the user had just taken. The UI language is the fallback for anyone whose
+    // setting predates that, and English the fallback for that.
     _effectiveTranslateLanguage() {
         const saved = this.settings && this.settings.translateLanguage;
         if (saved) return saved;
@@ -227,6 +234,16 @@ Object.assign(NYM.prototype, {
         return ui || 'en';
     },
 
+    // Translate a message and show the result inline below the original message.
+    // Uses the CF proxy when available, falls back to calling Google Translate directly.
+    // Manual translations, keyed by message id, so a full container re-render
+    // can put them back. The DOM was the only record: opening a conversation, a
+    // column repaint or any other fresh render rebuilds the row WITHOUT its
+    // `.message-translation`, and the user's translation was simply gone —
+    // silently, since nothing re-issued it either. Auto-translate has had this
+    // (`_autoTranslateCache` + the re-attach in `_maybeAutoTranslate`); manual
+    // never did.
+    //
     // In-memory only, like the auto-translate cache: it survives re-renders,
     // not reloads.
     _manualTrCache() {
@@ -848,7 +865,8 @@ Object.assign(NYM.prototype, {
         // text would break image/video loading, mangle media URLs, and drop the
         // async-unfurled rich-link previews. Only the message TEXT is swapped.
         const MEDIA_SEL = 'img.msg-img, img.message-image, video, .video-container,'
-            + ' audio, .link-preview-container, .link-preview, .file-offer, .media-container';
+            + ' audio, .link-preview-container, .link-preview, .file-offer, .media-container,'
+            + ' .nostr-card-container, .nostr-card';
         const KEEP = 'blockquote, ' + MEDIA_SEL;
         const timeEl = contentEl.querySelector(':scope > .bubble-time-inner');
         const hoverEl = contentEl.querySelector(':scope > .msg-hover-buttons');

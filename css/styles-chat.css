@@ -655,6 +655,31 @@
     color: var(--primary);
 }
 
+.timestamp-popup-copy {
+    display: flex;
+    gap: 6px;
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--glass-border);
+}
+
+.timestamp-copy-btn {
+    flex: 1;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm, 6px);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.timestamp-copy-btn:hover {
+    color: var(--primary);
+    background: rgba(255, 255, 255, 0.12);
+}
+
 .group-readers,
 .channel-readers {
     display: flex;

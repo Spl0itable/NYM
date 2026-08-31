@@ -463,6 +463,26 @@ window.nymHapticTap = function (ms) {
             nym().handleChannelLink(t.dataset.channelRef, e);
             return false;
         },
+        'openNostrRef':               function (e, t) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().openNostrRef(t && t.dataset ? t.dataset.nostrRef : '', e);
+            return false;
+        },
+        'jumpToNostrRef':             function (e, t) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().jumpToNostrRef(t && t.dataset ? t.dataset.nostrEventId : '');
+        },
+        'openNostrProfileCard':       function (e, t) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().openNostrProfileCard(t && t.dataset ? t.dataset.nostrPubkey : '', e);
+            return false;
+        },
+        'copyNostrEventRef':          function (e, t) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().copyNostrEventRef(t && t.dataset ? t.dataset.nostrCopy : '', t);
+        },
         'showFullTimestamp':          function (e, t) {
             if (e && e.stopPropagation) e.stopPropagation();
             var n = nym();

@@ -529,11 +529,21 @@ Object.assign(NYM.prototype, {
             const nowSec = Math.floor(Date.now() / 1000);
 
             // Guard against clock skew
-            let ceilingSec = nowSec;
-            if (eventCreatedAt > nowSec && _storedAtMs) {
-                ceilingSec = Math.min(nowSec, Math.floor(_storedAtMs / 1000));
+            let correctedCreatedAt = eventCreatedAt;
+            if (eventCreatedAt > nowSec) {
+                const candidateMs = _storedAtMs
+                    ? Math.min(eventCreatedAt * 1000, _storedAtMs)
+                    : eventCreatedAt * 1000;
+                correctedCreatedAt = Math.floor(this._stableClampMs(event.id, candidateMs) / 1000);
             }
-            let correctedCreatedAt = Math.min(eventCreatedAt, ceilingSec);
+
+            // Something already outside the 24-hour window has landed; ask for
+            // the sweep rather than waiting out its interval.
+            if (typeof this._channelWindowFloorSec === 'function' &&
+                correctedCreatedAt < this._channelWindowFloorSec() &&
+                typeof this._scheduleChannelWindowPrune === 'function') {
+                this._scheduleChannelWindowPrune();
+            }
 
             // Reconstruct quote display from nymquote tag (NYM-specific quote reply)
             // On the wire, quotes are sent as @mention + nymquote tag so other clients
@@ -845,6 +855,13 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
+                // Repaint a profile card that is already open for this user.
+                // Every field on it except the avatar is written once, at open,
+                // from whatever was known then, so without this a profile
+                // arriving a moment after the card opened changed nothing on it
+                // until it was closed and reopened. Placed after ALL of the
+                // fields above are stored (nym included) so one call refreshes
+                // the whole card from the store.
                 if (typeof this.updateRenderedProfileCard === 'function') {
                     this.updateRenderedProfileCard(pubkey);
                 }

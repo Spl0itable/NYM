@@ -286,22 +286,33 @@ Object.assign(NYM.prototype, {
         if (!this._d1Unread) this._d1Unread = new Map();
         const now = Math.floor(Date.now() / 1000);
         let changed = false;
-        const seedKey = (unreadKey, buckets) => {
+        const seedKey = (unreadKey, name, buckets) => {
             if (!Array.isArray(buckets)) return;
             const lastRead = this.channelLastRead.get(unreadKey) || 0;
-            // Buckets are hourly, index 0 = current hour. Sum the hours that fall
-            // after lastRead (whole channel when never read).
-            const span = lastRead > 0
-                ? Math.min(24, Math.max(0, Math.ceil((now - lastRead) / 3600)))
-                : 24;
+            // Buckets are hourly, index 0 = the hour ending now. Sum the whole
+            // hours after lastRead, prorating the boundary bucket.
+            const newest = (this._d1ChannelLast && this._d1ChannelLast.get(name)) || 0;
             let count = 0;
-            for (let h = 0; h < span; h++) count += (buckets[h] || 0);
+            if (!(lastRead > 0 && newest > 0 && newest <= lastRead)) {
+                const windowSec = lastRead > 0 ? Math.max(0, now - lastRead) : 24 * 3600;
+                const whole = Math.min(24, Math.floor(windowSec / 3600));
+                for (let h = 0; h < whole; h++) count += (buckets[h] || 0);
+                if (whole < 24) {
+                    const fraction = (windowSec - whole * 3600) / 3600;
+                    if (fraction > 0) count += Math.floor((buckets[whole] || 0) * fraction);
+                }
+            }
             // D1 is the archive of record: keep it as a floor so a stale or
             // already-read local cache can't drop the badge below real activity.
             this._d1Unread.set(unreadKey, count);
-            if (count > (this.unreadCounts.get(unreadKey) || 0)) {
+            const standing = this.unreadCounts.get(unreadKey) || 0;
+            if (count > standing) {
                 this._setUnreadCount(unreadKey, count);
                 this._renderUnreadBadge(unreadKey, count);
+                changed = true;
+            } else if (count === 0 && standing > 0 && this._recomputeUnreadCount(unreadKey) === 0) {
+                this._setUnreadCount(unreadKey, 0);
+                this._renderUnreadBadge(unreadKey, 0);
                 changed = true;
             }
         };
@@ -309,7 +320,7 @@ Object.assign(NYM.prototype, {
             if (!value) return;
             const name = String(value.geohash || value.channel || '').toLowerCase();
             if (!name) return;
-            seedKey('#' + name, act.get(name));
+            seedKey('#' + name, name, act.get(name));
         });
         if (changed) this._persistUnreadCounts();
     },
@@ -480,6 +491,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     isValidGeohash(str) {
         return this.geohashRegex.test(str.toLowerCase());
+    },
+
+    // The geohash a channel IS, or '' when it is a named one.
+    //
+    // Registration happens from a dozen places and several only ever have the
+    // NAME — a column seed, a synced joined-key list, a mesh-backed row — while
+    // others pass the name as the geohash whether or not it is one. Whichever
+    // landed first decided the row, so a real geohash channel could read "Not a
+    // geohash" (or a named one try to show a location) purely on arrival order.
+    // `channelWire` picks the transport by this same test, so the label can
+    // never disagree with what the channel is on the wire.
+    channelGeohashKey(channel, geohash) {
+        const g = this.sanitizeChannelName(geohash || '');
+        if (g && this.isValidGeohash(g)) return g;
+        const c = this.sanitizeChannelName(channel || '');
+        return (c && this.isValidGeohash(c)) ? c : '';
     },
 
     // Wire encoding for a channel. Geohash channels use kind 20000 + `g` tag;
@@ -699,8 +726,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const validChannelPattern = /^#[\p{L}\p{N}]+$/u;
         items.forEach(item => {
-            const channelNameEl = item.querySelector('.channel-name');
-            const channelName = channelNameEl ? channelNameEl.textContent.toLowerCase() : '';
+            // The row's own identity, NOT its rendered text. `.channel-name`
+            // wraps the `.channel-sub` location line, so its textContent reads
+            // "#u4pruylondon, united kingdom" — which fails the name pattern
+            // below on the comma and space, and hid every located channel the
+            // moment anything was typed. "Not a geohash" did the same to named
+            // rows, so a search matched nothing that was already listed.
+            const key = (item.dataset.geohash || item.dataset.channel || '').toLowerCase();
+            const channelName = key ? `#${key}` : '';
             // Hide channels with invalid names (spaces, special chars, URLs)
             if (!validChannelPattern.test(channelName)) {
                 item.style.display = 'none';
@@ -1055,8 +1088,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         delete titleEl.dataset.groupHeaderSig;
 
         const safeChannel = this.sanitizeChannelName(channel);
-        const safeGeohash = this.sanitizeChannelName(geohash);
-        const isGeo = !!safeGeohash && this.isValidGeohash(safeGeohash);
+        const safeGeohash = this.channelGeohashKey(channel, geohash);
+        const isGeo = !!safeGeohash;
         const displayName = safeGeohash ? `#${safeGeohash}` : `#${safeChannel}`;
         if (!safeChannel && !safeGeohash) {
             titleEl.replaceChildren();
@@ -1869,6 +1902,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const item = document.createElement('div');
             item.className = 'channel-item list-item';
             item.dataset.channel = channel;
+            // The ROUTING key, exactly as registered: `switchChannel` reads it
+            // back off the row, and `geohash || channel` is what keys the
+            // message store, the activity map and the unread counts. It is NOT
+            // an "is this a geohash" flag — `geoKey` below answers that, for
+            // display only. Emptying this for a named channel pointed its
+            // storage key at the bare name while its messages live under
+            // `#name`, and sent its posts to the `geohash || 'nymchat'` fallback
+            // in `publishMessage`.
             item.dataset.geohash = geohash;
 
             // Check if this is the current active channel
@@ -1879,13 +1920,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 item.classList.add('active');
             }
 
-            const isGeo = geohash && this.isValidGeohash(geohash);
-            const displayName = geohash ? `#${this.escapeHtml(geohash)}` : `#${this.escapeHtml(channel)}`;
+            // DISPLAY ONLY — whether this channel has a location to show, and
+            // which geohash to resolve it from. Derived rather than taken on
+            // trust from the caller (see `channelGeohashKey`); the routing key
+            // above is untouched.
+            const geoKey = this.channelGeohashKey(channel, geohash);
+            const isGeo = !!geoKey;
+            const displayName = geoKey ? `#${this.escapeHtml(geoKey)}` : `#${this.escapeHtml(channel)}`;
 
             // Get location information for geohash channels
             let locationHint = '';
             if (isGeo) {
-                const location = this.getGeohashLocation(geohash);
+                const location = this.getGeohashLocation(geoKey);
                 if (location) {
                     locationHint = ` title="${this.escapeHtml(location)}"`;
                 }
@@ -1901,7 +1947,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // human-readable place once the queued lookup lands; a named
             // channel just says it isn't one. Mirrors the channel header.
             const subText = isGeo
-                ? (this._loadGeohashPlaceCache().get(geohash.toLowerCase()) || this.getGeohashLocation(geohash) || '')
+                ? (this._loadGeohashPlaceCache().get(geoKey) || this.getGeohashLocation(geoKey) || '')
                 : 'Not a geohash';
 
             item.innerHTML = `
@@ -1917,7 +1963,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             // cached one already rendered its place above and costs no request.
             // Only a resolved place name has the "City, Country" shape worth
             // splitting; raw coordinates and 'Not a geohash' stay one run.
-            const cachedPlace = isGeo ? this._loadGeohashPlaceCache().get(geohash.toLowerCase()) : null;
+            const cachedPlace = isGeo ? this._loadGeohashPlaceCache().get(geoKey) : null;
             const subEl = item.querySelector('.channel-sub');
             if (subEl) {
                 if (cachedPlace) {
@@ -1931,8 +1977,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     subEl.appendChild(only);
                 }
             }
-            if (isGeo && !this._loadGeohashPlaceCache().has(geohash.toLowerCase())) {
-                this._resolveGeohashPlaceName(geohash).then(place => {
+            if (isGeo && !this._loadGeohashPlaceCache().has(geoKey)) {
+                this._resolveGeohashPlaceName(geoKey).then(place => {
                     if (place && subEl && subEl.isConnected) this._fillLocationParts(subEl, place);
                 }).catch(() => { /* keep the coordinates */ });
             }
@@ -2268,6 +2314,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // means the true total is one MORE than whatever already stood.
         if (this._unreadCountStillValid(channel)) {
             count = Math.max(count, (this.unreadCounts.get(channel) || 0) + 1);
+        }
+        this._setUnreadCount(channel, count);
+        this._persistUnreadCounts();
+        this._renderUnreadBadge(channel, count);
+        this._scheduleChannelSort();
+    },
+
+    // Re-derive a badge without updateUnreadCount's live-arrival bump, for
+    // callers that only changed which STORED messages are visible.
+    refreshUnreadCount(channel) {
+        let count = this._recomputeUnreadCount(channel);
+        if (this._d1Unread) count = Math.max(count, this._d1Unread.get(channel) || 0);
+        if (this._unreadCountStillValid(channel)) {
+            count = Math.max(count, this.unreadCounts.get(channel) || 0);
         }
         this._setUnreadCount(channel, count);
         this._persistUnreadCounts();

@@ -86,13 +86,26 @@
         } catch (_) { return null; }
     }
 
+    // NIP-19 entities and bare 64-hex ids, matched only at a word boundary
+    // that isn't part of a URL, so a link to a viewer keeps its own markup.
+    const NOSTR_BECH32 = /(?<![\w/:.#=&?"'-])(nostr:)?((?:nevent|naddr|nprofile|note|npub)1[023456789acdefghjklmnpqrstuvwxyz]{20,})(?![\w-])(?![^<]*>)/gi;
+    const NOSTR_HEX_ID = /(?<![\w/:.#=&?"'-])([0-9a-f]{64})(?![\w-])(?![^<]*>)/gi;
+
+    // A pasted NIP-19 entity is all letters and digits, so it trips none of
+    // RX_FORMAT_TRIGGERS and the fast path below would skip it entirely.
+    const NOSTR_TRIGGER = /(?:nevent|naddr|nprofile|note|npub)1[023456789acdefghjklmnpqrstuvwxyz]{20,}|[0-9a-f]{64}/i;
+
+    function shortenNostrRef(token) {
+        return token.length > 20 ? token.slice(0, 12) + '…' + token.slice(-6) : token;
+    }
+
     function sanitizeGroupName(name) {
         return (name || '').replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
     }
 
     function format(content, ctx) {
         ctx = ctx || {};
-        if (!RX_FORMAT_TRIGGERS.test(content)) {
+        if (!RX_FORMAT_TRIGGERS.test(content) && !NOSTR_TRIGGER.test(content)) {
             return content.indexOf('\n') === -1 ? content : content.replace(/\n/g, '<br>');
         }
 
@@ -235,6 +248,22 @@
                 const name = escapeHtml(sanitizeGroupName(invite.n || '') || 'group');
                 const groupSvg = `<svg class="inline-group-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
                 return `<span class="channel-link group-invite-chip" data-action="joinGroupFromInvite" data-invite="${escapeHtml(token)}">${groupSvg}Join ${name}</span>`;
+            }
+        );
+
+        formatted = formatted.replace(
+            NOSTR_BECH32,
+            (match, scheme, token) => {
+                const safeToken = escapeHtml(token);
+                return `<span class="nostr-ref" data-action="openNostrRef" data-nostr-ref="${safeToken}" title="${safeToken}">${escapeHtml(shortenNostrRef(token))}</span>`;
+            }
+        );
+
+        formatted = formatted.replace(
+            NOSTR_HEX_ID,
+            (match, id) => {
+                const safeId = escapeHtml(id.toLowerCase());
+                return `<span class="nostr-ref nostr-ref-raw" data-nostr-ref="${safeId}">${escapeHtml(id)}</span>`;
             }
         );
 

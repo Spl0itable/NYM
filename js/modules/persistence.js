@@ -35,6 +35,7 @@
     // serialized event, re-checked on every cache hit in _verifiedIdCheck),
     // so a tampered event can never ride the cache.
     const META_VERIFIED_EVENT_IDS = 'verifiedEventIds';
+    const META_EVENT_TIME_CEILINGS = 'eventTimeCeilings';
 
     Object.assign(NYM.prototype, {
 
@@ -236,6 +237,14 @@
             return ser;
         },
 
+        // Fold a cached history into whatever is already in memory for that
+        // conversation. Hydration used to SKIP any key a live event had already
+        // created while it yielded (`breathe`), so one relay/D1 event arriving
+        // first threw the channel's whole cached window away — including the
+        // thread ROOTS `_withPinnedThreadRoots` had pinned into it. After a
+        // reload the replies whose roots went with it re-rendered inline, as
+        // top-level messages. Merging keeps both: the live object wins on a
+        // shared id (it is the one other code already holds references to).
         _mergeCachedMessages(existing, cached) {
             if (!Array.isArray(existing) || existing.length === 0) return cached;
             if (!Array.isArray(cached) || cached.length === 0) return existing;
@@ -393,6 +402,18 @@
                         ids: Array.from(this._verifiedEventIds).slice(-20000)
                     });
                 }
+                if (this._eventTimeCeilings && this._eventTimeCeilings.size > 0) {
+                    const cutoff = Date.now() - (this.channelHistoryMaxAgeMs || (24 * 60 * 60 * 1000));
+                    const map = {};
+                    for (const [id, ms] of this._eventTimeCeilings) {
+                        if (!Number.isFinite(ms) || ms <= cutoff) {
+                            this._eventTimeCeilings.delete(id);
+                            continue;
+                        }
+                        map[id] = ms;
+                    }
+                    this._cachePut('meta', { key: META_EVENT_TIME_CEILINGS, map });
+                }
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
@@ -458,6 +479,12 @@
                     } else if (m.key === META_VERIFIED_EVENT_IDS) {
                         if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
                         for (const id of m.ids) this._verifiedEventIds.add(id);
+                    } else if (m.key === META_EVENT_TIME_CEILINGS && m.map && typeof m.map === 'object') {
+                        if (!this._eventTimeCeilings) this._eventTimeCeilings = new Map();
+                        const ceilCutoff = Date.now() - (this.channelHistoryMaxAgeMs || (24 * 60 * 60 * 1000));
+                        for (const [id, ms] of Object.entries(m.map)) {
+                            if (typeof ms === 'number' && ms > ceilCutoff) this._eventTimeCeilings.set(id, ms);
+                        }
                     } else if (m.key === META_POOL_SHARD_LAST_SEEN && m.map && typeof m.map === 'object') {
                         if (!this._shardLastSeenAt) this._shardLastSeenAt = new Map();
                         for (const [shardId, ts] of Object.entries(m.map)) {
@@ -625,10 +652,22 @@
                     // into memory.
                     msgs = this._pruneChannelWindow(msgs);
                     if (!msgs.length) { this._cacheDelete('channels', c.key); continue; }
+                    // breathe() hands the event loop back, so a live relay
+                    // event may have arrived for this key while we yielded (and
+                    // may have arrived before the loop started). Merge rather
+                    // than overwrite OR skip: overwriting drops the live
+                    // message, skipping drops the entire cached window.
                     this.messages.set(c.key, this._mergeCachedMessages(this.messages.get(c.key), msgs));
                     loadedChannelKeys.push(c.key);
                 }
 
+                // Column view paints a column once and then only ever appends
+                // to it, so a cached history written straight into
+                // `this.messages` never reaches the screen on its own. Ask the
+                // columns to reconcile HERE rather than only at the end of
+                // hydration: everything below can skip, throw or await
+                // something slow, and a column left showing three live
+                // messages for the session is the visible cost.
                 if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile();
 
                 for (const key of loadedChannelKeys) {
@@ -1107,6 +1146,17 @@
             });
         },
 
+        // Bring memory, the cache and the reaction store back inside the
+        // 24-hour window. The persist and hydrate boundaries already refuse to
+        // write or reload aged-out messages, but a session left open for days
+        // keeps accumulating in memory — and the whole point of the window is
+        // that those messages exist on no other client and cannot be re-fetched
+        // by any of them, this one included, after a reload.
+        //
+        // Reactions are keyed by the id of the message they target, so dropping
+        // the reaction rows for the ids we drop is exactly "kind 7 events whose
+        // `k` tag is 20000/23333" — a reaction on a PM or group message is keyed
+        // by an id in pmMessages and is never touched here.
         pruneChannelHistoryWindow() {
             if (!this.messages || typeof this._pruneChannelWindow !== 'function') return 0;
             let dropped = 0;
@@ -1151,6 +1201,14 @@
                 ? document.querySelector(`.message[data-message-id="${String(m.id).replace(/"/g, '\\"')}"]`)
                 : null;
             if (el) el.remove();
+        },
+
+        _scheduleChannelWindowPrune() {
+            if (this._channelWindowPruneSoonTimer) return;
+            this._channelWindowPruneSoonTimer = setTimeout(() => {
+                this._channelWindowPruneSoonTimer = null;
+                try { this.pruneChannelHistoryWindow(); } catch (_) { }
+            }, 600);
         },
 
         // Run the sweep at boot (after hydration) and on a long interval, so a
