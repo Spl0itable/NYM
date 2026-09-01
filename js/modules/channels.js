@@ -607,6 +607,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return lower;
     },
 
+    isValidChannelTag(value) {
+        return typeof value === 'string' && value.length > 0 && !/\s/.test(value);
+    },
+
+    isValidBotChannelEvent(event) {
+        if (!event || !Array.isArray(event.tags)) return false;
+        if (event.kind !== 20000 && event.kind !== 23333) return true;
+        const tagName = event.kind === 20000 ? 'g' : 'd';
+        const tag = event.tags.find(t => Array.isArray(t) && t[0] === tagName);
+        return !!tag && this.isValidChannelTag(tag[1]);
+    },
+
     // Push a navigation entry onto the history stack.
     _pushNavigation(entry) {
         if (this._navigating) return;

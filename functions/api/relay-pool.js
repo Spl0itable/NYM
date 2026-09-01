@@ -539,7 +539,8 @@ export async function onRequest(context) {
 
   function sanitizeChannelKey(name) {
     if (typeof name !== 'string') return '';
-    return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
+    if (/\s/.test(name)) return '';
+    return name.toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
   }
 
   const isArchivableChannelKind = (k) => k === 20000 || k === 23333 || k === 7 || k === 30078;
@@ -691,6 +692,7 @@ export async function onRequest(context) {
 
   function emojiCoord(kind, pubkey, dTag) {
     if (!pubkey) return null;
+    if (typeof dTag === 'string' && /\s/.test(dTag)) return null;
     return kind + ':' + pubkey + ':' + (kind === 30030 ? (dTag || '') : '');
   }
 

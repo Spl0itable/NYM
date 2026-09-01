@@ -2653,7 +2653,18 @@ async function onRequest(context) {
   }
 
 
-  const { command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers, lang, threadRoot } = body;
+  const { command, args, geohash, conversation, senderNym, publishedContent, activeUsers, lang, threadRoot } = body;
+  if (typeof geohash === "string" && geohash !== "" && !isValidChannelTag(geohash)) {
+    return new Response(JSON.stringify({ error: "Invalid channel" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  }
+  const channelMessages = Array.isArray(body.channelMessages)
+    ? body.channelMessages.filter(function (m) {
+        return !m || typeof m.channel !== "string" || isValidChannelTag(m.channel.replace(/^#/, ""));
+      })
+    : body.channelMessages;
   // A command sent from inside a message thread carries that thread's root
   // event id. The reply then carries the same NIP-10 marked root so clients
   // file it in the thread instead of the flat channel — otherwise a game or a
@@ -4883,9 +4894,14 @@ function extractNym(event) {
 function extractGeohash(event) {
   if (!event.tags) return null;
   var gTag = event.tags.find(function(t) { return t[0] === "g"; });
-  if (gTag) return gTag[1];
+  if (gTag) return isValidChannelTag(gTag[1]) ? gTag[1] : null;
   var dTag = event.tags.find(function(t) { return t[0] === "d"; });
-  return dTag ? dTag[1] : null;
+  if (!dTag) return null;
+  return isValidChannelTag(dTag[1]) ? dTag[1] : null;
+}
+
+function isValidChannelTag(value) {
+  return typeof value === "string" && value.length > 0 && !/\s/.test(value);
 }
 
 // A valid geohash uses base32 (no a, i, l, o); anything else is a named channel.
@@ -4942,7 +4958,9 @@ function dropSpamFirstMessages(events) {
 // Normalize raw events into the {channel, nym, content, timestamp, pubkey} shape
 // the channel-command handlers consume from the client's channelMessages.
 function eventsToChannelMsgs(events) {
-  return events.map(function (evt) {
+  return events.filter(function (evt) {
+    return isValidChannelTag(extractGeohash(evt));
+  }).map(function (evt) {
     return {
       channel: extractGeohash(evt),
       nym: extractNym(evt) || "nym",

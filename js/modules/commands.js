@@ -9,6 +9,7 @@ Object.assign(NYM.prototype, {
 
     async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot) {
         if (!this.useRelayProxy) return;
+        if (typeof geohash === 'string' && geohash && !this.isValidChannelTag(geohash)) return;
         // Support @Nymbot mentions anywhere in the message as an alias for ?ask
         const mentionRegex = /@nymbot(?:#[a-f0-9]{4})?/i;
         if (mentionRegex.test(content) && !content.startsWith('?')) {
@@ -211,6 +212,10 @@ Object.assign(NYM.prototype, {
             });
             if (!resp.ok) { this._setBotChannelThinking(false); return; }
             const data = await resp.json();
+            if (data.event && !this.isValidBotChannelEvent(data.event)) {
+                this._setBotChannelThinking(false);
+                return;
+            }
             if (data.event) {
                 // Publish the signed bot event to all connected relays
                 const msg = JSON.stringify(['EVENT', data.event]);
