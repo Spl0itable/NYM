@@ -4893,8 +4893,15 @@ function isGeohashName(str) {
   return typeof str === "string" && /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/.test(str.toLowerCase());
 }
 
+function eventTimeSec(evt) {
+  var ts = (evt && evt.created_at) || 0;
+  var now = Math.floor(Date.now() / 1000);
+  return ts > now ? now : ts;
+}
+
 function timeAgo(unixTs) {
   var seconds = Math.floor(Date.now() / 1000) - unixTs;
+  if (seconds < 0) seconds = 0;
   if (seconds < 60) return seconds + "s ago";
   if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
   if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
@@ -4940,7 +4947,7 @@ function eventsToChannelMsgs(events) {
       channel: extractGeohash(evt),
       nym: extractNym(evt) || "nym",
       content: evt.content || "",
-      timestamp: evt.created_at,
+      timestamp: eventTimeSec(evt),
       pubkey: evt.pubkey || "",
       isBot: false
     };
@@ -4981,7 +4988,7 @@ async function handleTop(channelMessages, context) {
     var events = await fetchRecentEvents({ kinds: [20000, 23333], since: since, limit: 500 }, 6000);
     events = dropSpamFirstMessages(events.filter(isHumanMessage));
     messages = events.map(function(evt) {
-      return { channel: extractGeohash(evt), timestamp: evt.created_at };
+      return { channel: extractGeohash(evt), timestamp: eventTimeSec(evt) };
     });
   }
   if (messages.length === 0) {
@@ -5035,7 +5042,7 @@ async function handleLast(args, channelMessages, context) {
         channel: extractGeohash(evt),
         nym: extractNym(evt) || "nym",
         content: evt.content || "",
-        timestamp: evt.created_at
+        timestamp: eventTimeSec(evt)
       };
     });
   }

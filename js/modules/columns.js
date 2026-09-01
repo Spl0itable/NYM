@@ -623,6 +623,8 @@ Object.assign(NYM.prototype, {
     _cvReconcileColumns() {
         if (!this._cvActive || !Array.isArray(this._cvColumns)) return;
         for (const col of this._cvColumns) {
+            if (typeof this._threadViewOccupies === 'function' &&
+                this._threadViewOccupies(col.listEl)) continue;
             if (this._cvColumnBehind(col)) this._cvRenderColumn(col);
         }
     },
