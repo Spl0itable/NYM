@@ -4484,14 +4484,16 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     transition: background 0.15s ease;
 }
 
-.nostr-card[data-action],
+.nostr-card-head[data-action],
 .nostr-ref {
     cursor: pointer;
 }
 
-.nostr-card[data-action]:hover {
-    background: rgba(255, 255, 255, 0.06);
+.nostr-card-head[data-action]:hover .nostr-card-author {
+    color: var(--primary);
 }
+
+
 
 .nostr-card-head {
     display: flex;
@@ -4551,11 +4553,27 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .nostr-card-body {
     font-size: 0.85em;
     color: var(--text);
-    display: -webkit-box;
-    -webkit-line-clamp: 4;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
     overflow-wrap: anywhere;
+}
+
+.nostr-card-body .msg-img,
+.nostr-card-body .message-video,
+.nostr-card-body video {
+    max-height: 180px;
+    width: auto;
+}
+
+.nostr-card-body .truncated-inner {
+    max-height: 180px;
+}
+
+.nostr-card-body .read-more-btn {
+    text-align: left;
+    font-size: 11px;
+}
+
+.nostr-card-body .link-preview {
+    max-width: 100%;
 }
 
 .nostr-card-body.nostr-card-empty {

@@ -732,8 +732,12 @@ Object.assign(NYM.prototype, {
 });
 
 // Clicking a message body opens its thread (threads enabled only). Interactive
-// children — links, media, buttons, badges, the author, timestamps — keep their
-// own behavior; a text selection or a just-fired long-press never triggers it.
+// children — links, media, buttons, badges, @mentions, the author, timestamps —
+// keep their own behavior; a text selection or a just-fired long-press never
+// triggers it. A mention is listed here rather than left to its own handler
+// stopping the event: this listener is on `document`, so it is registered
+// before that one and would win the race, and a mention that resolves to
+// nobody stops nothing at all.
 // Quoted blocks are excluded here rather than relying on the quote handler
 // stopping the event first: that handler is delegated on the conversation
 // container, which never sees a click inside a column's own list.
@@ -754,7 +758,7 @@ Object.assign(NYM.prototype, {
             if (!contentEl || contentEl.closest('.message[data-message-id]') !== msgEl) return;
         }
         if (e.target.closest('a, button, img, video, audio, input, textarea, select, code, pre, ' +
-            '.author-clickable, .clickable-timestamp, .reaction-badge, .add-reaction-btn, ' +
+            '.nm-mention, .author-clickable, .clickable-timestamp, .reaction-badge, .add-reaction-btn, ' +
             '.zap-badge, .add-zap-btn, .thread-indicator, .thread-indicator-row, .msg-hover-buttons, [data-action], ' +
             '.file-offer, .message-gallery, blockquote, .quote-author, .poll-card, .spoiler, ' +
             '.crypto-verified-badge, .crypto-pq-badge, .group-readers, .channel-readers, ' +

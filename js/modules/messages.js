@@ -1329,29 +1329,63 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    // The `.read-more-btn` toggle for one `.truncated-inner`.
+    _makeReadMoreBtn(inner) {
+        const btn = document.createElement('button');
+        btn.className = 'read-more-btn';
+        btn.textContent = 'Read more';
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const isExpanded = inner.classList.toggle('truncated-expanded');
+            btn.textContent = isExpanded ? 'Show less' : 'Read more';
+        });
+        return btn;
+    },
+
+    // The char-count threshold only flags candidates; the collapse itself is
+    // height-based, so drop the toggle for content that already fits.
+    _settleReadMore(targets) {
+        for (const t of targets) {
+            if (t.inner.clientHeight > 0 && t.inner.scrollHeight <= t.inner.clientHeight + 2) {
+                t.btn.remove();
+                t.host.classList.remove('has-truncation');
+                t.inner.classList.add('truncated-expanded');
+            }
+        }
+    },
+
+    // Collapse `host`'s current children behind a Read more toggle. Returns the
+    // truncation target for [_settleReadMore], or null when there is nothing to
+    // collapse.
+    _collapseWithReadMore(host) {
+        const nodes = Array.from(host.childNodes);
+        if (!nodes.length) return null;
+        const inner = document.createElement('span');
+        inner.className = 'truncated-inner';
+        nodes.forEach(n => inner.appendChild(n));
+        const btn = this._makeReadMoreBtn(inner);
+        host.appendChild(inner);
+        host.appendChild(btn);
+        host.classList.add('has-truncation');
+        return { inner, btn, host };
+    },
+
+    _readMoreThreshold() {
+        return window.innerWidth <= 768 ? 400 : 600;
+    },
+
     // Content-dependent passes that must run after the formatted HTML is in the
     // DOM: truncation, image blur, iOS video load, link previews, media
     // fallbacks. Runs inline (sync render) or after the worker content swap.
     _finalizeMessageContent(messageEl, message) {
-        const isMobileTruncate = window.innerWidth <= 768;
-        const truncateThreshold = isMobileTruncate ? 400 : 600;
+        const truncateThreshold = this._readMoreThreshold();
         const truncationTargets = [];
         if (!message.isFileOffer && message.content) {
             const contentEl = messageEl.querySelector('.message-content') || messageEl;
             const bubbleTimeInner = contentEl.querySelector(':scope > .bubble-time-inner');
 
-            const makeReadMoreBtn = (inner) => {
-                const btn = document.createElement('button');
-                btn.className = 'read-more-btn';
-                btn.textContent = 'Read more';
-                btn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const isExpanded = inner.classList.toggle('truncated-expanded');
-                    btn.textContent = isExpanded ? 'Show less' : 'Read more';
-                });
-                return btn;
-            };
+            const makeReadMoreBtn = (inner) => this._makeReadMoreBtn(inner);
 
             contentEl.querySelectorAll(':scope > blockquote').forEach(bq => {
                 if ((bq.textContent || '').length > truncateThreshold) {
@@ -1397,15 +1431,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // The char-count threshold only flags candidates; the collapse itself is
-        // height-based, so drop the toggle for content that already fits.
-        for (const t of truncationTargets) {
-            if (t.inner.clientHeight > 0 && t.inner.scrollHeight <= t.inner.clientHeight + 2) {
-                t.btn.remove();
-                t.host.classList.remove('has-truncation');
-                t.inner.classList.add('truncated-expanded');
-            }
-        }
+        this._settleReadMore(truncationTargets);
 
         // Blur images (including quoted images) for non-own senders when set.
         if (!message.isOwn) {

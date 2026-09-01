@@ -940,13 +940,21 @@ Object.assign(NYM.prototype, {
     // Re-entering a channel rebuilds the row, so this runs again on the same
     // message: it is idempotent, deduplicates repeated hrefs, and paints
     // straight from the cache when warm so a seen preview doesn't flash.
-    _attachLinkPreviews(messageEl) {
-        if (messageEl.dataset.previewsAttached === '1') return;
-        const links = messageEl.querySelectorAll('.message-content a[href^="http"]');
+    // [opts] lets another surface reuse this: `scope` is what to search for
+    // links, `container` what to append the cards to, and `flag` the dataset
+    // key that makes it idempotent (a Nostr reference card unfurls the links in
+    // ITS body, into ITS body, without touching the host message's own).
+    _attachLinkPreviews(messageEl, opts = {}) {
+        const flag = opts.flag || 'previewsAttached';
+        if (messageEl.dataset[flag] === '1') return;
+        const scope = opts.scope || messageEl;
+        const links = opts.scope
+            ? scope.querySelectorAll('a[href^="http"]')
+            : scope.querySelectorAll('.message-content a[href^="http"]');
         if (links.length === 0) return;
-        const container = messageEl.querySelector('.message-content');
+        const container = opts.container || messageEl.querySelector('.message-content');
         if (!container) return;
-        messageEl.dataset.previewsAttached = '1';
+        messageEl.dataset[flag] = '1';
 
         const seen = new Set();
         const hrefs = [];
@@ -1027,22 +1035,27 @@ Object.assign(NYM.prototype, {
                     this.manualRetryDM(retryEl.dataset.retryEventId);
                     return;
                 }
-
-                const mentionEl = e.target.closest('.nm-mention');
-                if (mentionEl && !e.target.closest('a, button, .reaction-badge, .add-reaction-btn')) {
-                    const pubkey = this._resolveMentionPubkey(mentionEl);
-                    if (pubkey) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const nym = this.getNymFromPubkey(pubkey);
-                        const suffix = this.getPubkeySuffix(pubkey);
-                        // Clicking a @mention should open the full user context menu
-                        this.showContextMenu(e, `${nym}#${suffix}`, pubkey, null, null, false);
-                        return;
-                    }
-                }
             });
         }
+
+        // Clicking a @mention opens that user's context menu. Delegated on the
+        // document, not on #messagesContainer: under column view each column
+        // renders into its own list, which that container never sees. Scoped to
+        // a message body so the call-chat overlay's mentions stay inert, as
+        // they were when this listener lived on the conversation container.
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest) return;
+            const mentionEl = e.target.closest('.nm-mention');
+            if (!mentionEl || !mentionEl.closest('.message-content')) return;
+            if (e.target.closest('a, button, .reaction-badge, .add-reaction-btn')) return;
+            const pubkey = this._resolveMentionPubkey(mentionEl);
+            if (!pubkey) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const nym = this.getNymFromPubkey(pubkey);
+            const suffix = this.getPubkeySuffix(pubkey);
+            this.showContextMenu(e, `${nym}#${suffix}`, pubkey, null, null, false);
+        });
 
         // Clicking a quoted block jumps to the message it quotes. Delegated on
         // the document, not on #messagesContainer: under column view each

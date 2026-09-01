@@ -367,13 +367,16 @@
                 const nip05Html = data.nip05
                     ? `<span class="nostr-card-nip05">${esc(data.nip05)}</span>` : '';
                 const aboutHtml = data.about
-                    ? `<div class="nostr-card-body">${esc(data.about.slice(0, 240))}</div>` : '';
+                    ? `<div class="nostr-card-body">${this.formatMessage(data.about)}</div>` : '';
                 // A shared npub is a person, so the card offers what tapping
-                // that person anywhere else in the app offers: their menu.
+                // that person anywhere else in the app offers: their menu. The
+                // HEAD carries it, not the whole card: the body below is real
+                // content, and a tap target around all of it would compete
+                // with every link in it.
                 const profileAttr = data.pubkey
                     ? ' data-action="openNostrProfileCard" role="button" tabindex="0"' : '';
-                return `<div class="nostr-card nostr-card-profile"${profileAttr} data-nostr-pubkey="${esc(data.pubkey)}">
-                    <div class="nostr-card-head">${avatarHtml}<div class="nostr-card-ident">${authorHtml}${nip05Html}</div><span class="nostr-card-kind">Profile</span></div>
+                return `<div class="nostr-card nostr-card-profile" data-nostr-pubkey="${esc(data.pubkey)}">
+                    <div class="nostr-card-head"${profileAttr}>${avatarHtml}<div class="nostr-card-ident">${authorHtml}${nip05Html}</div><span class="nostr-card-kind">Profile</span></div>
                     ${aboutHtml}
                 </div>`;
             }
@@ -384,14 +387,22 @@
                 : '';
             const channelHtml = data.channel
                 ? `<span class="nostr-card-channel">${esc(data.channel)}</span>` : '';
-            const body = (data.content || '').replace(/\s+/g, ' ').trim();
+            // The referenced event's body renders as a message body — media,
+            // code, mentions, emoji — not an escaped excerpt. A referenced
+            // event is very often exactly the media it carries, which a
+            // character-count truncation could never show. `_attachCardBody`
+            // then adds the same height-based Read more clamp and the link
+            // previews once this is in the DOM.
+            const body = (data.content || '').trim();
             const bodyHtml = body
-                ? `<div class="nostr-card-body">${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>`
+                ? `<div class="nostr-card-body">${this.formatMessage(body)}</div>`
                 : '<div class="nostr-card-body nostr-card-empty">No text content</div>';
+            // The HEAD is the jump affordance, not the whole card — see the
+            // profile branch above.
             const jumpAttr = this._findStoredMessage(data.id)
                 ? ' data-action="jumpToNostrRef" role="button" tabindex="0"' : '';
-            return `<div class="nostr-card"${jumpAttr} data-nostr-event-id="${esc(data.id)}">
-                <div class="nostr-card-head">${avatarHtml}<div class="nostr-card-ident">${authorHtml}${channelHtml}</div><span class="nostr-card-kind">${esc(kindLabel)}</span>${timeHtml}</div>
+            return `<div class="nostr-card" data-nostr-event-id="${esc(data.id)}">
+                <div class="nostr-card-head"${jumpAttr}>${avatarHtml}<div class="nostr-card-ident">${authorHtml}${channelHtml}</div><span class="nostr-card-kind">${esc(kindLabel)}</span>${timeHtml}</div>
                 ${bodyHtml}
             </div>`;
         },
@@ -425,6 +436,7 @@
                 el.className = 'nostr-card-container';
                 el.innerHTML = html;
                 container.appendChild(el);
+                this._attachCardBody(el, data);
             };
 
             const run = () => {
@@ -545,6 +557,42 @@
                     this.displaySystemMessage('Referenced event is not available');
                 }
             });
+        },
+
+        // The passes a card body needs once it is in the DOM, the same ones a
+        // message body gets: the height-based Read more clamp, link previews,
+        // media fallbacks, and the others'-images blur. Reference chips inside
+        // it are deliberately NOT unfurled — a card inside a card, and again
+        // inside that one, is not a thread of context.
+        _attachCardBody(cardEl, data) {
+            const bodyEl = cardEl.querySelector('.nostr-card-body');
+            if (!bodyEl || bodyEl.classList.contains('nostr-card-empty')) return;
+
+            const text = (data.type === 'profile' ? data.about : data.content) || '';
+            if (text.length > this._readMoreThreshold()) {
+                const target = this._collapseWithReadMore(bodyEl);
+                if (target) this._settleReadMore([target]);
+            }
+
+            if (typeof this._attachLinkPreviews === 'function') {
+                this._attachLinkPreviews(cardEl, {
+                    scope: bodyEl,
+                    container: bodyEl,
+                    flag: 'cardPreviewsAttached',
+                });
+            }
+            if (typeof this._attachMediaFallbacks === 'function') {
+                this._attachMediaFallbacks(cardEl);
+            }
+
+            const pubkey = data.pubkey || '';
+            const isOwn = pubkey && pubkey === this.pubkey;
+            const shouldBlur = !isOwn && (this.blurOthersImages === true ||
+                (this.blurOthersImages === 'friends' && !this.isFriend(pubkey)));
+            if (shouldBlur) {
+                bodyEl.querySelectorAll('img:not(.avatar-message)')
+                    .forEach(img => img.classList.add('blurred'));
+            }
         },
 
         // Copies an event reference, confirming in place on the button.
