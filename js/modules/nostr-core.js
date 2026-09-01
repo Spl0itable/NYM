@@ -2373,8 +2373,11 @@ Object.assign(NYM.prototype, {
             if (idx !== -1) {
                 msgs.splice(idx, 1);
                 this.persistChannelMessages(channel);
-                if (typeof this.updateUnreadCount === 'function') {
-                    this.updateUnreadCount(channel);
+                // Re-derive, don't bump: a deletion removes a message. Going
+                // through updateUnreadCount added one to the badge for a
+                // message that had just been taken off the list.
+                if (typeof this.refreshUnreadCount === 'function') {
+                    this.refreshUnreadCount(channel);
                 }
             }
         });
@@ -2390,8 +2393,8 @@ Object.assign(NYM.prototype, {
             if (removed) {
                 this.channelDOMCache.delete(convKey);
                 this.persistPMMessages(convKey);
-                if (typeof this.updateUnreadCount === 'function') {
-                    this.updateUnreadCount(convKey);
+                if (typeof this.refreshUnreadCount === 'function') {
+                    this.refreshUnreadCount(convKey);
                 }
             }
         });

@@ -325,7 +325,7 @@
             this.addPMConversation(this.getNymFromPubkey(pubkey), pubkey, ms);
             this.movePMToTop(pubkey, ms);
             this.displayMessage(msg);
-            if (typeof this.updateUnreadCount === 'function') this.updateUnreadCount(conversationKey);
+            if (typeof this.updateUnreadCount === 'function') this.updateUnreadCount(conversationKey, msg.created_at);
         },
 
         // True when the message the user is sending should ride the mesh: the

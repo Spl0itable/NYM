@@ -320,9 +320,30 @@ Object.assign(NYM.prototype, {
             if (!value) return;
             const name = String(value.geohash || value.channel || '').toLowerCase();
             if (!name) return;
+            if (this.blockedChannels && this.blockedChannels.has(name)) return;
+            // The conversation on screen is being read as it arrives, so the
+            // archive must not paint a badge on it: a reply collapsed inside a
+            // thread never advances the read watermark, and D1's buckets count
+            // it, which put a badge on the channel the user was looking at.
+            if (this._channelIsOnScreen('#' + name)) return;
             seedKey('#' + name, name, act.get(name));
         });
         if (changed) this._persistUnreadCounts();
+    },
+
+    // True when this conversation is the one being read right now. Under column
+    // view that is the focused, visible, bottom-pinned column (the same test
+    // _cvMarkColumnRead makes before clearing a badge); otherwise the channel
+    // the single view has open.
+    _channelIsOnScreen(unreadKey) {
+        if (typeof document !== 'undefined' && document.hidden) return false;
+        if (this._cvActive) {
+            const col = typeof this._cvColumnForKey === 'function'
+                ? this._cvColumnForKey(unreadKey) : null;
+            return !!col && this._cvFocusedId === col.id && col._atBottom !== false;
+        }
+        if (this.inPMMode) return false;
+        return unreadKey === (this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel);
     },
 
     // Discover recently-active NAMED channels (kind 23333) and fetch activity
@@ -2305,15 +2326,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Every caller gates this on `!message.isHistorical`, so it always means
     // "one more LIVE unread message arrived".
-    updateUnreadCount(channel) {
+    updateUnreadCount(channel, createdAt) {
         let count = this._recomputeUnreadCount(channel);
         // Don't let a partial local cache drop the badge below the D1 archive.
         if (this._d1Unread) count = Math.max(count, this._d1Unread.get(channel) || 0);
         // The cache may hold only a slice of what is unread, so the recompute
         // alone would stomp a larger standing count back down. A live arrival
-        // means the true total is one MORE than whatever already stood.
+        // means the true total is one MORE than whatever already stood — but
+        // only when the message is newer than the channel's read watermark.
+        // Relays replay older events live and a backfill can land on this path,
+        // and every one of those bumped the badge by one for a message the
+        // channel had already been read past. Callers with no message in hand
+        // (a deletion sweep) pass nothing and keep the unconditional bump.
         if (this._unreadCountStillValid(channel)) {
-            count = Math.max(count, (this.unreadCounts.get(channel) || 0) + 1);
+            const standing = this.unreadCounts.get(channel) || 0;
+            const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
+            const isNew = !(createdAt > 0) || createdAt > lastRead;
+            count = Math.max(count, standing + (isNew ? 1 : 0));
         }
         this._setUnreadCount(channel, count);
         this._persistUnreadCounts();

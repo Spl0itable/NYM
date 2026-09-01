@@ -1461,7 +1461,7 @@ Object.assign(NYM.prototype, {
             const cvShown = this._cvActive && this._cvListForKey(groupConvKey);
             if (cvShown) this.displayMessage(msg);
             if (!isOwn && !senderBlocked) {
-                if (!(cvShown && this._cvMarkColumnRead(groupConvKey))) this.updateUnreadCount(groupConvKey);
+                if (!(cvShown && this._cvMarkColumnRead(groupConvKey))) this.updateUnreadCount(groupConvKey, msg.created_at);
                 notifyForGroup();
             }
         }
@@ -2959,7 +2959,7 @@ Object.assign(NYM.prototype, {
                 list.splice(idx, 1);
                 this.channelDOMCache.delete(groupConvKey);
                 if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
-                if (typeof this.updateUnreadCount === 'function') this.updateUnreadCount(groupConvKey);
+                if (typeof this.refreshUnreadCount === 'function') this.refreshUnreadCount(groupConvKey);
             } else if (this.deletedEventIds && this.deletedEventIds.add) {
                 // Not in our local list yet — remember so a late-arriving copy stays gone.
                 this.deletedEventIds.add(messageId);

@@ -592,14 +592,14 @@ Object.assign(NYM.prototype, {
                 _cvContainer = this._cvListForKey(storageKey);
                 if (!_cvContainer) {
                     if (!message.isOwn && !exists && !message.isHistorical) {
-                        this.updateUnreadCount(storageKey);
+                        this.updateUnreadCount(storageKey, message.created_at);
                     }
                     return;
                 }
                 const seen = this._cvMarkColumnRead(storageKey);
                 if (!seen) {
                     if (!message.isOwn && !exists && !message.isHistorical) {
-                        this.updateUnreadCount(storageKey);
+                        this.updateUnreadCount(storageKey, message.created_at);
                     }
                 } else if (!message.isOwn && !message.isHistorical && message.geohash &&
                     message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
@@ -612,7 +612,7 @@ Object.assign(NYM.prototype, {
                 // does a partial-cache restore that appends trailing new
                 // messages on switch back, avoiding a full re-render.
                 if (!message.isOwn && !exists && !message.isHistorical) {
-                    this.updateUnreadCount(storageKey);
+                    this.updateUnreadCount(storageKey, message.created_at);
                 }
                 return;
             } else {
@@ -623,7 +623,7 @@ Object.assign(NYM.prototype, {
                     // strategy as the PM branch above; no cache invalidation
                     // needed.
                     if (!message.isOwn && !exists && !message.isHistorical) {
-                        this.updateUnreadCount(storageKey);
+                        this.updateUnreadCount(storageKey, message.created_at);
                     }
                     return;
                 }

@@ -1591,7 +1591,7 @@ Object.assign(NYM.prototype, {
                 // appends the trailing new messages to the cached fragment,
                 // avoiding a full re-render of long PM threads.
                 if (!isOwn) {
-                    if (!(cvShown && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey);
+                    if (!(cvShown && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey, msg.created_at);
                     notifyForPM();
                 }
             }
@@ -2092,7 +2092,7 @@ Object.assign(NYM.prototype, {
         this.persistPMMessages(conversationKey);
         this.addPMConversation(botNym, bot.pubkey, nowSec * 1000);
         this.movePMToTop(bot.pubkey, nowSec * 1000);
-        this.updateUnreadCount(conversationKey);
+        this.updateUnreadCount(conversationKey, msg.created_at);
         try { localStorage.setItem('nym_botpm_welcomed', 'true'); } catch { }
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
     },
