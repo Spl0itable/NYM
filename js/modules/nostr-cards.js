@@ -349,19 +349,51 @@
             }
         },
 
+        _cardAuthorHtml(data) {
+            const esc = (s) => this.escapeHtml(s || '');
+            const raw = (data && data.author) || '';
+            const base = typeof this.stripPubkeySuffix === 'function'
+                ? this.stripPubkeySuffix(raw) : raw;
+            if (!base) return '';
+            const pubkey = (data && data.pubkey) || '';
+            const suffix = (pubkey && typeof this.getPubkeySuffix === 'function')
+                ? this.getPubkeySuffix(pubkey) : '';
+            const attrs = pubkey
+                ? ` data-action="openNostrProfileCard" data-nostr-pubkey="${esc(pubkey)}" role="button" tabindex="0"`
+                : '';
+            return `<span class="nostr-card-author"${attrs}>${esc(base)}` +
+                `${suffix ? `<span class="nym-suffix">#${esc(suffix)}</span>` : ''}</span>`;
+        },
+
+        _hydrateCardAuthor(cardEl, data) {
+            const pubkey = data && data.pubkey;
+            if (!cardEl || !pubkey) return;
+            if (this.users && this.users.get(pubkey)) return;
+            if (typeof this.fetchProfileDirect !== 'function') return;
+            Promise.resolve(this.fetchProfileDirect(pubkey)).then(() => {
+                const user = this.users && this.users.get(pubkey);
+                if (!user) return;
+                const span = cardEl.querySelector('.nostr-card-author');
+                const nym = typeof this.parseNymFromDisplay === 'function'
+                    ? this.parseNymFromDisplay(user.nym) : (user.nym || '');
+                if (!span || !nym) return;
+                const fresh = this._cardAuthorHtml(Object.assign({}, data, { author: nym }));
+                if (fresh) span.outerHTML = fresh;
+            }).catch(() => { });
+        },
+
         _renderNostrRefCard(data) {
             if (!data) return '';
             const esc = (s) => this.escapeHtml(s || '');
             const avatarSrc = (data.pubkey && typeof this.getAvatarUrl === 'function')
                 ? this.getAvatarUrl(data.pubkey) : '';
+            // Carries `data-avatar-pubkey` so a picture that lands after the
+            // card was painted rides the global _flushAvatarUpdates sweep, the
+            // way every other avatar in the app does.
             const avatarHtml = avatarSrc
-                ? `<img src="${esc(avatarSrc)}" class="nostr-card-avatar" alt="" decoding="async" loading="lazy" data-error-action="errorHideElement">`
+                ? `<img src="${esc(avatarSrc)}" class="nostr-card-avatar" alt="" decoding="async" loading="lazy" data-avatar-pubkey="${esc(this._safePubkey(data.pubkey))}" data-error-action="errorHideElement">`
                 : '';
-            const suffix = (data.pubkey && typeof this.getPubkeySuffix === 'function')
-                ? this.getPubkeySuffix(data.pubkey) : '';
-            const authorHtml = data.author
-                ? `<span class="nostr-card-author">${esc(data.author)}${suffix ? `<span class="nym-suffix">#${esc(suffix)}</span>` : ''}</span>`
-                : '';
+            const authorHtml = this._cardAuthorHtml(data);
 
             if (data.type === 'profile') {
                 const nip05Html = data.nip05
@@ -437,6 +469,7 @@
                 el.innerHTML = html;
                 container.appendChild(el);
                 this._attachCardBody(el, data);
+                this._hydrateCardAuthor(el, data);
             };
 
             const run = () => {
@@ -490,8 +523,13 @@
         openNostrProfileCard(pubkey, e) {
             if (!pubkey || typeof this.showContextMenu !== 'function') return;
             const user = this.users && this.users.get(pubkey);
-            const nym = (user && user.nym)
+            const raw = (user && user.nym)
                 || (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pubkey) : '');
+            // Both sources can already carry `#xxxx` (getNymFromPubkey always
+            // does), so strip before re-adding or the menu title reads
+            // `name#abcd#abcd`.
+            const nym = typeof this.stripPubkeySuffix === 'function'
+                ? this.stripPubkeySuffix(raw) : raw;
             const suffix = typeof this.getPubkeySuffix === 'function'
                 ? this.getPubkeySuffix(pubkey) : '';
             this.showContextMenu(e, suffix ? `${nym}#${suffix}` : nym, pubkey, null, null, false);

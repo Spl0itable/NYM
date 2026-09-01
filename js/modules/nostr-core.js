@@ -402,6 +402,10 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            if (this.isValidGeohash(geohash) !== (event.kind === 20000)) {
+                return;
+            }
+
             // Cross-transport dedup. A `['nymmesh', <id>]` tag marks this event
             // as the Nostr replay of a message the Bluetooth mesh already
             // carried — the sender's outbox publishing, once their internet

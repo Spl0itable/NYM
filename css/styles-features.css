@@ -4485,11 +4485,13 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 }
 
 .nostr-card-head[data-action],
+.nostr-card-author[data-action],
 .nostr-ref {
     cursor: pointer;
 }
 
-.nostr-card-head[data-action]:hover .nostr-card-author {
+.nostr-card-head[data-action]:hover .nostr-card-author,
+.nostr-card-author[data-action]:hover {
     color: var(--primary);
 }
 

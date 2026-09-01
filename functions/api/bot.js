@@ -2785,12 +2785,12 @@ async function onRequest(context) {
   // Always append for ?ask queries that used web search; 50% chance for other eligible commands
   var ZAP_ELIGIBLE_COMMANDS = ["ask", "summarize", "define", "translate", "joke", "news", "btc", "bitcoin", "price"];
   var ZAP_PROMPTS = [
-    "⚡ Liked this response? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!",
-    "⚡ Found this helpful? Send a Bitcoin zap to show some love! If you don't know what or how to zap, just ask!",
-    "⚡ If this was useful, consider zapping this message with a few Bitcoin sats! If you don't know what or how to zap, just ask!",
-    "⚡ Tip jar is open — zap this message some Bitcoin if you enjoyed it! If you don't know what or how to zap, just ask!",
-    "⚡ Zap this message to tip with Bitcoin Lightning! If you don't know what or how to zap, just ask!",
-    "⚡ Want to say thanks? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!"
+    "⚡ Liked Nymchat's bot response? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!",
+    "⚡ Found Nymchat's bot helpful? Send a Bitcoin zap to show some love! If you don't know what or how to zap, just ask!",
+    "⚡ If Nymchat's bot was useful, consider zapping this message with a few Bitcoin sats! If you don't know what or how to zap, just ask!",
+    "⚡ Tip jar is open — zap this message some Bitcoin if you enjoyed Nymchat's bot! If you don't know what or how to zap, just ask!",
+    "⚡ Zap this message to tip Nymchat's bot with Bitcoin Lightning! If you don't know what or how to zap, just ask!",
+    "⚡ Want to say thanks to Nymchat's bot? Zap this message with a Bitcoin Lightning tip! If you don't know what or how to zap, just ask!"
   ];
   var isWebSearchAsk = command.toLowerCase() === "ask" && needsWebSearch(args || "");
   if (ZAP_ELIGIBLE_COMMANDS.includes(command.toLowerCase()) && (isWebSearchAsk || Math.random() < 0.5)) {

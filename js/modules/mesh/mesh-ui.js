@@ -247,7 +247,7 @@
 
         // inbound 
         _onMeshPublicMessage(m) {
-            const channel = m.channel || MESH_CHANNEL;
+            const channel = this.sanitizeChannelName(m.channel || '') || MESH_CHANNEL;
             const seconds = Math.floor((m.timestampMs || Date.now()) / 1000);
             const pubkey = m.senderNostrPubkey || ('mesh:' + m.senderPeerID);
             // Remember the mesh id: when the sender's internet comes back their
