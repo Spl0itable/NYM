@@ -293,7 +293,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                         maxLength}) =>
                     null,
                 onChanged: (_) => setState(() {}),
-                style: TextStyle(color: c.text, fontSize: 14),
+                style: TextStyle(color: c.inputText, fontSize: 14),
                 decoration: InputDecoration(
                   isDense: true,
                   hintText: tr('Enter new nym'),
@@ -365,10 +365,10 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 'public key identifies you to everyone, like a username, while '
                 'your private key proves you are really you, like a password. '
                 'Others use this pubkey to find you on Nymchat, and you use '
-                'theirs to find them. The same key has two spellings — npub '
+                'theirs to find them. The same key has two formats — npub '
                 'and hex — and they are interchangeable. The four characters '
                 'after the # in a nickname are the last four of the hex '
-                'spelling.'),
+                'format.'),
             style: TextStyle(color: c.textDim, fontSize: 11, height: 1.4),
           ),
           const SizedBox(height: 8),
@@ -583,7 +583,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
           buildCounter: (_,
                   {required currentLength, required isFocused, maxLength}) =>
               null,
-          style: TextStyle(color: c.text, fontSize: 14),
+          style: TextStyle(color: c.inputText, fontSize: 14),
           decoration: InputDecoration(
             hintText: tr('Tell people a bit about yourself...'),
             hintStyle: TextStyle(color: c.textDim),
@@ -611,7 +611,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         _label(c, tr('Bitcoin Lightning Address')),
         TextField(
           controller: _lightning,
-          style: TextStyle(color: c.text, fontSize: 14),
+          style: TextStyle(color: c.inputText, fontSize: 14),
           decoration: InputDecoration(
             isDense: true,
             hintText: 'your@lightning-address.com',
@@ -744,7 +744,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                      color: c.text, fontFamily: 'monospace', fontSize: 12),
+                      color: c.inputText, fontFamily: 'monospace', fontSize: 12),
                 ),
               ),
             ),
@@ -807,7 +807,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 autocorrect: false,
                 enableSuggestions: false,
                 style: TextStyle(
-                    color: c.text, fontFamily: 'monospace', fontSize: 12),
+                    color: c.inputText, fontFamily: 'monospace', fontSize: 12),
                 decoration: InputDecoration(
                   hintText: 'nympq1…',
                   hintStyle: TextStyle(color: c.textDim, fontSize: 12),
@@ -887,7 +887,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: c.text,
+                    color: c.inputText,
                     fontFamily: 'monospace',
                     fontSize: 12,
                   ),

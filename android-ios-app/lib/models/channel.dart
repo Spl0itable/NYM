@@ -9,6 +9,11 @@ final RegExp _geohashRe = RegExp(r'^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$');
 /// True if [s] is a valid geohash (docs/specs/03 §1.1).
 bool isValidGeohash(String s) => _geohashRe.hasMatch(s.toLowerCase());
 
+final RegExp _channelTagWhitespaceRe = RegExp(r'\s');
+
+bool isValidChannelTag(String? s) =>
+    s != null && s.isNotEmpty && !_channelTagWhitespaceRe.hasMatch(s);
+
 /// The default channel, which cannot be left or blocked.
 const String kDefaultChannel = 'nymchat';
 
@@ -39,16 +44,31 @@ class ChannelEntry {
   /// Channel name (always present).
   final String channel;
 
-  /// Geohash if a geohash channel; '' for named.
+  /// Geohash as the caller supplied it; '' when they did not. Prefer
+  /// [geohashKey], which fills this in from the channel's own name.
   final String geohash;
 
-  bool get isGeohash => geohash.isNotEmpty;
+  /// The geohash this channel IS, or '' when it is a named channel.
+  ///
+  /// Validated, and derived from the name when [geohash] was not supplied.
+  /// Registration happens from a dozen places — a mesh delivery, a synced key
+  /// list, a column seed, a discovery pass — and several only ever have the
+  /// name while others pass it as a geohash whether or not it is one;
+  /// whichever landed first decided the row for the rest of the session, one
+  /// way or the other. [channelWire] picks the transport by this same test, so
+  /// the answer cannot disagree with what the channel is on the wire.
+  String get geohashKey {
+    if (geohash.isNotEmpty && isValidGeohash(geohash)) return geohash;
+    return isValidGeohash(channel) ? channel : '';
+  }
+
+  bool get isGeohash => geohashKey.isNotEmpty;
 
   /// Storage key for messages: `#<geohash>` or `#<name>` (always `#`-prefixed).
-  String get storageKey => '#${isGeohash ? geohash : channel}';
+  String get storageKey => '#${isGeohash ? geohashKey : channel}';
 
   /// Lookup key in the `channels` map (geohash or name, lowercase).
-  String get key => (isGeohash ? geohash : channel).toLowerCase();
+  String get key => (isGeohash ? geohashKey : channel).toLowerCase();
 
   Map<String, dynamic> toJson() =>
       {'key': key, 'channel': channel, 'geohash': geohash};

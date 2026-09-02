@@ -21,9 +21,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../features/pms/pm_logic.dart' show ReceiptInfo;
+import '../../models/channel.dart';
 import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../services/mesh/mesh_events.dart';
+import '../../services/platform/deep_links.dart' show sanitizeChannelName;
 import '../../services/mesh/mesh_peer.dart';
 import '../../services/mesh/mesh_service.dart';
 import '../../services/mesh/noise/noise_crypto.dart';
@@ -432,12 +434,22 @@ class MeshBridge {
   }
 
   void _onPublic(MeshPublicMessage msg) {
-    final channelName = (msg.channel == null || msg.channel!.isEmpty)
+    // A radio frame names its own channel, and that name went straight into the
+    // message with none of the checks the Nostr ingest makes. There is no event
+    // kind here to pair a shape against — a mesh frame carries no kind — but the
+    // name itself still has to be one the app could have created, so a peer
+    // cannot file a message under a channel that could never exist.
+    final raw = (msg.channel == null || msg.channel!.isEmpty)
         ? kMeshNearbyChannel
         : (msg.channel!.startsWith('#')
             ? msg.channel!.substring(1)
             : msg.channel!);
-    final key = channelName.toLowerCase();
+    // A name that isn't one falls back to Nearby rather than being dropped:
+    // the words were still said over the radio, and an unnamed frame already
+    // lands there.
+    final sanitized = sanitizeChannelName(raw);
+    final key = sanitized.isEmpty ? kMeshNearbyChannel : sanitized;
+    final channelName = key;
     if (_meshChannelKeys.add(key)) _refreshMarkers();
     final storageKey = '#$key';
     final isOwn = msg.senderPeerID == _service.myPeerID;
@@ -452,7 +464,10 @@ class MeshBridge {
       ms: msg.timestampMs,
       isOwn: isOwn,
       channel: channelName,
-      eventKind: 20000,
+      // The kind this channel's messages travel under once they reach Nostr,
+      // so a reaction to a mesh message carries the same `k` the relay copy
+      // would (a named channel is 23333, not 20000).
+      eventKind: channelWire(key).kind,
       deliveryStatus: DeliveryStatus.sent,
       viaMesh: true,
     );

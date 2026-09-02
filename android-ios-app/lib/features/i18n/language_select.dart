@@ -177,7 +177,7 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
               const SizedBox(width: 8),
               Expanded(
                 child: TextField(
-                  style: TextStyle(color: c.text, fontSize: 14),
+                  style: TextStyle(color: c.inputText, fontSize: 14),
                   cursorColor: c.primary,
                   decoration: InputDecoration(
                     isDense: true,

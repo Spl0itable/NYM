@@ -1323,7 +1323,7 @@ const List<String> kAppStringsCatalog = <String>[
   'Partly quantum-resistant',
   'Not quantum-resistant',
   'Quantum-resistant, legacy key',
-  'A "pubkey" aka "public key" is one half of a keypair: your public key identifies you to everyone, like a username, while your private key proves you are really you, like a password. Others use this pubkey to find you on Nymchat, and you use theirs to find them. The same key has two spellings — npub and hex — and they are interchangeable. The four characters after the # in a nickname are the last four of the hex spelling.',
+  'A "pubkey" aka "public key" is one half of a keypair: your public key identifies you to everyone, like a username, while your private key proves you are really you, like a password. Others use this pubkey to find you on Nymchat, and you use theirs to find them. The same key has two formats — npub and hex — and they are interchangeable. The four characters after the # in a nickname are the last four of the hex format.',
   'View or Edit Nym\'s Details',
   'Your private messages and group chats with other Nymchat users are now encrypted with an added post-quantum key exchange (ML-KEM-768), so traffic recorded today can\u2019t be decrypted later by a quantum computer.\n\nThis uses a recovery code, not your nsec. Save the code below alongside your nsec — you will need it to read these messages on another device, and if every device holding it is lost, they cannot be recovered. It is always available in your Nym\u2019s details.',
   'Add your post-quantum recovery code',

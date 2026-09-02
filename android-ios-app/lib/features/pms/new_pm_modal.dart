@@ -477,7 +477,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                           TextField(
                             controller: _messageController,
                             maxLines: 3,
-                            style: TextStyle(color: c.textBright, fontSize: 15),
+                            style: TextStyle(color: c.inputText, fontSize: 15),
                             decoration: _inputDecoration(
                                 c, tr('Start the conversation...')),
                           ),
@@ -665,7 +665,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                     focusNode: _recipientFocus,
                     autofocus: true, // PWA focuses pmRecipientInput on open
                     onSubmitted: (_) => _addFromInput(),
-                    style: TextStyle(color: c.text, fontSize: 13),
+                    style: TextStyle(color: c.inputText, fontSize: 13),
                     decoration: InputDecoration(
                       isDense: true,
                       isCollapsed: true,

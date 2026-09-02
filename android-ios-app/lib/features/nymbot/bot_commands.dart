@@ -249,6 +249,15 @@ const List<BotCommand> kBotCommands = [
     description: 'Transfer your credits (standard and Pro) to another user',
     creditCommand: true,
   ),
+  BotCommand(
+    name: 'anon',
+    group: BotCommandGroup.credits,
+    usage: '?anon',
+    description:
+        'Chat from a throwaway key Nymbot can never link to your nym',
+    creditCommand: true,
+    isFree: true,
+  ),
 
   // --- Info -------------------------------------------------------------------
   // `?help` appears twice in the README (Credits group + Info group). It is a

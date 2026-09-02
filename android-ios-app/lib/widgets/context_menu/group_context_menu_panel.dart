@@ -1153,7 +1153,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                             Expanded(
                               child: TextField(
                                 controller: _controller,
-                                style: TextStyle(color: c.text, fontSize: 14),
+                                style: TextStyle(color: c.inputText, fontSize: 14),
                                 onSubmitted: (_) => _add(),
                                 decoration: InputDecoration(
                                   isDense: true,

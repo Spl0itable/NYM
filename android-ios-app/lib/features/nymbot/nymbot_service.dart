@@ -91,8 +91,9 @@ class NymbotService {
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
     Duration timeout = _defaultTimeout,
+    bool anon = false,
   }) async {
-    final ws = _apiSocketRequest;
+    final ws = anon ? null : _apiSocketRequest;
     if (ws != null) {
       // The socket is authenticated once; frames drop pubkey/auth (the worker
       // pins the socket's pubkey). Null → fall back to HTTP (shop.js:162).
@@ -189,6 +190,7 @@ class NymbotService {
     GitConfig? git,
     Map<String, String>? cmdAlias,
     Map<String, dynamic>? pqAnnouncement,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'pm',
@@ -207,6 +209,7 @@ class NymbotService {
       pubkey: pubkey,
       auth: auth,
       timeout: _pmTimeout,
+      anon: anon,
     );
     final json = res.data;
 
@@ -228,12 +231,14 @@ class NymbotService {
   Future<BotBalance> balance({
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'balance',
       const <String, dynamic>{},
       pubkey: pubkey,
       auth: auth,
+      anon: anon,
     );
     // Never zero-fill from an `{error}`/error-status body — the PWA shows
     // `'Nymbot: ' + (data.error || 'could not check balance')` instead
@@ -255,6 +260,7 @@ class NymbotService {
     String? recipientPubkey,
     Map<String, dynamic>? zapRequest,
     String? comment,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'create-invoice',
@@ -267,6 +273,7 @@ class NymbotService {
       },
       pubkey: pubkey,
       auth: auth,
+      anon: anon,
     );
     _throwOnStatus(res);
     return BotInvoice.fromJson(res.data, tier: tier, amountSats: amountSats);
@@ -279,12 +286,14 @@ class NymbotService {
     required String invoiceId,
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'check-invoice',
       <String, dynamic>{'invoiceId': invoiceId},
       pubkey: pubkey,
       auth: auth,
+      anon: anon,
     );
     _throwOnStatus(res);
     return res.data;
@@ -299,6 +308,7 @@ class NymbotService {
     Future<Map<String, dynamic>?> Function()? auth,
     Map<String, dynamic>? receipt,
     String? gifterNym,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'claim-credits',
@@ -309,6 +319,7 @@ class NymbotService {
       },
       pubkey: pubkey,
       auth: auth,
+      anon: anon,
     );
     _throwOnStatus(res);
     return res.data;
@@ -340,18 +351,64 @@ class NymbotService {
         comment: comment,
       );
 
+  Future<Map<String, dynamic>> voucherKeys() async {
+    final res = await _postRaw(
+      const <String, dynamic>{'action': 'voucher-keys'},
+      timeout: _defaultTimeout,
+    );
+    _throwOnError(res);
+    return res.data;
+  }
+
+  Future<Map<String, dynamic>> voucherIssue({
+    required String pubkey,
+    required String tier,
+    required String reqId,
+    required List<Map<String, dynamic>> outputs,
+    Future<Map<String, dynamic>?> Function()? auth,
+  }) async {
+    final res = await _botRequest(
+      'voucher-issue',
+      <String, dynamic>{'tier': tier, 'reqId': reqId, 'outputs': outputs},
+      pubkey: pubkey,
+      auth: auth,
+    );
+    _throwOnError(res);
+    return res.data;
+  }
+
+  Future<Map<String, dynamic>> voucherRedeem({
+    required String pubkey,
+    required String tier,
+    required String redeemId,
+    required List<Map<String, dynamic>> tokens,
+    Future<Map<String, dynamic>?> Function()? auth,
+  }) async {
+    final res = await _botRequest(
+      'voucher-redeem',
+      <String, dynamic>{'tier': tier, 'redeemId': redeemId, 'tokens': tokens},
+      pubkey: pubkey,
+      auth: auth,
+      anon: true,
+    );
+    _throwOnError(res);
+    return res.data;
+  }
+
   /// Transfers all of the user's credits (standard + Pro) to another user
   /// (`action: transfer-credits`).
   Future<Map<String, dynamic>> transfer({
     required String pubkey,
     required String targetPubkey,
     Future<Map<String, dynamic>?> Function()? auth,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'transfer-credits',
       <String, dynamic>{'targetPubkey': targetPubkey},
       pubkey: pubkey,
       auth: auth,
+      anon: anon,
     );
     _throwOnStatus(res);
     return res.data;
@@ -361,12 +418,14 @@ class NymbotService {
   Future<Map<String, dynamic>> clearHistory({
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'clear-history',
       const <String, dynamic>{},
       pubkey: pubkey,
       auth: auth,
+      anon: anon,
     );
     _throwOnStatus(res);
     return res.data;

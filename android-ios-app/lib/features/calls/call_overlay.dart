@@ -1663,7 +1663,7 @@ class _InputRowState extends ConsumerState<_InputRow> {
                   onKeyEvent: _onMentionKey,
                   child: TextField(
                     controller: widget.controller,
-                    style: TextStyle(color: c.textBright, fontSize: 14),
+                    style: TextStyle(color: c.inputText, fontSize: 14),
                     minLines: 1,
                     maxLines: 4,
                     onChanged: _onChanged,

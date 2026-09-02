@@ -443,7 +443,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
       controller: _custom,
       keyboardType: TextInputType.number,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      style: TextStyle(color: c.text, fontSize: 14),
+      style: TextStyle(color: c.inputText, fontSize: 14),
       decoration: InputDecoration(
         hintText: tr('Custom amount (sats)'),
         hintStyle: TextStyle(color: c.textDim),

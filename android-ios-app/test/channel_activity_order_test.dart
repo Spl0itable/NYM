@@ -21,19 +21,19 @@ void main() {
       () {
     final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
     // A fresh live message stamps recent activity (stored as createdAt*1000 ms).
-    n.ingestEvent(_msg('busy', 2000));
-    final tNewest = n.state.channelLastActivity['#busy']!;
+    n.ingestEvent(_msg('busyroom', 2000));
+    final tNewest = n.state.channelLastActivity['#busyroom']!;
 
     // A D1 backfill replays OLDER history through the same path; it must NOT
     // overwrite the newer activity time (the sidebar-sort regression).
-    n.ingestEvent(_msg('busy', 1000));
-    n.ingestEvent(_msg('busy', 500));
-    expect(n.state.channelLastActivity['#busy'], tNewest,
+    n.ingestEvent(_msg('busyroom', 1000));
+    n.ingestEvent(_msg('busyroom', 500));
+    expect(n.state.channelLastActivity['#busyroom'], tNewest,
         reason: 'old backfilled messages must not sink the channel');
 
     // A genuinely newer message advances it.
-    n.ingestEvent(_msg('busy', 3000));
-    expect(n.state.channelLastActivity['#busy']! > tNewest, isTrue);
+    n.ingestEvent(_msg('busyroom', 3000));
+    expect(n.state.channelLastActivity['#busyroom']! > tNewest, isTrue);
   });
 
   test(
@@ -56,7 +56,7 @@ void main() {
   test('index-backed reaction guard: isKnownMessageId tracks ingested ids', () {
     final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
     expect(n.isKnownMessageId('cm_x_1'), isFalse);
-    n.ingestEvent(_msg('x', 1, id: 'cm_x_1'));
+    n.ingestEvent(_msg('xa', 1, id: 'cm_x_1'));
     expect(n.isKnownMessageId('cm_x_1'), isTrue);
     // A removed message's id is no longer known (index de-indexed on remove).
     n.removeMessage('cm_x_1');

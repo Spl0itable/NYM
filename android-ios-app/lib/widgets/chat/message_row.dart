@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/constants/relays.dart';
+import '../../core/crypto/bech32_codec.dart' show encodeNevent;
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -657,11 +659,25 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // styles-features.css:1224-1227) alongside the 700 nym bolding.
     final suffixWeight =
         hasGenesisFlair(_cosmetics) ? FontWeight.w400 : FontWeight.w100;
-    // `message.author` carries the stored nym which already includes its
-    // `#suffix` (User.nym / the `anon#xxxx` fallback). Strip it so the canonical
-    // suffix below isn't appended twice (PWA renders the base nym + a separate
-    // `.nym-suffix` span — `parseNymFromDisplay`, `messages.js:1781`).
-    final baseNym = stripPubkeySuffix(message.author);
+    // `message.author` is the nym FROZEN onto the message when it was ingested,
+    // so a message that arrived before its sender's kind 0 keeps whatever
+    // fallback was current then — usually the literal "nym". The PWA does not
+    // have that problem: `updatePMNicknameFromProfile` rewrites
+    // `.message[data-pubkey] .message-author` in place on every kind 0
+    // (pms.js:3163), so already-painted rows pick the real name up.
+    //
+    // Prefer the LIVE profile and keep the stored author only as the fallback.
+    // Watched, so the row repaints when the profile lands — the native
+    // equivalent of that sweep. An ephemeral/pseudonymous sender has no entry
+    // in the map, so those keep the nym they were sent under.
+    final liveNym = ref.watch(
+        usersProvider.select((u) => u[message.pubkey]?.nym));
+    // It already includes its `#suffix` (User.nym / the `anon#xxxx` fallback).
+    // Strip it so the canonical suffix below isn't appended twice (PWA renders
+    // the base nym + a separate `.nym-suffix` span — `parseNymFromDisplay`,
+    // `messages.js:1781`).
+    final baseNym = stripPubkeySuffix(
+        (liveNym != null && liveNym.isNotEmpty) ? liveNym : message.author);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1374,6 +1390,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                   fontSize: 12,
                   powEventId: message.id,
                   powTarget: message.powTarget,
+                  copyPubkey: message.pubkey,
                   // Public channel messages only: PM/group rows are
                   // gift-wrapped and carry no mined work.
                   powApplies: !message.isPM && !message.isGroup,
@@ -1888,6 +1905,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         _TimestampText(
           powEventId: message.id,
           powTarget: message.powTarget,
+          copyPubkey: message.pubkey,
           powApplies: !message.isPM && !message.isGroup,
           label: formatRelativeTime(message.dateTime),
           fullTimestamp: formatFullTimestamp(
@@ -2633,7 +2651,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// `slap`/`hug` → the rate-limited `/me` command, `none` → no-op.
   void _dispatchSwipeAction(BuildContext context, String action) {
     final controller = ref.read(nostrControllerProvider);
-    final baseNym = _baseNym(message.author);
+    // The nym the row is DISPLAYING, not the one frozen on the message — a
+    // quote that named the sender differently from the line above it would be
+    // its own small bug, and the quote matcher keys on the `#suffix` anyway.
+    final baseNym = _baseNym(_displayNym());
     final fullNym = '$baseNym#${getPubkeySuffix(message.pubkey)}';
     switch (action) {
       case 'quote':
@@ -2727,7 +2748,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// action — sets the composer quote preview to this message.
   void _quoteReply() {
     if (message.content.isEmpty) return;
-    final baseNym = _baseNym(message.author);
+    final baseNym = _baseNym(_displayNym());
     final fullNym = '$baseNym#${getPubkeySuffix(message.pubkey)}';
     ref
         .read(pendingComposerActionProvider.notifier)
@@ -2762,6 +2783,15 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   // Trailing-`#xxxx`-only strip (users.js:1093-1098): a `#` inside the name
   // (e.g. `player#1`) belongs to the name.
   String _baseNym(String nym) => splitNymSuffix(nym).base;
+
+  /// The sender's display nym, live profile preferred over the one frozen onto
+  /// the message at ingest. See [_authorLine] for why the stored value goes
+  /// stale. Read (not watched) so the action paths can call it outside build;
+  /// the rendered author watches the same source.
+  String _displayNym() {
+    final live = ref.read(appStateProvider).users[message.pubkey]?.nym;
+    return (live != null && live.isNotEmpty) ? live : message.author;
+  }
 
   BorderRadius _bubbleRadius(bool self) {
     const r = Radius.circular(16);
@@ -3769,6 +3799,61 @@ class _HoverActionButtonState extends State<_HoverActionButton> {
   }
 }
 
+/// A small button in the timestamp popup that puts an event reference on the
+/// clipboard and says so in place for a moment.
+class _CopyRefButton extends StatefulWidget {
+  const _CopyRefButton({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  State<_CopyRefButton> createState() => _CopyRefButtonState();
+}
+
+class _CopyRefButtonState extends State<_CopyRefButton> {
+  bool _copied = false;
+  Timer? _reset;
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.value));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    _reset?.cancel();
+    _reset = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return InkWell(
+      onTap: _copy,
+      borderRadius: NymRadius.rsm,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.06),
+          border: Border.all(color: c.glassBorder),
+          borderRadius: NymRadius.rsm,
+        ),
+        child: Text(
+          _copied ? tr('Copied') : widget.label,
+          softWrap: false,
+          style: TextStyle(
+              color: _copied ? c.primary : c.text, fontSize: 11),
+        ),
+      ),
+    );
+  }
+}
+
 /// The tappable message timestamp (`.clickable-timestamp`, messages.js:936-938).
 /// Hover tints it `--primary` over 120ms (`.clickable-timestamp:hover`,
 /// styles-chat.css:596-604) and shows the glass full-timestamp tooltip
@@ -3788,12 +3873,16 @@ class _TimestampText extends StatefulWidget {
     this.powEventId,
     this.powTarget,
     this.powApplies = false,
+    this.copyPubkey = '',
   });
 
   final String label;
   final String fullTimestamp;
   final double fontSize;
   final double? height;
+
+  /// The event's author, so the copied `nevent` carries it.
+  final String copyPubkey;
 
   /// The event id whose leading zero bits are the work actually proven.
   final String? powEventId;
@@ -3876,6 +3965,37 @@ class _TimestampTextState extends State<_TimestampText> {
     ];
   }
 
+  /// The copy-reference row, or nothing when this row carries no real event id
+  /// (an optimistic echo, a system line, a poll).
+  List<Widget> _copyRows(NymColors c) {
+    final id = widget.powEventId ?? '';
+    if (!RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(id)) {
+      return const [];
+    }
+    final nevent = encodeNevent(id,
+        author: widget.copyPubkey,
+        relays: RelayConfig.defaultRelays.take(3).toList());
+    return [
+      Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Divider(height: 1, thickness: 1, color: c.glassBorder),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (nevent.isNotEmpty) ...[
+              _CopyRefButton(label: tr('Copy nevent'), value: nevent),
+              const SizedBox(width: 6),
+            ],
+            _CopyRefButton(label: tr('Copy event ID'), value: id),
+          ],
+        ),
+      ),
+    ];
+  }
+
   @override
   void dispose() {
     _popup?.remove();
@@ -3923,7 +4043,7 @@ class _TimestampTextState extends State<_TimestampText> {
                 child: Container(
                   // `.reactors-modal { min-width:160; max-width:240 }`.
                   constraints:
-                      const BoxConstraints(minWidth: 160, maxWidth: 240),
+                      const BoxConstraints(minWidth: 160, maxWidth: 280),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
@@ -3965,6 +4085,7 @@ class _TimestampTextState extends State<_TimestampText> {
                         style: TextStyle(color: c.text, fontSize: 13),
                       ),
                       ..._powRows(c),
+                      ..._copyRows(c),
                     ],
                   ),
                 ),

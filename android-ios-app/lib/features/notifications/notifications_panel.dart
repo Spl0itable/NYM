@@ -822,7 +822,7 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
 /// `.notification-item-author` — the author wrapped in literal `<…>` brackets
 /// (`.nym-bracket`, primary), with the decorated nym (base + dim `#suffix` +
 /// badges) inside. For non-pubkey entries the bare title is bracketed.
-class _Author extends StatelessWidget {
+class _Author extends ConsumerWidget {
   const _Author(
       {required this.entry, required this.pubkey, required this.brackets});
   final NotificationEntry entry;
@@ -837,10 +837,23 @@ class _Author extends StatelessWidget {
   final bool brackets;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final bracket =
         TextStyle(color: c.primary, fontSize: 13, fontWeight: FontWeight.w600);
+    // The LIVE profile wins over the nym frozen onto the entry when it was
+    // recorded. A notification that arrived before its sender's kind 0 froze
+    // the "nym" placeholder into `entry.title`, and passing that to CallNym
+    // short-circuits its own `usersProvider` lookup — so the row kept the
+    // placeholder even after the real profile landed. The PWA modal prefers the
+    // live users map the same way and only falls back to the stored
+    // `senderNym` (notifications.js `openNotificationsModal`). Watched, so the
+    // row repaints in place when the profile arrives with the panel open — the
+    // native counterpart of `updateNotificationModalProfile`.
+    final liveNym = pubkey.isEmpty
+        ? ''
+        : (ref.watch(usersProvider.select((u) => u[pubkey]?.nym)) ?? '');
+    final shownNym = liveNym.isNotEmpty ? liveNym : entry.title;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -849,14 +862,14 @@ class _Author extends StatelessWidget {
           child: pubkey.isNotEmpty
               ? CallNym(
                   pubkey: pubkey,
-                  nym: entry.title,
+                  nym: shownNym,
                   baseColor: c.primary,
                   baseStyle: const TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600),
                   badgeSize: 12,
                 )
               : Text(
-                  entry.title,
+                  shownNym,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

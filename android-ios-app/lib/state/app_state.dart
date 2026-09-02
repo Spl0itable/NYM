@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/event_kinds.dart';
+import '../core/constants/history_window.dart';
 import '../core/utils/nym_utils.dart';
 import '../features/channels/channel_manager.dart';
 import '../features/emoji/custom_emoji.dart'
@@ -1703,6 +1704,63 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Only populated while [_batchDepth] > 0.
   final Set<String> _channelCapPending = <String>{};
 
+  /// Public channel history is a rolling window as well as a capped one — see
+  /// [CacheStore.channelHistoryMaxAge]. The D1 archive floors `channel-get` at
+  /// the same 24 hours and the relay filters ask for `since: now - 86400`, so
+  /// anything older exists on no other client and cannot be re-fetched by this
+  /// one either; holding it in memory shows history nobody else can see.
+  ///
+  /// Returns the ids dropped, so the caller can clear the reactions targeting
+  /// them (reactions are keyed by their target message id, which makes that
+  /// exactly "kind 7 events whose `k` tag is 20000/23333").
+  /// Called when an ingested channel message is already outside the 24-hour
+  /// window. Set by [NostrController]; null in tests.
+  void Function()? onAgedChannelMessage;
+
+  Set<String> pruneChannelHistoryWindow() {
+    final floor = channelWindowFloorSec();
+    final dropped = <String>{};
+    for (final entry in state.messages.entries) {
+      final key = entry.key;
+      if (key.startsWith('pm-') || key.startsWith('group-')) continue;
+      final list = entry.value;
+      if (list.isEmpty || !list.any((m) => m.createdAt < floor)) continue;
+
+      // Same thread-root pin as the count cap: an in-window reply whose root
+      // aged out would otherwise reflow inline with a dead-end thread.
+      final keep = <Message>[];
+      final wanted = <String>{};
+      for (final m in list) {
+        if (m.createdAt < floor) continue;
+        keep.add(m);
+        final root = m.threadRoot;
+        if (root != null && root.isNotEmpty) wanted.add(root);
+      }
+      for (final m in keep) {
+        wanted.remove(threadKeyForMessage(m));
+      }
+      final pinned = <Message>[];
+      for (final m in list) {
+        if (m.createdAt >= floor) continue;
+        if (wanted.isNotEmpty && wanted.remove(threadKeyForMessage(m))) {
+          pinned.add(m);
+        } else {
+          dropped.add(m.id);
+          final shared = m.nymMessageId;
+          if (shared != null && shared.isNotEmpty) dropped.add(shared);
+          _unindexMessage(m);
+          state.reactions.remove(m.id);
+        }
+      }
+      list
+        ..clear()
+        ..addAll(pinned)
+        ..addAll(keep);
+    }
+    if (dropped.isNotEmpty) _scheduleEmit();
+    return dropped;
+  }
+
   /// Trims a public-channel conversation to the newest [_kChannelHistoryCap]
   /// messages. [list] must already be in ascending (oldest-first) order, which
   /// [_insertMessageSorted] maintains outside a batch and [_flushDirtySorts]
@@ -1710,10 +1768,31 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void _capChannelHistory(List<Message> list) {
     if (list.length <= _kChannelHistoryCap) return;
     final drop = list.length - _kChannelHistoryCap;
-    for (var i = 0; i < drop; i++) {
-      _unindexMessage(list[i]);
+    // Keep thread ROOTS the surviving window still references. The cap is a
+    // plain front trim, so a root older than the window falls out while its
+    // replies stay — and a reply whose root is gone reflows INLINE, as though
+    // it were a top-level message, with a thread affordance that dead-ends
+    // (`visibleMessages` only hides a reply whose root is present locally).
+    // Same pinning the PWA gives both its live and persisted windows
+    // (`persistence.js#_withPinnedThreadRoots`).
+    final wanted = <String>{};
+    for (var i = drop; i < list.length; i++) {
+      final root = list[i].threadRoot;
+      if (root != null && root.isNotEmpty) wanted.add(root);
     }
-    list.removeRange(0, drop);
+    for (var i = drop; i < list.length && wanted.isNotEmpty; i++) {
+      wanted.remove(threadKeyForMessage(list[i]));
+    }
+    final pinned = <Message>[];
+    for (var i = 0; i < drop; i++) {
+      final m = list[i];
+      if (wanted.isNotEmpty && wanted.remove(threadKeyForMessage(m))) {
+        pinned.add(m);
+      } else {
+        _unindexMessage(m);
+      }
+    }
+    list.replaceRange(0, drop, pinned);
   }
 
   // ---------------------------------------------------------------------------
@@ -1904,6 +1983,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     final m = EventMapper.channelMessage(e, selfPubkey: state.selfPubkey);
     if (m == null) return;
+    // Already outside the 24-hour window; ask for the sweep rather than
+    // waiting out its interval.
+    if (m.createdAt < channelWindowFloorSec()) onAgedChannelMessage?.call();
     // A backlog restore is historical by PROVENANCE regardless of the mapper's
     // timestamp-age guess (the archived event can read as ≈now). Keeps it out of
     // the flood dim and the snap-in entrance, matching the PWA restore path.
@@ -4599,12 +4681,25 @@ class AppStateNotifier extends StateNotifier<AppState> {
         final byStorage = _channelLastRead[storageKey] ?? 0;
         final byBare = _channelLastRead[key] ?? 0;
         final lastRead = byStorage > byBare ? byStorage : byBare;
-        final span = lastRead > 0
-            ? ((nowSec - lastRead) / 3600).ceil().clamp(0, 24)
-            : 24;
+        // Rounding the unread window UP to whole hours credited the whole
+        // boundary bucket, so a channel read minutes ago was seeded with every
+        // message of the past hour — ones it had just shown as read. Sum the
+        // whole hours exactly and prorate the boundary bucket to the slice of
+        // it that actually falls after the watermark. `last` is the newest
+        // created_at D1 knows of: at or before the watermark there is nothing
+        // unread at all, whatever the buckets total.
+        final newest = last[key] ?? last[rawKey] ?? 0;
+        if (lastRead > 0 && newest > 0 && newest <= lastRead) return;
+        final windowSec =
+            lastRead > 0 ? (nowSec - lastRead).clamp(0, 24 * 3600) : 24 * 3600;
+        final whole = (windowSec ~/ 3600).clamp(0, 24);
         var count = 0;
-        for (var h = 0; h < span && h < buckets.length; h++) {
+        for (var h = 0; h < whole && h < buckets.length; h++) {
           if (buckets[h] > 0) count += buckets[h];
+        }
+        if (whole < 24 && whole < buckets.length && buckets[whole] > 0) {
+          final fraction = (windowSec - whole * 3600) / 3600;
+          if (fraction > 0) count += (buckets[whole] * fraction).floor();
         }
         if (count <= 0) return;
         // D1 is a FLOOR: only ever raise the badge, never lower it.

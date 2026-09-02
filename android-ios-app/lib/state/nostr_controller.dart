@@ -73,6 +73,7 @@ import '../features/identity/vault_settings_modal.dart'
     show identityVaultProvider;
 import '../services/nostr/event_mapper.dart';
 import '../services/nostr/event_signer.dart';
+import '../services/nostr/event_time_ceilings.dart';
 import '../services/nostr/identity_service.dart';
 import '../services/nostr/nostr_service.dart';
 import '../services/nostr/nym_generator.dart';
@@ -126,6 +127,11 @@ class NostrController {
   final Ref _ref;
   Identity? _identity;
   NostrService? _service;
+
+  /// The live relay service, or null before boot finishes. Exposed for callers
+  /// that need one bounded query of their own (the NIP-19 reference cards).
+  NostrService? get relayService => _service;
+
   GroupManager? _groups;
   EventSigner? _signer;
   bool _started = false;
@@ -1228,6 +1234,8 @@ class NostrController {
     _profileBackfillTimer = null;
     _profileBackfillQueue.clear();
     _profileBackfillQueued.clear();
+    _channelWindowPruneTimer?.cancel();
+    _channelWindowPruneTimer = null;
     _flushScheduled = false;
     _dirtyChannelKeys.clear();
     _dirtyPmKeys.clear();
@@ -2848,7 +2856,10 @@ class NostrController {
     final sender = rumor['pubkey'] as String?;
     if (sender != null && sender.isNotEmpty && sender != self) {
       if (u.isBitchat) {
-        _bitchatUsers.add(sender);
+        // WITH the time it happened: the post-quantum send plan weighs this
+        // against the peer's announcement, and the older evidence must not win.
+        _noteBitchatFormatSeen(
+            sender, (rumor['created_at'] as int?) ?? _nowSecForBitchat());
       } else if (_tags(rumor).any((t) => t.length > 1 && t[0] == 'x')) {
         _nymUsers.add(sender);
       }
@@ -3301,15 +3312,17 @@ class NostrController {
     }
 
     // 1:1 PM message.
+    final anonAuthor = _isAnonBotPubkey(rumor['pubkey']);
     final m = PmLogic.mapPmRumor(
       rumor: rumor,
       wrapId: u.wrapId,
-      selfPubkey: self,
+      selfPubkey: anonAuthor ? (rumor['pubkey'] as String) : self,
       senderVerified: u.senderVerified,
       pqEncrypted: u.isPq,
       pqRootFor: (peer) => pqSealRootVerdict(peer) == true,
     );
     if (m == null) return;
+    if (anonAuthor) m.pubkey = self;
     // Our OWN message, rebuilt from a wrap. The only wrap of it we can receive
     // is the self-addressed archive copy, sealed to OUR key — so `u.isPq`
     // describes our archive, never how the message reached the recipient. Ask
@@ -3377,7 +3390,7 @@ class NostrController {
     // Backfill the sender's kind-0 from D1 if unknown (PWA `queueProfileFetch`).
     _maybeBackfillProfiles(m.pubkey);
     // Delivery receipt back to the sender (not for our own self-copy).
-    if (!m.isOwn && m.nymMessageId != null) {
+    if (!m.isOwn && m.nymMessageId != null && !anonSuppressSendTo(m.pubkey)) {
       _service?.publishReceipt(
         messageId: m.nymMessageId!,
         receiptType: 'delivered',
@@ -4659,6 +4672,25 @@ class NostrController {
   /// send them a parallel `bitchat1:` wrap so the bitchat app can decrypt us.
   final Set<String> _bitchatUsers = <String>{};
 
+  /// WHEN a bitchat-format wrap from each of them last opened. The set above
+  /// answers "does this peer speak Bitchat at all", which a dozen call sites
+  /// ask; only the send plan needs the time, to weigh it against the peer's
+  /// announcement ([PqPmPlan.decide]). A pubkey with no entry reads as 0 —
+  /// older than any announcement.
+  final Map<String, int> _bitchatSeenAt = <String, int>{};
+
+  int _nowSecForBitchat() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+  /// Records that a bitchat-format wrap from [pubkey] opened, at [atSec].
+  void _noteBitchatFormatSeen(String pubkey, int atSec) {
+    if (pubkey.isEmpty) return;
+    _bitchatUsers.add(pubkey);
+    if (atSec > (_bitchatSeenAt[pubkey] ?? 0)) _bitchatSeenAt[pubkey] = atSec;
+    while (_bitchatSeenAt.length > 5000) {
+      _bitchatSeenAt.remove(_bitchatSeenAt.keys.first);
+    }
+  }
+
   /// Peers we've received a Nymchat-format PM/receipt from (PWA `nymUsers`) —
   /// they get a NIP-17 wrap. An UNKNOWN peer (in neither set) gets BOTH.
   final Set<String> _nymUsers = <String>{};
@@ -4666,6 +4698,24 @@ class NostrController {
   /// Announced ML-KEM keys, keyed by pubkey. Holding one for a peer is exactly
   /// what makes them post-quantum capable (features/identity/pq_registry.dart).
   final PqRegistry _pqRegistry = PqRegistry();
+
+  /// First-seen clamps for future-dated events, shared with [EventMapper].
+  final EventTimeCeilings _eventTimeCeilings = EventTimeCeilings();
+
+  Timer? _eventTimeCeilingsPersistTimer;
+  void _schedulePersistEventTimeCeilings() {
+    if (_eventTimeCeilingsPersistTimer != null) return;
+    if (PanicWipe.inProgress) return;
+    _eventTimeCeilingsPersistTimer = Timer(const Duration(seconds: 5), () {
+      _eventTimeCeilingsPersistTimer = null;
+      final cache = _cache;
+      if (cache == null || !cache.isOpen) return;
+      unawaited(cache
+          .saveMetaMap(
+              CacheStore.metaEventTimeCeilings, _eventTimeCeilings.toJson())
+          .catchError((_) {}));
+    });
+  }
 
   /// In-flight and recently-failed announcement lookups, so two sends racing
   /// for the same new peer open one subscription rather than two, and a peer
@@ -5542,6 +5592,10 @@ class NostrController {
             _pqRegistry.isKnownNymchatClient(recipientPubkey, nowSec: nowSec),
         recipientAcceptsLayered: _pqRegistry.acceptsLayered(recipientPubkey,
             nowSec: nowSec, enabled: pqOn),
+        // The two dated facts the plan weighs against each other.
+        bitchatSeenAtSec: _bitchatSeenAt[recipientPubkey] ?? 0,
+        announcedAtSec:
+            _pqRegistry.announcedAtFor(recipientPubkey, nowSec: nowSec),
       );
     } catch (e) {
       debugPrint('[PQ] send plan failed, falling back to dual-send: $e');
@@ -7738,6 +7792,7 @@ class NostrController {
     }
 
     if (view.kind == ViewKind.pm) {
+      if (anonSuppressSendTo(view.id)) return;
       await service.publishTyping(status: 'start', recipients: [view.id]);
     } else {
       final group = _ref.read(appStateProvider.notifier).groupById(view.id);
@@ -7789,6 +7844,7 @@ class NostrController {
     if (messageId.isEmpty || peerPubkey.isEmpty) return;
     final service = _service;
     if (service == null) return;
+    if (anonSuppressSendTo(peerPubkey)) return;
     if (!_sentPmReadReceipts.add(messageId)) return;
     if (_sentPmReadReceipts.length > 2000) {
       final keep = _sentPmReadReceipts
@@ -7995,7 +8051,9 @@ class NostrController {
 
     final status = event.tagValue('typing');
     final geohash = event.tagValue('g') ?? event.tagValue('d');
-    if (status == null || geohash == null || geohash.isEmpty) return;
+    if (status == null || geohash == null || !isValidChannelTag(geohash)) {
+      return;
+    }
 
     // The typing store keys on the active view's storageKey; a geohash channel
     // view is `ChatView.channel(geohash)` → storageKey `'#<geohash>'`
@@ -8025,7 +8083,12 @@ class NostrController {
 
     final messageId = event.tagValue('e');
     final geohash = event.tagValue('g') ?? event.tagValue('d');
-    if (messageId == null || messageId.isEmpty || geohash == null) return;
+    if (messageId == null ||
+        messageId.isEmpty ||
+        geohash == null ||
+        !isValidChannelTag(geohash)) {
+      return;
+    }
 
     final appState = _ref.read(appStateProvider);
     if (appState.blockedUsers.contains(event.pubkey)) return;
@@ -8121,7 +8184,7 @@ class NostrController {
       final entry =
           state.channels.where((c) => c.key == state.view.id.toLowerCase());
       if (entry.isNotEmpty && entry.first.isGeohash) {
-        geohash = entry.first.geohash;
+        geohash = entry.first.geohashKey;
       } else {
         channel = state.view.id;
       }
@@ -8143,6 +8206,7 @@ class NostrController {
     final service = _service;
     final identity = _identity;
     if (service == null || identity == null) return false;
+    if (anonSuppressSendTo(target)) return true;
     final appState = _ref.read(appStateProvider.notifier);
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     // NIP-30 declarations for a custom `:shortcode:` reaction — the PWA
@@ -9117,6 +9181,8 @@ class NostrController {
       final cache = CacheStore();
       await cache.open();
       _cache = cache;
+      _eventTimeCeilings.onChanged = _schedulePersistEventTimeCeilings;
+      EventMapper.ceilings = _eventTimeCeilings;
       // PMs hydrate only when caching is enabled; disabled → wipe the store,
       // exactly the PWA's `cachePMsAllowed ? … : this.clearPMCache()`
       // (persistence.js:455-475).
@@ -9169,6 +9235,11 @@ class NostrController {
       // vouch events on every boot/resume, each costing ~12 ms of pure-Dart
       // BIP340 math without this cache — several seconds of pegged CPU that
       // read as the whole app lagging while history streamed in.
+      // Public channel history is a rolling 24-hour window. The cache load
+      // already refused to bring aged-out messages back, but a session left
+      // running crosses the boundary while it is open, so sweep on a timer too.
+      _startChannelWindowPrune();
+
       final verifiedIds =
           await cache.loadMetaSet(CacheStore.metaVerifiedEventIds);
       if (verifiedIds.isNotEmpty) NostrService.seedVerifiedIds(verifiedIds);
@@ -9176,7 +9247,26 @@ class NostrController {
       if (!cachePms) unawaited(cache.clearPms());
       // Reactions hydrate AFTER messages so their tallies attach to rows that
       // now exist (same effective order as the PWA's single hydration pass).
-      if (reactions.isNotEmpty) appState.hydrateReactions(reactions);
+      // A row whose target message is no longer held is dead weight nothing can
+      // render — and for a public channel message pruned by the 24-hour window
+      // it is exactly the aged-out kind 7 that window is meant to drop, so it is
+      // deleted rather than reloaded.
+      if (reactions.isNotEmpty) {
+        final held = <String>{};
+        for (final list in [...channelMsgs.values, ...pmMsgs.values]) {
+          for (final m in list) {
+            if (m.id.isNotEmpty) held.add(m.id);
+            final shared = m.nymMessageId;
+            if (shared != null && shared.isNotEmpty) held.add(shared);
+          }
+        }
+        final orphans = reactions.keys.where((id) => !held.contains(id)).toList();
+        if (orphans.isNotEmpty) {
+          reactions.removeWhere((id, _) => !held.contains(id));
+          unawaited(cache.deleteReactionsFor(orphans).catchError((_) {}));
+        }
+        if (reactions.isNotEmpty) appState.hydrateReactions(reactions);
+      }
       // Web-of-trust graph: restore the persisted nymchatPubkeys / vouches /
       // trusted sets so the spam gate isn't cold on launch (it still grows live
       // from PoW-valid messages + receipts + vouches).
@@ -9199,6 +9289,10 @@ class NostrController {
         _pqRegistry.hydrate(pqKeys,
             nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000);
       }
+      // Restored BEFORE the relay layer starts, so the launch replay reuses
+      // last session's correction instead of re-stamping to "now".
+      final ceilings = await cache.loadMetaMap(CacheStore.metaEventTimeCeilings);
+      if (ceilings.isNotEmpty) _eventTimeCeilings.hydrate(ceilings);
     } catch (e) {
       debugPrint('hydrateFromCache failed: $e');
     }
@@ -9364,6 +9458,62 @@ class NostrController {
     } catch (e) {
       debugPrint('cache flush failed: $e');
     }
+  }
+
+  Timer? _channelWindowPruneTimer;
+
+  /// Sweep public channel history back inside its 24-hour window — memory, the
+  /// cached rows for the channels that changed, and the reactions targeting the
+  /// messages dropped (reactions are keyed by their target's id, which is what
+  /// makes that exactly the kind 7 events tagged `k` 20000/23333).
+  /// Debounce for a sweep asked for out of band, long enough that a whole
+  /// backfill batch is swept once instead of once per message.
+  Timer? _channelWindowPruneSoonTimer;
+
+  void _scheduleChannelWindowPrune() {
+    if (_channelWindowPruneSoonTimer != null) return;
+    _channelWindowPruneSoonTimer = Timer(const Duration(milliseconds: 600), () {
+      _channelWindowPruneSoonTimer = null;
+      _runChannelWindowPrune();
+    });
+  }
+
+  Future<void> _runChannelWindowPrune() async {
+    if (PanicWipe.inProgress) return;
+    final notifier = _ref.read(appStateProvider.notifier);
+    Set<String> dropped;
+    try {
+      dropped = notifier.pruneChannelHistoryWindow();
+    } catch (e) {
+      debugPrint('channel window prune failed: $e');
+      return;
+    }
+    if (dropped.isEmpty) return;
+    try {
+      await _cache?.deleteReactionsFor(dropped);
+    } catch (e) {
+      debugPrint('channel window reaction prune failed: $e');
+    }
+    // The pruned conversations must be rewritten, not left on disk holding
+    // the messages we just dropped from memory.
+    for (final key in _ref.read(appStateProvider).messages.keys) {
+      if (key.startsWith('pm-') || key.startsWith('group-')) continue;
+      _dirtyChannelKeys.add(key);
+    }
+    _scheduleFlush();
+  }
+
+  void _startChannelWindowPrune() {
+    _channelWindowPruneTimer?.cancel();
+    _ref.read(appStateProvider.notifier).onAgedChannelMessage =
+        _scheduleChannelWindowPrune;
+    Future<void> run() async {
+      await _runChannelWindowPrune();
+    }
+
+    run();
+    _channelWindowPruneTimer =
+        Timer.periodic(const Duration(minutes: 15), (_) => run());
   }
 
   // ---------------------------------------------------------------------------
@@ -10109,7 +10259,7 @@ class NostrController {
     if (_groupBackfillInFlight) return;
     _groupBackfillInFlight = true;
     try {
-      final ephPks = groups.allEphemeralPubkeys();
+      final ephPks = [...groups.allEphemeralPubkeys(), ..._anonBotPubkeys()];
       if (ephPks.isEmpty) return;
       final wraps = await sync.pmGetByPubkeys(ephPks);
       for (final w in wraps) {
@@ -10428,6 +10578,15 @@ class NostrController {
       ephemeralKeys: result.groupEphemeralKeys,
       history: result.groupMessageHistory,
     );
+    final anon = result.botAnon;
+    if (anon != null) applyBotAnonSync(anon);
+  }
+
+  void applyBotAnonSync(Map<String, dynamic> payload) {
+    try {
+      _ref.read(botChatControllerProvider.notifier).anon.applySynced(payload);
+    } catch (_) {
+    }
   }
 
   /// Shared apply for the three per-group cross-device maps, used by the boot
@@ -10523,6 +10682,44 @@ class NostrController {
   /// ephemeral keys plus, in Ghost Mode, one per live epoch. Registering them
   /// together is what lets a reply sent to an identity we have already rotated
   /// away from still decrypt.
+  bool anonSuppressSendTo(String pubkey) {
+    if (pubkey.isEmpty || !isVerifiedBot(pubkey)) return false;
+    try {
+      return _ref.read(botChatControllerProvider.notifier).anon.enabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _isAnonBotPubkey(Object? pubkey) =>
+      pubkey is String && pubkey.isNotEmpty && _anonBotPubkeys().contains(pubkey);
+
+  List<String> _anonBotPubkeys() {
+    try {
+      return _ref.read(botChatControllerProvider.notifier).anon.pubkeys;
+    } catch (_) {
+      return const <String>[];
+    }
+  }
+
+  List<({Uint8List sk, Uint8List kemSk, Uint8List kemPk})> _anonBotKeys() {
+    try {
+      final anon = _ref.read(botChatControllerProvider.notifier).anon;
+      final out = <({Uint8List sk, Uint8List kemSk, Uint8List kemPk})>[];
+      final st = anon.state;
+      if (st == null) return out;
+      for (final id in [if (st.current != null) st.current!, ...st.prev]) {
+        final kem = anon.kemFor(id);
+        if (kem != null) {
+          out.add((sk: id.sk, kemSk: kem.secretKey, kemPk: kem.publicKey));
+        }
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   void _applyEphemeralKeys() {
     final service = _service;
     final groups = _groups;
@@ -10531,6 +10728,7 @@ class NostrController {
       ...groups.allEphemeralSecretKeys(),
       ..._ref.read(ghostModeProvider).secretKeys,
     ]);
+    service.setAnonBotKeys(_anonBotKeys());
     // Refreshed alongside the ephemeral keys so a rotation or a login change
     // takes effect on the same tick.
     service.setPqSelfKeys(pqCapable ? pqSelfCandidateKeys() : const []);
@@ -10586,6 +10784,7 @@ class NostrController {
     final pks = [
       ...groups.allEphemeralPubkeys(),
       ..._ref.read(ghostModeProvider).pubkeys,
+      ..._anonBotPubkeys(),
     ];
     if (pks.isEmpty) return;
     // Filter split per relays.js:2711-2721: in PROXY/D1 mode the REQ is
@@ -11291,7 +11490,8 @@ class NostrController {
       };
       joinedEntries = [
         for (final k in keys)
-          if (k != kDefaultChannel) ChannelEntry(channel: k, geohash: k),
+          if (k != kDefaultChannel)
+            ChannelEntry(channel: k, geohash: isChannelGeohash(k) ? k : ''),
       ];
     }
     if (pinnedSet != null ||
@@ -11691,6 +11891,12 @@ class NostrController {
       historyByConvKey: history,
       leftGroups: appState.leftGroups,
     );
+    try {
+      final anonPayload =
+          _ref.read(botChatControllerProvider.notifier).anon.syncPayload();
+      if (anonPayload != null) await sync.botAnonSyncSet(anonPayload);
+    } catch (_) {
+    }
   }
 
   /// Serializes a [Group] for the `nymchat-groups` category, byte-matching the
@@ -12559,6 +12765,10 @@ class NostrController {
         // Publish the worker-signed event VERBATIM (`['EVENT', data.event]`,
         // commands.js:203-216); it arrives back via the channel subscription.
         final botEvent = NostrEvent.fromJson(Map<String, dynamic>.from(event));
+        if (EventMapper.channelKeyOf(botEvent) == null) {
+          _setBotChannelThinking(storageKey, false);
+          return;
+        }
         await _service?.pool.publish(botEvent);
       }
     } catch (e) {
@@ -12772,6 +12982,8 @@ class NostrController {
     // (`_debouncedNostrSettingsSave`, pms.js:1878/1903).
     bot.pmArchivePurger = purgeBotPmArchive;
     bot.settingsSyncRequester = syncSettings;
+    bot.anonKeysChanged = _refreshEphemeralSubscriptions;
+    _applyEphemeralKeys();
     return true;
   }
 

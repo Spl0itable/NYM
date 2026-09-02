@@ -279,7 +279,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
             keyboardType: TextInputType.visiblePassword,
             onSubmitted: (_) => _unlock(),
             decoration: ModalChrome.inputDecoration(c, tr('Password or PIN')),
-            style: TextStyle(color: c.textBright, fontSize: 15),
+            style: TextStyle(color: c.inputText, fontSize: 15),
           ),
         ),
       // Body → actions gap: the password `.form-group` carries

@@ -36,6 +36,8 @@ import '../shop/shop_controller.dart' show shopControllerProvider;
 import '../commands/command_i18n.dart';
 import 'bot_commands.dart';
 import 'nymbot_models.dart';
+import '../../services/storage/secure_store.dart';
+import 'anon_bot.dart';
 import 'nymbot_service.dart';
 
 // =============================================================================
@@ -79,7 +81,7 @@ bool _isSpace(String ch) => ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 /// (`?git` can carry an access token). A 1:1 port of the interception regex in
 /// the PWA's `sendPM` (pms.js:1584-1591).
 final RegExp botPMCommandRe = RegExp(
-    r'^\s*\?(github|git|help|commands|balance|buy|clear|transfer|gift|model)\b',
+    r'^\s*\?(github|git|help|commands|balance|buy|clear|transfer|gift|model|anon)\b',
     caseSensitive: false);
 
 // =============================================================================
@@ -122,6 +124,19 @@ final botBuyRequestProvider =
   (ref) => BotBuyRequestHooks(),
 );
 
+class BotAnonRequestHooks extends StateNotifier<bool> {
+  BotAnonRequestHooks() : super(false);
+
+  void request() => state = true;
+
+  void consume() => state = false;
+}
+
+final botAnonRequestProvider =
+    StateNotifierProvider<BotAnonRequestHooks, bool>(
+  (ref) => BotAnonRequestHooks(),
+);
+
 // =============================================================================
 // Private bot-chat engine state
 // =============================================================================
@@ -138,6 +153,8 @@ class BotChatState {
     this.sending = false,
     this.clearedAtSec = 0,
     this.infoMessages = const <Message>[],
+    this.anonEnabled = false,
+    this.anonPubkey,
   });
 
   /// The pinned Pro model (`?model <name>`), or null for standard routing.
@@ -172,6 +189,10 @@ class BotChatState {
   /// thread by timestamp.
   final List<Message> infoMessages;
 
+  final bool anonEnabled;
+
+  final String? anonPubkey;
+
   bool get isPro => proModel != null;
 
   BotChatState copyWith({
@@ -183,6 +204,8 @@ class BotChatState {
     bool? sending,
     int? clearedAtSec,
     List<Message>? infoMessages,
+    bool? anonEnabled,
+    Object? anonPubkey = _sentinel,
   }) =>
       BotChatState(
         proModel: identical(proModel, _sentinel)
@@ -195,6 +218,10 @@ class BotChatState {
         sending: sending ?? this.sending,
         clearedAtSec: clearedAtSec ?? this.clearedAtSec,
         infoMessages: infoMessages ?? this.infoMessages,
+        anonEnabled: anonEnabled ?? this.anonEnabled,
+        anonPubkey: identical(anonPubkey, _sentinel)
+            ? this.anonPubkey
+            : anonPubkey as String?,
       );
 
   static const _sentinel = Object();
@@ -221,6 +248,30 @@ class BotChatController extends StateNotifier<BotChatState> {
   final Ref _ref;
   final NymbotService _service;
 
+  late final AnonBotManager anon = _buildAnon();
+
+  AnonBotManager _buildAnon() {
+    final mgr = AnonBotManager(_service);
+    mgr.persist = (json) async {
+      final pk = _pubkey;
+      if (pk == null) return;
+      try {
+        await SecureStore().set('nym_botanon_$pk', json);
+      } catch (_) {}
+    };
+    mgr.onKeysChanged = () {
+      anonKeysChanged?.call();
+      if (mounted) {
+        state = state.copyWith(
+            anonEnabled: mgr.enabled, anonPubkey: mgr.pubkey);
+      }
+    };
+    mgr.requestSync = () => settingsSyncRequester?.call();
+    return mgr;
+  }
+
+  void Function()? anonKeysChanged;
+
   String? _pubkey;
   Map<String, dynamic>? _auth;
   Uint8List? _privkey;
@@ -243,6 +294,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   static const _kGitPref = 'nym_botpm_git';
   static const _kClearedAtPref = 'nym_botpm_cleared_at';
   static const _kWelcomedPref = 'nym_botpm_welcomed';
+  static const _kAnonPref = 'nym_botanon_enabled';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -264,6 +316,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         } catch (_) {}
       }
       final clearedAt = int.tryParse(p.getString(_kClearedAtPref) ?? '') ?? 0;
+      if (p.getString(_kAnonPref) == 'true') anon.setEnabled(true);
       // Monotonic: a synced remote marker ([applySyncedMarkers]) may have
       // landed before prefs hydrated — never regress it to the older on-disk
       // value.
@@ -350,6 +403,31 @@ class BotChatController extends StateNotifier<BotChatState> {
     _auth = auth;
     _privkey = privkey;
     _signer = signer ?? (privkey != null ? LocalSigner(privkey) : null);
+    anon.reset(pubkey);
+    anon.bindAccount(pubkey, _authFor);
+    unawaited(_hydrateAnon(pubkey));
+  }
+
+  Future<void> _hydrateAnon(String pubkey) async {
+    String? blob;
+    try {
+      blob = await SecureStore().get('nym_botanon_$pubkey');
+    } catch (_) {
+      blob = null;
+    }
+    if (_pubkey != pubkey) return;
+    if (blob != null && blob.isNotEmpty) {
+      anon.hydrate(blob);
+    } else {
+      anon.markLoaded();
+    }
+    if (anon.enabled) anon.ensureIdentity();
+    if (mounted) {
+      state = state.copyWith(
+          anonEnabled: anon.enabled, anonPubkey: anon.pubkey);
+    }
+    anonKeysChanged?.call();
+    unawaited(anon.flush());
   }
 
   /// Late-attaches the ACTIVE [EventSigner] (local key OR NIP-46 remote) on
@@ -717,6 +795,10 @@ class BotChatController extends StateNotifier<BotChatState> {
       handleModelCommand(trimmed);
       return;
     }
+    if (RegExp(r'^\?anon\b', caseSensitive: false).hasMatch(trimmed)) {
+      _ref.read(botAnonRequestProvider.notifier).request();
+      return;
+    }
     if (RegExp(r'^\?clear\b', caseSensitive: false).hasMatch(trimmed)) {
       await clearBotPMHistory();
       return;
@@ -769,9 +851,14 @@ class BotChatController extends StateNotifier<BotChatState> {
     // both — the worker fetches the bot-addressed wrap by its id from relays.
     NostrEvent? botWrap;
     NostrEvent? selfWrap;
+    final anonSender = anon.enabled ? anon.ensureIdentity() : null;
+    if (anon.enabled && anonSender == null) {
+      _system('Anonymous Nymbot chat is not ready on this device yet.');
+      return;
+    }
     if (selfPubkey.isNotEmpty) {
       final rumor = PmLogic.buildPmRumor(
-        selfPubkey: selfPubkey,
+        selfPubkey: anonSender?.pk ?? selfPubkey,
         recipientPubkey: kNymbotPubkey,
         content: content,
         nymMessageId: nymMessageId,
@@ -783,12 +870,16 @@ class BotChatController extends StateNotifier<BotChatState> {
         ],
         nowMs: nowMs,
       );
-      botWrap = await _wrapRumor(rumor, kNymbotPubkey);
+      botWrap = await _wrapRumor(rumor, kNymbotPubkey, sender: anonSender);
       if (botWrap != null && !_publishDmEvent(botWrap.toJson())) {
         botWrap = null;
       }
       if (botWrap != null) {
-        selfWrap = await _wrapRumor(rumor, selfPubkey);
+        selfWrap = anonSender != null
+            ? await _wrapRumor(rumor, anonSender.pk,
+                sender: anonSender,
+                recipientKem: anon.kemFor(anonSender)?.publicKey)
+            : await _wrapRumor(rumor, selfPubkey);
         if (selfWrap != null) _publishDmEvent(selfWrap.toJson());
         // `sendPM` records own activity right after `sendNIP17PM`
         // (pms.js:1596): refresh our own lastSeen + the throttled presence
@@ -846,11 +937,43 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// forward-secrecy TTL like `publishPM` does. Uses the local key when bound;
   /// a delegated (NIP-46) signer seals through the remote signer.
   Future<NostrEvent?> _wrapRumor(
-      UnsignedEvent rumor, String recipientPubkey) async {
+      UnsignedEvent rumor, String recipientPubkey,
+      {AnonBotIdentity? sender, Uint8List? recipientKem}) async {
     final s = _ref.read(settingsProvider);
     final expiration = (s.dmForwardSecrecyEnabled && s.dmTtlSeconds > 0)
         ? DateTime.now().millisecondsSinceEpoch ~/ 1000 + s.dmTtlSeconds
         : null;
+    if (sender != null) {
+      try {
+        var kemPk = recipientKem;
+        if (kemPk == null) {
+          try {
+            kemPk = await _ref
+                .read(nostrControllerProvider)
+                .pqLayeredWrapKeyFor(recipientPubkey);
+          } catch (_) {
+            kemPk = null;
+          }
+        }
+        if (kemPk != null) {
+          return await giftwrap.pq2Nip59Wrap(
+            rumor: rumor,
+            senderPrivkey: sender.sk,
+            recipientPubkey: recipientPubkey,
+            recipientKemPublicKey: kemPk,
+            expiration: expiration,
+          );
+        }
+        return giftwrap.nip59Wrap(
+          rumor: rumor,
+          senderPrivkey: sender.sk,
+          recipientPubkey: recipientPubkey,
+          expiration: expiration,
+        );
+      } catch (_) {
+        return null;
+      }
+    }
     try {
       final sk = _privkey;
       if (sk != null) {
@@ -899,6 +1022,25 @@ class BotChatController extends StateNotifier<BotChatState> {
     return null;
   }
 
+  List<giftwrap.UnwrapCandidate> anonUnwrapCandidates(NostrEvent wrap) {
+    String? pTag;
+    for (final t in wrap.tags) {
+      if (t.length > 1 && t[0] == 'p') {
+        pTag = t[1];
+        break;
+      }
+    }
+    if (pTag == null) return const <giftwrap.UnwrapCandidate>[];
+    final id = anon.identityForWrap(pTag);
+    if (id == null) return const <giftwrap.UnwrapCandidate>[];
+    final kem = anon.kemFor(id);
+    return [
+      if (kem != null)
+        (sk: id.sk, bitchat: false, kemSk: kem.secretKey, kemPk: kem.publicKey),
+      giftwrap.classicalCandidate(id.sk),
+    ];
+  }
+
   /// Unwraps the worker's kind-1059 reply wrap and ingests it into the
   /// canonical thread — the display leg of `handleGiftWrapDM(data.event, {})`
   /// (pms.js:2489-2492), including the leading `<think>` split the PWA does at
@@ -906,20 +1048,22 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// back to the relay echo of the wrap we just published.
   Future<void> _displayBotReplyWrap(Map<String, dynamic> wrapJson) async {
     final sk = _privkey;
-    if (sk == null) return;
     try {
       final wrap = NostrEvent.fromJson(wrapJson);
-      // The full self candidate set (ML-KEM keypairs first, classical last):
-      // once the user announced a key, the worker seals its replies
-      // post-quantum, and a classical-only candidate would push every reply
-      // onto the slower relay-echo fallback.
-      var candidates = const <giftwrap.UnwrapCandidate>[];
-      try {
-        candidates =
-            _ref.read(nostrControllerProvider).selfUnwrapCandidates();
-      } catch (_) {}
+      var candidates = anonUnwrapCandidates(wrap);
       if (candidates.isEmpty) {
-        candidates = [giftwrap.classicalCandidate(sk)];
+        if (sk == null) return;
+        // The full self candidate set (ML-KEM keypairs first, classical last):
+        // once the user announced a key, the worker seals its replies
+        // post-quantum, and a classical-only candidate would push every reply
+        // onto the slower relay-echo fallback.
+        try {
+          candidates =
+              _ref.read(nostrControllerProvider).selfUnwrapCandidates();
+        } catch (_) {}
+        if (candidates.isEmpty) {
+          candidates = [giftwrap.classicalCandidate(sk)];
+        }
       }
       final unwrapped = await giftwrap.unwrapGiftWrap(wrap, candidates);
       if (unwrapped == null || !mounted) return;
@@ -964,6 +1108,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// publish path doesn't surface its wrap ids) get a dedicated wrap built and
   /// published here so the worker has an event to fetch.
   Future<void> _runBotExchange(Message m, {String? wrapId}) async {
+    final anonId = anon.ready ? anon.identity : null;
     if (_pubkey == null) {
       _system(
           'Nymbot: could not publish your encrypted message. Please try again.');
@@ -972,7 +1117,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     _markBotPMReceipts('delivered');
     if (wrapId == null) {
       final rumor = PmLogic.buildPmRumor(
-        selfPubkey: _pubkey!,
+        selfPubkey: anonId?.pk ?? _pubkey!,
         recipientPubkey: kNymbotPubkey,
         content: m.content,
         nymMessageId: m.nymMessageId ?? PmLogic.generateSharedEventId(),
@@ -983,7 +1128,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           if ((m.threadRoot ?? '').isNotEmpty) ['nymthread', m.threadRoot!],
         ],
       );
-      final wrap = await _wrapRumor(rumor, kNymbotPubkey);
+      final wrap = await _wrapRumor(rumor, kNymbotPubkey, sender: anonId);
       if (wrap != null && _publishDmEvent(wrap.toJson())) {
         wrapId = wrap.id;
       }
@@ -1004,18 +1149,23 @@ class BotChatController extends StateNotifier<BotChatState> {
       final pro = state.proModel;
       final git = state.git;
       Map<String, dynamic>? pqAnnouncement;
-      try {
-        pqAnnouncement =
-            _ref.read(nostrControllerProvider).pqSelfAnnouncementJson;
-      } catch (_) {
-        pqAnnouncement = null;
+      if (anonId != null) {
+        pqAnnouncement = anon.announcement();
+      } else {
+        try {
+          pqAnnouncement =
+              _ref.read(nostrControllerProvider).pqSelfAnnouncementJson;
+        } catch (_) {
+          pqAnnouncement = null;
+        }
       }
       final data = await _service.sendBotMessage(
-        pubkey: _pubkey!,
+        pubkey: anonId?.pk ?? _pubkey!,
+        anon: anonId != null,
         eventId: wrapId,
         // Signed only on the HTTP fallback leg — the authenticated socket
         // skips per-action auth (shop.js:158-165).
-        auth: () => _authFor('pm'),
+        auth: () => anonId != null ? anon.authFor('pm') : _authFor('pm'),
         proModel: pro?.key,
         fresh: fresh,
         // Repo mode rides only on Pro replies with a connected repo
@@ -1157,8 +1307,12 @@ class BotChatController extends StateNotifier<BotChatState> {
   Future<void> checkBotCredits({required bool display}) async {
     if (_pubkey == null) return;
     try {
+      final anonId = anon.ready ? anon.identity : null;
       final b = await _service.balance(
-          pubkey: _pubkey!, auth: () => _authFor('balance'));
+          pubkey: anonId?.pk ?? _pubkey!,
+          anon: anonId != null,
+          auth: () =>
+              anonId != null ? anon.authFor('balance') : _authFor('balance'));
       if (!mounted) return;
       state = state.copyWith(
           balance: b, balanceKnown: true, balanceUnavailable: false);
@@ -1166,8 +1320,10 @@ class BotChatController extends StateNotifier<BotChatState> {
         final std = b.balance;
         final pro = b.proBalance;
         _displayBotInfoMessage(
-            'Your balance: **$std** standard credit${std == 1 ? '' : 's'} · '
+            '${anon.ready ? 'Your anonymous balance' : 'Your balance'}: '
+            '**$std** standard credit${std == 1 ? '' : 's'} · '
             '**$pro** Pro credit${pro == 1 ? '' : 's'}.'
+            '${anon.ready ? ' Type `?anon` to move more credits across from your nym.' : ''}'
             '${std <= 0 && pro <= 0 ? ' Type `?buy` to purchase more.' : ''}');
       }
     } on NymbotException catch (e) {
@@ -1195,6 +1351,40 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   /// Back-compat convenience for the screen's open-time refresh.
   Future<void> refreshBalance() => checkBotCredits(display: false);
+
+  Future<void> setAnonEnabled(bool on) async {
+    anon.setEnabled(on);
+    unawaited(_prefs.then((p) => p.setString(_kAnonPref, on ? 'true' : 'false')));
+    if (mounted) {
+      state = state.copyWith(anonEnabled: on, anonPubkey: anon.pubkey);
+    }
+    if (on) unawaited(anon.flush());
+    await checkBotCredits(display: false);
+  }
+
+  Future<int> anonMoveCredits(int amount, CreditTier tier) async {
+    final moved = await anon.moveCredits(amount, tier.wire);
+    await checkBotCredits(display: false);
+    return moved;
+  }
+
+  Future<int> anonRotate({bool sweep = false}) async {
+    final moved = await anon.rotate(sweep: sweep);
+    if (mounted) state = state.copyWith(anonPubkey: anon.pubkey);
+    await checkBotCredits(display: false);
+    return moved;
+  }
+
+  Future<BotBalance?> accountBalance() async {
+    final pk = _pubkey;
+    if (pk == null) return null;
+    try {
+      return await _service.balance(
+          pubkey: pk, auth: () => _authFor('balance'));
+    } catch (_) {
+      return null;
+    }
+  }
 
   // --- ?model (pms.js `_handleBotModelCommand`, :2119-2145) -------------------
 
@@ -1251,9 +1441,15 @@ class BotChatController extends StateNotifier<BotChatState> {
     _setClearedAt(DateTime.now().millisecondsSinceEpoch ~/ 1000);
     // Best-effort server-side context wipe (`_clearBotServerThread`).
     if (_pubkey != null) {
-      final pk = _pubkey!;
+      final anonId = anon.ready ? anon.identity : null;
+      final pk = anonId?.pk ?? _pubkey!;
       unawaited(_service
-          .clearHistory(pubkey: pk, auth: () => _authFor('clear-history'))
+          .clearHistory(
+              pubkey: pk,
+              anon: anonId != null,
+              auth: () => anonId != null
+                  ? anon.authFor('clear-history')
+                  : _authFor('clear-history'))
           .catchError((_) => <String, dynamic>{}));
     }
     // Batch pm-delete of the thread's wraps from the D1 archive so no device

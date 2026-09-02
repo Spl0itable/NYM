@@ -82,6 +82,17 @@ class NymColors extends ThemeExtension<NymColors> {
 
   bool get isLight => brightness == Brightness.light;
 
+  /// The colour of text the user TYPES into a field, and of the read-only
+  /// `.form-input`s that display a key back to them.
+  ///
+  /// NOT [text]. The PWA forces every `input`, `textarea`, `select` and
+  /// `.form-input` to pure white / pure black with `!important`
+  /// (styles-themes-responsive.css:571-592) precisely because `--text` is
+  /// accent-tinted: in the bitchat and matrix themes it is literally the same
+  /// `#00ff00` as `--primary`, so a saved nickname, bio or lightning address
+  /// read as bright accent text rather than as body text.
+  Color get inputText => isLight ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
+
   /// SELF `.message-content` bubble fill. Glass: `rgb(from var(--primary) r g b
   /// / 0.25)` dark / `0.20` light (styles-features.css:3642 / themes:1396).
   /// Solid-ui: the opaque `color-mix(in srgb, var(--primary) 22%, #2a2a3a)` dark

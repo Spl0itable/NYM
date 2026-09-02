@@ -248,6 +248,11 @@ class _ComposerState extends ConsumerState<Composer> {
   /// (PWA expands when content exceeds ~1.5 lines, ui-context.js:1738).
   bool _popout = false;
 
+  /// The field's own vertical scroll, held here so the popout can hang a
+  /// [Scrollbar] off it — without a thumb there was nothing on a phone to say
+  /// a draft taller than the box could be scrolled at all.
+  final ScrollController _fieldScroll = ScrollController();
+
   /// Last time we emitted a mesh typing indicator (ms), for ~1/s throttling.
   int _lastMeshTypingMs = 0;
 
@@ -342,6 +347,7 @@ class _ComposerState extends ConsumerState<Composer> {
     _focus.removeListener(_onFocusChanged);
     _controller.dispose();
     _focus.dispose();
+    _fieldScroll.dispose();
     _translateSearchController.dispose();
     super.dispose();
   }
@@ -2007,6 +2013,27 @@ class _ComposerState extends ConsumerState<Composer> {
     // `fontSize * 1.4` line height (`autoResizeTextarea`'s fallback). The
     // popout keeps its own `min(40vh, 360)` cap below.
     final flatMaxLines = math.max(1, 140 ~/ (fontSize * 1.4));
+    // `min(40vh, 360)` is the PWA's rule, but 40% of a phone's FULL height is
+    // not 40% of what is on screen: with the keyboard up and the box growing
+    // upward, a tall draft ran under the status bar. Bound it by the space
+    // really available above the composer row.
+    final mq = MediaQuery.of(context);
+    final available = mq.size.height -
+        mq.padding.top -
+        mq.viewInsets.bottom -
+        _composerRowBase -
+        8;
+    final popoutMaxHeight = math.max(
+      _composerRowBase,
+      math.min(math.min(mq.size.height * 0.4, 360.0), available),
+    );
+    // Grow to fill that box and no further. A fixed 12-line cap was
+    // independent of it: dead space below, clipped overflow above.
+    final popoutLineHeight = mq.textScaler.scale(fontSize) * 1.5;
+    final popoutMaxLines = math.max(
+      3,
+      ((popoutMaxHeight - 20) / popoutLineHeight).floor(),
+    );
     // `.composer-popout .message-input`: elevated rounded box vs the flat field.
     // `.message-input` flat fill is white@0.05 → white@0.07 on focus (dark); in
     // light mode `body.light-mode div.message-input` flips to black@0.04 →
@@ -2058,8 +2085,9 @@ class _ComposerState extends ConsumerState<Composer> {
       // on the SAME [inputEnabled] (= the SEND `sendEnabled`) so the field is
       // typable iff SEND is — never inert while SEND is live, nor vice-versa.
       enabled: inputEnabled,
-      maxLines: _popout ? 12 : flatMaxLines,
+      maxLines: _popout ? popoutMaxLines : flatMaxLines,
       minLines: 1,
+      scrollController: _fieldScroll,
       textInputAction: TextInputAction.newline,
       // A markdown block marker is painted out of existence, so a plain
       // Backspace would eat it one invisible character at a time. This takes
@@ -2181,11 +2209,9 @@ class _ComposerState extends ConsumerState<Composer> {
         child: stack,
       );
     }
-    // The popout box is elevated (shadow-lg) and height-capped (min 40vh,360).
+    // The popout box is elevated (shadow-lg) and height-capped.
     return Container(
-      constraints: BoxConstraints(
-        maxHeight: math.min(MediaQuery.sizeOf(context).height * 0.4, 360),
-      ),
+      constraints: BoxConstraints(maxHeight: popoutMaxHeight),
       decoration: const BoxDecoration(
         borderRadius: NymRadius.rmd,
         // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5).
@@ -2194,7 +2220,11 @@ class _ComposerState extends ConsumerState<Composer> {
               color: Color(0x80000000), blurRadius: 32, offset: Offset(0, 8)),
         ],
       ),
-      child: stack,
+      child: Scrollbar(
+        controller: _fieldScroll,
+        thumbVisibility: true,
+        child: stack,
+      ),
     );
   }
 
@@ -2441,7 +2471,7 @@ class _ComposerState extends ConsumerState<Composer> {
                       child: TextField(
                         controller: _translateSearchController,
                         onChanged: (v) => setState(() => _translateQuery = v),
-                        style: TextStyle(color: c.text, fontSize: 13),
+                        style: TextStyle(color: c.inputText, fontSize: 13),
                         cursorColor: c.isLight ? Colors.black : Colors.white,
                         decoration: InputDecoration(
                           isDense: true,

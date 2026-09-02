@@ -206,7 +206,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
               // (key-vault.js:558).
               inputFormatters:
                   isPin ? [FilteringTextInputFormatter.digitsOnly] : null,
-              style: TextStyle(color: c.textBright, fontSize: 15),
+              style: TextStyle(color: c.inputText, fontSize: 15),
               decoration: _decoration(
                   c, isPin ? tr('Choose a PIN code') : tr('Choose a password')),
             ),
@@ -220,7 +220,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
               keyboardType: isPin ? TextInputType.number : TextInputType.text,
               inputFormatters:
                   isPin ? [FilteringTextInputFormatter.digitsOnly] : null,
-              style: TextStyle(color: c.textBright, fontSize: 15),
+              style: TextStyle(color: c.inputText, fontSize: 15),
               decoration: _decoration(c, tr('Confirm')),
             ),
           ),

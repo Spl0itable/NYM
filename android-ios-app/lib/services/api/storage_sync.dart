@@ -1205,6 +1205,13 @@ class StorageSync {
   /// category dedups against the last publish by content hash, so an unchanged
   /// group produces no network write. Best-effort; failures per category are
   /// swallowed like the PWA's per-branch `try/catch`.
+  Future<void> botAnonSyncSet(Map<String, dynamic> payload) async {
+    try {
+      await _publishCategoryWrap({'botAnon': payload}, 'nymchat-botanon');
+    } catch (_) {
+    }
+  }
+
   Future<void> groupSyncSet({
     required Map<String, Map<String, dynamic>> groupConversations,
     required Map<String, Map<String, dynamic>> ephemeralKeysByGroup,
@@ -1579,6 +1586,7 @@ class StorageSync {
     // backlog on a fresh device. Non-core / additive, applied regardless of the
     // core-section ts gate (the PWA routes them through `applyNostrSettingsAdditive`).
     Map<String, dynamic>? groupConversations;
+    Map<String, dynamic>? botAnon;
     final groupEphemeralKeys = <String, dynamic>{};
     final groupMessageHistory = <String, List<dynamic>>{};
     for (final d in decoded) {
@@ -1604,6 +1612,9 @@ class StorageSync {
           ek.forEach(
               (gid, entry) => groupEphemeralKeys[gid.toString()] = entry);
         }
+      } else if (c == 'nymchat-botanon') {
+        final anon = d.payload['botAnon'];
+        if (anon is Map) botAnon = anon.cast<String, dynamic>();
       } else if (c.startsWith('nymchat-history-')) {
         final hist = d.payload['groupMessageHistory'];
         if (hist is Map) {
@@ -1633,7 +1644,8 @@ class StorageSync {
         : core.where((d) => d.category == 'nymchat-settings').toList();
     final hasGroupData = groupConversations != null ||
         groupEphemeralKeys.isNotEmpty ||
-        groupMessageHistory.isNotEmpty;
+        groupMessageHistory.isNotEmpty ||
+        botAnon != null;
     if (toApply.isEmpty) {
       // No settings sections to apply — but a notifications wrap, a readstate
       // category, or per-group data alone is still worth returning so the caller
@@ -1650,6 +1662,7 @@ class StorageSync {
               groupConversations: groupConversations,
               groupEphemeralKeys: groupEphemeralKeys,
               groupMessageHistory: groupMessageHistory,
+              botAnon: botAnon,
             );
     }
 
@@ -1667,6 +1680,7 @@ class StorageSync {
       groupConversations: groupConversations,
       groupEphemeralKeys: groupEphemeralKeys,
       groupMessageHistory: groupMessageHistory,
+      botAnon: botAnon,
     );
   }
 
@@ -2798,6 +2812,7 @@ class SettingsLoadResult {
     this.groupConversations,
     this.groupEphemeralKeys = const {},
     this.groupMessageHistory = const {},
+    this.botAnon,
   });
   final Map<String, dynamic> payload;
   final int newestTs;
@@ -2820,6 +2835,8 @@ class SettingsLoadResult {
   /// month-bucketed, byte-bounded wraps (settings.js:495-529); the shards for a
   /// conversation key are concatenated here.
   final Map<String, List<dynamic>> groupMessageHistory;
+
+  final Map<String, dynamic>? botAnon;
 
   /// The decrypted `nymchat-notifications` wrap payload, when present —
   /// carries `seenNotifications` (the cross-device notification read-state

@@ -821,7 +821,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
           ? null
           : [LengthLimitingTextInputFormatter(maxLength)],
       style: TextStyle(
-        color: c.isLight ? const Color(0xFF000000) : c.textBright,
+        color: c.inputText,
         fontSize: 15,
       ),
       decoration: InputDecoration(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -141,6 +142,14 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     final c = _colors(context);
     final state = ref.watch(botChatControllerProvider);
 
+    ref.listen<bool>(botAnonRequestProvider, (_, requested) {
+      if (!requested) return;
+      ref.read(botAnonRequestProvider.notifier).consume();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showAnon(context);
+      });
+    });
+
     // NOTE: `?buy` / out-of-credits (`botBuyRequestProvider`) AND gift requests
     // (`?gift` / context-menu "Gift Nymbot Credits") are handled by the
     // always-mounted listeners in home_shell.dart — no second listener here,
@@ -173,6 +182,8 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
           onTapModel: () => _showModelPicker(context),
           onTapGit: () => _showGitConnect(context),
           onTapBuy: () => _showBuy(context),
+          anonOn: state.anonEnabled,
+          onTapAnon: () => _showAnon(context),
         ),
         Expanded(
           // Tap on the messages region drops focus (dismisses the keyboard)
@@ -357,6 +368,15 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     );
   }
 
+  void _showAnon(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _colors(context).bgSecondary,
+      builder: (_) => _AnonModal(colors: _colors(context)),
+    );
+  }
+
   void _showModelPicker(BuildContext context) {
     final c = _colors(context);
     final current = ref.read(botChatControllerProvider).proModel;
@@ -484,6 +504,12 @@ const String _kSvgGitBranch =
     '<path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 
 /// Feather lightning-bolt polygon for the buy chip (index.html:692 `#botBuyBtn`).
+const String _kSvgAnon =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>'
+    '<line x1="3" y1="21" x2="21" y2="3"/></svg>';
+
 const String _kSvgBolt =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
     'stroke-linecap="round" stroke-linejoin="round">'
@@ -500,6 +526,8 @@ class _BotControlBar extends StatelessWidget {
     required this.onTapModel,
     required this.onTapGit,
     required this.onTapBuy,
+    required this.anonOn,
+    required this.onTapAnon,
   });
 
   final bool isPro;
@@ -511,6 +539,8 @@ class _BotControlBar extends StatelessWidget {
   final VoidCallback onTapModel;
   final VoidCallback onTapGit;
   final VoidCallback onTapBuy;
+  final bool anonOn;
+  final VoidCallback onTapAnon;
 
   @override
   Widget build(BuildContext context) {
@@ -550,6 +580,16 @@ class _BotControlBar extends StatelessWidget {
             colors: c,
             compact: compact,
             onTap: onTapGit,
+          ),
+          SizedBox(width: gap),
+          _CtrlButton(
+            svg: _kSvgAnon,
+            label: tr('Anon'),
+            active: anonOn,
+            labelMaxWidth: labelMax,
+            colors: c,
+            compact: compact,
+            onTap: onTapAnon,
           ),
         ],
       ),
@@ -1603,7 +1643,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                       child: TextField(
                         controller: _translateSearchController,
                         onChanged: (v) => setState(() => _translateQuery = v),
-                        style: TextStyle(color: c.text, fontSize: 13),
+                        style: TextStyle(color: c.inputText, fontSize: 13),
                         cursorColor: c.isLight ? Colors.black : Colors.white,
                         decoration: InputDecoration(
                           isDense: true,
@@ -2687,6 +2727,230 @@ class ProModelPickerSheet extends StatelessWidget {
 // Git connect modal (provider + PAT + repo/branch) — premium surface
 // =============================================================================
 
+class _AnonModal extends ConsumerStatefulWidget {
+  const _AnonModal({required this.colors});
+
+  final NymColors colors;
+
+  @override
+  ConsumerState<_AnonModal> createState() => _AnonModalState();
+}
+
+class _AnonModalState extends ConsumerState<_AnonModal> {
+  final TextEditingController _amount = TextEditingController();
+  CreditTier _tier = CreditTier.standard;
+  String _status = '';
+  bool _busy = false;
+  BotBalance? _accountBalance;
+
+  @override
+  void initState() {
+    super.initState();
+    _tier = ref.read(botChatControllerProvider).isPro
+        ? CreditTier.pro
+        : CreditTier.standard;
+    _loadAccountBalance();
+  }
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadAccountBalance() async {
+    final b =
+        await ref.read(botChatControllerProvider.notifier).accountBalance();
+    if (mounted) setState(() => _accountBalance = b);
+  }
+
+  Future<void> _toggle(bool on) async {
+    setState(() => _busy = true);
+    await ref.read(botChatControllerProvider.notifier).setAnonEnabled(on);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _status = on
+          ? tr('Anonymous mode on — Nymbot sees only the key below.')
+          : '';
+    });
+  }
+
+  Future<void> _move() async {
+    final amount = int.tryParse(_amount.text.trim()) ?? 0;
+    if (amount <= 0) {
+      setState(() => _status = tr('Enter how many credits to move.'));
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = tr('Moving credits…');
+    });
+    try {
+      final moved = await ref
+          .read(botChatControllerProvider.notifier)
+          .anonMoveCredits(amount, _tier);
+      if (!mounted) return;
+      _amount.clear();
+      setState(() => _status =
+          '${tr('Moved')} $moved ${tr('credits to your throwaway key.')}');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+      unawaited(_loadAccountBalance());
+    }
+  }
+
+  Future<void> _rotate() async {
+    setState(() {
+      _busy = true;
+      _status = tr('Rotating…');
+    });
+    try {
+      final moved = await ref
+          .read(botChatControllerProvider.notifier)
+          .anonRotate(sweep: true);
+      if (!mounted) return;
+      setState(() => _status = moved > 0
+          ? tr('New throwaway key created; balance carried over.')
+          : tr('New throwaway key created.'));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final state = ref.watch(botChatControllerProvider);
+    final anonPk = state.anonPubkey;
+    final acct = _accountBalance;
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(tr('Anonymous Nymbot chat'),
+                style: TextStyle(
+                    color: c.textBright,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Text(
+              tr('This chat is already end-to-end encrypted, but Nymbot still '
+                  'sees which pubkey is talking to it. Turn this on and every '
+                  'message and reply travels under a throwaway key generated on '
+                  'this device — the same trick group chats use. Credits move '
+                  'across as blind vouchers Nymbot signs without seeing, so its '
+                  'records cannot link the two.'),
+              style: TextStyle(color: c.textDim, fontSize: 12, height: 1.4),
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: state.anonEnabled,
+              thumbColor: WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) return c.primary;
+                return null;
+              }),
+              title: Text(tr('Anonymous mode'),
+                  style: TextStyle(color: c.text, fontSize: 14)),
+              subtitle: Text(tr('Send this chat from a throwaway key'),
+                  style: TextStyle(color: c.textDim, fontSize: 11)),
+              onChanged: _busy ? null : (v) => _toggle(v),
+            ),
+            if (state.anonEnabled) ...[
+              const SizedBox(height: 6),
+              Text(
+                anonPk == null || anonPk.isEmpty
+                    ? tr('Throwaway key: not created yet')
+                    : 'Throwaway key: ${anonPk.substring(0, 16)}…'
+                        '${anonPk.substring(anonPk.length - 8)}',
+                style: TextStyle(color: c.textDim, fontSize: 11),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Anonymous: ${state.balance.balance} standard · '
+                '${state.balance.proBalance} Pro'
+                '${acct == null ? '' : ' · your nym: ${acct.balance} standard · ${acct.proBalance} Pro'}',
+                style: TextStyle(color: c.textDim, fontSize: 11),
+              ),
+              const SizedBox(height: 14),
+              Text(tr('Move credits across'),
+                  style: TextStyle(color: c.textDim, fontSize: 12)),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _amount,
+                      keyboardType: TextInputType.number,
+                      style: TextStyle(color: c.inputText, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: tr('credits'),
+                        hintStyle: TextStyle(color: c.textDim),
+                        isDense: true,
+                        filled: true,
+                        fillColor: c.bgTertiary,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  DropdownButton<CreditTier>(
+                    value: _tier,
+                    dropdownColor: c.bgSecondary,
+                    style: TextStyle(color: c.text, fontSize: 13),
+                    onChanged: _busy
+                        ? null
+                        : (v) => setState(() => _tier = v ?? _tier),
+                    items: [
+                      DropdownMenuItem(
+                          value: CreditTier.standard,
+                          child: Text(tr('Standard'))),
+                      DropdownMenuItem(
+                          value: CreditTier.pro, child: Text(tr('Pro'))),
+                    ],
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _busy ? null : _move,
+                    child: Text(tr('Move')),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: _busy ? null : _rotate,
+                child: Text(tr('New throwaway key')),
+              ),
+            ],
+            if (_status.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(_status,
+                  style: TextStyle(color: c.textDim, fontSize: 12, height: 1.4)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _GitConnectModal extends StatefulWidget {
   const _GitConnectModal({
     required this.colors,
@@ -2857,7 +3121,7 @@ class _GitConnectModalState extends State<_GitConnectModal> {
         TextField(
           controller: ctrl,
           obscureText: obscure,
-          style: TextStyle(color: c.text, fontSize: 14),
+          style: TextStyle(color: c.inputText, fontSize: 14),
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: TextStyle(color: c.textDim),

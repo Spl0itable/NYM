@@ -417,7 +417,7 @@ class _FormInputState extends State<_FormInput> {
         focusNode: _focus,
         maxLength: widget.maxLength,
         onChanged: widget.onChanged,
-        style: TextStyle(color: c.textBright, fontSize: 15),
+        style: TextStyle(color: c.inputText, fontSize: 15),
         decoration: InputDecoration(
           hintText: widget.hint,
           hintStyle: TextStyle(color: c.textDim, fontSize: 15),

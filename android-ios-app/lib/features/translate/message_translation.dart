@@ -9,6 +9,7 @@ import '../i18n/i18n.dart';
 import 'auto_translate.dart';
 import 'translate_languages.dart';
 import 'translate_service.dart';
+import 'translation_cache.dart';
 
 /// Inline `.message-translation` block shown below a message after the user
 /// taps "Translate" (translate.js `translateMessage`). A left-accented panel
@@ -39,6 +40,11 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
   /// Null until a target language is resolved (either it was already set, or
   Future<TranslationResult>? _future;
 
+  /// The already-finished translation, when the cache has one. Seeds the
+  /// builder so a row rebuilt from scratch paints it immediately instead of a
+  /// frame of "Translating..." for work that is long done.
+  TranslationResult? _seed;
+
   late final TranslateService _service = widget.service ?? TranslateService();
 
   /// Never empty — see [manualTranslateTargetFor]. The language was chosen at
@@ -54,19 +60,30 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
 
   void _start(String target) {
     final plain = TranslateService.stripQuotes(widget.content);
-    final future = _service.translate(plain, target);
-    // On failure the PWA shows the inline `.translation-error` AND posts a
-    // system chat message with the error detail
-    // (translate.js:269 `displaySystemMessage('Translation failed: ' + ...)`).
-    // Capture the notifier now so the message still lands even if this widget
-    // is disposed before the request settles, like the PWA's detached async.
-    final notifier = ref.read(appStateProvider.notifier);
-    future.then<void>((_) {}, onError: (Object err) {
-      final msg = err is TranslateException ? err.message : err.toString();
-      notifier.addSystemMessage(tr('Translation failed: {error}',
-          {'error': msg.isEmpty ? tr('Unknown error') : msg}));
-    });
-    _future = future;
+    _seed = ref.read(translationCacheProvider).settled(plain, target);
+    // Through the cache, so a row rebuilt because a message arrived above it
+    // reuses the request it already made instead of flashing "Translating..."
+    // and spending another API call on text it has already translated.
+    _future = ref.read(translationCacheProvider).resolve(
+      plain,
+      target,
+      () => _service.translate(plain, target),
+      onStarted: (future) {
+        // On failure the PWA shows the inline `.translation-error` AND posts a
+        // system chat message with the error detail
+        // (translate.js:269 `displaySystemMessage('Translation failed: ' + ...)`).
+        // Capture the notifier now so the message still lands even if this
+        // widget is disposed before the request settles, like the PWA's
+        // detached async. Attached per REQUEST, not per widget, so a rebuild
+        // cannot post the same failure twice.
+        final notifier = ref.read(appStateProvider.notifier);
+        future.then<void>((_) {}, onError: (Object err) {
+          final msg = err is TranslateException ? err.message : err.toString();
+          notifier.addSystemMessage(tr('Translation failed: {error}',
+              {'error': msg.isEmpty ? tr('Unknown error') : msg}));
+        });
+      },
+    );
   }
 
 
@@ -94,8 +111,9 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
       ),
       child: FutureBuilder<TranslationResult>(
         future: future,
+        initialData: _seed,
         builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
+          if (snap.connectionState != ConnectionState.done && !snap.hasData) {
             // `.translation-loading`: STATIC italic dim@0.6 — the PWA has NO
             // pulse on the inline message translation (styles-features.css:4333).
             return Text(

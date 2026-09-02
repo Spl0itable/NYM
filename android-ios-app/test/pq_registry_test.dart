@@ -352,13 +352,18 @@ void main() {
     // A peer holding a key is a CURRENT peer: they announced pk2. A peer that
     // announced only `pk` is modelled with layered:false, and is now sent no
     // post-quantum wrap at all.
+    // Bitchat evidence defaults to being the NEWER of the two: the plan weighs
+    // when each was made, so a caller that only says "known bitchat" is asking
+    // about the case where it is current.
     PqPmPlan plan({Uint8List? kem, bool bitchat = false, bool nym = false,
-            bool layered = true}) =>
+            bool layered = true, int bitchatAt = 2000, int announcedAt = 1000}) =>
         PqPmPlan.decide(
             recipientKemKey: kem,
             recipientAcceptsLayered: layered,
             knownBitchat: bitchat,
-            knownNym: nym);
+            knownNym: nym,
+            bitchatSeenAtSec: bitchat ? bitchatAt : 0,
+            announcedAtSec: announcedAt);
 
     test('unknown peer, no key: bitchat + classical nym (today\'s behaviour)', () {
       final p = plan();
@@ -378,12 +383,13 @@ void main() {
       expect(p.nym, isTrue);
     });
 
-    // An announcement proves the pubkey RAN Nymchat this week; bitchat-format
-    // traffic from them proves they are running Bitchat NOW. Only one of those
-    // is about the present, and suppressing on the announcement alone is what
-    // left a peer who moved to Bitchat, or who runs both, receiving nothing.
-    test('a peer we have heard bitchat format from keeps getting it', () {
-      final p = plan(kem: key, bitchat: true);
+    // An announcement proves the pubkey ran Nymchat when it was signed;
+    // bitchat-format traffic proves they ran Bitchat when they sent it. The
+    // NEWER one is about the present, and suppressing on the announcement
+    // alone is what left a peer who moved to Bitchat, or who runs both,
+    // receiving nothing.
+    test('bitchat format heard SINCE the announcement keeps getting it', () {
+      final p = plan(kem: key, bitchat: true, bitchatAt: 2000, announcedAt: 1000);
       expect(p.bitchat, isTrue);
       expect(p.nym, isTrue);
     });
@@ -391,9 +397,36 @@ void main() {
     // A post-quantum wrap beside a readable copy of the same text protects
     // nothing, so the message goes classical and the shield says so.
     test('...and is not sent a post-quantum wrap alongside it', () {
-      final p = plan(kem: key, bitchat: true);
+      final p = plan(kem: key, bitchat: true, bitchatAt: 2000, announcedAt: 1000);
       expect(p.pq, isFalse);
       expect(p.kemPublicKey, isNull);
+    });
+
+    // The reported failure. The set behind `knownBitchat` never forgets and is
+    // rebuilt from cached PM history, so one wrap from the dual-send era — from
+    // before any of this existed — pinned a peer classical for good, however
+    // current their announcement.
+    test('an OLD bitchat wrap does not outrank a live announcement', () {
+      final p = plan(kem: key, bitchat: true, bitchatAt: 1000, announcedAt: 2000);
+      expect(p.pq, isTrue);
+      expect(p.kemPublicKey, isNotNull);
+      expect(p.bitchat, isFalse);
+    });
+
+    // An entry with no time at all — rebuilt by a build that predates the
+    // timestamp — reads as older than any announcement. Safe: a peer genuinely
+    // on Bitchat has no live announcement, so `provenNym` still routes a copy.
+    test('an undated bitchat entry reads as the older evidence', () {
+      final p = plan(kem: key, bitchat: true, bitchatAt: 0, announcedAt: 2000);
+      expect(p.pq, isTrue);
+      expect(p.bitchat, isFalse);
+    });
+
+    test('and undated with no announcement still gets both formats', () {
+      final p = plan(bitchat: true, bitchatAt: 0, announcedAt: 0);
+      expect(p.pq, isFalse);
+      expect(p.bitchat, isTrue);
+      expect(p.nym, isTrue);
     });
 
     // Classification is inference, not proof — a Bitchat client echoing our
@@ -585,6 +618,8 @@ void main() {
       bool bitchat = false,
       bool nym = false,
       bool proven = false,
+      int bitchatAt = 2000,
+      int announcedAt = 1000,
     }) =>
         PqPmPlan.decide(
           recipientKemKey: kem,
@@ -592,6 +627,8 @@ void main() {
           knownBitchat: bitchat,
           knownNym: nym,
           provenNymchat: proven,
+          bitchatSeenAtSec: bitchat ? bitchatAt : 0,
+          announcedAtSec: announcedAt,
         );
 
     test('a proven Nymchat peer gets no Bitchat wrap', () {
@@ -608,9 +645,16 @@ void main() {
       expect(plan(bitchat: true).bitchat, isTrue);
     });
 
-    // The reverse of what this used to assert, for the reason above.
-    test('first-hand bitchat traffic outranks the announcement', () {
-      expect(plan(bitchat: true, proven: true).bitchat, isTrue);
+    // The reverse of what this used to assert, for the reason above — and only
+    // when the bitchat evidence is the newer of the two.
+    test('first-hand bitchat traffic outranks an OLDER announcement', () {
+      expect(plan(bitchat: true, proven: true, bitchatAt: 2000, announcedAt: 1000)
+          .bitchat, isTrue);
+    });
+
+    test('but not an announcement made since it', () {
+      expect(plan(bitchat: true, proven: true, bitchatAt: 1000, announcedAt: 2000)
+          .bitchat, isFalse);
     });
 
     test('an unknown peer keeps the pre-existing dual-send', () {

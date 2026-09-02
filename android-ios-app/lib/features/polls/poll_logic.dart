@@ -2,6 +2,7 @@ import 'dart:math';
 
 import '../../core/constants/event_kinds.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../models/channel.dart';
 import '../../models/nostr_event.dart';
 import '../../models/poll.dart';
 
@@ -126,7 +127,9 @@ class PollLogic {
         .toList();
     final nymTag = e.tagValue('n');
     final nym = nymTag != null ? stripPubkeySuffix(nymTag) : 'nym';
-    final geohash = e.tagValue('g') ?? '';
+    final gTag = e.tagValue('g');
+    if (gTag != null && !isValidChannelTag(gTag)) return null;
+    final geohash = gTag ?? '';
     return Poll(
       id: e.id,
       question: question,

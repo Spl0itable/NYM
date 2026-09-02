@@ -140,7 +140,7 @@ class _DevNsecModalState extends State<DevNsecModal> {
                                 controller: _nsec,
                                 obscureText: true,
                                 style: TextStyle(
-                                    color: c.textBright, fontSize: 15),
+                                    color: c.inputText, fontSize: 15),
                                 decoration:
                                     ModalChrome.inputDecoration(c, 'nsec1... or hex private key'),
                               ),

@@ -83,7 +83,15 @@ class _PollCardState extends ConsumerState<PollCard> {
 
     final users = ref.watch(usersProvider);
     final authorPic = users[poll.pubkey]?.profile?.picture;
-    final baseNym = stripPubkeySuffix(poll.nym.isEmpty ? 'nym' : poll.nym);
+    // The LIVE profile wins over the nym stored on the poll, which was frozen
+    // when the poll event was ingested and is the literal "nym" when no profile
+    // was known yet. The PWA resolves this at render the same way
+    // (`user ? parseNymFromDisplay(user.nym) : 'nym'`, polls.js:519); only the
+    // fallback comes from the event.
+    final liveNym = users[poll.pubkey]?.nym ?? '';
+    final storedNym = poll.nym.isEmpty ? 'nym' : poll.nym;
+    final baseNym =
+        stripPubkeySuffix(liveNym.isNotEmpty ? liveNym : storedNym);
     final suffix = getPubkeySuffix(poll.pubkey);
 
     // Clamp the timestamp to now so polls never appear in the future

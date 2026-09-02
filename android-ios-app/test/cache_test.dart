@@ -1,16 +1,24 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'package:nym_bar/core/constants/history_window.dart';
 import 'package:nym_bar/models/message.dart';
 import 'package:nym_bar/models/user.dart';
 import 'package:nym_bar/services/storage/cache_store.dart';
+
+/// Public channel history is bounded to a rolling 24-hour window
+/// ([kChannelHistoryMaxAge]), so channel fixtures must carry timestamps inside
+/// it — `createdAt: 0` is 1970 and would simply be pruned. [createdAt] is
+/// therefore an offset in seconds from a base a few minutes ago, which keeps
+/// the ordering these tests rely on while staying in window.
+int get _base => (DateTime.now().millisecondsSinceEpoch ~/ 1000) - 3600;
 
 Message _msg(String id, {int createdAt = 0, bool isPM = false}) => Message(
       id: id,
       author: 'alice',
       pubkey: 'pk_$id',
       content: 'body $id',
-      createdAt: createdAt,
+      createdAt: _base + createdAt,
       isPM: isPM,
     );
 
@@ -44,23 +52,24 @@ void main() {
       final loaded = await store.loadChannelMessages('#nymchat');
       expect(loaded.length, 3);
       expect(loaded.map((m) => m.id), ['a', 'b', 'c']);
-      expect(loaded[1].createdAt, 20);
+      expect(loaded[1].createdAt, _base + 20);
       expect(loaded[2].content, 'body c');
       await store.close();
     });
 
     test('trims to the per-channel limit, keeping the newest', () async {
       final store = await _openStore();
-      final n = CacheStore.channelMessageLimit + 25; // 125
+      const over = 25;
+      final n = CacheStore.channelMessageLimit + over;
       final msgs = [
         for (var i = 0; i < n; i++) _msg('m$i', createdAt: i),
       ];
       await store.saveChannelMessages('#big', msgs);
 
       final loaded = await store.loadChannelMessages('#big');
-      expect(loaded.length, CacheStore.channelMessageLimit); // 100
+      expect(loaded.length, CacheStore.channelMessageLimit);
       // slice(-limit): the last `limit` messages are retained.
-      expect(loaded.first.id, 'm25');
+      expect(loaded.first.id, 'm$over');
       expect(loaded.last.id, 'm${n - 1}');
       await store.close();
     });

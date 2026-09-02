@@ -105,7 +105,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
   // (2) registered geohash channels.
   for (final c in state.channels) {
     if (!c.isGeohash) continue;
-    candidates.add(c.geohash.toLowerCase());
+    candidates.add(c.geohashKey.toLowerCase());
   }
 
   // (3) geohash-tagged channels with stored messages.
@@ -181,7 +181,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
   // `isJoined: userJoinedChannels.has(gh)` (geohash-globe.js:1166).
   final joined = <String>{
     for (final c in state.channels)
-      if (c.isGeohash) c.geohash.toLowerCase(),
+      if (c.isGeohash) c.geohashKey.toLowerCase(),
     for (final k in state.pinnedChannels)
       if (isValidGeohash(k)) k.toLowerCase(),
   };

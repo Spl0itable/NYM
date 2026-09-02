@@ -132,3 +132,184 @@ Uint8List decodeNymPq(String code) {
   }
   return r.data;
 }
+
+/// What a NIP-19 reference points at, once decoded.
+enum NostrRefKind { event, profile, addr }
+
+/// A decoded NIP-19 reference (or a bare 64-hex event id).
+class NostrRef {
+  const NostrRef({
+    required this.kind,
+    this.id = '',
+    this.pubkey = '',
+    this.eventKind,
+    this.identifier = '',
+    this.relays = const [],
+  });
+
+  final NostrRefKind kind;
+
+  /// Event id, for [NostrRefKind.event].
+  final String id;
+
+  /// Author (nevent), subject (npub/nprofile) or addressable author (naddr).
+  final String pubkey;
+
+  /// Event kind, when the reference carries one (nevent's optional hint, or
+  /// naddr's required one).
+  final int? eventKind;
+
+  /// naddr's `d` tag.
+  final String identifier;
+
+  /// Relay hints the reference travelled with.
+  final List<String> relays;
+
+  /// The cache/lookup identity of this reference.
+  String get key => switch (kind) {
+        NostrRefKind.event => 'e:$id',
+        NostrRefKind.profile => 'p:$pubkey',
+        NostrRefKind.addr => 'a:$eventKind:$pubkey:$identifier',
+      };
+}
+
+/// Walks a NIP-19 TLV payload into (type, value) records.
+List<({int type, Uint8List value})> _tlv(Uint8List data) {
+  final out = <({int type, Uint8List value})>[];
+  var i = 0;
+  while (i + 2 <= data.length) {
+    final type = data[i];
+    final len = data[i + 1];
+    final start = i + 2;
+    if (start + len > data.length) break;
+    out.add((type: type, value: data.sublist(start, start + len)));
+    i = start + len;
+  }
+  return out;
+}
+
+int _int32(Uint8List b) {
+  var v = 0;
+  for (final byte in b) {
+    v = (v << 8) | byte;
+  }
+  return v;
+}
+
+/// Decodes any NIP-19 entity this app renders a card for — `nevent`, `note`,
+/// `naddr`, `npub`, `nprofile` — plus a bare 64-hex event id. Returns null for
+/// anything else (an `nsec` included: a secret key is never a reference).
+NostrRef? decodeNostrRef(String token) {
+  var raw = token.trim();
+  if (raw.toLowerCase().startsWith('nostr:')) raw = raw.substring(6);
+  if (raw.isEmpty) return null;
+  if (RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(raw)) {
+    return NostrRef(kind: NostrRefKind.event, id: raw.toLowerCase());
+  }
+  ({String hrp, Uint8List data}) r;
+  try {
+    r = _decode(raw);
+  } catch (_) {
+    return null;
+  }
+  try {
+    switch (r.hrp) {
+      case 'note':
+        if (r.data.length != 32) return null;
+        return NostrRef(kind: NostrRefKind.event, id: bytesToHex(r.data));
+      case 'npub':
+        if (r.data.length != 32) return null;
+        return NostrRef(kind: NostrRefKind.profile, pubkey: bytesToHex(r.data));
+      case 'nevent':
+        var id = '';
+        var author = '';
+        int? kind;
+        final relays = <String>[];
+        for (final rec in _tlv(r.data)) {
+          switch (rec.type) {
+            case 0 when rec.value.length == 32:
+              id = bytesToHex(rec.value);
+            case 1:
+              relays.add(String.fromCharCodes(rec.value));
+            case 2 when rec.value.length == 32:
+              author = bytesToHex(rec.value);
+            case 3 when rec.value.length == 4:
+              kind = _int32(rec.value);
+          }
+        }
+        if (id.isEmpty) return null;
+        return NostrRef(
+            kind: NostrRefKind.event,
+            id: id,
+            pubkey: author,
+            eventKind: kind,
+            relays: relays);
+      case 'nprofile':
+        var pubkey = '';
+        final relays = <String>[];
+        for (final rec in _tlv(r.data)) {
+          if (rec.type == 0 && rec.value.length == 32) {
+            pubkey = bytesToHex(rec.value);
+          } else if (rec.type == 1) {
+            relays.add(String.fromCharCodes(rec.value));
+          }
+        }
+        if (pubkey.isEmpty) return null;
+        return NostrRef(
+            kind: NostrRefKind.profile, pubkey: pubkey, relays: relays);
+      case 'naddr':
+        var identifier = '';
+        var pubkey = '';
+        int? kind;
+        final relays = <String>[];
+        for (final rec in _tlv(r.data)) {
+          switch (rec.type) {
+            case 0:
+              identifier = String.fromCharCodes(rec.value);
+            case 1:
+              relays.add(String.fromCharCodes(rec.value));
+            case 2 when rec.value.length == 32:
+              pubkey = bytesToHex(rec.value);
+            case 3 when rec.value.length == 4:
+              kind = _int32(rec.value);
+          }
+        }
+        if (pubkey.isEmpty || kind == null) return null;
+        return NostrRef(
+            kind: NostrRefKind.addr,
+            pubkey: pubkey,
+            eventKind: kind,
+            identifier: identifier,
+            relays: relays);
+      default:
+        return null;
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Encodes an `nevent`: TLV 0 = 32-byte event id, TLV 1 = each relay hint,
+/// TLV 2 = author pubkey. Returns the bare hex id if [hexId] is not one.
+String encodeNevent(String hexId,
+    {String author = '', List<String> relays = const []}) {
+  if (!RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(hexId)) {
+    return '';
+  }
+  final data = <int>[];
+  void tlv(int type, List<int> value) {
+    data
+      ..add(type)
+      ..add(value.length)
+      ..addAll(value);
+  }
+
+  tlv(0, hexToBytes(hexId.toLowerCase()));
+  for (final relay in relays.take(3)) {
+    tlv(1, relay.codeUnits);
+  }
+  if (RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(author)) {
+    tlv(2, hexToBytes(author.toLowerCase()));
+  }
+  return _encode('nevent', data);
+}

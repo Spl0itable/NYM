@@ -782,7 +782,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       onChanged: onChanged,
       onSubmitted: onSubmitted,
       keyboardType: number ? TextInputType.number : TextInputType.text,
-      style: TextStyle(color: c.textBright, fontSize: 15),
+      style: TextStyle(color: c.inputText, fontSize: 15),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: TextStyle(color: c.textDim),

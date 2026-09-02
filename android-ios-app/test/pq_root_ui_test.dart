@@ -222,7 +222,7 @@ void main() {
       expect(
           para,
           endsWith('The four characters after the # in a nickname are the '
-              'last four of the hex spelling.'));
+              'last four of the hex format.'));
       expect(modal.contains('last four of the hex '), isTrue);
     });
   });

@@ -284,8 +284,16 @@ class MeshController extends StateNotifier<MeshUiState> {
         clearError: true,
       );
     } catch (e) {
-      state = state.copyWith(error: '$e', running: false);
+      // Drop the peer list with the radio, exactly as _stop does: a start that
+      // failed leaves whatever was discovered last time on screen, and every
+      // row in it is a peer nothing can reach — including its ping button.
       await _teardown();
+      state = state.copyWith(
+          error: '$e',
+          running: false,
+          linkCount: 0,
+          peers: const [],
+          pings: const {});
     } finally {
       _busy = false;
     }
@@ -449,7 +457,14 @@ class MeshController extends StateNotifier<MeshUiState> {
   /// Probes [peerID]: are you there, and how many links away?
   Future<void> ping(String peerID) async {
     final service = _service;
-    if (service == null || !state.running) return;
+    // A radio that is not running cannot measure anything — but returning in
+    // silence made the button look dead: no "pinging…", no result, nothing at
+    // all for a tap that landed. Say it the same way an unanswered ping is
+    // said, so the row always reacts to being pressed.
+    if (service == null || !state.running) {
+      _setPing(peerID, const MeshPingState.lost());
+      return;
+    }
     _setPing(peerID, const MeshPingState.waiting());
     _pingTimeouts.remove(peerID)?.cancel();
     _pingTimeouts[peerID] = Timer(pingTimeout, () {

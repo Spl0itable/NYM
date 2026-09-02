@@ -250,7 +250,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         Expanded(
           child: TextField(
             controller: _recoveryController,
-            style: TextStyle(color: c.text, fontSize: 13),
+            style: TextStyle(color: c.inputText, fontSize: 13),
             decoration: InputDecoration(
               isDense: true,
               hintText: tr('Recovery code'),
@@ -1658,7 +1658,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
                 TextField(
                   controller: _controller,
                   autofocus: true,
-                  style: TextStyle(color: c.text, fontSize: 13),
+                  style: TextStyle(color: c.inputText, fontSize: 13),
                   decoration: InputDecoration(
                     hintText: tr('Recipient npub or hex pubkey'),
                     hintStyle: TextStyle(color: c.textDim),

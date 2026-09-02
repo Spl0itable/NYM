@@ -39,14 +39,14 @@ void main() {
     final c = ProviderContainer();
     addTearDown(c.dispose);
     final n = c.read(appStateProvider.notifier)..goLive('self', 'me#0001');
-    n.switchView(const ChatView.channel('news'));
+    n.switchView(const ChatView.channel('newsroom'));
     expect(c.read(messagesForCurrentViewProvider), isEmpty);
 
     // Simulate _runChannelBackfill: batched ingest of channel-get rows.
     n.ingestEvents([
-      _chanMsg('news', now - 100),
-      _chanMsg('news', now - 50),
-      _chanMsg('news', now),
+      _chanMsg('newsroom', now - 100),
+      _chanMsg('newsroom', now - 50),
+      _chanMsg('newsroom', now),
     ]);
 
     final msgs = c.read(messagesForCurrentViewProvider);
@@ -62,17 +62,17 @@ void main() {
 
     // Boot hydration seeds the store + _seenIds from the local cache (old msgs).
     n.hydrateAllMessages({
-      '#news': [_cached('#news', now - 10000), _cached('#news', now - 9000)],
+      '#newsroom': [_cached('#newsroom', now - 10000), _cached('#newsroom', now - 9000)],
     });
-    n.switchView(const ChatView.channel('news'));
+    n.switchView(const ChatView.channel('newsroom'));
     expect(c.read(messagesForCurrentViewProvider).length, 2);
 
     // D1 backfill returns the SAME old rows (deduped) PLUS newer ones.
     n.ingestEvents([
-      _chanMsg('news', now - 10000), // dup of cached → skipped
-      _chanMsg('news', now - 9000), // dup of cached → skipped
-      _chanMsg('news', now - 5), // new
-      _chanMsg('news', now), // new (most recent)
+      _chanMsg('newsroom', now - 10000), // dup of cached → skipped
+      _chanMsg('newsroom', now - 9000), // dup of cached → skipped
+      _chanMsg('newsroom', now - 5), // new
+      _chanMsg('newsroom', now), // new (most recent)
     ]);
 
     final msgs = c.read(messagesForCurrentViewProvider);
@@ -80,20 +80,20 @@ void main() {
     expect(msgs.last.createdAt, now,
         reason: 'the most recent backfilled message is newest-last');
     // Sidebar sort key reflects the newest message (ms), not the old cache.
-    expect(n.state.channelLastActivity['#news'], now * 1000);
+    expect(n.state.channelLastActivity['#newsroom'], now * 1000);
   });
 
   test('channelLastActivity tracks the newest message across cache+backfill',
       () {
     final n = AppStateNotifier()..goLive('self', 'me#0001');
     n.hydrateAllMessages({
-      '#news': [_cached('#news', now - 10000)],
+      '#newsroom': [_cached('#newsroom', now - 10000)],
     });
     // After hydration the activity is the cached msg time.
-    expect(n.state.channelLastActivity['#news'], (now - 10000) * 1000);
+    expect(n.state.channelLastActivity['#newsroom'], (now - 10000) * 1000);
     // A newer backfilled/live message raises it.
-    n.ingestEvent(_chanMsg('news', now));
-    expect(n.state.channelLastActivity['#news'], now * 1000);
+    n.ingestEvent(_chanMsg('newsroom', now));
+    expect(n.state.channelLastActivity['#newsroom'], now * 1000);
   });
 
   // Reproduces the "channel loads nothing despite D1 having messages" report:

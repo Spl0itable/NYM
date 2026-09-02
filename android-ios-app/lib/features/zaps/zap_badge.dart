@@ -255,7 +255,12 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
   /// spurious "cannot receive zaps". Posts the PWA's "Checking…" system note,
   /// awaits the resolve, then either opens the modal or reports no address.
   Future<void> _quickZap(BuildContext context) async {
-    final baseNym = stripPubkeySuffix(message.author);
+    // Live profile preferred over the nym frozen onto the message: this text is
+    // shown to the user right now, so it should name the sender the way the
+    // rest of the UI does.
+    final liveNym = ref.read(appStateProvider).users[message.pubkey]?.nym;
+    final baseNym = stripPubkeySuffix(
+        (liveNym != null && liveNym.isNotEmpty) ? liveNym : message.author);
     final notifier = ref.read(appStateProvider.notifier);
     notifier.addSystemMessage(
         tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));

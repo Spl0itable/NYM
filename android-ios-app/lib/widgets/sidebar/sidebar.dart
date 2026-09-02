@@ -443,7 +443,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           final r = capped<ChannelEntry>(
             channels,
             term,
-            (ch) => (ch.isGeohash ? ch.geohash : ch.channel)
+            (ch) => (ch.isGeohash ? ch.geohashKey : ch.channel)
                 .toLowerCase()
                 .contains(term),
             _channelExpanded,

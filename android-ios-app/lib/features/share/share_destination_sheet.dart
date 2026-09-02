@@ -92,12 +92,12 @@ class _ShareDestinationSheetState
     // Channels
     final chanMatches = [
       for (final ch in channels)
-        if (_matches(ch.isGeohash ? ch.geohash : ch.channel)) ch
+        if (_matches(ch.isGeohash ? ch.geohashKey : ch.channel)) ch
     ];
     if (chanMatches.isNotEmpty) {
       section(tr('Channels'));
       for (final ch in chanMatches) {
-        final label = '#${ch.isGeohash ? ch.geohash : ch.channel}';
+        final label = '#${ch.isGeohash ? ch.geohashKey : ch.channel}';
         rows.add(_row(
             c,
             Text('#',
@@ -200,7 +200,7 @@ class _ShareDestinationSheetState
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: TextField(
                 onChanged: (v) => setState(() => _query = v),
-                style: TextStyle(color: c.text),
+                style: TextStyle(color: c.inputText),
                 decoration: InputDecoration(
                   isDense: true,
                   prefixIcon: Icon(Icons.search, size: 18, color: c.textDim),

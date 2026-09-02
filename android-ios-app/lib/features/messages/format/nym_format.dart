@@ -16,6 +16,13 @@ import '../../../models/channel.dart' show isValidGeohash;
 /// (only newline -> paragraph splitting). Mirrors `RX_FORMAT_TRIGGERS`.
 final RegExp _rxTriggers = RegExp(r'[^\x20-\x7E\n]|[*_~`#>@:;/\\&<>"]');
 
+/// A pasted NIP-19 entity or bare event id is all letters and digits, so it
+/// trips none of [_rxTriggers] and the fast path would hand it straight back
+/// as plain text, never reaching the reference pass.
+final RegExp _rxNostrTrigger = RegExp(
+    r'(?:nevent|naddr|nprofile|note|npub)1[023456789acdefghjklmnpqrstuvwxyz]{20,}|[0-9a-f]{64}',
+    caseSensitive: false);
+
 // ---------------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------------
@@ -252,6 +259,21 @@ class ChannelLinkChip extends InlineNode {
   final String label;
 }
 
+/// A pasted NIP-19 entity (`nevent` / `note` / `naddr` / `npub` / `nprofile`,
+/// with or without the `nostr:` scheme) or a bare 64-hex event id. Rendered as
+/// a reference chip; the row unfurls it into a card underneath.
+class NostrRefNode extends InlineNode {
+  const NostrRefNode({required this.token, required this.raw});
+
+  /// The entity itself, scheme stripped — what gets decoded and looked up.
+  final String token;
+
+  /// True for a bare hex id, which keeps its own text rather than being
+  /// shortened into a chip: 64 hex characters are not always an event id, and
+  /// restyling every one of them would be a guess.
+  final bool raw;
+}
+
 /// `…#gjoin=<token>` group-invite chip.
 class GroupInviteChip extends InlineNode {
   const GroupInviteChip({required this.name, required this.token});
@@ -420,7 +442,7 @@ class NymFormat {
 
     // Fast path: no trigger chars -> plain paragraphs split on blank lines,
     // keeping single newlines inside a paragraph.
-    if (!_rxTriggers.hasMatch(content)) {
+    if (!_rxTriggers.hasMatch(content) && !_rxNostrTrigger.hasMatch(content)) {
       return _plainParagraphs(content);
     }
 
@@ -758,6 +780,22 @@ class NymFormat {
     // Bare links.
     tokens = _splitByRegex(
         tokens, RegExp(r'https?://[^\s]+'), (m) => _NodeTok(LinkNode(m[0]!)));
+
+    // NIP-19 references. AFTER the bare-link pass, so an entity inside a URL
+    // path (an njump-style viewer link) stays part of that link. The lookbehind
+    // keeps it from matching mid-token or inside a query string.
+    tokens = _splitByRegex(
+        tokens,
+        RegExp(
+            r'''(?<![\w/:.#=&?"'-])(?:nostr:)?((?:nevent|naddr|nprofile|note|npub)1[023456789acdefghjklmnpqrstuvwxyz]{20,})(?![\w-])''',
+            caseSensitive: false),
+        (m) => _NodeTok(NostrRefNode(token: m[1]!, raw: false)));
+
+    tokens = _splitByRegex(
+        tokens,
+        RegExp(r'''(?<![\w/:.#=&?"'-])([0-9a-f]{64})(?![\w-])''',
+            caseSensitive: false),
+        (m) => _NodeTok(NostrRefNode(token: m[1]!.toLowerCase(), raw: true)));
 
     // Mentions with suffix: @name#xxxx. The name part allows SPACES (a nym can
     // be multi-word), bounded by the `#xxxx` suffix — the PWA's

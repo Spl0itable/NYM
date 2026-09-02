@@ -175,6 +175,79 @@ void main() {
     await bobService.stop();
   });
 
+  test('a frame naming a channel the app could not have created falls back to '
+      '#mesh', () async {
+    // A radio frame names its own channel and that name went straight into the
+    // message, with none of the checks the Nostr ingest makes. There is no
+    // event kind here to pair a shape against, but the name still has to be one
+    // the app could have created — otherwise a peer files a message under a
+    // channel that can never exist.
+    SharedPreferences.setMockInitialValues(
+        <String, Object>{'flutter.nym_notifications_enabled': 'false'});
+    final kv = await KeyValueStore.open();
+    final bus = RadioBus();
+    final aliceId = await NoiseIdentity.fromSeeds(
+        staticPrivate: randomBytes(32), signingSeed: randomBytes(32));
+    final bobId = await NoiseIdentity.fromSeeds(
+        staticPrivate: randomBytes(32), signingSeed: randomBytes(32));
+
+    final alice = MeshService(
+      identity: aliceId,
+      transport: FakeMeshTransport(bus, 'alice'),
+      nicknameProvider: () => 'alice',
+    );
+    final bobService = MeshService(
+      identity: bobId,
+      transport: FakeMeshTransport(bus, 'bob'),
+      nicknameProvider: () => 'bob',
+    );
+
+    final container = ProviderContainer(overrides: [
+      keyValueStoreProvider.overrideWithValue(kv),
+      _bridgeServiceProvider.overrideWithValue(bobService),
+    ]);
+    addTearDown(container.dispose);
+
+    final app = container.read(appStateProvider.notifier);
+    app.goLive(
+        bobId.fingerprint.padRight(64, '0').substring(0, 64), 'bob#0000');
+
+    final bridge = container.read(_bridgeProvider);
+    bridge.start();
+
+    await alice.start();
+    await bobService.start();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    await alice.sendPublicMessage('junk channel', channel: 'has space');
+    await alice.sendPublicMessage('real channel', channel: 'radio');
+
+    final landed = await _waitFor(() =>
+        (container.read(appStateProvider).messages['#mesh'] ?? const [])
+            .any((m) => m.content == 'junk channel'));
+    expect(landed, isTrue,
+        reason: 'the words were still said over the radio — Nearby, not lost');
+
+    final keys = container.read(appStateProvider).messages.keys.toList();
+    expect(keys.any((k) => k.contains(' ')), isFalse,
+        reason: 'no store key may come from an unsanitised frame');
+
+    final onRadio = await _waitFor(() =>
+        (container.read(appStateProvider).messages['#radio'] ?? const [])
+            .any((m) => m.content == 'real channel'));
+    expect(onRadio, isTrue, reason: 'a legal name still routes to its channel');
+
+    // A named channel is 23333 on the wire, so a reaction to this row carries
+    // the same `k` the relay copy would — the row used to hardcode 20000.
+    final radio = container.read(appStateProvider).messages['#radio']!.first;
+    expect(radio.eventKind, 23333);
+
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await bridge.dispose();
+    await alice.stop();
+    await bobService.stop();
+  });
+
   test('an inbound mesh PM from a peer lands in its pm-<pubkey> view',
       () async {
     SharedPreferences.setMockInitialValues(

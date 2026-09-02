@@ -339,7 +339,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     return TextField(
       controller: _searchController,
       onChanged: (v) => setState(() => _query = _sanitizeUserText(v).trim()),
-      style: TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
+      style: TextStyle(color: c.inputText, fontSize: 12),
       cursorColor: c.isLight ? Colors.black : Colors.white,
       decoration: InputDecoration(
         isDense: true,

@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_sqlcipher/sqflite.dart';
 
+import '../../core/constants/history_window.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../models/message.dart';
 import '../../models/user.dart';
@@ -27,9 +28,20 @@ import 'secure_store.dart';
 ///   avatars / banners. (Here as SQLite tables of the same names.)
 /// - `STORE_LIMITS` — profiles 2000, channels 50, pms 100, reactions 5000,
 ///   avatars 500, banners 200. Eviction trims to ~90% (`floor(limit*0.9)`) once
-///   a store exceeds its limit, oldest `lastTouched` first. **No time expiry.**
-/// - Per-record message caps: channels keep the last `channelMessageLimit||100`
-///   messages, pms keep the last `pmStorageLimit||500`.
+///   a store exceeds its limit, oldest `lastTouched` first. That LRU has no time
+///   component; the 24-hour window below is separate and applies to public
+///   channel history only.
+/// - Per-record message caps: channels keep the last [channelMessageLimit],
+///   pms the last [pmStorageLimit]. These mirror what app.js actually SETS
+///   (`this.channelMessageLimit = 1000`, `this.pmStorageLimit = 1000`) — they
+///   used to mirror the `|| 100` / `|| 500` fallbacks in the persistence.js
+///   expressions, which the PWA never reaches, so a phone kept a tenth of the
+///   history the web client did.
+/// - Public channel history is additionally bounded to a rolling
+///   [channelHistoryMaxAge] (the PWA's `channelHistoryMaxAgeMs`): the D1 archive
+///   floors `channel-get` at the same 24 hours and the relay filters ask for
+///   `since: now - 86400`, so anything older cannot be re-fetched by this device
+///   or any other.
 /// - PMs are **only** persisted when caching is enabled
 ///   (`settings.cachePMs`); when disabled, `savePmMessages` is a no-op (and the
 ///   `pms` table can be cleared via [clearPms]).
@@ -51,10 +63,14 @@ class CacheStore {
     'banners': 200,
   };
 
-  /// Per-record message cap fallbacks used when persisting (persistence.js
-  /// `this.channelMessageLimit || 100` / `this.pmStorageLimit || 500`).
-  static const int channelMessageLimit = 100;
-  static const int pmStorageLimit = 500;
+  /// Per-record message caps used when persisting, matching the values app.js
+  /// assigns (`this.channelMessageLimit` / `this.pmStorageLimit`).
+  static const int channelMessageLimit = 1000;
+  static const int pmStorageLimit = 1000;
+
+  /// Rolling window for PUBLIC channel history — see
+  /// `core/constants/history_window.dart`.
+  static const Duration channelHistoryMaxAge = kChannelHistoryMaxAge;
 
   /// `meta` store key constants (persistence.js).
   static const String metaProcessedPmEventIds = 'processedPMEventIds';
@@ -63,6 +79,7 @@ class CacheStore {
   static const String metaNymchatVouches = 'nymchatVouches';
   static const String metaTrustedPubkeys = 'trustedPubkeys';
   static const String metaPoolShardLastSeen = 'poolShardLastSeen';
+  static const String metaEventTimeCeilings = 'eventTimeCeilings';
   static const String metaPqKeys = 'pqKeys';
 
   /// Event ids whose BIP340 signatures verified in past sessions (bounded,
@@ -287,6 +304,47 @@ class CacheStore {
   // Channel messages
   // ---------------------------------------------------------------------------
 
+  /// Drop channel messages that have aged out of [channelHistoryMaxAge], then
+  /// pin back any thread ROOT the survivors still reply to — an in-window reply
+  /// whose root aged out would otherwise reflow inline as a top-level message
+  /// with a dead-end thread affordance. Mirrors `_pruneChannelWindow`.
+  static List<Message> _withinChannelWindow(List<Message> messages) {
+    if (messages.isEmpty) return messages;
+    final floor = channelWindowFloorSec();
+    if (!messages.any((m) => m.createdAt < floor)) return messages;
+    final kept = messages.where((m) => m.createdAt >= floor).toList();
+    return _withPinnedThreadRoots(messages, kept, (m) => m.id);
+  }
+
+  /// Keep thread ROOTS in the persisted window (PWA
+  /// `persistence.js#_withPinnedThreadRoots`). The window is a plain last-N
+  /// slice, so a root older than the window drops off while its replies stay —
+  /// and after a reload those replies can never re-thread: they render inline,
+  /// as though they were top-level messages, and their thread affordance
+  /// dead-ends. Any message the kept window references as a thread root is
+  /// pinned in front of the slice.
+  static List<Message> _withPinnedThreadRoots(
+    List<Message> messages,
+    List<Message> trimmed,
+    String Function(Message) keyOf,
+  ) {
+    if (identical(trimmed, messages)) return trimmed;
+    final kept = <String>{for (final m in trimmed) keyOf(m)};
+    final wanted = <String>{};
+    for (final m in trimmed) {
+      final root = m.threadRoot;
+      if (root != null && root.isNotEmpty && !kept.contains(root)) {
+        wanted.add(root);
+      }
+    }
+    if (wanted.isEmpty) return trimmed;
+    final pinned = <Message>[];
+    for (final m in messages) {
+      if (wanted.remove(keyOf(m))) pinned.add(m);
+    }
+    return pinned.isEmpty ? trimmed : [...pinned, ...trimmed];
+  }
+
   /// Persist a channel's messages, keeping only the last [channelMessageLimit]
   /// (mirrors `persistChannelMessages`: `messages.slice(-limit)`). Stamps
   /// `lastTouched`. An empty list deletes the record, as in the PWA.
@@ -298,9 +356,18 @@ class CacheStore {
       await db.delete('channels', where: 'key = ?', whereArgs: [key]);
       return;
     }
-    final trimmed = msgs.length > channelMessageLimit
-        ? msgs.sublist(msgs.length - channelMessageLimit)
-        : msgs;
+    // Age first, then the count cap — a channel quiet for a day must not write
+    // back a full window of messages that have all aged out.
+    final inWindow = _withinChannelWindow(msgs);
+    if (inWindow.isEmpty) {
+      await db.delete('channels', where: 'key = ?', whereArgs: [key]);
+      return;
+    }
+    var trimmed = inWindow.length > channelMessageLimit
+        ? inWindow.sublist(inWindow.length - channelMessageLimit)
+        : inWindow;
+    // Channel thread keys are event ids (`threadKeyForMessage`).
+    trimmed = _withPinnedThreadRoots(inWindow, trimmed, (m) => m.id);
     final json = jsonEncode(trimmed.map((m) => m.toJson()).toList());
     await db.insert(
       'channels',
@@ -318,14 +385,46 @@ class CacheStore {
       limit: 1,
     );
     if (rows.isEmpty) return [];
-    return _decodeMessages(rows.first['json'] as String?);
+    return _withinChannelWindow(_decodeMessages(rows.first['json'] as String?));
+  }
+
+  /// Delete the cached reactions targeting [messageIds] — reactions are keyed by
+  /// the id of the message they react to, so pruning the rows for a set of
+  /// dropped channel messages is exactly "kind 7 events whose `k` tag is
+  /// 20000/23333". A reaction on a PM or group message is keyed by an id that
+  /// never appears in a channel history.
+  Future<void> deleteReactionsFor(Iterable<String> messageIds) async {
+    final ids = messageIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return;
+    for (var i = 0; i < ids.length; i += 200) {
+      final end = i + 200 < ids.length ? i + 200 : ids.length;
+      final chunk = ids.sublist(i, end);
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      await _database.delete('reactions',
+          where: 'messageId IN ($placeholders)', whereArgs: chunk);
+    }
   }
 
   /// Load EVERY cached channel history, keyed by storage key — the boot
   /// hydration read (persistence.js `hydrateFromCache` getAll over the
   /// `channels` store, :427-433). Empty/corrupt records are skipped.
-  Future<Map<String, List<Message>>> loadAllChannelMessages() =>
-      _loadAllMessages('channels');
+  Future<Map<String, List<Message>>> loadAllChannelMessages() async {
+    final all = await _loadAllMessages('channels');
+    // A cache written before the window rule, or simply left unopened for a
+    // day, must not put aged-out history back into memory. Rows that empty out
+    // are deleted rather than reloaded every launch.
+    final drop = <String>[];
+    all.updateAll((key, msgs) {
+      final kept = _withinChannelWindow(msgs);
+      if (kept.isEmpty) drop.add(key);
+      return kept;
+    });
+    for (final key in drop) {
+      all.remove(key);
+      await _database.delete('channels', where: 'key = ?', whereArgs: [key]);
+    }
+    return all;
+  }
 
   // ---------------------------------------------------------------------------
   // PM / group messages (only persisted when caching enabled)
@@ -348,9 +447,11 @@ class CacheStore {
       await db.delete('pms', where: 'key = ?', whereArgs: [key]);
       return;
     }
-    final trimmed = msgs.length > pmStorageLimit
+    var trimmed = msgs.length > pmStorageLimit
         ? msgs.sublist(msgs.length - pmStorageLimit)
         : msgs;
+    // PM/group thread keys are the shared nymMessageId when present.
+    trimmed = _withPinnedThreadRoots(msgs, trimmed, (m) => m.nymMessageId ?? m.id);
     final json = jsonEncode(trimmed.map((m) => m.toJson()).toList());
     await db.insert(
       'pms',

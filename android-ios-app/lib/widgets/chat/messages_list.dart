@@ -534,7 +534,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         orElse: () => ChannelEntry(channel: view.id),
       );
       return tr('No recent messages in #{channel}',
-          {'channel': ch.isGeohash ? ch.geohash : ch.channel});
+          {'channel': ch.isGeohash ? ch.geohashKey : ch.channel});
     }
     return tr('No recent messages');
   }

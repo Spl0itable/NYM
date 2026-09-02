@@ -41,10 +41,10 @@ void main() {
   test('never-opened channel still counts its history as unread', () {
     final n = AppStateNotifier()..goLive('selfpk', 'me#0001');
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    // Active view is the default channel; #never was never opened (lastRead=0),
+    // Active view is the default channel; #neveropened was never opened (lastRead=0),
     // so even older messages count (PWA: created_at > lastRead=0).
     n.switchView(const ChatView.channel('other'));
-    n.ingestEvent(_msg('never', 'alice', nowSec - 5, 'recent-ish'));
-    expect(n.state.unreadCounts['#never'], 1);
+    n.ingestEvent(_msg('neveropened', 'alice', nowSec - 5, 'recent-ish'));
+    expect(n.state.unreadCounts['#neveropened'], 1);
   });
 }

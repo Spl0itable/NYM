@@ -1229,6 +1229,10 @@ class NostrService {
     for (final esk in _ephemeralSks) {
       out.add(giftwrap.classicalCandidate(esk));
     }
+    for (final k in _anonBotKeys) {
+      out.add((sk: k.sk, bitchat: false, kemSk: k.kemSk, kemPk: k.kemPk));
+      out.add(giftwrap.classicalCandidate(k.sk));
+    }
     return out;
   }
 
@@ -1248,6 +1252,14 @@ class NostrService {
     _ephemeralSks
       ..clear()
       ..addAll(sks);
+  }
+
+  List<({Uint8List sk, Uint8List kemSk, Uint8List kemPk})> _anonBotKeys =
+      const [];
+
+  void setAnonBotKeys(
+      List<({Uint8List sk, Uint8List kemSk, Uint8List kemPk})> keys) {
+    _anonBotKeys = List.unmodifiable(keys);
   }
 
   /// Unwraps a kind-1059 gift wrap restored from the D1 PM archive and routes it

@@ -208,7 +208,7 @@ class _ReportModalState extends State<ReportModal> {
                     TextField(
                       controller: _details,
                       maxLines: 4,
-                      style: TextStyle(color: c.text, fontSize: 15),
+                      style: TextStyle(color: c.inputText, fontSize: 15),
                       decoration: InputDecoration(
                         hintText: tr(
                             'Provide any additional context for this report...'),

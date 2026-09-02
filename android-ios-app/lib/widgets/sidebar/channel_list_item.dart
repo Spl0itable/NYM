@@ -56,12 +56,12 @@ class ChannelListItem extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    final name = '#${entry.isGeohash ? entry.geohash : entry.channel}';
+    final name = '#${entry.isGeohash ? entry.geohashKey : entry.channel}';
     // `.channel-item.pinned:not(.active)` paints the grey treatment; the active
     // state always wins.
     final showPinned = pinned && !active;
     // Geohash rows get a `title="{getGeohashLocation(geohash)}"` hover tooltip.
-    final location = entry.isGeohash ? geohashLocationLabel(entry.geohash) : '';
+    final location = entry.isGeohash ? geohashLocationLabel(entry.geohashKey) : '';
 
     // `.channel-item.active` fill is primary@0.10 + a primary@0.05 glow (dark);
     // `body.light-mode` neutralises it to black@0.06 with `box-shadow:none`
@@ -111,7 +111,7 @@ class ChannelListItem extends ConsumerWidget {
       children: [
         nameText,
         _ChannelLocationLine(
-          geohash: entry.isGeohash ? entry.geohash : '',
+          geohash: entry.geohashKey,
           textSize: textSize,
         ),
       ],

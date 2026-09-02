@@ -743,23 +743,31 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
             _lastScale = 1.0;
             setState(() => _dragging = false);
           },
-          child: RepaintBoundary(
-            child: CustomPaint(
-              size: size,
-              painter: GeoMapPainter(
-                view: _view,
-                style: style,
-                features: _features,
-                admin1Features: _admin1Features,
-                cities: _cities,
-                channels: channels,
-                heatmap: _heatmap,
-                daynight: _daynight,
-                grid: _grid,
-                hoveredGeohash: _hoveredGeohash,
-                userLocation: _userLocation(),
-                heatmapImage: _heatImage,
-                repaint: _ticker,
+          // Clipped to the map's own box. A CustomPainter draws on the canvas
+          // it is handed and is NOT bounded by its layout slot, so a zoomed-in
+          // world painted coastlines and dots straight over the "GEOHASH
+          // EXPLORER" header sitting above it. The card's own Clip.antiAlias
+          // does not help: the header is INSIDE the card, so the overspill was
+          // never crossing the boundary that clips.
+          child: ClipRect(
+            child: RepaintBoundary(
+              child: CustomPaint(
+                size: size,
+                painter: GeoMapPainter(
+                  view: _view,
+                  style: style,
+                  features: _features,
+                  admin1Features: _admin1Features,
+                  cities: _cities,
+                  channels: channels,
+                  heatmap: _heatmap,
+                  daynight: _daynight,
+                  grid: _grid,
+                  hoveredGeohash: _hoveredGeohash,
+                  userLocation: _userLocation(),
+                  heatmapImage: _heatImage,
+                  repaint: _ticker,
+                ),
               ),
             ),
           ),

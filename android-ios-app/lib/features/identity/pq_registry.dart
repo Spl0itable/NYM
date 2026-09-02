@@ -372,6 +372,18 @@ class PqRegistry {
   /// to the device that published it, not to whoever is checking.
   int? epochFor(String pubkey) => _keys[pubkey]?.epoch;
 
+  /// WHEN a peer's live announcement was signed, or 0 when it is expired or
+  /// unknown. An announcement is evidence about a moment, and the send plan
+  /// has to weigh it against other evidence from other moments — see
+  /// [PqPmPlan.decide]. Derived from the expiry rather than stored, because
+  /// `exp` is stamped `now + pqTtl` on every publish, so the two are the same
+  /// fact; that also makes it right for an entry restored by an older build.
+  int announcedAtFor(String pubkey, {required int nowSec}) {
+    final e = _entry(pubkey, nowSec);
+    if (e == null || e.exp <= 0) return 0;
+    return e.exp - pqTtl.inSeconds;
+  }
+
   /// Whether a peer's live announcement is root-seeded (spec §3), for the
   /// badge. A KEM-less entry is never root-seeded: there is no key to protect.
   bool isRootSeeded(String pubkey,
@@ -645,6 +657,8 @@ class PqPmPlan {
     required bool knownNym,
     bool provenNymchat = false,
     bool recipientAcceptsLayered = false,
+    int bitchatSeenAtSec = 0,
+    int announcedAtSec = 0,
   }) {
     // Holding a KEM key means we hold their announcement, so it always implies
     // a proven Nymchat client. Deriving it here rather than trusting the caller
@@ -667,7 +681,21 @@ class PqPmPlan {
     // Nymchat and moved to Bitchat — or who runs both — receiving anything at
     // all. Before the announcement existed, a peer we had heard bitchat format
     // from always got a bitchat copy; this restores that.
-    final bitchat = knownBitchat || !proven;
+    //
+    // So the NEWER piece of evidence decides, which needs both to carry a time.
+    // [knownBitchat] on its own does not: the set behind it never forgets, and
+    // it is rebuilt from cached PM history on every launch, so one wrap
+    // exchanged during the dual-send era — before any of this existed — marked
+    // a peer "running Bitchat NOW" for good. Every such peer was handed a
+    // classical NIP-44 message forever, however current their announcement,
+    // which is what "existing users never connect over post-quantum" was. An
+    // entry with no time reads as older than any announcement; that is the safe
+    // direction, because a peer genuinely on Bitchat has no live announcement
+    // and `proven` still routes them a Bitchat copy.
+    final bitchatIsCurrent = knownBitchat &&
+        bitchatSeenAtSec > 0 &&
+        !(announcedAtSec > 0 && announcedAtSec >= bitchatSeenAtSec);
+    final bitchat = bitchatIsCurrent || !proven;
 
     // A post-quantum wrap never accompanies a Bitchat copy of the same
     // plaintext: the copy is the easier target, so pairing them buys a quantum

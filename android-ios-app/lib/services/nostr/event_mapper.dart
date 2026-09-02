@@ -3,27 +3,69 @@ import 'dart:convert';
 import '../../core/constants/event_kinds.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/p2p/p2p_models.dart';
+import '../../models/channel.dart';
 import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../models/user.dart';
+import 'event_time_ceilings.dart';
 
 /// Pure mappers from Nostr [NostrEvent]s to app models. Kept side-effect free so
 /// they can be unit-tested without networking.
 class EventMapper {
   EventMapper._();
 
+  /// Registry of first-seen clamps for future-dated events. Null in tests and
+  /// before boot wires one up, where the clamp falls back to a volatile "now".
+  static EventTimeCeilings? ceilings;
+
+  /// The ceiling a future-dated event is pulled back to, and the `created_at`
+  /// that follows. A D1 `stored_at` is already stable and wins; otherwise the
+  /// clamp is remembered per event id so the next replay cannot re-stamp it.
+  static ({int ceilingMs, int createdAt}) _clampFuture(NostrEvent e, int nowMs) {
+    final nowSec = nowMs ~/ 1000;
+    if (e.createdAt <= nowSec + 60) {
+      return (ceilingMs: nowMs, createdAt: e.createdAt);
+    }
+    final storedAtMs = e.storedAt > 0 ? e.storedAt : 0;
+    final createdAtMs = e.createdAt * 1000;
+    final candidateMs =
+        (storedAtMs > 0 && storedAtMs < createdAtMs) ? storedAtMs : createdAtMs;
+    final registry = ceilings;
+    final ceilingMs = registry != null
+        ? registry.stableCeiling(e.id, candidateMs, nowMs)
+        : (candidateMs < nowMs ? candidateMs : nowMs);
+    return (ceilingMs: ceilingMs, createdAt: ceilingMs ~/ 1000);
+  }
+
+  /// The channel a channel-message event names, bare, or null when the event
+  /// is not a well-formed channel message.
+  ///
+  /// The kind and the channel's SHAPE have to agree, exactly as [channelWire]
+  /// pairs them on the way out: a geohash channel is kind 20000 + `g`, a named
+  /// one is 23333 + `d`. The kind picks WHICH tag to read, but nothing checked
+  /// the value it found — so a kind 20000 carrying `['g','nymchat']` filed
+  /// itself under `#nymchat` and rendered among the real 23333 traffic, a
+  /// message in a kind this app would never send there and indistinguishable
+  /// from the rest. The reverse smuggled a 23333 into a geohash channel.
+  /// Nothing upstream stops it: the subscription is kind-only, with no tag
+  /// filter. Neither case can be repaired by guessing which the sender meant,
+  /// so both are refused here — the one place every reader of a channel key
+  /// goes through, so a refused event cannot be stored, keyed, notified on or
+  /// receipted either.
+  static String? channelNameOf(NostrEvent e) {
+    final isGeo = e.kind == EventKind.geoChannel;
+    if (!isGeo && e.kind != EventKind.namedChannel) return null;
+    final name = isGeo ? e.tagValue('g') : e.tagValue('d');
+    if (name == null || !isValidChannelTag(name)) return null;
+    if (isValidGeohash(name) != isGeo) return null;
+    return name;
+  }
+
   /// The channel storage key for a channel-message event (`#<geohash|name>`),
   /// or null if it isn't a channel message.
   static String? channelKeyOf(NostrEvent e) {
-    if (e.kind == EventKind.geoChannel) {
-      final g = e.tagValue('g');
-      return g == null ? null : '#$g';
-    }
-    if (e.kind == EventKind.namedChannel) {
-      final d = e.tagValue('d');
-      return d == null ? null : '#$d';
-    }
-    return null;
+    final name = channelNameOf(e);
+    return name == null ? null : '#$name';
   }
 
   /// The event's authoritative display/age time in milliseconds — the same
@@ -38,13 +80,10 @@ class EventMapper {
   static int effectiveMsOf(NostrEvent e) {
     final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final nowSec = nowMs ~/ 1000;
-    final storedAtMs = e.storedAt > 0 ? e.storedAt : 0;
-    final future = e.createdAt > nowSec + 60;
-    final ceilingMs =
-        (future && storedAtMs > 0 && storedAtMs < nowMs) ? storedAtMs : nowMs;
-    final createdAt = future ? ceilingMs ~/ 1000 : e.createdAt;
-    return ms > 0 ? (ms < ceilingMs ? ms : ceilingMs) : createdAt * 1000;
+    final clamped = _clampFuture(e, nowMs);
+    return ms > 0
+        ? (ms < clamped.ceilingMs ? ms : clamped.ceilingMs)
+        : clamped.createdAt * 1000;
   }
 
   /// Maps a channel message event (kind 20000/23333) to a [Message].
@@ -54,11 +93,14 @@ class EventMapper {
     if (e.kind != EventKind.geoChannel && e.kind != EventKind.namedChannel) {
       return null;
     }
+    // [channelNameOf] is the single shape gate: it refuses a kind whose channel
+    // does not match it, covering the live pool, the D1 backfill and the mesh
+    // carrier (handleMeshCarriedEvent) alike, since all three map through here.
     final isGeo = e.kind == EventKind.geoChannel;
-    final geohash = isGeo ? e.tagValue('g') : null;
-    final channel = isGeo ? null : e.tagValue('d');
-    if (isGeo && geohash == null) return null;
-    if (!isGeo && channel == null) return null;
+    final name = channelNameOf(e);
+    if (name == null) return null;
+    final geohash = isGeo ? name : null;
+    final channel = isGeo ? null : name;
 
     final baseNym = e.tagValue('n') ?? 'nym';
     final author = getNymFromPubkey(baseNym, e.pubkey);
@@ -72,18 +114,13 @@ class EventMapper {
     // isn't persisted across reloads), so it never settles and always sorts as
     // newest — the "stale D1 messages resurface as now" bug. The D1 backfill
     // injects the archive row's `stored_at` (the pool's real receipt time, ms)
-    // which is a STABLE value once the event was archived. So for a
-    // future-dated event carrying a valid past `stored_at`, anchor to it
-    // instead of `nowMs`. Everything else (normal past events, events within
-    // 60s of now, live events, and any event without a `stored_at`) falls back
-    // to `nowMs`, exactly as before.
+    // which is a STABLE value once the event was archived, so it wins when
+    // present; an event with no `stored_at` has its first clamp REMEMBERED by
+    // [ceilings] instead, which stops each launch's replay re-stamping it.
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final nowSec = nowMs ~/ 1000;
-    final storedAtMs = e.storedAt > 0 ? e.storedAt : 0;
-    final future = e.createdAt > nowSec + 60;
-    final ceilingMs =
-        (future && storedAtMs > 0 && storedAtMs < nowMs) ? storedAtMs : nowMs;
-    final createdAt = future ? ceilingMs ~/ 1000 : e.createdAt;
+    final clamped = _clampFuture(e, nowMs);
+    final ceilingMs = clamped.ceilingMs;
+    final createdAt = clamped.createdAt;
 
     // Authoritative display/age timestamp (PWA `_extractEventMs` + `message.
     // timestamp`): the `ms` tag is the sender's REAL millisecond send time and is
