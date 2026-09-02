@@ -4933,6 +4933,7 @@ async function checkSavedConnection() {
             // Restore persisted group conversations and ephemeral keys for this keypair
             nym._loadGroupConversations();
             nym._loadEphemeralKeys();
+            nym._loadBotAnonState();
             nym._loadLastPMSyncTime();
             nym._loadLeftGroups();
 
@@ -5132,6 +5133,7 @@ async function initializeNym() {
         // Restore persisted group conversations and ephemeral keys for this keypair
         nym._loadGroupConversations();
         nym._loadEphemeralKeys();
+        nym._loadBotAnonState();
         nym._loadLastPMSyncTime();
         nym._loadLeftGroups();
 
@@ -6088,6 +6090,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Restore persisted groups and ephemeral keys for this identity before relay history arrives
     nym._loadGroupConversations();
     nym._loadEphemeralKeys();
+    nym._loadBotAnonState();
     nym._loadLastPMSyncTime();
     nym._loadLeftGroups();
 
@@ -6574,6 +6577,16 @@ async function applyNostrSettingsAdditive(s) {
 
     if (s.groupConversations && typeof s.groupConversations === 'object') {
         try { applyGroupData(s.groupConversations); } catch (_) { }
+    }
+
+    if (s.botAnon && typeof s.botAnon === 'object') {
+        try { nym.botAnonApplySynced(s.botAnon); } catch (_) { }
+    }
+    if (typeof s.botAnonEnabled === 'boolean') {
+        try {
+            nym._botAnonOn = s.botAnonEnabled;
+            localStorage.setItem('nym_botanon_enabled', s.botAnonEnabled ? 'true' : 'false');
+        } catch (_) { }
     }
 
     // Ephemeral keys — always merge from every settings event so no device's
@@ -7260,6 +7273,16 @@ async function applyNostrSettings(s) {
 
     if (s.groupConversations && typeof s.groupConversations === 'object') {
         try { applyGroupData(s.groupConversations); } catch (_) { }
+    }
+
+    if (s.botAnon && typeof s.botAnon === 'object') {
+        try { nym.botAnonApplySynced(s.botAnon); } catch (_) { }
+    }
+    if (typeof s.botAnonEnabled === 'boolean') {
+        try {
+            nym._botAnonOn = s.botAnonEnabled;
+            localStorage.setItem('nym_botanon_enabled', s.botAnonEnabled ? 'true' : 'false');
+        } catch (_) { }
     }
 
     if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {

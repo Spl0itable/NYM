@@ -1684,6 +1684,26 @@ body.chat-bubbles .read-more-btn {
     color: var(--danger);
 }
 
+.bot-anon-move {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bot-anon-move .form-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.bot-anon-move #botAnonTier {
+    flex: 0 0 auto;
+    width: auto;
+}
+
+#botAnonIdentity {
+    word-break: break-all;
+}
+
 .message-content blockquote {
     border-left: 3px solid rgb(from var(--primary) r g b / 0.4);
     padding-left: 12px;

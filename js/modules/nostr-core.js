@@ -1365,6 +1365,7 @@ Object.assign(NYM.prototype, {
     // Using kind 69420 instead of 14 to avoid showing blank DMs in other NIP-17 clients
     async sendNymReceipt(messageId, receiptType, recipientPubkey, context = 'pm', groupId = null) {
         if (!this._canSendGiftWraps()) return;
+        if (context !== 'group' && this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey)) return;
 
         if (receiptType === 'read' && !this.isReadReceiptAllowedFor(context)) {
             return;
@@ -1476,6 +1477,7 @@ Object.assign(NYM.prototype, {
             // don't expose the real-pubkey membership set to relays.
             await this._sendGiftWrapsAsync(otherMembers, rumor, null, this.currentGroup);
         } else if (this.currentPM) {
+            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(this.currentPM)) return;
             tags.push(['p', this.currentPM]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
             if (this.privkey) {

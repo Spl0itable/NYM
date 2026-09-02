@@ -337,6 +337,11 @@ Object.assign(NYM.prototype, {
             ? Math.floor(Date.now() / 1000) + this.settings.dmTTLSeconds
             : null;
 
+        if (typeof this.botAnonEnabled === 'function' && this.botAnonEnabled() &&
+            this._botAnonSenderFor(recipientPubkey)) {
+            return await this._sendAnonBotPM(content, recipientPubkey, options);
+        }
+
         // Local key available (ephemeral/nsec)
         if (this.privkey) {
             const NT = window.NostrTools;
@@ -885,12 +890,22 @@ Object.assign(NYM.prototype, {
                 ? (peer, ct) => _nip46Decrypt(peer, ct) : null;
             const remoteDecrypt = _extDecrypt || _n46Decrypt;
 
+            const anonCandidates = typeof this.botAnonCandidatesFor === 'function'
+                ? this.botAnonCandidatesFor(event) : [];
             let seal, rumor;
             // Whether this wrap arrived over the hybrid post-quantum transport.
             // Surfaced on the message so the UI can distinguish confidentiality
             // (this) from authentication (senderVerified) — they are orthogonal.
             let isPqWrap = false;
-            if (this.privkey) {
+            if (anonCandidates.length) {
+                const anonRes = await this._cryptoCall('unwrapGiftWrap', [event, anonCandidates],
+                    () => window.NymCrypto.unwrapGiftWrap(event, anonCandidates));
+                if (!anonRes) return;
+                ({ seal, rumor } = anonRes);
+                isPqWrap = !!anonRes.isPq;
+                this._noteWrapDecrypted(event.id);
+                if (!fromD1) this._botAnonArchive(event);
+            } else if (this.privkey) {
                 // Real key (Bitchat + NIP-44) first, then ephemeral keys (NIP-44).
                 const ephSks = this._ephemeralCandidateSks(event);
                 // Post-quantum candidates first, ordered so the common case
@@ -1058,13 +1073,18 @@ Object.assign(NYM.prototype, {
                 this.ingestImetaTags(rumor.tags);
             }
 
-            const senderPubkey = rumor.pubkey;
+            const senderPubkey = (typeof this.isBotAnonPubkey === 'function' && this.isBotAnonPubkey(rumor.pubkey))
+                ? this.pubkey : rumor.pubkey;
             const isOwn = !!this.pubkey && senderPubkey === this.pubkey;
 
             // Track if this user uses Bitchat format (for replies)
             const isBitchatUser = isBitchatFormat(event.content) || rumor.content?.startsWith('bitchat1:');
             if (isBitchatUser && !isOwn) {
-                this.bitchatUsers.add(senderPubkey);
+                // WITH the time it happened: the post-quantum send plan weighs
+                // this against the peer's announcement, and the older evidence
+                // must not win (see `_pqPmPlan`).
+                this.noteBitchatFormatSeen(senderPubkey,
+                    (rumor && rumor.created_at) || (event && event.created_at) || 0);
             }
 
             // Track if this user uses Nymchat format with delivery receipts (has 'x' tag)
@@ -1474,6 +1494,7 @@ Object.assign(NYM.prototype, {
                 isFileOffer: !!pmFileOffer,
                 fileOffer: pmFileOffer,
                 thinking: botThinking || undefined,
+                anonWrap: anonCandidates.length ? true : undefined,
                 bitchatMessageId: parsed.messageId,  // For sending Bitchat read receipts
                 nymMessageId: nymMsgId,  // For sending Nymchat read receipts
                 threadRoot: (typeof this.threadRootFromRumorTags === 'function')
@@ -1793,7 +1814,7 @@ Object.assign(NYM.prototype, {
             // token), so they aren't encrypted, published, shown as message
             // bubbles, or stored — only their system-message responses appear.
             if (this.isVerifiedBot(recipientPubkey) &&
-                /^\s*\?(github|git|help|commands|balance|buy|clear|transfer|gift|model)\b/i.test(content || '')) {
+                /^\s*\?(github|git|help|commands|balance|buy|clear|transfer|gift|model|anon)\b/i.test(content || '')) {
                 const trimmedCmd = String(content).trim();
                 if (/^\?(github|git)\b/i.test(trimmedCmd)) this._handleBotGitCommand(trimmedCmd);
                 else this._handleBotPM(trimmedCmd, null);
@@ -1801,6 +1822,13 @@ Object.assign(NYM.prototype, {
             }
             if (!this.connected) throw new Error('Not connected to relay');
             if (!content || !content.trim()) return false;
+            if (this.isVerifiedBot(recipientPubkey) && this.botAnonEnabled && this.botAnonEnabled()) {
+                const blocked = this.botAnonBlockedReason();
+                if (blocked) {
+                    this.displaySystemMessage('Anonymous Nymbot chat: ' + blocked);
+                    return false;
+                }
+            }
 
             const wrapped = await this.sendNIP17PM(content, recipientPubkey, options);
             this.recordOwnActivity();
@@ -1863,7 +1891,8 @@ Object.assign(NYM.prototype, {
         const nowSec = Math.floor(Date.now() / 1000);
         const MONEY = {
             'transfer-credits': 1, 'create-invoice': 1, 'claim-credits': 1,
-            'shop-buy-invoice': 1, 'shop-claim': 1, 'shop-transfer': 1, 'shop-redeem': 1
+            'shop-buy-invoice': 1, 'shop-claim': 1, 'shop-transfer': 1, 'shop-redeem': 1,
+            'voucher-issue': 1
         };
         const sensitive = !!MONEY[action] || action === 'clear-history';
         const cacheKey = (action || '') + '|' + url;
@@ -2100,13 +2129,30 @@ Object.assign(NYM.prototype, {
     // Best-effort removal of the Nymbot conversation's encrypted wraps from
     // the D1 PM archive, so a cleared thread can't be restored on any device.
     async _purgeBotPMArchive(conversationKey) {
-        if (!this._pmArchiveAllowed()) return;
-        const ids = (this.pmMessages.get(conversationKey) || [])
-            .map(m => m && m.id)
-            .filter(id => typeof id === 'string' && /^[0-9a-f]{64}$/i.test(id));
-        for (let i = 0; i < ids.length; i += 200) {
-            try { await this._storageApiRequest('pm-delete', { ids: ids.slice(i, i + 200) }); } catch (_) { }
+        const anonReady = typeof this.botAnonReady === 'function' && this.botAnonReady();
+        const msgs = this.pmMessages.get(conversationKey) || [];
+        const anonIds = new Set();
+        const ownIds = new Set();
+        for (const m of msgs) {
+            if (!m) continue;
+            const bucket = (m.anonSender || m.anonWrap) ? anonIds : ownIds;
+            if (typeof m.id === 'string' && /^[0-9a-f]{64}$/i.test(m.id)) bucket.add(m.id);
+            const shared = m.nymMessageId && this._giftWrapsForSharedId
+                ? this._giftWrapsForSharedId.get(m.nymMessageId) : null;
+            if (shared) for (const wid of shared) bucket.add(wid);
         }
+        const send = async (ids, viaAnon) => {
+            const list = Array.from(ids);
+            for (let i = 0; i < list.length; i += 200) {
+                const chunk = list.slice(i, i + 200);
+                try {
+                    if (viaAnon) await this._botAnonPost('storage', 'pm-delete', { ids: chunk });
+                    else await this._storageApiRequest('pm-delete', { ids: chunk });
+                } catch (_) { }
+            }
+        };
+        if (anonReady && anonIds.size) await send(anonIds, true);
+        if (this._pmArchiveAllowed() && ownIds.size) await send(ownIds, false);
     },
 
     // Wipe the Nymbot conversation and start fresh (premium ?clear command)
@@ -2607,6 +2653,14 @@ Object.assign(NYM.prototype, {
             modelLabel.toggleAttribute('data-no-i18n', !!proModel);
         }
         if (modelBtn) modelBtn.classList.toggle('active', isPro);
+        const anonBtn = document.getElementById('botAnonBtn');
+        const anonOn = typeof this.botAnonEnabled === 'function' && this.botAnonEnabled();
+        if (anonBtn) {
+            anonBtn.classList.toggle('active', anonOn);
+            anonBtn.title = anonOn
+                ? 'Anonymous: Nymbot sees a throwaway key, not your nym'
+                : 'Chat from a throwaway key Nymbot cannot link to your nym';
+        }
         const gitBtn = document.getElementById('botGitBtn');
         const gitLabel = document.getElementById('botGitBtnLabel');
         const connected = !!(git && git.token && git.repo);
@@ -2845,9 +2899,10 @@ Object.assign(NYM.prototype, {
         const proModel = this._getBotProModel();
         const std = this._lastBotCredits;
         const pro = this._lastBotProCredits;
+        const anonTag = (typeof this.botAnonEnabled === 'function' && this.botAnonEnabled()) ? 'anonymous · ' : '';
         if (proModel) {
             const proText = typeof pro === 'number' ? pro : '…';
-            let meta = `${proText} Pro credit${pro === 1 ? '' : 's'} · ${proModel.label}`;
+            let meta = `${anonTag}${proText} Pro credit${pro === 1 ? '' : 's'} · ${proModel.label}`;
             const git = this._getGitConfig();
             if (git && git.token && git.repo) meta += ` · ${git.repo.split('/').pop()}`;
             el.textContent = meta;
@@ -2855,8 +2910,8 @@ Object.assign(NYM.prototype, {
         }
         if (typeof std !== 'number') return;
         el.textContent = (typeof pro === 'number' && pro > 0)
-            ? `${std} standard · ${pro} Pro credits left`
-            : `${std} credit${std === 1 ? '' : 's'} left`;
+            ? `${anonTag}${std} standard · ${pro} Pro credits left`
+            : `${anonTag}${std} credit${std === 1 ? '' : 's'} left`;
     },
 
     // Paint the header credit indicator for the open Nymbot chat, then refresh it
@@ -2893,6 +2948,11 @@ Object.assign(NYM.prototype, {
         if (/^\?model\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
             this._handleBotModelCommand(trimmed);
+            return;
+        }
+        if (/^\?anon\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
+            this.openBotAnonModal();
             return;
         }
         if (/^\?clear\b/i.test(trimmed)) {
@@ -2937,7 +2997,11 @@ Object.assign(NYM.prototype, {
             // Our own signed nym-pq announcement rides along so the worker
             // seals its reply post-quantum deterministically (it verifies the
             // signature; no lookup race can leave the reply classical).
-            if (this._pqSelfSignedAnnouncement) {
+            const anonRouted = typeof this.botAnonReady === 'function' && this.botAnonReady();
+            const anonAnnouncement = anonRouted ? this._botAnonAnnouncement() : null;
+            if (anonAnnouncement) {
+                reqExtra.pqAnnouncement = anonAnnouncement;
+            } else if (!anonRouted && this._pqSelfSignedAnnouncement) {
                 reqExtra.pqAnnouncement = this._pqSelfSignedAnnouncement;
             }
             const cmdAlias = this.commandAliasHint(content);
@@ -2970,7 +3034,8 @@ Object.assign(NYM.prototype, {
                     if (data.pro) this._setBotProCreditDisplay(data.balance);
                     else this._setBotCreditDisplay(data.balance);
                 }
-                this.showBotCreditsModal(null, data.pro ? 'pro' : 'standard');
+                if (typeof this.botAnonReady === 'function' && this.botAnonReady()) this.openBotAnonModal();
+                else this.showBotCreditsModal(null, data.pro ? 'pro' : 'standard');
                 return;
             }
             if (status >= 400 || !data || data.error) {
@@ -3026,7 +3091,10 @@ Object.assign(NYM.prototype, {
             if (display) {
                 const b = data.balance || 0;
                 const p = data.proBalance || 0;
-                this._displayBotInfoMessage(`Your balance: <strong>${b}</strong> standard credit${b === 1 ? '' : 's'} · <strong>${p}</strong> Pro credit${p === 1 ? '' : 's'}.` +
+                const anon = typeof this.botAnonReady === 'function' && this.botAnonReady();
+                this._displayBotInfoMessage((anon ? 'Your anonymous balance: ' : 'Your balance: ') +
+                    `<strong>${b}</strong> standard credit${b === 1 ? '' : 's'} · <strong>${p}</strong> Pro credit${p === 1 ? '' : 's'}.` +
+                    (anon ? ' Type <code>?anon</code> to move more credits across from your nym.' : '') +
                     (b <= 0 && p <= 0 ? ' Type <code>?buy</code> to purchase more.' : ''));
             }
             return data.balance;
@@ -3661,6 +3729,10 @@ Object.assign(NYM.prototype, {
     async sendEditedPM(newContent, originalMessageId, recipientPubkey, originalNymMessageId) {
         try {
             if (!this.connected) throw new Error('Not connected to relay');
+            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey)) {
+                this.displaySystemMessage('Editing is off in the anonymous Nymbot chat — an edit would be signed by your real key. Send a new message instead.');
+                return false;
+            }
 
             const now = Math.floor(Date.now() / 1000);
             const nymMessageId = this._generateSharedEventId();

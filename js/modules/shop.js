@@ -155,6 +155,15 @@ Object.assign(NYM.prototype, {
     async _botMoneyRequest(action, extra, opts) {
         const apiHost = this._getApiHost();
         if (!apiHost) return { status: 0, data: {} };
+        const anon = (opts && typeof opts.anon === 'boolean')
+            ? opts.anon
+            : (typeof this._botAnonAutoRoute === 'function' && this._botAnonAutoRoute(action));
+        if (anon) {
+            if (!this.botAnonReady()) {
+                return { status: 503, data: { error: 'Anonymous Nymbot chat is not ready on this device yet.' } };
+            }
+            return this.botAnonRequest(action, extra, opts);
+        }
         if (this.pubkey) {
             try {
                 await this._ensureApiSocket();
@@ -1444,8 +1453,8 @@ TRANSFER TO PUBKEY
 
     async _reconcileCreditEntry(entry) {
         if (this.currentZapInvoice && this.currentZapInvoice.invoiceId === entry.invoiceId) return;
-        if (!await this._checkBotInvoicePaid(entry.invoiceId)) return;
-        if (await this._claimBotCredits(entry.invoiceId, entry.recipientNym, null)) {
+        if (!await this._checkBotInvoicePaid(entry.invoiceId, entry.anon)) return;
+        if (await this._claimBotCredits(entry.invoiceId, entry.recipientNym, null, entry.anon)) {
             this._removePendingPurchase(entry.invoiceId);
         }
     },

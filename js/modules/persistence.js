@@ -731,7 +731,13 @@
                             await breathe();
                             if (!m || m.isOwn || m.isGroup || !m.pubkey) continue;
                             if (m.nymMessageId) this.nymUsers.add(m.pubkey);
-                            if (m.bitchatMessageId) this.bitchatUsers.add(m.pubkey);
+                            // Carries the message's own time forward: the
+                            // post-quantum send plan compares it against the
+                            // peer's announcement, and a rebuilt entry with no
+                            // time reads as older than any of them.
+                            if (m.bitchatMessageId) {
+                                this.noteBitchatFormatSeen(m.pubkey, m.created_at || 0);
+                            }
                         }
                     }
                 } else {

@@ -815,17 +815,31 @@ function buildActivityResult(rows) {
 }
 
 async function topChannelActivityRows(db, kind, now, minTs, channelLimit) {
-  var sql =
+  var seen = "(SELECT channel, created_at, COUNT(*) OVER (PARTITION BY pubkey) AS pk " +
+    "FROM events WHERE kind = ? AND created_at >= ?)";
+  var spamSql =
     "SELECT pb.channel AS channel, pb.age AS age, pb.c AS c, pb.mx AS mx FROM (" +
     "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
-    "FROM events WHERE kind = ? AND created_at >= ? GROUP BY channel, age" +
+    "FROM " + seen + " WHERE pk >= 2 GROUP BY channel, age" +
     ") pb JOIN (" +
-    "SELECT channel FROM events WHERE kind = ? AND created_at >= ? " +
+    "SELECT channel FROM " + seen + " WHERE pk >= 2 " +
     "GROUP BY channel ORDER BY COUNT(*) DESC, channel LIMIT ?" +
     ") top ON pb.channel = top.channel";
   try {
-    return (await db.prepare(sql).bind(now, kind, minTs, kind, minTs, channelLimit).all()).results || [];
-  } catch (e) { return []; }
+    return (await db.prepare(spamSql).bind(now, kind, minTs, kind, minTs, channelLimit).all()).results || [];
+  } catch (e) {
+    var plainSql =
+      "SELECT pb.channel AS channel, pb.age AS age, pb.c AS c, pb.mx AS mx FROM (" +
+      "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
+      "FROM events WHERE kind = ? AND created_at >= ? GROUP BY channel, age" +
+      ") pb JOIN (" +
+      "SELECT channel FROM events WHERE kind = ? AND created_at >= ? " +
+      "GROUP BY channel ORDER BY COUNT(*) DESC, channel LIMIT ?" +
+      ") top ON pb.channel = top.channel";
+    try {
+      return (await db.prepare(plainSql).bind(now, kind, minTs, kind, minTs, channelLimit).all()).results || [];
+    } catch (e2) { return []; }
+  }
 }
 
 // A gift wrap is storable for a user only if it is a kind 1059/1060 event that

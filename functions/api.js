@@ -17,7 +17,8 @@ import { verifyClientAuth, isNymchatClient, getPublicKey } from './api/_shared.j
 // Actions handled by the bot worker (Nymbot PM, credits, invoices, Ledger).
 const BOT_ACTIONS = {
   'pm': 1, 'clear-history': 1, 'balance': 1,
-  'create-invoice': 1, 'check-invoice': 1, 'claim-credits': 1, 'transfer-credits': 1
+  'create-invoice': 1, 'check-invoice': 1, 'claim-credits': 1, 'transfer-credits': 1,
+  'voucher-keys': 1, 'voucher-issue': 1
 };
 
 async function forwardResponse(id, resp, send) {

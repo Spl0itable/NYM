@@ -634,19 +634,25 @@ Object.assign(NYM.prototype, {
             const purchaseComment = giftNym
                 ? `Nymbot ${isPro ? 'Pro ' : ''}credits gift for @${giftNym} — ${creditWord}`
                 : `Nymbot ${isPro ? 'Pro ' : ''}credits — ${creditWord}`;
+            const giftPk = this.currentZapTarget.giftRecipientPubkey;
+            const anonBuy = !!(typeof this.botAnonReady === 'function' && this.botAnonReady() &&
+                !(giftPk && giftPk !== this.pubkey));
             let zapRequest = null;
-            try { zapRequest = await this.createZapRequest(amount, purchaseComment); } catch (e) { }
+            try {
+                zapRequest = anonBuy
+                    ? this._botAnonZapRequest(amount, purchaseComment, this.verifiedBot.pubkey)
+                    : await this.createZapRequest(amount, purchaseComment);
+            } catch (e) { }
             const reqExtra = { amountSats: amount, zapRequest, comment: purchaseComment };
             if (isPro) reqExtra.tier = 'pro';
-            const giftPk = this.currentZapTarget.giftRecipientPubkey;
             if (giftPk && giftPk !== this.pubkey) reqExtra.recipientPubkey = giftPk;
-            const { data } = await this._botMoneyRequest('create-invoice', reqExtra);
+            const { data } = await this._botMoneyRequest('create-invoice', reqExtra, { anon: anonBuy });
             if (!data || data.error || !data.pr) {
                 throw new Error((data && data.error) || 'Failed to generate invoice');
             }
-            const invoice = { pr: data.pr, verify: data.verify, serverVerify: !!data.serverVerify, amount, invoiceId: data.invoiceId };
+            const invoice = { pr: data.pr, verify: data.verify, serverVerify: !!data.serverVerify, amount, invoiceId: data.invoiceId, anon: anonBuy };
             this.currentZapInvoice = invoice;
-            this._addPendingPurchase({ kind: 'credit', invoiceId: invoice.invoiceId, amount, recipientNym: giftNym || null });
+            this._addPendingPurchase({ kind: 'credit', invoiceId: invoice.invoiceId, amount, recipientNym: giftNym || null, anon: anonBuy });
             this.displayZapInvoice(invoice);
             if (invoice.verify) {
                 // LUD-21: poll the verify URL
@@ -712,7 +718,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
             let paid = false;
-            try { paid = await this._checkBotInvoicePaid(invoice.invoiceId); } catch (e) { }
+            try { paid = await this._checkBotInvoicePaid(invoice.invoiceId, invoice.anon); } catch (e) { }
             if (paid) {
                 clearInterval(this._botCreditServerPoll);
                 this._botCreditServerPoll = null;
@@ -730,10 +736,10 @@ Object.assign(NYM.prototype, {
         }, 2000);
     },
 
-    async _checkBotInvoicePaid(invoiceId) {
+    async _checkBotInvoicePaid(invoiceId, anon) {
         const apiHost = this._getApiHost();
         if (!apiHost) return false;
-        const { data } = await this._botMoneyRequest('check-invoice', { invoiceId });
+        const { data } = await this._botMoneyRequest('check-invoice', { invoiceId }, { anon: !!anon });
         return !!(data && data.paid);
     },
 
@@ -753,7 +759,7 @@ Object.assign(NYM.prototype, {
                 if (paid) { await this.handleShopPaymentSuccess(); return; }
             } else if (this.currentZapInvoice && this.currentZapInvoice.invoiceId &&
                 this.currentZapTarget && this.currentZapTarget.isBotCreditPurchase) {
-                const paid = await this._checkBotInvoicePaid(this.currentZapInvoice.invoiceId);
+                const paid = await this._checkBotInvoicePaid(this.currentZapInvoice.invoiceId, this.currentZapInvoice.anon);
                 if (paid) { this.handleZapPaymentSuccess(this.currentZapInvoice.amount); return; }
             } else if (this.currentZapInvoice && (this.currentZapInvoice.verify || this.currentZapInvoice.providerPubkey || this.currentZapInvoice.receipt)) {
                 const paid = await this._serverVerifyZapPaid(this.currentZapInvoice);
@@ -775,7 +781,7 @@ Object.assign(NYM.prototype, {
     // payment (server-side, against the invoice it issued) and add credits.
     // receipt is the NIP-57 zap receipt, used when the wallet has no LUD-21
     // verify URL.
-    async _claimBotCredits(invoiceId, recipientNym, receipt) {
+    async _claimBotCredits(invoiceId, recipientNym, receipt, anon) {
         if (!invoiceId) {
             this.displaySystemMessage('Nymbot credit purchase: payment received but the invoice reference was lost. Run ?balance shortly — if credits are missing, contact support.');
             return false;
@@ -785,10 +791,10 @@ Object.assign(NYM.prototype, {
             if (!apiHost) return false;
             const reqExtra = { invoiceId };
             if (receipt) reqExtra.receipt = receipt;
-            if (this.nym) reqExtra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
+            if (this.nym && !anon) reqExtra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
             let data = null, status = 0;
             for (let attempt = 0; attempt < 5; attempt++) {
-                const res = await this._botMoneyRequest('claim-credits', reqExtra);
+                const res = await this._botMoneyRequest('claim-credits', reqExtra, { anon: !!anon });
                 status = res.status;
                 data = res.data || {};
                 if (status >= 200 && status < 300 && data && !data.error) break;
@@ -1137,6 +1143,7 @@ Object.assign(NYM.prototype, {
         const botCreditInvoiceId = this.currentZapInvoice && this.currentZapInvoice.invoiceId;
         const botCreditReceipt = (this.currentZapInvoice && this.currentZapInvoice.receipt) || null;
         const botCreditGiftNym = this.currentZapTarget.giftRecipientNym || null;
+        const botCreditAnon = !!(this.currentZapInvoice && this.currentZapInvoice.anon);
 
         if (!isBotCreditPurchase && this.currentZapTarget.messageId) {
             const bolt11 = this.currentZapInvoice && this.currentZapInvoice.pr;
@@ -1176,7 +1183,7 @@ Object.assign(NYM.prototype, {
 `;
 
         if (isBotCreditPurchase) {
-            this._claimBotCredits(botCreditInvoiceId, botCreditGiftNym, botCreditReceipt);
+            this._claimBotCredits(botCreditInvoiceId, botCreditGiftNym, botCreditReceipt, botCreditAnon);
         }
 
         // Close modal after 2 seconds
@@ -1623,6 +1630,7 @@ Object.assign(NYM.prototype, {
             };
             await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
         } else if (pmPeer) {
+            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(pmPeer)) return;
             const rumor = {
                 kind: 9735,
                 created_at: now,

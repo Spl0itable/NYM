@@ -35,6 +35,7 @@
 //   @Nymbot <question> - Mention-based alias for ?ask
 
 import { ledgerCall } from "./_ledger.js";
+import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
 import {
   PQ_D_TAG,
@@ -1961,6 +1962,14 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
+  if (body.action === "voucher-keys") {
+    if (!voucherConfigured(env)) return json({ error: "Anonymous vouchers are not configured on this server." }, 503);
+    try {
+      return json(voucherKeysetPublic(env));
+    } catch (e) {
+      return json({ error: "Voucher keyset unavailable." }, 500);
+    }
+  }
   if (!env.DB_CREDITS) {
     return json({ error: "Private Nymbot messaging is not configured (missing DB_CREDITS binding)." }, 503);
   }
@@ -1977,7 +1986,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       return json({ error: "Authentication failed" }, 401);
     }
     var WRITE_ACTIONS = {
-      "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1, "clear-history": 1
+      "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1, "clear-history": 1,
+      "voucher-issue": 1, "voucher-redeem": 1
     };
     if (WRITE_ACTIONS[body.action]) {
       var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
@@ -2039,6 +2049,32 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       balance: rec.balance, totalPurchased: rec.totalPurchased, totalUsed: rec.totalUsed,
       proBalance: prec.balance, proTotalPurchased: prec.totalPurchased, proTotalUsed: prec.totalUsed
     });
+  }
+
+  if (body.action === "voucher-issue" || body.action === "voucher-redeem") {
+    if (!voucherConfigured(env)) {
+      return json({ error: "Anonymous vouchers are not configured on this server." }, 503);
+    }
+    var vTier = body.tier === "pro" ? "pro" : "standard";
+    var vRes;
+    try {
+      vRes = body.action === "voucher-issue"
+        ? await voucherIssue(env, ledgerCall, {
+            pubkey: userPubkey, tier: vTier,
+            reqId: String(body.reqId || ""), outputs: body.outputs
+          })
+        : await voucherRedeem(env, ledgerCall, {
+            pubkey: userPubkey, tier: vTier,
+            redeemId: String(body.redeemId || ""), tokens: body.tokens
+          });
+    } catch (e) {
+      return json({ error: "Voucher operation failed." }, 500);
+    }
+    if (!vRes || vRes.error) {
+      return json({ error: (vRes && vRes.error) || "Voucher operation failed." },
+        vRes && vRes.unavailable ? 503 : 400);
+    }
+    return json(vRes);
   }
 
   if (body.action === "transfer-credits") {
@@ -2640,7 +2676,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history")) {
+  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -4909,8 +4945,19 @@ function isGeohashName(str) {
   return typeof str === "string" && /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/.test(str.toLowerCase());
 }
 
+// A sender whose clock runs fast stamps `created_at` in the future, and the
+// archive stores exactly what was signed. Reading it back as an age gave a
+// NEGATIVE one — `#nymchat — 3 msgs (-1627146s ago)` — because every branch
+// below compares against a number that is bigger than now. The clients clamp
+// the same skew when they map an event (event_mapper `_clampFuture`); this is
+// the same rule for the bot's own reads.
 function eventTimeSec(evt) {
   var ts = (evt && evt.created_at) || 0;
+  var storedMs = (evt && typeof evt.stored_at === "number" && evt.stored_at > 0) ? evt.stored_at : 0;
+  if (storedMs) {
+    var storedSec = Math.floor(storedMs / 1000);
+    if (storedSec < ts) ts = storedSec;
+  }
   var now = Math.floor(Date.now() / 1000);
   return ts > now ? now : ts;
 }
@@ -4926,21 +4973,35 @@ function timeAgo(unixTs) {
 
 // D1 archive is the authoritative source for channel commands; relays are only
 // a fallback. Returns raw nostr events (newest first) or null when unavailable.
+var EFFECTIVE_MS_SQL =
+  "(CASE WHEN stored_at > 0 AND stored_at < created_at * 1000 THEN stored_at ELSE created_at * 1000 END)";
+
 async function fetchChannelEventsFromD1(context, kinds, since, limit, channel) {
   try {
     var env = context && context.env;
     if (!env || !hasD1(env.DB_CHANNELS)) return null;
-    var where = ["kind IN (" + kinds.map(function () { return "?"; }).join(",") + ")", "created_at >= ?"];
+    var where = [
+      "kind IN (" + kinds.map(function () { return "?"; }).join(",") + ")",
+      "created_at >= ?",
+      EFFECTIVE_MS_SQL + " >= ?"
+    ];
     var binds = kinds.slice();
     binds.push(since);
+    binds.push(since * 1000);
     if (channel) { where.push("channel = ?"); binds.push(String(channel).toLowerCase()); }
     binds.push(limit || 1000);
     var rows = (await replica(env.DB_CHANNELS).prepare(
-      "SELECT json FROM events WHERE " + where.join(" AND ") + " ORDER BY created_at DESC LIMIT ?"
+      "SELECT json, stored_at FROM events WHERE " + where.join(" AND ") +
+      " ORDER BY " + EFFECTIVE_MS_SQL + " DESC LIMIT ?"
     ).bind(...binds).all()).results || [];
     var events = [];
     for (var i = 0; i < rows.length; i++) {
-      try { var e = JSON.parse(rows[i].json); if (e) events.push(e); } catch (_) { }
+      try {
+        var e = JSON.parse(rows[i].json);
+        if (!e) continue;
+        if (typeof rows[i].stored_at === "number" && rows[i].stored_at > 0) e.stored_at = rows[i].stored_at;
+        events.push(e);
+      } catch (_) { }
     }
     return events.length ? events : null;
   } catch (e) { return null; }
@@ -5150,11 +5211,12 @@ async function handleSeen(nickname, channelMessages, context) {
       if (!geo) continue;
       if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
       channels[geo].count++;
-      if (events[j].created_at > channels[geo].lastSeen) {
-        channels[geo].lastSeen = events[j].created_at;
+      var seenAt = eventTimeSec(events[j]);
+      if (seenAt > channels[geo].lastSeen) {
+        channels[geo].lastSeen = seenAt;
       }
-      if (events[j].created_at > latestTime) {
-        latestTime = events[j].created_at;
+      if (seenAt > latestTime) {
+        latestTime = seenAt;
         if (nym) foundNym = nym;
       }
     }
@@ -5215,12 +5277,13 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
       if (!nym) continue;
       var pubkey = events[j].pubkey || "";
       var key = pubkey || nym.toLowerCase().replace(/#.*$/, "").trim();
+      var activeAt = eventTimeSec(events[j]);
       if (!nymsByPubkey[key]) {
-        nymsByPubkey[key] = { nym: nym, pubkey: pubkey, lastSeen: events[j].created_at, msgCount: 1 };
+        nymsByPubkey[key] = { nym: nym, pubkey: pubkey, lastSeen: activeAt, msgCount: 1 };
       } else {
         nymsByPubkey[key].msgCount++;
-        if (events[j].created_at > nymsByPubkey[key].lastSeen) {
-          nymsByPubkey[key].lastSeen = events[j].created_at;
+        if (activeAt > nymsByPubkey[key].lastSeen) {
+          nymsByPubkey[key].lastSeen = activeAt;
           nymsByPubkey[key].nym = nym;
         }
       }

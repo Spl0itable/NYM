@@ -737,6 +737,10 @@
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
                     <span class="bot-ctrl-label" id="botGitBtnLabel">Git</span>
                 </button>
+                <button class="bot-ctrl-btn" type="button" id="botAnonBtn" data-action="openBotAnonModal" title="Chat from a throwaway key">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><line x1="3" y1="21" x2="21" y2="3"></line></svg>
+                    <span class="bot-ctrl-label" id="botAnonBtnLabel">Anon</span>
+                </button>
                 <button class="bot-ctrl-btn bot-ctrl-buy" type="button" id="botBuyBtn" data-action="openBotCreditsModal" title="Buy Nymbot credits">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                     <span class="bot-ctrl-label">Buy</span>
@@ -2346,6 +2350,48 @@
         </div>
     </div>
 
+    <div class="modal" id="botAnonModal">
+        <div class="modal-content">
+            <button class="modal-close" data-action="closeModal" data-modal-id="botAnonModal">✕</button>
+            <div class="modal-header">Anonymous Nymbot Chat</div>
+            <p class="bot-git-intro">Your premium chat is already end-to-end encrypted, but Nymbot still sees which pubkey is talking to it. Turn this on and every message, and every reply, travels under a throwaway key generated on this device — the same trick group chats use. Nymbot bills that key, answers it, and never learns your nym. Credits move across as blind vouchers Nymbot signs without seeing, so its own records cannot link the two.</p>
+            <div class="form-group bot-git-writes-row">
+                <div class="bot-git-writes-text">
+                    <div class="bot-git-writes-title">Anonymous mode</div>
+                    <div class="form-hint">Send this chat from a throwaway key</div>
+                </div>
+                <label class="nym-switch">
+                    <input type="checkbox" id="botAnonToggle" data-on-change="botAnonToggle">
+                    <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
+                </label>
+            </div>
+            <div id="botAnonActiveBody" class="nm-hidden">
+                <div class="form-group">
+                    <label class="form-label">Throwaway key</label>
+                    <div class="form-hint" id="botAnonIdentity" data-no-i18n></div>
+                    <div class="form-hint" id="botAnonBalances"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="botAnonAmount">Move credits across</label>
+                    <div class="bot-anon-move">
+                        <input type="number" class="form-input" id="botAnonAmount" min="1" step="1" placeholder="credits" autocomplete="off">
+                        <select class="form-input" id="botAnonTier">
+                            <option value="standard">Standard</option>
+                            <option value="pro">Pro</option>
+                        </select>
+                        <button class="send-btn" type="button" data-action="botAnonMove">Move</button>
+                    </div>
+                    <div class="form-hint">Spends that many credits from your nym and mints the same value onto the throwaway key. Nymbot signs the vouchers blind, so it cannot match what it spent to what it later accepts.</div>
+                    <div class="form-hint">Credits live on the throwaway key, so keep this device or a synced one.</div>
+                </div>
+                <div class="modal-actions">
+                    <button class="icon-btn" type="button" data-action="botAnonRotate">New throwaway key</button>
+                </div>
+            </div>
+            <div class="bot-git-status nm-hidden" id="botAnonStatus"></div>
+        </div>
+    </div>
+
     <!-- Share Channel Modal -->
     <div class="modal" id="shareModal">
         <div class="modal-content share-modal">
@@ -2495,6 +2541,7 @@
     <script defer src="js/modules/mesh/mesh-service.js"></script>
     <script defer src="js/modules/messages.js"></script>
     <script defer src="js/modules/pms.js"></script>
+    <script defer src="js/modules/anon-bot.js"></script>
     <script defer src="js/modules/groups.js"></script>
     <script defer src="js/modules/ui-context.js"></script>
     <script defer src="js/modules/mesh/mesh-ui.js"></script>

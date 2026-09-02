@@ -1054,6 +1054,10 @@ ${this._emojiSectionsHtml()}`;
 
             // For 1:1 PM messages: send reaction as gift wrap to the peer so it stays private
             if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
+                if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(this.currentPM)) {
+                    this.addToRecentEmojis(emoji);
+                    return;
+                }
                 const now = Math.floor(Date.now() / 1000);
                 const reactionRumor = {
                     kind: 7,

@@ -144,6 +144,7 @@ Object.assign(NYM.prototype, {
             lowDataMode: this.settings.lowDataMode || localStorage.getItem('nym_low_data_mode') === 'true',
             groupChatPMOnlyMode: this.settings.groupChatPMOnlyMode || false,
             threadsEnabled: this.settings.threadsEnabled !== false,
+            botAnonEnabled: typeof this.botAnonEnabled === 'function' ? this.botAnonEnabled() : false,
             translateLanguage: this.settings.translateLanguage || '',
             translateFavoriteLanguages: this._getTranslateFavorites(),
             uiLanguage: this.settings.uiLanguage || '',
@@ -575,6 +576,17 @@ Object.assign(NYM.prototype, {
                     );
                 } catch (_) { }
             }
+        }
+
+        if (this._botAnon && this._botAnon.current) {
+            try {
+                await this._publishCategoryWrap(
+                    { botAnon: this.botAnonSerialize() },
+                    'nymchat-botanon',
+                    now,
+                    []
+                );
+            } catch (_) { }
         }
 
         // Group conversation metadata → nymchat-groups

@@ -295,6 +295,7 @@ Object.assign(NYM.prototype, {
             '?balance': { desc: 'Check your standard & Pro credit balances' },
             '?gift': { desc: 'Gift Nymbot credits to another user' },
             '?transfer': { desc: 'Transfer ALL your Nymbot credits to another pubkey' },
+            '?anon': { desc: 'Chat from a throwaway key Nymbot can never link to your nym' },
             '?clear': { desc: 'Clear Nymbot chat history and start fresh' },
         };
         this.commands = {

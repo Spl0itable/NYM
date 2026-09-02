@@ -427,6 +427,10 @@ window.nymHapticTap = function (ms) {
         'botGitConnect':              function () { nym()._botGitConnect(); },
         'botGitDisconnect':           function () { nym()._botGitDisconnect(); },
         'openBotCreditsModal':        function () { nym().openBotCreditsModal(); },
+        'openBotAnonModal':           function () { nym().openBotAnonModal(); },
+        'botAnonToggle':              function (_e, t) { nym().botAnonToggleFromModal(t.checked); },
+        'botAnonMove':                function () { nym().botAnonMoveFromModal(); },
+        'botAnonRotate':              function () { nym().botAnonRotateFromModal(); },
 
         // Share modal
         'copyShareUrl':               function () { nym().copyShareUrl(); },

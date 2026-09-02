@@ -676,7 +676,7 @@
         /// to skip the Bitchat wrap.
         /// `root` is the §3 claim: v:2 AND src=="root". Anything else is
         /// recorded as legacy, because the badge reports the truth.
-        _pqRecord(pubkey, pk, exp, epoch, root, fmt) {
+        _pqRecord(pubkey, pk, exp, epoch, root, fmt, at) {
             if (!this.pqKeys) this.pqKeys = new Map();
             // Absent `fmt` means an entry recorded before the split (or by our
             // own self-record): assume the legacy format only, which is what
@@ -684,7 +684,13 @@
             this.pqKeys.set(pubkey, {
                 pk: pk || null, exp, epoch, root: !!root,
                 pq1: fmt ? !!fmt.pq1 : true,
-                pq2: fmt ? !!fmt.pq2 : false
+                pq2: fmt ? !!fmt.pq2 : false,
+                // WHEN they said it. An announcement is evidence about a
+                // moment, and the send plan has to weigh it against other
+                // evidence from other moments — see `_pqPmPlan`. Derived from
+                // the expiry for an entry restored by an older build, which is
+                // exactly `created_at` since `exp` is stamped `now + TTL`.
+                at: at || (exp ? exp - PQ_TTL_SEC : 0)
             });
             // Ride the same debounced write the other dedup sets use, so a
             // reload does not start from nothing and send the next message
@@ -793,7 +799,8 @@
                     this._pqAnnouncementIsRootSeeded(payload),
                     // Which formats this peer can open. pk2 alone means the
                     // layered one only — a signer login.
-                    { pq1: pk1 !== undefined, pq2: pk2 !== undefined });
+                    { pq1: pk1 !== undefined, pq2: pk2 !== undefined },
+                    parseInt(event.created_at, 10) || 0);
                 if (event.pubkey === this.pubkey) this._pqSelfAnnouncement = payload;
             } catch (_) { }
         },
@@ -1001,6 +1008,43 @@
             return this.pqEnabled() ? rec.pk : null;
         },
 
+        /// When this peer's live announcement was signed, or 0. Zero also
+        /// means "expired or never seen": `_pqEntry` withholds a lapsed one,
+        /// and an announcement we do not hold cannot be the newer evidence.
+        pqAnnouncedAt(pubkey) {
+            const rec = this._pqEntry(pubkey);
+            return (rec && rec.at) || 0;
+        },
+
+        /// When a bitchat-format wrap from this pubkey last opened, or 0.
+        ///
+        /// The set it accompanies is deliberately kept: a dozen call sites ask
+        /// "does this peer speak Bitchat at all", which is still a membership
+        /// question. Only the send plan needs to know WHEN, and an entry with
+        /// no time — rebuilt from a cached message that predates this, or from
+        /// an older build — reads as 0, i.e. older than any announcement. That
+        /// is the safe direction: a peer genuinely on Bitchat has no live
+        /// announcement, so `provenNym` still routes them a Bitchat copy.
+        bitchatFormatSeenAt(pubkey) {
+            if (!pubkey || !this._bitchatSeenAt) return 0;
+            return this._bitchatSeenAt.get(pubkey) || 0;
+        },
+
+        /// Records that a bitchat-format wrap from `pubkey` opened at `atSec`.
+        noteBitchatFormatSeen(pubkey, atSec) {
+            if (!pubkey) return;
+            if (!this.bitchatUsers) this.bitchatUsers = new Set();
+            this.bitchatUsers.add(pubkey);
+            if (!this._bitchatSeenAt) this._bitchatSeenAt = new Map();
+            const ts = parseInt(atSec, 10) || 0;
+            if (ts > (this._bitchatSeenAt.get(pubkey) || 0)) {
+                this._bitchatSeenAt.set(pubkey, ts);
+            }
+            while (this._bitchatSeenAt.size > 5000) {
+                this._bitchatSeenAt.delete(this._bitchatSeenAt.keys().next().value);
+            }
+        },
+
         pqKeyFor(pubkey) {
             if (!this.pqEnabled()) return null;
             const rec = this._pqEntry(pubkey);
@@ -1183,19 +1227,28 @@
             const announced = this.pqLayeredKeyFor(recipientPubkey);
             const provenNym = this.isKnownNymchatClient(recipientPubkey);
 
-            // Have we ever DECRYPTED a bitchat-format wrap from this pubkey?
-            // Not inference: `bitchatUsers` is written when a `v2:` payload
-            // from them opens, which only their client could have produced.
-            // `nymUsers` is different and is deliberately not consulted — a
-            // Bitchat client that echoes our `x` tag back sets that one.
-            const knownBitchat = !!(this.bitchatUsers && this.bitchatUsers.has(recipientPubkey));
+            // Have we DECRYPTED a bitchat-format wrap from this pubkey, and
+            // when? Not inference: `bitchatUsers` is written when a `v2:`
+            // payload from them opens, which only their client could have
+            // produced. `nymUsers` is different and is deliberately not
+            // consulted — a Bitchat client that echoes our `x` tag back sets
+            // that one.
+            //
+            // Two kinds of evidence, answering different questions, so the
+            // NEWER one decides. An announcement proves the pubkey ran Nymchat
+            // when it was signed; a bitchat-format wrap proves they ran Bitchat
+            // when they sent it. Comparing a set membership against a live
+            // announcement compared a fact with no time in it: `bitchatUsers`
+            // never forgets, and it is rebuilt from cached PM history on every
+            // reload, so one wrap exchanged during the dual-send era — before
+            // any of this existed — marked a peer "running Bitchat NOW" for
+            // good. Every such peer was handed a classical NIP-44 message
+            // forever, however current their announcement, which is what
+            // "existing users never connect over post-quantum" was.
+            const bitchatAt = this.bitchatFormatSeenAt(recipientPubkey);
+            const announcedAt = this.pqAnnouncedAt(recipientPubkey);
+            const knownBitchat = bitchatAt > 0 && !(announcedAt > 0 && announcedAt >= bitchatAt);
 
-            // Two kinds of evidence, answering different questions. An
-            // announcement proves the pubkey RAN Nymchat in the last week;
-            // bitchat-format traffic from them proves they are running Bitchat
-            // NOW. When both are true the second decides: an unnecessary
-            // Bitchat copy is a few hundred wasted bytes, a missing one is a
-            // message that never arrives and never errors.
             const bitchat = knownBitchat || !provenNym;
 
             // A post-quantum wrap never accompanies a Bitchat copy of the same

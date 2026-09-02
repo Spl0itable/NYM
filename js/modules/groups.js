@@ -97,6 +97,9 @@ Object.assign(NYM.prototype, {
                 }
             }
         }
+        if (typeof this.botAnonPubkeys === 'function') {
+            for (const pk of this.botAnonPubkeys()) pks.add(pk);
+        }
         return [...pks];
     },
 

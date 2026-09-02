@@ -211,6 +211,12 @@ The private chat can also generate media. `?image <description>` sends back a ge
 
 Pro can also work inside one of your git repositories, Claude Code-style. Type `?git` to connect a provider, choosing either GitHub, GitLab, or Gitea/Forgejo (including Codeberg and self-hosted instances), and pasting a scoped personal access token and selecting a repo and branch. Repo messages then run as a small agent: the model lists, reads, and searches your actual files, and with `?git writes on` it can commit files, create branches, and open pull/merge requests. Repo tasks use up to 6 model calls per message, each billed at the selected model's Pro credit price (only calls actually used are charged). The access token is stored only on your device (Panic Mode wipes it), travels to the Nymbot worker per request, and is never stored server-side or published to relays.
 
+### Anonymous Mode
+
+The private chat is end-to-end encrypted, but Nymbot still knows *which pubkey* is talking to it — its credit row, its thread, and its own archived copy of the conversation are all keyed to you, so anyone holding the bot's private key could read that off. Turn on the **Anon** chip in the chat header (or type `?anon`) and the whole conversation moves onto a throwaway keypair generated on your device, the same trick group chats use for their rotating recipient keys. Nymbot bills that key, answers it, archives it, and never learns your nym; replies stay hybrid post-quantum, and receipts, typing indicators, reactions and edits to Nymbot are suppressed so nothing puts your real signature beside the thread.
+
+Credits reach the throwaway key as blind vouchers rather than a transfer, which would recreate the link: your client blinds a random secret, the worker debits your nym and signs what it cannot see, and the throwaway key later presents the unblinded voucher for the worker to verify and credit with nothing to match it against. Every signature carries a DLEQ proof the client checks before spending. You can also just buy credits straight onto the throwaway key with `?buy`. `?transfer` and `?gift` stay on your real nym, since both are about your named account, and credits on a throwaway key live and die with it — it is stored under your identity encryption and synced across your devices.
+
 ### Bot Commands
 
 **AI & Knowledge:**
@@ -250,6 +256,7 @@ Pro can also work inside one of your git repositories, Claude Code-style. Type `
 - `?git` - Connect a git repo (GitHub/GitLab/Gitea) so Pro replies can read the code and optionally commit, branch, and open PRs
 - `?gift @nym` - Gift credits to another user
 - `?transfer @nym` - Transfer your credits (standard and Pro) to another user
+- `?anon` - Chat from a throwaway key Nymbot can never link to your nym
 
 **Info:**
 - `?help` - List all available bot commands
