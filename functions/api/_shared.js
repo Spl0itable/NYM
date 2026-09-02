@@ -2897,13 +2897,49 @@ async function invoicePaymentConfirmed(env, pending, receipt) {
   return false;
 }
 
+// Truncate on a character boundary, and drop any orphan that reached us
+// anyway, before the text can be handed to anyone else.
+function truncateText(text, max) {
+  var s = typeof text === "string" ? text : String(text == null ? "" : text);
+  if (s.length <= max) return s;
+  var end = max;
+  var last = s.charCodeAt(end - 1);
+  // A high surrogate in the last slot has its pair on the far side of the cut.
+  if (last >= 0xD800 && last <= 0xDBFF) end--;
+  return s.slice(0, end);
+}
+
+function wellFormedText(text) {
+  if (typeof text !== "string") return text;
+  // The overwhelmingly common case: no surrogate code units at all.
+  if (!/[\uD800-\uDFFF]/.test(text)) return text;
+  if (typeof text.isWellFormed === "function" && text.isWellFormed()) return text;
+  var out = "";
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i);
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      var next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0;
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        out += text.charAt(i) + text.charAt(i + 1);
+        i++;
+      }
+      // else: a high surrogate with nothing after it — drop it.
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      // A low surrogate with no high surrogate before it — drop it.
+    } else {
+      out += text.charAt(i);
+    }
+  }
+  return out;
+}
+
 function sanitizeInput(text) {
   if (typeof text !== "string") return "";
   // Truncate excessively long inputs
-  text = text.slice(0, 1000);
+  text = truncateText(text, 1000);
   // Strip zero-width and invisible unicode characters used for steganographic injection
   text = text.replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/g, "");
-  return text.trim();
+  return wellFormedText(text).trim();
 }
 
 const CLIENT_CORS_HEADERS = {
@@ -2947,6 +2983,8 @@ export {
   nwcInvoicePaid,
   invoicePaymentConfirmed,
   sanitizeInput,
+  truncateText,
+  wellFormedText,
   bytesToHex,
   hexToBytes,
   utf8ToBytes,

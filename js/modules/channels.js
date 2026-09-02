@@ -607,6 +607,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return lower;
     },
 
+    truncateText(text, max) {
+        const s = typeof text === 'string' ? text : String(text ?? '');
+        if (s.length <= max) return s;
+        let end = max;
+        const last = s.charCodeAt(end - 1);
+        if (last >= 0xD800 && last <= 0xDBFF) end--;
+        return s.slice(0, end);
+    },
+
     isValidChannelTag(value) {
         return typeof value === 'string' && value.length > 0 && !/\s/.test(value);
     },

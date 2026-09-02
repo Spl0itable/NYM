@@ -1,5 +1,7 @@
 // Translation on Workers AI, shared by the app-facing proxy endpoint
 
+import { truncateText, wellFormedText } from './_shared.js';
+
 /// Dedicated MT. One job, no prompt.
 export const MT_MODEL = '@cf/meta/m2m100-1.2b';
 
@@ -412,7 +414,10 @@ function mixedLanguageClause(target) {
 /// Returns { translatedText, detectedLanguage, engine }.
 export async function translateText(ai, { text, source, target }) {
   if (!ai) throw new Error('AI binding not configured');
-  const q = String(text).slice(0, MAX_CHARS);
+  // Character-boundary truncation, then a sweep for any orphan half that
+  // arrived in the text already: a lone surrogate makes the request body
+  // unparseable upstream, and every engine below fails on it in turn.
+  const q = wellFormedText(truncateText(String(text), MAX_CHARS));
   let sl = source || 'auto';
   if (!q.trim()) throw new Error('nothing to translate');
   if (!target) throw new Error('no target language');

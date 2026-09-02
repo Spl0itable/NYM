@@ -133,7 +133,7 @@ Object.assign(NYM.prototype, {
                 const mapped = msgs.slice(-msgLimit).map(m => ({
                     nym: m.author || 'nym',
                     pubkey: m.pubkey || '',
-                    content: (m.content || '').slice(0, 300),
+                    content: this.truncateText(m.content || '', 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
                     channel: chanKey
@@ -182,7 +182,7 @@ Object.assign(NYM.prototype, {
                 const mapped = msgs.filter(m => !m._spamGated).map(m => ({
                     nym: m.author || 'nym',
                     pubkey: m.pubkey || '',
-                    content: (m.content || '').slice(0, 300),
+                    content: this.truncateText(m.content || '', 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
                     channel: chanKey
