@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -1717,14 +1718,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // Green only when it is genuinely on end to end. The send-only and
           // unavailable states keep the ordinary colour, so the green means
           // one thing — the same rule the PWA's status line follows.
-          child: Text(
-            pqStatus,
-            style: TextStyle(
-              color: pqCapable && pqRootHeld
-                  ? context.nym.primary
-                  : context.nym.text.withValues(alpha: 0.85),
-              fontSize: 13,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                pqStatus,
+                style: TextStyle(
+                  color: pqCapable && pqRootHeld
+                      ? context.nym.primary
+                      : context.nym.text.withValues(alpha: 0.85),
+                  fontSize: 13,
+                ),
+              ),
+              // Four terms decide whether a conversation is post-quantum, and
+              // from outside all four look the same: a shield reading "Not
+              // quantum-resistant". Read on demand, because every value in here
+              // can change on the next announcement.
+              const _PqDiagnostics(),
+            ],
           ),
         ),
       ),
@@ -3716,6 +3727,67 @@ class _LanguageSelectRow extends StatelessWidget {
             Icon(Icons.keyboard_arrow_down, size: 20, color: c.textDim),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The post-quantum diagnostics readout: an expandable, copyable dump of the
+/// live terms behind every conversation's shield.
+class _PqDiagnostics extends ConsumerStatefulWidget {
+  const _PqDiagnostics();
+
+  @override
+  ConsumerState<_PqDiagnostics> createState() => _PqDiagnosticsState();
+}
+
+class _PqDiagnosticsState extends ConsumerState<_PqDiagnostics> {
+  String? _text;
+
+  void _refresh() => setState(
+      () => _text = ref.read(nostrControllerProvider).pqDiagnosticsText());
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final text = _text;
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.zero,
+        title: Text(tr('Post-quantum diagnostics'),
+            style: TextStyle(color: c.textDim, fontSize: 12)),
+        onExpansionChanged: (open) {
+          if (open) _refresh();
+        },
+        children: [
+          Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(maxHeight: 260),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                text ?? '',
+                style: TextStyle(
+                    color: c.textDim, fontSize: 11, fontFamily: 'monospace'),
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: text == null || text.isEmpty
+                  ? null
+                  : () => Clipboard.setData(ClipboardData(text: text)),
+              child: Text(tr('Copy')),
+            ),
+          ),
+        ],
       ),
     );
   }

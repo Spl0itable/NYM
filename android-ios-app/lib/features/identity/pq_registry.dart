@@ -307,12 +307,27 @@ class PqRegistry {
   /// A KEM-less announcement is recorded, not dropped: it still proves the peer
   /// runs Nymchat, which is what [isKnownNymchatClient] reports and what stops
   /// the send path wasting a Bitchat wrap on them.
-  void ingest(String pubkey, String content, {required int nowSec}) {
+  void ingest(String pubkey, String content,
+      {required int nowSec, int createdAt = 0}) {
     final ann = PqAnnouncement.parse(content);
     if (ann == null) return;
     if (ann.retracted || ann.expiresAt <= nowSec) {
       _keys.remove(pubkey);
       return;
+    }
+    // Kind 30078 is ADDRESSABLE: one event per (kind, pubkey, d-tag), and the
+    // NEWEST wins. Applying whichever arrived last instead let older copies
+    // undo a good one, and older copies arrive constantly — the standing
+    // subscription replays on reconnect, the archive returns several rows, and
+    // a peer's own boot publish goes out KEYLESS a moment before the one
+    // carrying the key (it is withheld until their settings load resolves the
+    // root). Any of those landing second replaced a live ML-KEM key with
+    // `nym:1` and nothing else. Every publish stamps `exp = now + pqTtl`, so
+    // the expiry dates the announcement without storing anything extra.
+    final held = _entry(pubkey, nowSec);
+    if (held != null && createdAt > 0) {
+      final heldAt = held.exp - pqTtl.inSeconds;
+      if (createdAt < heldAt) return;
     }
     record(pubkey, ann.publicKey, ann.expiresAt, ann.epoch,
         rootSeeded: ann.rootSeeded,
@@ -474,15 +489,57 @@ class PqRegistry {
         }
         if (pk.length != mlKemPublicKeyLength) continue;
       }
+      // A row written BEFORE the formats were recorded says nothing about
+      // which one this peer accepts, and the only format still produced is the
+      // layered one. Restoring such a row's key would hand the send path a key
+      // it must refuse to seal to, so the entry comes back KEYLESS: still proof
+      // the peer runs Nymchat — which is what suppresses the Bitchat wrap —
+      // while leaving the announcement lookup a reason to go and ask again.
+      final preSplit = v.length <= 5;
       // Absent on rows written before the root existed — those peers were
       // legacy, so the default is the truth rather than a guess.
-      record(entry.key, pk, exp, epoch,
+      record(entry.key, preSplit ? null : pk, exp, epoch,
           rootSeeded: v.length > 3 && v[3] == 1,
-          // Rows written before the split carried the combined format only.
           acceptsLegacy: v.length > 4 ? v[4] == 1 : true,
           acceptsLayered: v.length > 5 && v[5] == 1);
     }
   }
+}
+
+/// Why one conversation is sending classical, in one line.
+///
+/// [PqPmPlan.decide] reaches its verdict through four terms, and every one of
+/// them can be false for a different reason. From the outside all four look
+/// identical — a shield reading "Not quantum-resistant" — so a report of "it is
+/// not working" cannot be told apart from any other, and neither can a fix.
+/// This names the FIRST term that failed, in the order the plan evaluates them.
+String pqPeerDiagnosis({
+  required bool supported,
+  required bool modeOff,
+  required bool haveEntry,
+  required bool haveKey,
+  required bool acceptsLayered,
+  int? lookupAgeSec,
+}) {
+  if (!supported) return 'ML-KEM did not load on this device';
+  if (modeOff) return 'post-quantum mode is off';
+  if (!haveEntry) {
+    if (lookupAgeSec != null) {
+      return 'no announcement found (looked ${lookupAgeSec}s ago)';
+    }
+    return 'no announcement held, and none has been looked up yet';
+  }
+  if (!haveKey) return 'their announcement carries no ML-KEM key';
+  if (!acceptsLayered) {
+    return 'their announcement offers only the legacy format (pk without pk2), '
+        'which is never sent';
+  }
+  // Nothing below can take it away: a live layered key settles it, because the
+  // Bitchat app cannot publish an announcement, so a `v2:` wrap from a peer who
+  // publishes one is their Nymchat client dual-sending. Bitchat traffic only
+  // decides for a peer with no usable key, and there the missing key is already
+  // the nearer reason — reported above.
+  return 'post-quantum';
 }
 
 /// Policy: whether this identity is capable of, and configured for,
@@ -695,7 +752,26 @@ class PqPmPlan {
     final bitchatIsCurrent = knownBitchat &&
         bitchatSeenAtSec > 0 &&
         !(announcedAtSec > 0 && announcedAtSec >= bitchatSeenAtSec);
-    final bitchat = bitchatIsCurrent || !proven;
+
+    // ...but a peer holding a LIVE key we can seal to is a Nymchat client, and
+    // that settles it, because the Bitchat app cannot publish a kind-30078
+    // announcement at all.
+    //
+    // The `v2:` wrap we decrypted from them is that same Nymchat client
+    // DUAL-SENDING: its plan reached this line about us, found no announcement
+    // of ours yet, and sent both formats — exactly what ours does. Reading it
+    // as "they run Bitchat" is reading our own protocol back as evidence
+    // against itself, and it is symmetric, so both sides do it to each other:
+    // each keeps replying in the format that keeps the other pinned to
+    // classical. That is the loop that left established conversations
+    // non-post-quantum while new ones worked.
+    //
+    // A peer who really moved from Nymchat to Bitchat keeps their announcement
+    // for its remaining TTL and would get a wrap they cannot open until it
+    // lapses. That is the accepted cost: bounded by an expiry nobody is
+    // republishing, where the loop above never ends on its own.
+    final bitchat =
+        announced != null ? false : (bitchatIsCurrent || !proven);
 
     // A post-quantum wrap never accompanies a Bitchat copy of the same
     // plaintext: the copy is the easier target, so pairing them buys a quantum

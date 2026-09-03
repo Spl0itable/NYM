@@ -4681,6 +4681,75 @@ class NostrController {
 
   int _nowSecForBitchat() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
+  /// Everything the post-quantum path decided, as copyable text.
+  ///
+  /// Deliberately the live values rather than a summary: the question a stuck
+  /// conversation raises is always "which of these is not what I think it is",
+  /// and only the values answer it. Read on demand — every one of them can
+  /// change on the next announcement, and a stale readout is worse than none.
+  String pqDiagnosticsText() {
+    final identity = _identity;
+    if (identity == null) return 'not signed in';
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // There is no "unsupported" state on this platform — ML-KEM is compiled
+    // in rather than loaded — so the term is constant here and the readout
+    // says so rather than omitting a line the PWA's has.
+    const supported = true;
+    final modeOff = _pqMode == PqMode.off;
+    final capable =
+        PqPolicy.capable(privkey: identity.privkey, root: _pqRoot);
+    final out = <String>[
+      'supported=$supported capable=$capable '
+          'enabled=${PqPolicy.enabled(privkey: identity.privkey, mode: _pqMode)}',
+      'mode=$_pqMode epoch=$_pqEpoch devices=${_pqDevices.length}',
+      'root: held=${_pqRoot != null} settled=$_pqRootSettled '
+          'locked=$_pqRootLocked',
+      'announced: ${_pqLastPublishMs == 0 ? 'never this session' : '${(DateTime.now().millisecondsSinceEpoch - _pqLastPublishMs) ~/ 1000}s ago'}'
+          ' withKey=${_pqSelfSignedAnnouncement != null}',
+      '',
+    ];
+    final peers = _appPmPeers();
+    out.add('${peers.length} PM contact${peers.length == 1 ? '' : 's'}:');
+    for (final pk in peers) {
+      final key = _pqRegistry.keyFor(pk, nowSec: nowSec, enabled: true);
+      final layered =
+          _pqRegistry.acceptsLayered(pk, nowSec: nowSec, enabled: true);
+      final announcedAt = _pqRegistry.announcedAtFor(pk, nowSec: nowSec);
+      final bitchatAt = _bitchatSeenAt[pk] ?? 0;
+      final miss = _pqLookupMisses[pk];
+      final why = pqPeerDiagnosis(
+        supported: supported,
+        modeOff: modeOff,
+        haveEntry: _pqRegistry.isKnownNymchatClient(pk, nowSec: nowSec),
+        haveKey: key != null,
+        acceptsLayered: layered,
+        lookupAgeSec: miss == null
+            ? null
+            : (DateTime.now().millisecondsSinceEpoch - miss) ~/ 1000,
+      );
+      out
+        ..add('  ${pk.substring(0, 8)}… -> '
+            '${why == 'post-quantum' ? 'POST-QUANTUM' : 'classical'}')
+        ..add('    $why')
+        ..add('    key=${key != null} layered=$layered '
+            'announced=${announcedAt == 0 ? '-' : '${nowSec - announcedAt}s ago'} '
+            'bitchatSeen=${bitchatAt == 0 ? 'never' : '${nowSec - bitchatAt}s ago'}');
+    }
+    return out.join('\n');
+  }
+
+  /// The PM peers the diagnostics reports on — the conversations the user
+  /// actually has, which is where a stuck shield is noticed.
+  List<String> _appPmPeers() {
+    final seen = <String>{};
+    for (final key in _ref.read(appStateProvider).messages.keys) {
+      if (!key.startsWith('pm-')) continue;
+      final pk = key.substring(3);
+      if (pk.length == 64 && pk != _identity?.pubkey) seen.add(pk);
+    }
+    return seen.toList();
+  }
+
   /// Records that a bitchat-format wrap from [pubkey] opened, at [atSec].
   void _noteBitchatFormatSeen(String pubkey, int atSec) {
     if (pubkey.isEmpty) return;
@@ -4750,14 +4819,34 @@ class NostrController {
     }
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nowSec = nowMs ~/ 1000;
-    // Only an entry WITH A KEY ends the search. A keyless one says "this is a
-    // Nymchat client that published no post-quantum key" — true when we
-    // recorded it, and recorded for a week. A peer who was on an older build,
+    // Only an entry we can actually SEND to ends the search, which means the
+    // LAYERED format: it is the only one still produced, so an entry carrying a
+    // key we would never seal to is no better than a keyless one. Testing for a
+    // key alone made a restored PRE-SPLIT row — written before the formats were
+    // recorded, so `acceptsLayered` reads false — both unusable and
+    // unrefreshable: the send path withheld the key and this returned early
+    // rather than fetching the announcement that would have set the flag, so
+    // every message to that peer went classical, in both directions, for as
+    // long as the cache survived.
+    //
+    // A keyless entry is likewise a reason to look again, not to stop. It says
+    // "a Nymchat client that published no post-quantum key" — true when we
+    // recorded it, and recorded for a week; a peer who was on an older build,
     // or signed in with an extension, and has since switched to their nsec
-    // would go on getting classical messages for the rest of that week if this
-    // returned early on the stale answer. The point of this lookup is the key,
-    // so not having one is a reason to look again, not to stop.
-    if (_pqRegistry.keyFor(pubkey, nowSec: nowSec, enabled: true) != null) {
+    // would go on getting classical messages for the rest of that week.
+    // ...and only while it can still settle the recency question the send plan
+    // is about to ask. We stop refreshing an announcement once it is usable, so
+    // a cached one goes stale by design — a peer who republishes every few
+    // hours can easily have a two-day-old entry here while a Bitchat-format
+    // message from them arrived last night. Concluding "Bitchat is newer" off
+    // that comparison is concluding off our own staleness, and it is
+    // self-reinforcing: their client makes the same call about us, so each side
+    // keeps replying in the format that keeps the other pinned.
+    final announcedAt = _pqRegistry.announcedAtFor(pubkey, nowSec: nowSec);
+    final staleVsBitchat =
+        announcedAt > 0 && (_bitchatSeenAt[pubkey] ?? 0) > announcedAt;
+    if (!staleVsBitchat &&
+        _pqRegistry.acceptsLayered(pubkey, nowSec: nowSec, enabled: true)) {
       return Future<void>.value();
     }
     final existing = _pqLookups[pubkey];
@@ -5088,7 +5177,8 @@ class NostrController {
   /// Ingests a peer's (already signature-verified) `nym-pq` announcement.
   void _ingestPqAnnouncement(NostrEvent event) {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    _pqRegistry.ingest(event.pubkey, event.content, nowSec: nowSec);
+    _pqRegistry.ingest(event.pubkey, event.content,
+        nowSec: nowSec, createdAt: event.createdAt);
     if (event.pubkey == _identity?.pubkey) {
       final ann = PqAnnouncement.parse(event.content);
       if (ann != null && !ann.retracted) {
