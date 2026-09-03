@@ -1887,6 +1887,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // Live web search / changelog lookup — same capability as public channels.
   var pmSearchResults = [];
   var pmSearchAttempted = false;
+  var pmSearchedQuery = question;
   var pmChangelogCtx = "";
   try {
     if (needsChangelogContext(question)) {
@@ -1896,7 +1897,8 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       var pmTurns = (history || []).map(function (h) {
         return { author: h && h.isBot ? "nymbot" : "", text: h && h.text };
       });
-      pmSearchResults = await webSearch(searchQueryFor(question, pmTurns), null, context.env);
+      pmSearchedQuery = searchQueryFor(question, pmTurns);
+      pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
       pmSearchAttempted = true;
     }
   } catch (e) { }
@@ -1911,7 +1913,8 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       pmCtx += "IMPORTANT: These live web search results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them. Never say 'the search results you provided' or imply the user supplied them. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web. Treat them as more current and authoritative than your training data: if they describe a recent event, that event is real and has happened — do NOT dismiss it as 'fictional', 'speculative', 'hypothetical', or 'a future event' just because it postdates your training. Answer naturally in your own voice without mentioning 'search results'. If they don't fully cover the question, supplement with your own knowledge.\n";
       pmCtx += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
     } else if (pmSearchAttempted) {
-      pmCtx += "A live web search ran for this question just now and came back with nothing usable. Say plainly that you could not find anything current on it, then answer from what you already know and be clear about that. Do not imply you looked something up, and do not present training data as if it were today's news.\n";
+      pmCtx += "A live web search ran just now for \"" + searchQueryTerms(pmSearchedQuery) +
+        "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news.\n";
     }
     if (pmChangelogCtx) {
       pmCtx += pmChangelogCtx + "\n";
@@ -4139,20 +4142,22 @@ async function webSearch(query, geohash, env) {
     });
     if (weatherResults.length > 0) return weatherResults;
   }
-  // Merged, not raced. Returning the first non-empty list meant a single junk
-  // match from the DDG fallback regexes shut out Wikipedia entirely, and it
-  // meant the good sources were only ever consulted when the flaky ones had
-  // already failed. Each source is tried, the results are concatenated in
-  // priority order and deduplicated, and the cap keeps the context bounded.
+  var terms = searchQueryTerms(query);
+  var narrow = narrowSearchTerm(query);
   var sources = [
-    { name: "brave", run: function () { return searchBrave(env, query); } },
-    { name: "news-rss", run: function () { return searchNewsRss(query); } },
-    { name: "mojeek", run: function () { return searchMojeek(query); } },
-    { name: "ddg-html", run: function () { return searchDDGHtml(query); } },
-    { name: "google", run: function () { return searchGoogle(query); } },
-    { name: "ddg-instant", run: function () { return searchDDGInstant(query); } },
-    { name: "wikipedia", run: function () { return searchWikipedia(query); } }
+    { name: "brave", run: function () { return searchBrave(env, terms); } },
+    { name: "news-rss", run: function () { return searchNewsRss(terms); } },
+    { name: "mojeek", run: function () { return searchMojeek(terms); } },
+    { name: "ddg-html", run: function () { return searchDDGHtml(terms); } },
+    { name: "google", run: function () { return searchGoogle(terms); } },
+    { name: "ddg-instant", run: function () { return searchDDGInstant(terms); } },
+    { name: "wikipedia", run: function () { return searchWikipedia(terms); } }
   ];
+  if (narrow && narrow.toLowerCase() !== terms.toLowerCase()) {
+    sources.push({ name: "news-rss:" + narrow, run: function () { return searchNewsRss(narrow); } });
+    sources.push({ name: "wikipedia:" + narrow, run: function () { return searchWikipedia(narrow); } });
+    sources.push({ name: "mojeek:" + narrow, run: function () { return searchMojeek(narrow); } });
+  }
   var collected = await runSearchSources(sources);
   var merged = [];
   var seen = {};
@@ -4170,7 +4175,10 @@ async function webSearch(query, geohash, env) {
     }
     if (merged.length >= WEB_SEARCH_MAX_RESULTS) break;
   }
-  if (!merged.length) console.warn("nymbot web search: every source came back empty for " + JSON.stringify(query.slice(0, 80)));
+  if (!merged.length) {
+    console.warn("nymbot web search: every source came back empty for " +
+      JSON.stringify(truncateText(terms, 80)) + (narrow ? " (narrow: " + narrow + ")" : ""));
+  }
   return merged;
 }
 
@@ -4182,17 +4190,67 @@ var FOLLOW_UP_LEAD = /^(?:no|nope|nah|yes|yeah|yep|ok|okay|well|but|and|also|act
 var QUERY_STOPWORDS = ("what which who whom whose when where why how a an the this that these those " +
   "it its they them their there he she him her his hers we us our you your i me my " +
   "is are was were be been being am do does did done have has had will would can could " +
-  "and or but so if then than of to in on at for from with about by as up out " +
-  "no not yes ok okay well also actually just only really very much more most " +
-  "mean meant tell say said give show know think want ask asking happened happening " +
-  "recently lately now today currently latest new update updates thing things stuff one any"
+  "and or but so if then than of to in on at for from with about by as up out over " +
+  "no not yes ok okay well also actually just only really very much more most all some " +
+  "mean meant tell say said give show know think want ask asking happened happening going " +
+  "recently lately now today currently latest new update updates thing things stuff one any " +
+  "whats hows wheres whos whens whys thats theres dont doesnt didnt cant wont im ive id"
 ).split(" ").reduce(function (set, w) { set[w] = true; return set; }, {});
 
+// Words as a search engine should see them: possessives and contractions folded
+// away, so "what's" counts as the stopword "what" rather than a subject word.
+function queryTokens(text) {
+  var raw = String(text || "").match(/[A-Za-z0-9][A-Za-z0-9'\u2019-]*/g) || [];
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var w = raw[i].replace(/['\u2019](s|re|ve|ll|d|m|t)$/i, "").replace(/^[-'\u2019]+|[-'\u2019]+$/g, "");
+    if (w) out.push(w);
+  }
+  return out;
+}
+
 function contentWordCount(text) {
-  var words = String(text || "").toLowerCase().match(/[a-z0-9][a-z0-9'-]*/g) || [];
-  var n = 0;
-  for (var i = 0; i < words.length; i++) if (!QUERY_STOPWORDS[words[i]]) n++;
-  return n;
+  return searchTerms(text).length;
+}
+
+// The subject words of a question, in order
+function searchTerms(text) {
+  var words = queryTokens(text);
+  var terms = [];
+  var seen = {};
+  for (var i = 0; i < words.length; i++) {
+    var word = words[i];
+    var lower = word.toLowerCase();
+    var acronym = word.length >= 2 && word === word.toUpperCase() && /[A-Z]/.test(word);
+    if (seen[lower] || lower.length < 2) continue;
+    if (QUERY_STOPWORDS[lower] && !acronym) continue;
+    seen[lower] = true;
+    terms.push(word);
+  }
+  return terms;
+}
+
+// The keyword string actually sent to the engines, and what the reply names
+// when nothing comes back.
+function searchQueryTerms(query) {
+  return searchTerms(query).slice(0, 8).join(" ") || String(query || "").trim();
+}
+
+// The one term most likely to be the thing being asked about: a proper noun if
+// the question capitalised one mid-sentence, otherwise the longest subject
+// word. Searched on its own alongside the full phrase, because a name nobody
+// has heard of finds nothing when it is buried in a sentence.
+function narrowSearchTerm(text) {
+  var terms = searchTerms(text);
+  if (terms.length < 2) return "";
+  var best = "";
+  for (var i = 0; i < terms.length; i++) {
+    var term = terms[i];
+    // The first word of a question is capitalised by habit, not by meaning.
+    var distinctive = (i > 0 && /^[A-Z]/.test(term) && term.length >= 3) || /[0-9]/.test(term);
+    if (distinctive && term.length > best.length) best = term;
+  }
+  return best;
 }
 
 // A follow-up carries none of its own subject: searching "no i mean recently"
@@ -4253,6 +4311,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     // Web search: fetch live results for questions that need current info
     var searchResults = [];
     var searchAttempted = false;
+    var searchedQuery = question;
     var changelogCtx = "";
     var isAsciiArtRequest = /\b(ascii\s*art|draw me|sketch)\b/i.test(question) || /\b(draw|make|create|generate)\b.{0,30}\b(ascii|art)\b/i.test(question);
     if (isAsciiArtRequest) {
@@ -4261,7 +4320,8 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       var releases = await fetchNymchatReleases(15);
       changelogCtx = buildChangelogContext(releases);
     } else if (needsWebSearch(question)) {
-      searchResults = await webSearch(searchQueryFor(question, conversation), geohash, context.env);
+      searchedQuery = searchQueryFor(question, conversation);
+      searchResults = await webSearch(searchedQuery, geohash, context.env);
       searchAttempted = true;
     }
 
@@ -4283,7 +4343,8 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       // told never to say it can't browse — so it answers from training data in
       // the confident voice of something that just looked it up. Say what
       // actually happened instead.
-      contextBlock += "A live web search ran for this question just now and came back with nothing usable. Say plainly that you could not find anything current on it, then answer from what you already know and be clear about that. Do not imply you looked something up, and do not present training data as if it were today's news.\n";
+      contextBlock += "A live web search ran just now for \"" + searchQueryTerms(searchedQuery) +
+        "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news.\n";
     }
     if (changelogCtx) {
       contextBlock += changelogCtx + "\n";
