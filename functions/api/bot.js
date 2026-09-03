@@ -4322,10 +4322,11 @@ var QUERY_STOPWORDS = ("what which who whom whose when where why how a an the th
 // Words as a search engine should see them: possessives and contractions folded
 // away, so "what's" counts as the stopword "what" rather than a subject word.
 function queryTokens(text) {
-  var raw = String(text || "").match(/[A-Za-z0-9][A-Za-z0-9'\u2019-]*/g) || [];
+  var raw = String(text || "").match(/[A-Za-z0-9][A-Za-z0-9'\u2019.-]*/g) || [];
   var out = [];
   for (var i = 0; i < raw.length; i++) {
-    var w = raw[i].replace(/['\u2019](s|re|ve|ll|d|m|t)$/i, "").replace(/^[-'\u2019]+|[-'\u2019]+$/g, "");
+    var w = raw[i].replace(/['\u2019](s|re|ve|ll|d|m|t)$/i, "")
+      .replace(/^[-'\u2019.]+|[-'\u2019.]+$/g, "");
     if (w) out.push(w);
   }
   return out;
@@ -4374,7 +4375,7 @@ function searchResultCaveats(question, results) {
     out += "Every result above came from one source (" + used[0] + "). That is a thin basis for " +
       "a confident answer: give what it actually says and say it is the only thing the search found.\n";
   }
-  var wantsCurrent = /\b(recent|recently|latest|just|now|today|breaking|news|update|happening)\b/i
+  var wantsCurrent = /\b(new|recent|recently|latest|just|now|today|breaking|news|update|happening)\b/i
     .test(String(question || ""));
   var encyclopediaOnly = used.length > 0 && used.every(function (name) { return name === "wikipedia"; });
   if (wantsCurrent && encyclopediaOnly) {
@@ -4402,7 +4403,8 @@ function narrowSearchTerm(text) {
   for (var i = 0; i < terms.length; i++) {
     var term = terms[i];
     // The first word of a question is capitalised by habit, not by meaning.
-    var distinctive = (i > 0 && /^[A-Z]/.test(term) && term.length >= 3) || /[0-9]/.test(term);
+    var distinctive = /[A-Za-z]/.test(term) && term.length >= 3 &&
+      ((i > 0 && /^[A-Z]/.test(term)) || /[0-9]/.test(term));
     if (distinctive && term.length > best.length) best = term;
   }
   return best;
@@ -4802,13 +4804,31 @@ async function handleChangelog(args) {
 }
 
 // Heuristic: should we pull GitHub release notes into ?ask context?
+// Words that can only be about this app, so a question built from nothing else
+// is asking about Nymchat's own releases.
+var CHANGELOG_SELF_WORDS = /^(?:nym|nymchat|app|apps|application|client|version|versions|release|releases|update|updates|changelog|changelogs|note|notes|patch|patches|history|log|logs)$/i;
+
+// A bare version number names no product, so "whats new in v3.61" is still ours
+var VERSION_TOKEN = /^v?\d+(?:\.\d+)+$/i;
+
+function namesSubjectOtherThanNymchat(question) {
+  var terms = searchTerms(question);
+  for (var i = 0; i < terms.length; i++) {
+    if (!CHANGELOG_SELF_WORDS.test(terms[i]) && !VERSION_TOKEN.test(terms[i])) return true;
+  }
+  return false;
+}
+
 function needsChangelogContext(question) {
   var q = (question || "").toLowerCase();
+  // Specific version reference like "3.74.533", "v3.61", "version 3.60.300"
+  if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
+  // "what's new in fable 5.1" is a question about something else, and was being
+  // answered out of Nymchat's release notes with the web search skipped.
+  if (namesSubjectOtherThanNymchat(q)) return false;
   if (/\b(changelog|release notes?|what'?s new|whats new|patch notes?|update notes?)\b/.test(q)) return true;
   if (/\b(latest|newest|recent|new|previous|last)\b.{0,30}\b(release|version|update)\b/.test(q)) return true;
   if (/\b(release|version|update)\b.{0,30}\b(history|notes?|log|info)\b/.test(q)) return true;
-  // Specific version reference like "3.74.533", "v3.61", "version 3.60.300"
-  if (/\bv?\d+\.\d+(?:\.\d+)?\b/.test(q) && /\b(nym|nymchat|app|version|release|update)\b/.test(q)) return true;
   return false;
 }
 
