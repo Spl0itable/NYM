@@ -1893,13 +1893,16 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     if (needsChangelogContext(question)) {
       var pmReleases = await fetchNymchatReleases(15);
       pmChangelogCtx = buildChangelogContext(pmReleases);
-    } else if (needsWebSearch(question)) {
+    } else {
       var pmTurns = (history || []).map(function (h) {
         return { author: h && h.isBot ? "nymbot" : "", text: h && h.text };
       });
-      pmSearchedQuery = searchQueryFor(question, pmTurns);
-      pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
-      pmSearchAttempted = true;
+      var pmResolved = searchQueryFor(question, pmTurns);
+      if (needsWebSearch(question, pmResolved)) {
+        pmSearchedQuery = pmResolved;
+        pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
+        pmSearchAttempted = true;
+      }
     }
   } catch (e) { }
   if (pmSearchResults.length > 0 || pmChangelogCtx || pmSearchAttempted) {
@@ -4182,6 +4185,9 @@ async function webSearch(query, geohash, env) {
   return merged;
 }
 
+// A pronoun with no antecedent in the message itself
+var ANAPHORIC_REF = /\b(?:it|its|that|this|them|they|those|these|him|her|hers)\b/i;
+
 // Filler a follow-up opens with, before its actual content.
 var FOLLOW_UP_LEAD = /^(?:no|nope|nah|yes|yeah|yep|ok|okay|well|but|and|also|actually|hmm)\b[,.\s]*(?:i\s+(?:mean|meant)|i'm\s+asking|as\s+in|what\s+about)?\b[,.\s]*/i;
 
@@ -4193,8 +4199,11 @@ var QUERY_STOPWORDS = ("what which who whom whose when where why how a an the th
   "and or but so if then than of to in on at for from with about by as up out over " +
   "no not yes ok okay well also actually just only really very much more most all some " +
   "mean meant tell say said give show know think want ask asking happened happening going " +
-  "recently lately now today currently latest new update updates thing things stuff one any " +
-  "whats hows wheres whos whens whys thats theres dont doesnt didnt cant wont im ive id"
+  "recently recent lately now today currently latest new news update updates thing things " +
+  "stuff one any anything something someone everyone please " +
+  "whats hows wheres whos whens whys thats theres dont doesnt didnt cant wont im ive id " +
+  "hi hey hello hiya sup yo gm gn thanks thank ty sure cool nice lol lmao haha hah " +
+  "yourself yourselves"
 ).split(" ").reduce(function (set, w) { set[w] = true; return set; }, {});
 
 // Words as a search engine should see them: possessives and contractions folded
@@ -4259,8 +4268,10 @@ function narrowSearchTerm(text) {
 function searchQueryFor(question, conversation) {
   var q = String(question || "").trim();
   var stripped = q.replace(FOLLOW_UP_LEAD, "").trim() || q;
-  // Two subject words of its own is enough to search on.
-  if (contentWordCount(stripped) >= 2) return q;
+  // Two subject words of its own is enough, unless a pronoun stands in for one
+  var leansOnThread = contentWordCount(stripped) < 2 ||
+    (ANAPHORIC_REF.test(stripped) && !narrowSearchTerm(stripped));
+  if (!leansOnThread) return q;
   if (!Array.isArray(conversation)) return stripped;
   // The most recent earlier turn from the user, never from Nymbot: the bot's
   // own prose would drown the search terms.
@@ -4279,19 +4290,13 @@ function searchQueryFor(question, conversation) {
 }
 
 // Determine if a question would benefit from live web search
-function needsWebSearch(question) {
-  var q = question.toLowerCase();
-  // Skip web search only for clearly conversational/personal queries directed at the bot
-  var skipPatterns = [
-    /^(hi|hey|hello|sup|yo|gm|gn|thanks|thank you|ok|okay|sure|lol|lmao|haha)\b/,
-    /^(you |u |how are |what do you |do you |can you |will you |are you |tell me about yourself|what are you)/,
-    /^(help|commands|what can you do)/
-  ];
-  for (var i = 0; i < skipPatterns.length; i++) {
-    if (skipPatterns[i].test(q)) return false;
-  }
-  // Search for everything else — most questions benefit from fresh data
-  return true;
+// Search unless there is nothing to search for. Keying on the opening words
+// filed "ok, but there is recent news about it" as the pleasantry "ok".
+function needsWebSearch(question, resolved) {
+  var q = String(question || "").trim();
+  if (!q) return false;
+  if (/^(?:help|commands)\b/i.test(q)) return false;
+  return searchTerms(typeof resolved === "string" && resolved ? resolved : q).length > 0;
 }
 
 async function handleAsk(question, context, conversation, channelMessages, activeUsers, senderNym, geohash) {
@@ -4314,13 +4319,14 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var searchedQuery = question;
     var changelogCtx = "";
     var isAsciiArtRequest = /\b(ascii\s*art|draw me|sketch)\b/i.test(question) || /\b(draw|make|create|generate)\b.{0,30}\b(ascii|art)\b/i.test(question);
+    var resolvedQuery = searchQueryFor(question, conversation);
     if (isAsciiArtRequest) {
       return "I can't generate ASCII art — try these sites instead: ascii.co.uk or asciiart.eu";
     } else if (needsChangelogContext(question)) {
       var releases = await fetchNymchatReleases(15);
       changelogCtx = buildChangelogContext(releases);
-    } else if (needsWebSearch(question)) {
-      searchedQuery = searchQueryFor(question, conversation);
+    } else if (needsWebSearch(question, resolvedQuery)) {
+      searchedQuery = resolvedQuery;
       searchResults = await webSearch(searchedQuery, geohash, context.env);
       searchAttempted = true;
     }
