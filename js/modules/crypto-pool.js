@@ -4,8 +4,14 @@
     const MAX_WORKERS = 4;
 
     // Worker dispatcher source (runs inside the blob worker).
+    // `needPq`: a worker whose ML-KEM script defined nothing still has a whole
+    // NymCrypto, and unwrapGiftWrap then returns null for every PQ wrap — which
+    // is this op's "no candidate matched", so the pool called it a success and
+    // never asked the main thread. Refuse the worker instead.
     const WORKER_SRC = "let ready=false;self.onmessage=function(e){var d=e.data||{},id=d.id,op=d.op,args=d.args;" +
-        "if(op==='__init'){try{self.importScripts.apply(self,args[0].scripts);ready=!!self.NymCrypto;self.postMessage({id:id,ok:ready});}" +
+        "if(op==='__init'){try{self.importScripts.apply(self,args[0].scripts);" +
+        "ready=!!self.NymCrypto&&(!args[0].needPq||!!(self.NymCrypto.pqAvailable&&self.NymCrypto.pqAvailable()));" +
+        "self.postMessage({id:id,ok:ready});}" +
         "catch(err){self.postMessage({id:id,ok:false,error:String(err&&err.message||err)});}return;}" +
         "if(!ready||typeof self.NymCrypto[op]!=='function'){self.postMessage({id:id,ok:false,error:'unavailable: '+op});return;}" +
         "try{self.postMessage({id:id,ok:true,result:self.NymCrypto[op].apply(null,args)});}" +
@@ -35,6 +41,9 @@
                 try { blobUrl = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })); }
                 catch (_) { resolve(null); return; }
                 const scripts = mkUrl ? [ntUrl, mkUrl, ncUrl] : [ntUrl, ncUrl];
+                // Only demanded of the workers when this page has it.
+                const needPq = !!(mkUrl && window.NymCrypto.pqAvailable
+                    && window.NymCrypto.pqAvailable());
                 const n = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, MAX_WORKERS));
                 const pool = [];
                 let pendingInit = 0, settled = false;
@@ -71,7 +80,7 @@
                         rec.busy--;
                         p.resolve(ok ? result : p.fallback());
                     };
-                    try { w.postMessage({ id: 0, op: '__init', args: [{ scripts }] }); }
+                    try { w.postMessage({ id: 0, op: '__init', args: [{ scripts, needPq }] }); }
                     catch (_) { pendingInit--; }
                 }
                 if (pendingInit === 0) finish();

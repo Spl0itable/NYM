@@ -37,6 +37,7 @@
 import { ledgerCall } from "./_ledger.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
+import { catalogProModels, catalogAliases } from "./_catalog.js";
 import {
   PQ_D_TAG,
   pqAwareDecrypt,
@@ -398,6 +399,81 @@ function botProResolveKey(key) {
     return BOT_PRO_MODEL_ALIASES[key];
   }
   return "";
+}
+
+// The live catalog (mirrored hourly into D1 by workers/model-catalog) is the
+// source of truth when it is reachable; BOT_PRO_MODELS above is the fallback,
+// so a new Cloudflare model becomes selectable without a deploy and an
+// unreachable catalog changes nothing.
+async function botProCatalog(env) {
+  var live = null;
+  try { live = await catalogProModels(env); } catch (e) { live = null; }
+  if (!live || !live.models || !Object.keys(live.models).length) {
+    return { models: BOT_PRO_MODELS, aliases: BOT_PRO_MODEL_ALIASES, byModelId: {}, source: "builtin" };
+  }
+  var aliases = catalogAliases(live.models);
+  // Cloudflare's unified catalog pages link pricing to the dashboard instead
+  // of printing it, so those models reach us with credit_basis "default" —
+  // one flat conservative charge for everything. Where we already hand-tuned
+  // the economics for that exact model id, keep them: switching to the live
+  // catalog must not silently re-price a model nobody asked us to re-price.
+  // Genuinely new models keep the conservative default until a price appears.
+  var builtinById = {};
+  Object.keys(BOT_PRO_MODELS).forEach(function (k) {
+    builtinById[BOT_PRO_MODELS[k].model] = BOT_PRO_MODELS[k];
+  });
+  Object.keys(live.models).forEach(function (k) {
+    var m = live.models[k];
+    if (m.priced !== false) return;
+    var known = builtinById[m.model];
+    if (!known) return;
+    m.baseCredits = known.baseCredits;
+    m.outTokensPerCredit = known.outTokensPerCredit;
+    m.maxTokens = known.maxTokens;
+    if (known.vision != null) m.vision = known.vision;
+    m.priced = true;
+    m.pricedFrom = "builtin";
+    m.max = m.outTokensPerCredit
+      ? m.baseCredits + Math.ceil((m.maxTokens || 8192) / m.outTokensPerCredit)
+      : m.baseCredits;
+  });
+  // Bridge the keys users already have pinned: a static key resolves to
+  // whichever live entry serves the same model id, and the retired aliases
+  // ride along behind it. A live key always wins a name clash.
+  Object.keys(BOT_PRO_MODELS).forEach(function (k) {
+    var liveKey = live.byModelId[BOT_PRO_MODELS[k].model];
+    if (liveKey && !live.models[k]) aliases[k] = liveKey;
+  });
+  Object.keys(BOT_PRO_MODEL_ALIASES).forEach(function (k) {
+    if (live.models[k] || aliases[k]) return;
+    var target = BOT_PRO_MODEL_ALIASES[k];
+    if (aliases[target]) aliases[k] = aliases[target];
+    else if (live.models[target]) aliases[k] = target;
+  });
+  return { models: live.models, aliases: aliases, byModelId: live.byModelId, source: "catalog" };
+}
+
+// Resolve a user-supplied ?model key against a catalog from botProCatalog.
+function botProPick(catalog, key) {
+  var raw = String(key || "").trim();
+  var k = raw.toLowerCase();
+  if (!k) return null;
+  if (Object.prototype.hasOwnProperty.call(catalog.models, k)) return { key: k, model: catalog.models[k] };
+  if (Object.prototype.hasOwnProperty.call(catalog.aliases, k)) {
+    var target = catalog.aliases[k];
+    if (catalog.models[target]) return { key: target, model: catalog.models[target] };
+  }
+  // A full model id ("anthropic/claude-opus-5") is accepted too, so a client
+  // that only knows the id can still pin it.
+  if (catalog.byModelId && Object.prototype.hasOwnProperty.call(catalog.byModelId, raw)) {
+    var byId = catalog.byModelId[raw];
+    if (catalog.models[byId]) return { key: byId, model: catalog.models[byId] };
+  }
+  // Last resort: the built-in table, in case the catalog dropped a model a
+  // user still has pinned.
+  var stat = botProResolveKey(k);
+  if (stat) return { key: stat, model: BOT_PRO_MODELS[stat] };
+  return null;
 }
 
 var BOT_MEDIA_BLOSSOM_HOST = "https://blossom.band";
@@ -1804,6 +1880,16 @@ function botTurnKey(pubkey, eventId) {
   return "pm:" + String(pubkey).toLowerCase() + ":" + String(eventId).toLowerCase();
 }
 
+// A turn keyed by the message itself — the rumor's `x` id, which every Nymchat
+// client stamps once per composed message and carries onto every wrap of it.
+// The wrap key above only de-duplicates resends of the SAME wrap; a client
+// that re-wraps the same rumor (the app's PM observer rebuilds one for a
+// message it sees rather than sent, and every logged-in device sees it) mints
+// a new wrap id and would otherwise buy a whole second answer.
+function botTurnMsgKey(pubkey, msgId) {
+  return "pm:" + String(pubkey).toLowerCase() + ":x:" + String(msgId).toLowerCase();
+}
+
 async function botTurnBegin(env, key) {
   var r;
   try { r = await ledgerCall(env, { op: "turn-begin", key: key }); } catch (e) { r = null; }
@@ -1829,13 +1915,15 @@ async function botTurnAbort(env, key) {
 // would pin a dead claim forever, which is worse than the duplicate.
 var BOT_TURN_MAX_HEARTBEATS = Math.ceil(600000 / BOT_TURN_HEARTBEAT_MS);
 
-function botTurnHeartbeat(env, key) {
+function botTurnHeartbeat(env, keys) {
   var beats = 0;
   var timer = setInterval(function () {
     if (++beats > BOT_TURN_MAX_HEARTBEATS) { clearInterval(timer); return; }
-    ledgerCall(env, { op: "turn-touch", key: key }).then(function (r) {
-      if (r && (r.lost || r._noLedger)) clearInterval(timer);
-    }, function () { });
+    for (var i = 0; i < keys.length; i++) {
+      ledgerCall(env, { op: "turn-touch", key: keys[i] }).then(function (r) {
+        if (r && r._noLedger) clearInterval(timer);
+      }, function () { });
+    }
   }, BOT_TURN_HEARTBEAT_MS);
   return function () { clearInterval(timer); };
 }
@@ -1962,12 +2050,13 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       }
       pmCtx += "--- END SEARCH RESULTS ---\n";
       pmCtx += "IMPORTANT: These results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them, so never say 'the search results you provided'. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web, and do NOT call an event they describe 'fictional' or 'speculative' just because it postdates your training.\n" +
-        "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
+        "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, cite nothing at all in a reply that says the search found nothing on point, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
       pmCtx += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
+      pmCtx += searchPageBlock(pmSearchResults);
       pmCtx += searchResultCaveats(question, pmSearchResults);
     } else if (pmSearchAttempted) {
       pmCtx += "A live web search ran just now for \"" + searchQueryTerms(pmSearchedQuery) +
-        "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news.\n";
+        "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news, and put no link at all in a reply that says you found nothing.\n";
     }
     if (pmChangelogCtx) {
       pmCtx += pmChangelogCtx + "\n";
@@ -2054,6 +2143,59 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
+  // Public: the ?model picker list. Mirrors what botProCatalog resolves
+  // against, so what the apps show is exactly what the worker will charge.
+  // Unauthenticated on purpose — it is public catalog data and the picker has
+  // to render before a user has a balance.
+  if (body.action === "models") {
+    var cat = await botProCatalog(env);
+    var order = ["anthropic", "openai", "google", "xai", "moonshotai", "minimax", "alibaba", "deepseek", "meta", "mistralai"];
+    var keys = Object.keys(cat.models);
+    var rank = function (k) {
+      var a = (cat.models[k].authorSlug || "").toLowerCase();
+      var i = order.indexOf(a);
+      return i === -1 ? order.length : i;
+    };
+    keys.sort(function (a, b) {
+      var d = rank(a) - rank(b);
+      if (d) return d;
+      var aa = (cat.models[a].authorSlug || "");
+      var bb = (cat.models[b].authorSlug || "");
+      if (aa !== bb) return aa < bb ? -1 : 1;
+      return a < b ? -1 : 1;
+    });
+    var list = keys.map(function (k) {
+      var m = cat.models[k];
+      return {
+        key: k,
+        label: m.label,
+        credits: m.baseCredits,
+        max: m.max != null ? m.max : (m.outTokensPerCredit
+          ? m.baseCredits + Math.ceil((m.maxTokens || 8192) / m.outTokensPerCredit)
+          : m.baseCredits),
+        description: m.description || "",
+        author: m.author || "",
+        authorSlug: m.authorSlug || "",
+        vision: !!m.vision,
+        reasoning: !!m.reasoning,
+        tools: !!m.tools,
+        context: m.context || null,
+        priced: m.priced !== false
+      };
+    });
+    var groups = [];
+    list.forEach(function (m) {
+      var last = groups[groups.length - 1];
+      if (last && last.authorSlug === m.authorSlug) last.keys.push(m.key);
+      else groups.push({ author: m.author || m.authorSlug || "Other", authorSlug: m.authorSlug, keys: [m.key] });
+    });
+    var unpriced = list.filter(function (m) { return !m.priced; }).length;
+    return json({
+      source: cat.source, models: list, groups: groups, aliases: cat.aliases,
+      unpriced: unpriced, satsPerCredit: BOT_PRO_SATS_PER_CREDIT
+    });
+  }
+
   if (body.action === "voucher-keys") {
     if (!voucherConfigured(env)) return json({ error: "Anonymous vouchers are not configured on this server." }, 503);
     try {
@@ -2354,9 +2496,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "pm") {
     var proModelKey = typeof body.proModel === "string" ? body.proModel : "";
-    if (proModelKey) proModelKey = botProResolveKey(proModelKey) || proModelKey;
-    var proModel = proModelKey && Object.prototype.hasOwnProperty.call(BOT_PRO_MODELS, proModelKey)
-      ? BOT_PRO_MODELS[proModelKey] : null;
+    var proModel = null;
+    if (proModelKey) {
+      var picked = botProPick(await botProCatalog(env), proModelKey);
+      if (picked) { proModelKey = picked.key; proModel = picked.model; }
+    }
     if (proModelKey && !proModel) {
       return json({ error: "Unknown Pro model. Type ?model to see the available models." }, 400);
     }
@@ -2404,58 +2548,68 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // Claim this turn before anything is fetched, generated or charged. A
     // resend of the same message replays the first attempt's answer instead of
     // paying for a second one.
-    var turnKey = botTurnKey(userPubkey, currentId);
+    var turnKeys = [];
+    var turnStopHeartbeat = function () { };
     var turnPending = function () {
       return json({
         pending: true,
         message: "Nymbot is still working on that message — ask again in a moment and the reply will be waiting."
       }, 202);
     };
-    var turnClaim = await botTurnBegin(env, turnKey);
-    if (turnClaim.state === "done" && turnClaim.result) {
-      return json(turnClaim.result.body, turnClaim.result.status);
-    }
-    if (turnClaim.state === "running") {
-      var waitedTurn = await botTurnWait(env, turnKey);
-      if (waitedTurn.result) return json(waitedTurn.result.body, waitedTurn.result.status);
-      // Still generating elsewhere: running it again here is the duplicate this
-      // claim exists to prevent.
-      if (waitedTurn.pending) return turnPending();
-      // The claim lapsed, so that attempt can never record an answer. Re-claim
-      // rather than just running, so two waiters can't both take it over.
-      var retakeClaim = await botTurnBegin(env, turnKey);
-      if (retakeClaim.state === "done" && retakeClaim.result) {
-        return json(retakeClaim.result.body, retakeClaim.result.status);
-      }
-      if (retakeClaim.state === "running") return turnPending();
-    }
-
-    // This attempt owns the claim from here on: the heartbeat holds its lease
-    // while it generates, and every exit below must either finish the turn or
-    // release the claim.
-    var turnStopHeartbeat = botTurnHeartbeat(env, turnKey);
-    // A throw below reaches neither helper, so the entry points release the
-    // claim for us. Best-effort: a context that won't take the property just
-    // falls back to the lease lapsing.
+    // A throw below reaches none of the helpers, so the entry points release
+    // the claims for us. Best-effort: a context that won't take the property
+    // just falls back to the leases lapsing.
     var turnArmRelease = function (fn) {
       try { context._botTurnRelease = fn; } catch (e) { }
     };
-    turnArmRelease(async function () {
-      turnStopHeartbeat();
-      await botTurnAbort(env, turnKey);
-    });
-    var turnFail = async function (obj, status) {
+    var turnRelease = async function () {
       turnArmRelease(null);
       turnStopHeartbeat();
-      await botTurnAbort(env, turnKey);
+      var keys = turnKeys;
+      turnKeys = [];
+      for (var i = 0; i < keys.length; i++) await botTurnAbort(env, keys[i]);
+    };
+    var turnFail = async function (obj, status) {
+      await turnRelease();
       return json(obj, status);
     };
     var turnDone = async function (obj, status) {
       turnArmRelease(null);
       turnStopHeartbeat();
-      await botTurnFinish(env, turnKey, obj, status);
+      var keys = turnKeys;
+      turnKeys = [];
+      for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status);
       return json(obj, status);
     };
+    // Take the claim for one key, or hand back the response this attempt must
+    // send instead of generating: a replayed answer, or `pending` while
+    // another attempt owns it. Null means this attempt owns the turn.
+    var turnAcquire = async function (key) {
+      var claim = await botTurnBegin(env, key);
+      if (claim.state === "running") {
+        var waited = await botTurnWait(env, key);
+        if (waited.result) return json(waited.result.body, waited.result.status);
+        // Still generating elsewhere: running it again here is the duplicate
+        // these claims exist to prevent.
+        if (waited.pending) return turnPending();
+        // The claim lapsed, so that attempt can never record an answer.
+        // Re-claim rather than just running, so two waiters can't both take
+        // it over.
+        claim = await botTurnBegin(env, key);
+      }
+      if (claim.state === "done" && claim.result) {
+        return json(claim.result.body, claim.result.status);
+      }
+      if (claim.state === "running") return turnPending();
+      turnKeys.push(key);
+      turnStopHeartbeat();
+      turnStopHeartbeat = botTurnHeartbeat(env, turnKeys.slice());
+      turnArmRelease(turnRelease);
+      return null;
+    };
+
+    var wrapClaimed = await turnAcquire(botTurnKey(userPubkey, currentId));
+    if (wrapClaimed) return wrapClaimed;
 
     var thread = await botGetThread(env, userPubkey);
     var historyIds = fresh ? [] : thread.filter(function (id) { return id !== currentId; });
@@ -2476,6 +2630,19 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var message = sanitizeInput(currentUnwrapped.rumor.content || "");
     if (!message) return await turnFail({ error: "Empty message" }, 400);
+    // Now that the rumor is open, claim the MESSAGE as well as the wrap that
+    // carried it. Two wraps of one rumor are one question and must buy one
+    // answer, however many of the user's devices decided to ask.
+    var msgId = rumorTagValue(currentUnwrapped.rumor, "x");
+    if (isHex64(msgId)) {
+      var msgClaimed = await turnAcquire(botTurnMsgKey(userPubkey, msgId));
+      if (msgClaimed) {
+        // Another wrap of this same message owns the turn; drop the claim on
+        // ours so its own resends go straight to that answer.
+        await turnRelease();
+        return msgClaimed;
+      }
+    }
     // A command typed in the user's language arrives with the canonical token
     // the client resolved it to, so the parsers below stay English-only.
     message = canonicalizeBotText(message, body && body.cmdAlias);
@@ -2806,7 +2973,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
+  if (body && (body.action === "models" || body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -4295,7 +4462,7 @@ async function webSearch(query, geohash, env) {
   }
   // Which engines contributed, so the reply can say when it rests on just one
   merged.sources = used;
-  return merged;
+  return merged.length ? await attachPageContent(merged) : merged;
 }
 
 // A pronoun with no antecedent in the message itself
@@ -4358,13 +4525,120 @@ function searchTerms(text) {
 // unrelated murder case, which came back cited as if it answered the question.
 function resultMatchesQuery(line, terms) {
   if (!terms.length) return true;
-  var hay = String(line || "").toLowerCase().replace(/[-\u2013\u2014]/g, "");
+  // On word starts, not anywhere: "light" is inside "Twilight", which is how a
+  // Breaking Dawn article came back cited for "dawn light arrested".
+  var words = queryTokens(String(line || "").replace(/[-\u2013\u2014]/g, " "))
+    .map(function (w) { return w.toLowerCase(); });
   var hits = 0;
   for (var i = 0; i < terms.length; i++) {
     var term = terms[i].toLowerCase().replace(/[-\u2013\u2014]/g, "");
-    if (term.length > 2 && hay.indexOf(term) !== -1) hits++;
+    if (term.length < 3) continue;
+    for (var j = 0; j < words.length; j++) {
+      // A prefix so "murder" still finds "murders", but never mid-word.
+      if (words[j].indexOf(term) === 0 || term.indexOf(words[j]) === 0 && words[j].length >= term.length - 2) {
+        hits++;
+        break;
+      }
+    }
   }
   return terms.length < 3 ? hits >= 1 : hits >= 2;
+}
+
+var PAGE_FETCH_COUNT = 2;
+var PAGE_FETCH_CHARS = 2000;
+var PAGE_FETCH_DEADLINE = 5000;
+
+// The URL a result line ends with
+function resultUrl(line) {
+  var m = /\[(https?:\/\/[^\]]+)\]\s*$/.exec(String(line || ""));
+  return m ? m[1] : "";
+}
+
+// Body text, favouring the blocks a spec sheet or article actually lives in.
+function extractReadableText(html) {
+  var body = String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<(nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, " ");
+  var parts = [];
+  var seen = {};
+  var re = /<(p|li|h[1-4]|td|th|dt|dd)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  var m;
+  while ((m = re.exec(body)) !== null && parts.length < 400) {
+    var piece = stripHtmlEntities(m[2]).replace(/\s+/g, " ").trim();
+    if (piece.length < 2 || seen[piece]) continue;
+    seen[piece] = true;
+    parts.push(piece);
+  }
+  var text = parts.length ? parts.join(" \u00b7 ") : stripHtmlEntities(body).replace(/\s+/g, " ").trim();
+  return truncateText(text, PAGE_FETCH_CHARS);
+}
+
+async function fetchResultPage(url) {
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
+  try {
+    var resp = await fetch(url, {
+      headers: { "User-Agent": "Nymbot/1.0 (+https://nymchat.app)", "Accept": "text/html" },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var type = resp.headers.get("Content-Type") || "";
+    if (type && !/text\/html|application\/xhtml/i.test(type)) throw new Error("not a page: " + type);
+    return extractReadableText(await resp.text());
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+
+// A snippet is a headline. Asked three times for the full spec list, the bot
+// repeated the same one line because the headline was all it ever had — so read
+// the top pages. A link that will not load is dropped rather than cited.
+async function attachPageContent(results) {
+  var urls = [];
+  for (var i = 0; i < results.length && urls.length < PAGE_FETCH_COUNT; i++) {
+    var url = resultUrl(results[i]);
+    if (url && urls.indexOf(url) === -1) urls.push(url);
+  }
+  if (!urls.length) return results;
+  var pages = [];
+  var dead = {};
+  var reads = urls.map(function (url) {
+    return fetchResultPage(url).then(function (text) {
+      if (text && text.length > 120) pages.push({ url: url, text: text });
+    }, function (e) {
+      console.warn("nymbot page read failed: " + url + " — " + ((e && e.message) || e));
+      if (/HTTP 4\d\d/.test(String((e && e.message) || ""))) dead[url] = true;
+    });
+  });
+  var deadline;
+  await Promise.race([
+    Promise.all(reads),
+    new Promise(function (resolve) { deadline = setTimeout(resolve, PAGE_FETCH_DEADLINE); })
+  ]);
+  clearTimeout(deadline);
+  var kept = results.filter(function (line) { return !dead[resultUrl(line)]; });
+  kept.sources = results.sources;
+  kept.pages = pages;
+  return kept;
+}
+
+// The pages themselves, where the detail a snippet cannot hold actually lives.
+function searchPageBlock(results) {
+  var pages = (results && results.pages) || [];
+  if (!pages.length) return "";
+  var out = "--- PAGE CONTENT (read from the results just now) ---\n";
+  for (var i = 0; i < pages.length; i++) {
+    out += "[" + pages[i].url + "]\n" + pages[i].text + "\n";
+  }
+  out += "--- END PAGE CONTENT ---\n";
+  out += "This is the actual text of those pages, not a summary. When the user asks for detail " +
+    "— a full spec list, figures, names, dates — take it from here and lay it out in full rather " +
+    "than repeating the one-line snippet. Do not claim a detail the page does not contain.\n";
+  return out;
 }
 
 // What the model needs told when the result set is thin or the wrong register.
@@ -4493,8 +4767,9 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       }
       contextBlock += "--- END SEARCH RESULTS ---\n";
       contextBlock += "IMPORTANT: These results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them, so never say 'the search results you provided'. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web, and do NOT call an event they describe 'fictional' or 'speculative' just because it postdates your training.\n" +
-        "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
+        "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, cite nothing at all in a reply that says the search found nothing on point, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
       contextBlock += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
+      contextBlock += searchPageBlock(searchResults);
       contextBlock += searchResultCaveats(question, searchResults);
     } else if (searchAttempted) {
       // Without this the model is told it has web search, given nothing, and
@@ -4502,7 +4777,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       // the confident voice of something that just looked it up. Say what
       // actually happened instead.
       contextBlock += "A live web search ran just now for \"" + searchQueryTerms(searchedQuery) +
-        "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news.\n";
+        "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news, and put no link at all in a reply that says you found nothing.\n";
     }
     if (changelogCtx) {
       contextBlock += changelogCtx + "\n";
@@ -5825,7 +6100,8 @@ export {
   onRequest,
   handleBotPMAction,
   botReleaseStrandedTurn,
-  botTurnKey
+  botTurnKey,
+  botTurnMsgKey
 };
 /*! Bundled license information:
 

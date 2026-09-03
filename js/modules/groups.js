@@ -1975,31 +1975,39 @@ Object.assign(NYM.prototype, {
             let pqCount = 0;
             let rootCount = 0;
             const wrapLocal = async (pubkey) => {
-                const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
-                // The two legs use different keys on purpose: the classical
-                // ECDH goes to the member's rotating ephemeral pubkey, keeping
-                // the metadata protection that rotation buys, while the KEM leg
-                // encapsulates to their long-lived identity ML-KEM key (which
-                // is what the announcement carries). Security is
-                // max(classical, PQ), so the rotation still delivers its
-                // forward secrecy against classical attackers while the KEM leg
-                // delivers harvest-now-decrypt-later protection.
-                const memberKemPk = this.pqGroupKeyFor(pubkey);
-                const wrapped = memberKemPk
-                    ? await this.pqWrapForPeerAsync(this.pqGroupUsesPq2(pubkey), rumor,
-                        this.privkey, encryptTo, memberKemPk, expirationTs)
-                    : await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
-                if (memberKemPk) {
-                    pqCount++;
-                    if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
-                }
-                this.sendDMToRelays(['EVENT', wrapped]);
-                this._recordGiftWrapId(sharedId, wrapped.id);
-                if (depositToD1) this._depositPMEvent(wrapped);
-                if (this.activeCosmetics?.has('cosmetic-redacted')) {
-                    setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
+                // One member must not cost the others their copy: a throwing
+                // wrap rejected the Promise.all below and stranded every member
+                // still queued behind it.
+                try {
+                    const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+                    // The two legs use different keys on purpose: the classical
+                    // ECDH goes to the member's rotating ephemeral pubkey, keeping
+                    // the metadata protection that rotation buys, while the KEM leg
+                    // encapsulates to their long-lived identity ML-KEM key (which
+                    // is what the announcement carries). Security is
+                    // max(classical, PQ), so the rotation still delivers its
+                    // forward secrecy against classical attackers while the KEM leg
+                    // delivers harvest-now-decrypt-later protection.
+                    const memberKemPk = this.pqGroupKeyFor(pubkey);
+                    const wrapped = memberKemPk
+                        ? await this.pqWrapForPeerAsync(this.pqGroupUsesPq2(pubkey), rumor,
+                            this.privkey, encryptTo, memberKemPk, expirationTs)
+                        : await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
+                    if (memberKemPk) {
+                        pqCount++;
+                        if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
+                    }
+                    this.sendDMToRelays(['EVENT', wrapped]);
+                    this._recordGiftWrapId(sharedId, wrapped.id);
+                    if (depositToD1) this._depositPMEvent(wrapped);
+                    if (this.activeCosmetics?.has('cosmetic-redacted')) {
+                        setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
+                    }
+                } catch (e) {
+                    console.warn('[GiftWrap] Local wrap failed for', pubkey, e);
                 }
             };
+
             const queue = members.slice();
             const workers = new Array(Math.min(8, queue.length)).fill(0).map(async () => {
                 while (queue.length) await wrapLocal(queue.shift());

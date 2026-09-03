@@ -638,6 +638,14 @@ Object.assign(NYM.prototype, {
     },
 
     // Drop wraps with no valid 'p' tag or none addressed to us (NIP-59).
+    // Whether a wrap's payload is post-quantum, in either framing.
+    _isPqPayload(content) {
+        const NC = window.NymCrypto;
+        if (!NC || typeof content !== 'string') return false;
+        return !!((NC.isPq2Payload && NC.isPq2Payload(content))
+            || (NC.isPqPayload && NC.isPqPayload(content)));
+    },
+
     _giftWrapIsForMe(event) {
         if (!this.pubkey) return true;
         const wrapRecipients = [];
@@ -688,6 +696,16 @@ Object.assign(NYM.prototype, {
         if (!id) return;
         if (!this._decryptedWrapIds) this._decryptedWrapIds = new Set();
         this._decryptedWrapIds.add(id);
+        // The outcome the persisted set waits for: only reached after an
+        // unwrap returned, so a wrap we could not open stays retryable.
+        if (this.processedPMEventIds) {
+            this.processedPMEventIds.add(id);
+            if (this.processedPMEventIds.size > 5000) {
+                this.processedPMEventIds = new Set(
+                    Array.from(this.processedPMEventIds).slice(-2500));
+            }
+            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+        }
         // Bounded well above processedPMEventIds' 5000, because this set is
         // also seeded with the whole cached PM history on boot
         // (_seedDecryptedWrapIds) and a cap that evicted most of that would
@@ -718,19 +736,23 @@ Object.assign(NYM.prototype, {
             if (!fromD1 && this.processedPMEventIds.has(event.id)) {
                 return;
             }
-            this.processedPMEventIds.add(event.id);
-            if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+            // In-flight guard only, so several relays carrying the same wrap
+            // do not all decrypt it at once. The PERSISTED mark waits for an
+            // outcome: recording it here wrote a wrap that failed to open to
+            // disk as processed, and nothing ever retried it. Cleared below
+            // unless the unwrap succeeded, and skipped for a D1 replay, which
+            // is the retry.
+            if (!this._pmWrapAttempted) this._pmWrapAttempted = new Set();
+            if (!fromD1 && this._pmWrapAttempted.has(event.id)) return;
+            this._pmWrapAttempted.add(event.id);
+            if (this._pmWrapAttempted.size > 50000) {
+                this._pmWrapAttempted = new Set(Array.from(this._pmWrapAttempted).slice(-25000));
+            }
 
             // Update lastPMSyncTime to track newest received PM
             if (event.created_at && event.created_at > this.lastPMSyncTime) {
                 this.lastPMSyncTime = event.created_at;
                 this._persistLastPMSyncTime();
-            }
-
-            // Limit Set size to prevent memory leaks (keep last 5000 events)
-            if (this.processedPMEventIds.size > 5000) {
-                const idsArray = Array.from(this.processedPMEventIds);
-                this.processedPMEventIds = new Set(idsArray.slice(-2500));
             }
 
             // Parse Bitchat message format: bitchat1:<base64url payload>
@@ -928,8 +950,15 @@ Object.assign(NYM.prototype, {
                     { sk: this.privkey, bitchat: true, selfId: this.pubkey },
                     ...ephSks.map(sk => ({ sk, bitchat: false }))
                 ];
-                const res = await this._cryptoCall('unwrapGiftWrap', [event, candidates],
+                let res = await this._cryptoCall('unwrapGiftWrap', [event, candidates],
                     () => window.NymCrypto.unwrapGiftWrap(event, candidates));
+                // null means "no candidate matched" — and also what a worker
+                // without ML-KEM returns for a PQ wrap, which the pool reports
+                // as a success. This thread has ML-KEM, so ask it first.
+                if (!res && this._isPqPayload(event.content)) {
+                    try { res = window.NymCrypto.unwrapGiftWrap(event, candidates); }
+                    catch (_) { res = null; }
+                }
                 if (!res) return;
                 ({ seal, rumor } = res);
                 isPqWrap = !!res.isPq;
@@ -1618,6 +1647,13 @@ Object.assign(NYM.prototype, {
             }
         } catch (err) {
             // Log decryption failures for debugging
+        } finally {
+            // Never reached _noteWrapDecrypted, so the wrap did not open.
+            // Release it for the next delivery.
+            if (this._pmWrapAttempted && event && event.id
+                && !(this._decryptedWrapIds && this._decryptedWrapIds.has(event.id))) {
+                this._pmWrapAttempted.delete(event.id);
+            }
         }
     },
 
@@ -1977,8 +2013,14 @@ Object.assign(NYM.prototype, {
         const git = this._getGitConfig();
         const std = this._lastBotCredits;
         const pro = this._lastBotProCredits;
-        const modelLines = this._botProModels.map(m =>
+        // ?help samples the catalog rather than printing all of it — the live
+        // list can run to dozens of models.
+        const allProModels = this._botProModelList();
+        const modelLines = allProModels.slice(0, 8).map(m =>
             `&nbsp;&nbsp;<code>${m.key}</code> — ${this.escapeHtml(m.label)}, ${this._botProPriceLabel(m)}`);
+        if (allProModels.length > 8) {
+            modelLines.push(`&nbsp;&nbsp;…and ${allProModels.length - 8} more — type <code>?model</code> or tap the model button.`);
+        }
         const statusBits = [];
         if (typeof std === 'number') statusBits.push(`${std} standard credit${std === 1 ? '' : 's'}`);
         if (typeof pro === 'number') statusBits.push(`${pro} Pro credit${pro === 1 ? '' : 's'}`);
@@ -2337,8 +2379,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Nymbot Pro model catalog (mirrors BOT_PRO_MODELS in functions/api/bot.js)
-    _botProModels: [
+    // Fallback Pro model catalog (mirrors BOT_PRO_MODELS in functions/api/bot.js).
+    // The live list comes from the `models` action, which reads the catalog the
+    // hourly worker mirrors into D1; this array is what renders before that
+    // lands and whenever it can't be reached.
+    _botProModelsFallback: [
         { key: 'claude-fable', label: 'Claude Fable 5', credits: 2, max: 16 },
         { key: 'claude-opus', label: 'Claude Opus 5', credits: 1, max: 8 },
         { key: 'claude-sonnet', label: 'Claude Sonnet 5', credits: 1, max: 6 },
@@ -2353,6 +2398,79 @@ Object.assign(NYM.prototype, {
         { key: 'minimax', label: 'MiniMax M3', credits: 1, max: 3 }
     ],
 
+    // Live catalog, once fetched: { models: [...], groups: [...], aliases: {} }.
+    _botProCatalog: null,
+    _botProCatalogAt: 0,
+
+    // Every read of the model list goes through here, so a failed or pending
+    // fetch degrades to the built-in list instead of an empty picker.
+    _botProModelList() {
+        const live = this._botProCatalog && this._botProCatalog.models;
+        return (live && live.length) ? live : this._botProModelsFallback;
+    },
+
+    _botProGroups() {
+        const live = this._botProCatalog;
+        if (live && live.groups && live.groups.length) return live.groups;
+        return [{ author: '', authorSlug: '', keys: this._botProModelsFallback.map(m => m.key) }];
+    },
+
+    // A key the user pinned before a version bump ("claude-opus") resolves to
+    // whatever the catalog now calls it ("claude-opus-5").
+    _botProResolveKey(key) {
+        const k = String(key || '').trim().toLowerCase();
+        if (!k) return '';
+        const list = this._botProModelList();
+        if (list.some(m => m.key === k)) return k;
+        const aliases = (this._botProCatalog && this._botProCatalog.aliases) || {};
+        if (aliases[k] && list.some(m => m.key === aliases[k])) return aliases[k];
+        return '';
+    },
+
+    // Cached for 6h in localStorage so the picker opens instantly and a cold
+    // start still has a list even offline.
+    async _loadBotProCatalog(force) {
+        const TTL = 6 * 60 * 60 * 1000;
+        const now = Date.now();
+        if (!force && this._botProCatalog && now - this._botProCatalogAt < TTL) return this._botProCatalog;
+        if (!force) {
+            try {
+                const raw = localStorage.getItem('nym_botpm_model_catalog');
+                if (raw) {
+                    const cached = JSON.parse(raw);
+                    if (cached && Array.isArray(cached.models) && cached.models.length) {
+                        this._botProCatalog = cached;
+                        this._botProCatalogAt = cached.at || 0;
+                        if (now - (cached.at || 0) < TTL) return cached;
+                    }
+                }
+            } catch { }
+        }
+        const apiHost = typeof this._getApiHost === 'function' ? this._getApiHost() : '';
+        if (!apiHost) return this._botProCatalog;
+        try {
+            const resp = await fetch(`https://${apiHost}/api/bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'models' })
+            });
+            const data = await resp.json().catch(() => null);
+            if (!resp.ok || !data || !Array.isArray(data.models) || !data.models.length) {
+                return this._botProCatalog;
+            }
+            const cat = {
+                models: data.models, groups: data.groups || [], aliases: data.aliases || {},
+                source: data.source || '', at: now
+            };
+            this._botProCatalog = cat;
+            this._botProCatalogAt = now;
+            try { localStorage.setItem('nym_botpm_model_catalog', JSON.stringify(cat)); } catch { }
+            return cat;
+        } catch {
+            return this._botProCatalog;
+        }
+    },
+
     // "2 credits/reply" for flat models, "from 2 (up to 16 for max-length
     // replies)" for usage-scaled ones — mirrors the worker's hybrid pricing.
     _botProPriceLabel(m) {
@@ -2363,7 +2481,11 @@ Object.assign(NYM.prototype, {
     _getBotProModel() {
         try {
             const key = localStorage.getItem('nym_botpm_pro_model') || '';
-            return this._botProModels.find(m => m.key === key) || null;
+            if (!key) return null;
+            const list = this._botProModelList();
+            return list.find(m => m.key === key)
+                || list.find(m => m.key === this._botProResolveKey(key))
+                || null;
         } catch { return null; }
     },
 
@@ -2381,8 +2503,20 @@ Object.assign(NYM.prototype, {
         const current = this._getBotProModel();
         const plural = n => n === 1 ? '' : 's';
         if (!arg) {
-            const lines = this._botProModels.map(m =>
-                `• <code>${m.key}</code>${current && current.key === m.key ? ' ✓' : ''} — ${this.escapeHtml(m.label)}, ${this._botProPriceLabel(m)}`);
+            this._loadBotProCatalog();
+            const all = this._botProModelList();
+            // The live catalog can run to dozens of models — too many for a
+            // chat bubble — so list a provider's worth at most and send the
+            // rest to the picker.
+            const groups = this._botProGroups();
+            const lines = groups.length > 1
+                ? groups.map(g => {
+                    const names = g.keys.slice(0, 6).map(k => `<code>${k}</code>`).join(', ');
+                    const more = g.keys.length > 6 ? ` +${g.keys.length - 6} more` : '';
+                    return `• <strong>${this.escapeHtml(g.author || 'Other')}</strong> — ${names}${more}`;
+                }).concat([`<em>${all.length} models available. Tap the model button for the full list with prices.</em>`])
+                : all.map(m =>
+                    `• <code>${m.key}</code>${current && current.key === m.key ? ' ✓' : ''} — ${this.escapeHtml(m.label)}, ${this._botProPriceLabel(m)}`);
             this._displayBotInfoMessage([
                 current
                     ? `Nymbot Pro model: <strong>${this.escapeHtml(current.label)}</strong> (${this._botProPriceLabel(current)}).`
@@ -2398,7 +2532,8 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Nymbot Pro off — back to standard multi-model routing (standard credits).');
             return;
         }
-        const picked = this._botProModels.find(m => m.key === arg);
+        const resolved = this._botProResolveKey(arg) || arg;
+        const picked = this._botProModelList().find(m => m.key === resolved);
         if (!picked) {
             this.displaySystemMessage(`Unknown model "${arg}". Type ?model to see the available Pro models.`);
             return;
@@ -2623,6 +2758,9 @@ Object.assign(NYM.prototype, {
         if (!bar) return;
         bar.classList.remove('nm-hidden');
         this._refreshBotControlBar();
+        // Warm the model catalog while the user reads, so the picker and the
+        // pinned model's price are current by the time either is needed.
+        this._loadBotProCatalog().then(() => this._refreshBotControlBar()).catch(() => { });
     },
 
     _hideBotControlBar() {
@@ -2704,33 +2842,85 @@ Object.assign(NYM.prototype, {
         const list = document.getElementById('botModelList');
         const modal = document.getElementById('botModelModal');
         if (!list || !modal) return;
+        const search = document.getElementById('botModelSearch');
+        if (search) {
+            search.value = '';
+            if (!search.dataset.bound) {
+                search.dataset.bound = '1';
+                search.addEventListener('input', () => this._renderBotModelList(search.value));
+            }
+        }
+        this._renderBotModelList('');
+        modal.classList.add('active');
+        // Refresh in the background: the picker shows the cached list at once
+        // and redraws if the catalog has moved on.
+        this._loadBotProCatalog().then((cat) => {
+            if (cat && modal.classList.contains('active')) {
+                this._renderBotModelList(search ? search.value : '');
+            }
+        }).catch(() => { });
+    },
+
+    // Grouped by provider, each row carrying the model's one-line blurb and
+    // its per-reply price. `filter` matches name, key, provider and blurb.
+    _renderBotModelList(filter) {
+        const list = document.getElementById('botModelList');
+        if (!list) return;
+        const q = String(filter || '').trim().toLowerCase();
         const current = this._getBotProModel();
         const check = this._botCheckSvg();
+        const byKey = new Map(this._botProModelList().map(m => [m.key, m]));
         const rows = [];
-        rows.push(`<button class="bot-model-row${!current ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="">
+
+        if (!q) {
+            rows.push(`<button class="bot-model-row${!current ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="">
                 <span class="bot-model-row-main">
                     <span class="bot-model-row-name">Standard <span class="bot-model-row-tag">auto-routed</span></span>
                     <span class="bot-model-row-desc">Best model per task · 10 sats each (standard credits)</span>
                 </span>
                 <span class="bot-model-check">${!current ? check : ''}</span>
             </button>`);
-        for (const m of this._botProModels) {
-            const sel = !!(current && current.key === m.key);
-            rows.push(`<button class="bot-model-row bot-model-row-pro${sel ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="${m.key}">
+        }
+
+        const matches = (m) => !q || [m.key, m.label, m.author, m.description]
+            .some(v => String(v || '').toLowerCase().includes(q));
+
+        let shown = 0;
+        for (const g of this._botProGroups()) {
+            const models = g.keys.map(k => byKey.get(k)).filter(m => m && matches(m));
+            if (!models.length) continue;
+            if (g.author) {
+                rows.push(`<div class="bot-model-group" data-no-i18n>${this.escapeHtml(g.author)}</div>`);
+            }
+            for (const m of models) {
+                shown++;
+                const sel = !!(current && current.key === m.key);
+                const tags = [];
+                if (m.vision) tags.push('vision');
+                if (m.reasoning) tags.push('reasoning');
+                if (m.tools) tags.push('tools');
+                const meta = [this._botProPriceLabel(m)].concat(tags.length ? [tags.join(' · ')] : []).join(' — ');
+                rows.push(`<button class="bot-model-row bot-model-row-pro${sel ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="${this.escapeHtml(m.key)}">
                 <span class="bot-model-row-main">
                     <span class="bot-model-row-name" data-no-i18n>${this.escapeHtml(m.label)}</span>
-                    <span class="bot-model-row-desc">${this.escapeHtml(this._botProPriceLabel(m))}</span>
+                    ${m.description ? `<span class="bot-model-row-about" data-no-i18n>${this.escapeHtml(m.description)}</span>` : ''}
+                    <span class="bot-model-row-desc">${this.escapeHtml(meta)}</span>
                 </span>
                 <span class="bot-model-check">${sel ? check : ''}</span>
             </button>`);
+            }
+        }
+        if (!shown && q) {
+            rows.push(`<div class="bot-model-empty">No model matches “${this.escapeHtml(filter)}”.</div>`);
         }
         list.innerHTML = rows.join('');
-        modal.classList.add('active');
     },
 
     _botSelectModel(key) {
         const prev = this._getBotProModel();
-        const picked = key ? this._botProModels.find(m => m.key === key) : null;
+        const picked = key
+            ? this._botProModelList().find(m => m.key === (this._botProResolveKey(key) || key))
+            : null;
         if (key && !picked) return;
         this._setBotProModel(picked ? picked.key : null);
         if (picked) {
