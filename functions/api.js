@@ -11,7 +11,7 @@
 //   ["ITEM", id, obj] ... ["END", id, status] - streamed (ndjson) result
 
 import { routeStorageAction } from './api/storage.js';
-import { handleBotPMAction } from './api/bot.js';
+import { handleBotPMAction, botReleaseStrandedTurn } from './api/bot.js';
 import { verifyClientAuth, isNymchatClient, getPublicKey } from './api/_shared.js';
 
 // Actions handled by the bot worker (Nymbot PM, credits, invoices, Ledger).
@@ -120,6 +120,8 @@ export async function onRequest(context) {
           resp = await routeStorageAction(ctx, body);
         }
       } catch (e) {
+        // Don't leave a crashed turn holding its de-duplication claim.
+        await botReleaseStrandedTurn(ctx);
         send(['RES', id, 500, { error: 'Internal server error' }]);
         return;
       }

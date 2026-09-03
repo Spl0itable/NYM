@@ -14,10 +14,10 @@ import {
 
 const SATS_PER_CREDIT_DEFAULT = 100;
 
-// An in-flight Nymbot turn holds its claim for a little over the clients' own
-// 180s request timeout, so a retry arriving right at that deadline still sees
-// the original as running rather than starting a second billed attempt.
-const BOT_TURN_CLAIM_TTL_S = 300;
+// An in-flight turn holds its claim on a lease the running attempt heartbeats
+// ("turn-touch"), so the claim outlives the slowest model yet lapses seconds
+// after the attempt's worker dies.
+const BOT_TURN_LEASE_S = 45;
 // A finished turn stays replayable well past the retry window.
 const BOT_TURN_RESULT_TTL_S = 900;
 // Comfortably above a gift-wrapped reply, comfortably below the row limit.
@@ -88,6 +88,8 @@ export class NymLedger {
       case "shop-supply": return this._shopSupply(a);
       case "turn-begin": return this._turnBegin(a.key);
       case "turn-poll": return this._turnPoll(a.key);
+      case "turn-touch": return this._turnTouch(a.key);
+      case "turn-abort": return this._turnAbort(a.key);
       case "turn-finish": return this._turnFinish(a.key, a.result);
       default: return { error: "unknown op" };
     }
@@ -154,9 +156,32 @@ export class NymLedger {
     this.sql.exec(
       "INSERT INTO bot_turns (id, result, exp) VALUES (?, NULL, ?);",
       key,
-      row.now + BOT_TURN_CLAIM_TTL_S
+      row.now + BOT_TURN_LEASE_S
     );
     return { state: "claimed" };
+  }
+
+  // Push the lease out, so a waiting retry keeps seeing "running" while this
+  // attempt really is still generating. "lost": the claim is no longer ours.
+  _turnTouch(key) {
+    const row = this._turnRow(key);
+    if (row.bad) return { ok: false };
+    if (row.result) return { ok: false, lost: true, finished: true };
+    if (!row.running) return { ok: false, lost: true };
+    this.sql.exec(
+      "UPDATE bot_turns SET exp = ? WHERE id = ? AND result IS NULL;",
+      row.now + BOT_TURN_LEASE_S,
+      key
+    );
+    return { ok: true };
+  }
+
+  // Release an unfinished claim (the attempt failed before it charged for an
+  // answer). A finished turn is left alone so its result stays replayable.
+  _turnAbort(key) {
+    if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
+    this.sql.exec("DELETE FROM bot_turns WHERE id = ? AND result IS NULL;", key);
+    return { ok: true };
   }
 
   // Read-only probe used while waiting on an in-flight attempt. "gone" means

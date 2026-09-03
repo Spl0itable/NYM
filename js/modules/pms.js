@@ -3021,9 +3021,24 @@ Object.assign(NYM.prototype, {
                 }
             }
             // Replies (especially Pro models with repo tool calls) can run long.
-            const { status, data } = await this._botMoneyRequest('pm', reqExtra, { timeout: 180000 });
+            // `pending` means an earlier attempt at this same message is still
+            // generating (our socket dropped and this is the HTTP retry): ask
+            // again with the same event id to collect that reply, rather than
+            // have the worker generate — and charge for — a second one.
+            let status, data;
+            for (let tries = 0; ; tries++) {
+                ({ status, data } = await this._botMoneyRequest('pm', reqExtra, { timeout: 180000 }));
+                if (!data || !data.pending || tries >= 5) break;
+                this._setBotTyping(true);  // keep the "thinking" strip up
+                await new Promise(r => setTimeout(r, 3000));
+            }
             this._setBotTyping(false);
             this._markBotPMReceipts('read');
+            if (data && data.pending) {
+                this.displaySystemMessage(data.message ||
+                    'Nymbot is still working on that message — its reply will arrive shortly.');
+                return;
+            }
             if (data && data.noCredits) {
                 const msg = data.error
                     || (data.pro

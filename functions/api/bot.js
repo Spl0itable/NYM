@@ -1782,12 +1782,27 @@ async function botPutProCredits(env, pubkey, data) {
 // reply dies with the abandoned socket. The ledger records the finished
 // response; a retry collects it instead of regenerating it.
 //
+// So the retry must never generate while the first attempt is alive — the miss
+// there is what made this model-dependent, since only a model slower than the
+// waiting window ever reached it. It takes the turn over only once the claim's
+// lease has lapsed (the owner stopped heartbeating, so its worker is gone);
+// while the lease holds it answers `pending` and the client comes back.
+//
 // Degrades to today's behaviour when the ledger binding is absent: no
 // de-duplication, but nothing breaks.
-var BOT_TURN_POLL_MS = 2000;
-var BOT_TURN_WAIT_BUDGET_MS = 90000;
+var BOT_TURN_POLL_MS = 1500;
+// Under the ~100s an edge request gets, so a waiting retry always lands its
+// answer (`pending` or the replayed reply) rather than dying on the wire.
+var BOT_TURN_WAIT_BUDGET_MS = 75000;
+// Refresh the claim comfortably inside the ledger's lease.
+var BOT_TURN_HEARTBEAT_MS = 15000;
 
-function botTurnKey(pubkey, eventId) { return "pm:" + pubkey + ":" + eventId; }
+// The transports disagree on case (the websocket pins its authed pubkey
+// lowercase, the HTTP body is taken as sent), so normalize — or one message
+// hashes to two turns and skips de-duplication entirely.
+function botTurnKey(pubkey, eventId) {
+  return "pm:" + String(pubkey).toLowerCase() + ":" + String(eventId).toLowerCase();
+}
 
 async function botTurnBegin(env, key) {
   var r;
@@ -1802,20 +1817,53 @@ async function botTurnFinish(env, key, body, status) {
   } catch (e) { /* the turn itself succeeded; only the replay copy is lost */ }
 }
 
-// Wait for the in-flight attempt to record its answer rather than running the
-// turn again. Returns the stored result, or null when the caller should run it
-// (the other attempt lapsed, died, or is slower than any real reply).
+// Release a claim whose attempt failed before it charged for an answer, so the
+// next try runs now instead of waiting out a lease nobody is honouring.
+async function botTurnAbort(env, key) {
+  try { await ledgerCall(env, { op: "turn-abort", key: key }); } catch (e) { }
+}
+
+// Keeps this attempt's claim alive while it generates. Returns a stop().
+// Self-limiting at both ends: it stops once the claim is no longer ours, and
+// never beats past the longest a turn can run — one that outlived its request
+// would pin a dead claim forever, which is worse than the duplicate.
+var BOT_TURN_MAX_HEARTBEATS = Math.ceil(600000 / BOT_TURN_HEARTBEAT_MS);
+
+function botTurnHeartbeat(env, key) {
+  var beats = 0;
+  var timer = setInterval(function () {
+    if (++beats > BOT_TURN_MAX_HEARTBEATS) { clearInterval(timer); return; }
+    ledgerCall(env, { op: "turn-touch", key: key }).then(function (r) {
+      if (r && (r.lost || r._noLedger)) clearInterval(timer);
+    }, function () { });
+  }, BOT_TURN_HEARTBEAT_MS);
+  return function () { clearInterval(timer); };
+}
+
+// Wait on the in-flight attempt instead of running the turn again:
+// { result } once it records its answer, { pending } while it is still alive
+// at the end of our budget (the caller must NOT generate), { takeover } once
+// the claim lapsed and that attempt is demonstrably dead.
 async function botTurnWait(env, key) {
   var deadline = Date.now() + BOT_TURN_WAIT_BUDGET_MS;
   while (Date.now() < deadline) {
     await new Promise(function (r) { setTimeout(r, BOT_TURN_POLL_MS); });
     var p;
-    try { p = await ledgerCall(env, { op: "turn-poll", key: key }); } catch (e) { return null; }
-    if (!p || p.error) return null;
-    if (p.state === "done") return p.result || null;
-    if (p.state !== "running") return null;
+    try { p = await ledgerCall(env, { op: "turn-poll", key: key }); } catch (e) { return { takeover: true }; }
+    if (!p || p.error) return { takeover: true };
+    if (p.state === "done") return p.result ? { result: p.result } : { takeover: true };
+    if (p.state !== "running") return { takeover: true };
   }
-  return null;
+  return { pending: true };
+}
+
+// Releases a claim whose attempt threw before it could finish or abort the
+// turn itself. Called from both entry points' catch blocks.
+async function botReleaseStrandedTurn(context) {
+  var release = context && context._botTurnRelease;
+  if (!release) return;
+  try { context._botTurnRelease = null; } catch (e) { }
+  try { await release(); } catch (e) { }
 }
 
 function isHex64(x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); }
@@ -1913,8 +1961,10 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         pmCtx += (r + 1) + ". " + pmSearchResults[r] + "\n";
       }
       pmCtx += "--- END SEARCH RESULTS ---\n";
-      pmCtx += "IMPORTANT: These live web search results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them. Never say 'the search results you provided' or imply the user supplied them. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web. Treat them as more current and authoritative than your training data: if they describe a recent event, that event is real and has happened — do NOT dismiss it as 'fictional', 'speculative', 'hypothetical', or 'a future event' just because it postdates your training. Answer naturally in your own voice without mentioning 'search results'. If they don't fully cover the question, supplement with your own knowledge.\n";
+      pmCtx += "IMPORTANT: These results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them, so never say 'the search results you provided'. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web, and do NOT call an event they describe 'fictional' or 'speculative' just because it postdates your training.\n" +
+        "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
       pmCtx += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
+      pmCtx += searchResultCaveats(question, pmSearchResults);
     } else if (pmSearchAttempted) {
       pmCtx += "A live web search ran just now for \"" + searchQueryTerms(pmSearchedQuery) +
         "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news.\n";
@@ -2355,16 +2405,57 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // resend of the same message replays the first attempt's answer instead of
     // paying for a second one.
     var turnKey = botTurnKey(userPubkey, currentId);
+    var turnPending = function () {
+      return json({
+        pending: true,
+        message: "Nymbot is still working on that message — ask again in a moment and the reply will be waiting."
+      }, 202);
+    };
     var turnClaim = await botTurnBegin(env, turnKey);
     if (turnClaim.state === "done" && turnClaim.result) {
       return json(turnClaim.result.body, turnClaim.result.status);
     }
     if (turnClaim.state === "running") {
       var waitedTurn = await botTurnWait(env, turnKey);
-      if (waitedTurn) return json(waitedTurn.body, waitedTurn.status);
-      // The other attempt never landed an answer, so it billed nothing and
-      // this one is free to run.
+      if (waitedTurn.result) return json(waitedTurn.result.body, waitedTurn.result.status);
+      // Still generating elsewhere: running it again here is the duplicate this
+      // claim exists to prevent.
+      if (waitedTurn.pending) return turnPending();
+      // The claim lapsed, so that attempt can never record an answer. Re-claim
+      // rather than just running, so two waiters can't both take it over.
+      var retakeClaim = await botTurnBegin(env, turnKey);
+      if (retakeClaim.state === "done" && retakeClaim.result) {
+        return json(retakeClaim.result.body, retakeClaim.result.status);
+      }
+      if (retakeClaim.state === "running") return turnPending();
     }
+
+    // This attempt owns the claim from here on: the heartbeat holds its lease
+    // while it generates, and every exit below must either finish the turn or
+    // release the claim.
+    var turnStopHeartbeat = botTurnHeartbeat(env, turnKey);
+    // A throw below reaches neither helper, so the entry points release the
+    // claim for us. Best-effort: a context that won't take the property just
+    // falls back to the lease lapsing.
+    var turnArmRelease = function (fn) {
+      try { context._botTurnRelease = fn; } catch (e) { }
+    };
+    turnArmRelease(async function () {
+      turnStopHeartbeat();
+      await botTurnAbort(env, turnKey);
+    });
+    var turnFail = async function (obj, status) {
+      turnArmRelease(null);
+      turnStopHeartbeat();
+      await botTurnAbort(env, turnKey);
+      return json(obj, status);
+    };
+    var turnDone = async function (obj, status) {
+      turnArmRelease(null);
+      turnStopHeartbeat();
+      await botTurnFinish(env, turnKey, obj, status);
+      return json(obj, status);
+    };
 
     var thread = await botGetThread(env, userPubkey);
     var historyIds = fresh ? [] : thread.filter(function (id) { return id !== currentId; });
@@ -2375,16 +2466,16 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var fetched = await fetchGiftWrapsByIds(fetchIds, currentId, 3000);
     var currentWrap = fetched[currentId];
     if (!currentWrap) {
-      return json({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
+      return await turnFail({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
     }
     var currentUnwrapped = unwrapBotGiftWrap(currentWrap, botPrivkey, botPq);
-    if (!currentUnwrapped) return json({ error: "Could not decrypt your message." }, 400);
+    if (!currentUnwrapped) return await turnFail({ error: "Could not decrypt your message." }, 400);
     // The current message must be authored by the authenticated user
     if (currentUnwrapped.author !== userPubkey) {
-      return json({ error: "Message author does not match the authenticated user." }, 403);
+      return await turnFail({ error: "Message author does not match the authenticated user." }, 403);
     }
     var message = sanitizeInput(currentUnwrapped.rumor.content || "");
-    if (!message) return json({ error: "Empty message" }, 400);
+    if (!message) return await turnFail({ error: "Empty message" }, 400);
     // A command typed in the user's language arrives with the canonical token
     // the client resolved it to, so the parsers below stay English-only.
     message = canonicalizeBotText(message, body && body.cmdAlias);
@@ -2439,11 +2530,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         };
         // Free, but it still publishes a wrap pair and advances the thread —
         // a resend must replay this one, not mint a second pair.
-        await botTurnFinish(env, turnKey, listBody);
-        return json(listBody);
+        return await turnDone(listBody);
       }
       if (!media.prompt) {
-        return json({ error: media.kind === "image"
+        return await turnFail({ error: media.kind === "image"
           ? "Usage: ?image <description of the picture> — add --model <name> to pick a generator, or ?image models to list them."
           : "Usage: ?speak <text to read aloud>" }, 400);
       }
@@ -2453,17 +2543,17 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       if (media.kind === "image" && mediaTier === "pro") {
         proImage = botProImageModel(media.modelKey);
         if (!proImage) {
-          return json({ error: "Unknown image model '" + media.modelKey + "'. Type ?image models to see them." }, 400);
+          return await turnFail({ error: "Unknown image model '" + media.modelKey + "'. Type ?image models to see them." }, 400);
         }
       } else if (media.kind === "image" && media.modelKey) {
-        return json({ error: "Picking an image model needs Nymbot Pro — select one with ?model first, or drop --model to use the standard generator." }, 400);
+        return await turnFail({ error: "Picking an image model needs Nymbot Pro — select one with ?model first, or drop --model to use the standard generator." }, 400);
       }
       var mediaCost = media.kind === "image" && proImage && proImage.credits
         ? proImage.credits
         : BOT_MEDIA_COSTS[media.kind][mediaTier];
       var mediaRecord = proModel ? proRecord : record;
       if ((mediaRecord.balance || 0) < mediaCost) {
-        return json({
+        return await turnFail({
           noCredits: true,
           pro: !!proModel,
           balance: mediaRecord.balance || 0,
@@ -2480,7 +2570,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           : await botGenerateSpeech(env, media.prompt, mediaTier, botPrivkey, botPubkey);
       } catch (e) {
         // Nothing is charged when generation or upload fails.
-        return json({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
+        return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
       }
       var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier });
       if (mediaSpend && mediaSpend._noLedger) {
@@ -2491,7 +2581,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (proModel) await botPutProCredits(env, userPubkey, mediaRecord);
         else await botPutCredits(env, userPubkey, mediaRecord);
       } else if (!mediaSpend || !mediaSpend.ok) {
-        return json({ noCredits: true, pro: !!proModel, balance: mediaSpend ? mediaSpend.balance : 0, required: mediaCost,
+        return await turnFail({ noCredits: true, pro: !!proModel, balance: mediaSpend ? mediaSpend.balance : 0, required: mediaCost,
           error: "Not enough " + (proModel ? "Pro " : "") + "credits — your balance changed. Type ?buy for more." }, 402);
       } else {
         mediaRecord.balance = mediaSpend.balance;
@@ -2515,8 +2605,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       };
       // Charged and delivered: record it so a resend collects this generation
       // rather than paying for another one.
-      await botTurnFinish(env, turnKey, mediaBody);
-      return json(mediaBody);
+      return await turnDone(mediaBody);
     }
 
     var ai = env.AI;
@@ -2533,7 +2622,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var cost = proModel ? (proModel.baseCredits || 1) : botCreditsForTask(taskType);
     if (!proModel && record.balance < cost) {
-      return json({
+      return await turnFail({
         noCredits: true,
         balance: record.balance,
         required: cost,
@@ -2545,10 +2634,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     try {
       chatResult = await handleBotPMChat(message, history, context, taskType, proModel, ghConfig);
     } catch (e) {
-      return json({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
+      return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
     }
     var reply = chatResult && chatResult.reply;
-    if (!reply) return json({ error: "Nymbot returned an empty response" }, 500);
+    if (!reply) return await turnFail({ error: "Nymbot returned an empty response" }, 500);
     if (proModel) {
       // Charge by what was actually generated; estimate from reply size when a
       // transport returns no usage. Never exceed the reserved amount.
@@ -2569,7 +2658,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       if (proModel) await botPutProCredits(env, userPubkey, spendRecord);
       else await botPutCredits(env, userPubkey, spendRecord);
     } else if (!consumed || !consumed.ok) {
-      return json({ noCredits: true, pro: !!proModel, balance: consumed ? consumed.balance : 0, required: cost, taskType: taskType,
+      return await turnFail({ noCredits: true, pro: !!proModel, balance: consumed ? consumed.balance : 0, required: cost, taskType: taskType,
         error: "Not enough " + (proModel ? "Pro " : "") + "credits — your balance changed. Type ?buy for more." }, 402);
     } else {
       spendRecord.balance = consumed.balance;
@@ -2593,8 +2682,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     };
     // Charged and delivered. If the socket carrying this response is already
     // gone, the client's HTTP retry reads the reply back out of here.
-    await botTurnFinish(env, turnKey, chatBody);
-    return json(chatBody);
+    return await turnDone(chatBody);
   }
 
   if (body.action === "clear-history") {
@@ -2722,6 +2810,7 @@ async function onRequest(context) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
+      await botReleaseStrandedTurn(context);
       console.error("bot PM action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
@@ -4031,6 +4120,28 @@ async function searchNewsRss(query) {
   }
 }
 
+// Titles and snippets out of a results page without depending on its class
+// names, which change without notice and cannot be checked from here: take each
+// outbound link and the prose that follows it.
+function extractHtmlResults(html, ownHost, limit) {
+  var results = [];
+  var seen = {};
+  var re = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]{1,300}?)<\/a>([\s\S]{0,600}?)(?=<a[^>]+href="https?:)/gi;
+  var m;
+  while ((m = re.exec(html)) !== null && results.length < limit) {
+    var url = stripHtmlEntities(m[1]);
+    if (!url || url.indexOf(ownHost) !== -1) continue;
+    var title = stripHtmlEntities(m[2]).replace(/\s+/g, " ").trim();
+    // A title is a phrase; navigation chrome is a word, and boilerplate repeats.
+    if (title.length < 12 || seen[url]) continue;
+    seen[url] = true;
+    var snippet = stripHtmlEntities(m[3]).replace(/\s+/g, " ").trim();
+    if (snippet.length > 300) snippet = truncateText(snippet, 300);
+    results.push(searchResultLine(title, snippet.length >= 40 ? snippet : "", url));
+  }
+  return results.filter(Boolean);
+}
+
 // Mojeek runs its own crawler and does not gate server traffic the way Google
 // and DuckDuckGo do — the one general-web scrape with a chance from here.
 async function searchMojeek(query) {
@@ -4043,15 +4154,7 @@ async function searchMojeek(query) {
     });
     clearTimeout(timer);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-    var html = await resp.text();
-    var results = [];
-    var re = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*class="ob"[^>]*>([\s\S]*?)<\/a>[\s\S]{0,400}?<p class="s">([\s\S]*?)<\/p>/gi;
-    var m;
-    while ((m = re.exec(html)) !== null && results.length < 5) {
-      var line = searchResultLine(stripHtmlEntities(m[2]), stripHtmlEntities(m[3]), m[1]);
-      if (line) results.push(line);
-    }
-    return results;
+    return extractHtmlResults(await resp.text(), "mojeek.com", 5);
   } catch (e) {
     clearTimeout(timer);
     throw e;
@@ -4162,26 +4265,36 @@ async function webSearch(query, geohash, env) {
     sources.push({ name: "mojeek:" + narrow, run: function () { return searchMojeek(narrow); } });
   }
   var collected = await runSearchSources(sources);
+  var queryTerms = searchTerms(query);
   var merged = [];
+  var used = [];
   var seen = {};
+  var dropped = 0;
   for (var i = 0; i < collected.length; i++) {
     var taken = 0;
+    var engine = sources[i].name.split(":")[0];
     for (var j = 0; j < collected[i].length && merged.length < WEB_SEARCH_MAX_RESULTS; j++) {
       if (taken >= WEB_SEARCH_MAX_PER_SOURCE) break;
       var line = String(collected[i][j] || "").trim();
       if (!line) continue;
       var key = line.toLowerCase().replace(/\s+/g, " ");
       if (seen[key]) continue;
+      if (!resultMatchesQuery(line, queryTerms)) { dropped++; continue; }
       seen[key] = true;
       merged.push(line);
+      if (used.indexOf(engine) === -1) used.push(engine);
       taken++;
     }
     if (merged.length >= WEB_SEARCH_MAX_RESULTS) break;
   }
+  if (dropped) console.warn("nymbot web search: dropped " + dropped + " off-topic results");
   if (!merged.length) {
-    console.warn("nymbot web search: every source came back empty for " +
-      JSON.stringify(truncateText(terms, 80)) + (narrow ? " (narrow: " + narrow + ")" : ""));
+    // Nothing came back at all, or nothing that was about the question
+    console.warn("nymbot web search: " + (dropped ? "nothing on topic" : "every source came back empty") +
+      " for " + JSON.stringify(truncateText(terms, 80)) + (narrow ? " (narrow: " + narrow + ")" : ""));
   }
+  // Which engines contributed, so the reply can say when it rests on just one
+  merged.sources = used;
   return merged;
 }
 
@@ -4200,7 +4313,7 @@ var QUERY_STOPWORDS = ("what which who whom whose when where why how a an the th
   "no not yes ok okay well also actually just only really very much more most all some " +
   "mean meant tell say said give show know think want ask asking happened happening going " +
   "recently recent lately now today currently latest new news update updates thing things " +
-  "stuff one any anything something someone everyone please " +
+  "stuff one any anything something someone everyone please got away because way ways " +
   "whats hows wheres whos whens whys thats theres dont doesnt didnt cant wont im ive id " +
   "hi hey hello hiya sup yo gm gn thanks thank ty sure cool nice lol lmao haha hah " +
   "yourself yourselves"
@@ -4239,6 +4352,39 @@ function searchTerms(text) {
   return terms;
 }
 
+// A result that shares almost nothing with the question is noise, and the model
+// will write a confident answer around it: "woman found guilty" returned an
+// unrelated murder case, which came back cited as if it answered the question.
+function resultMatchesQuery(line, terms) {
+  if (!terms.length) return true;
+  var hay = String(line || "").toLowerCase().replace(/[-\u2013\u2014]/g, "");
+  var hits = 0;
+  for (var i = 0; i < terms.length; i++) {
+    var term = terms[i].toLowerCase().replace(/[-\u2013\u2014]/g, "");
+    if (term.length > 2 && hay.indexOf(term) !== -1) hits++;
+  }
+  return terms.length < 3 ? hits >= 1 : hits >= 2;
+}
+
+// What the model needs told when the result set is thin or the wrong register.
+function searchResultCaveats(question, results) {
+  var used = (results && results.sources) || [];
+  var out = "";
+  if (used.length === 1) {
+    out += "Every result above came from one source (" + used[0] + "). That is a thin basis for " +
+      "a confident answer: give what it actually says and say it is the only thing the search found.\n";
+  }
+  var wantsCurrent = /\b(recent|recently|latest|just|now|today|breaking|news|update|happening)\b/i
+    .test(String(question || ""));
+  var encyclopediaOnly = used.length > 0 && used.every(function (name) { return name === "wikipedia"; });
+  if (wantsCurrent && encyclopediaOnly) {
+    out += "The question asks about something recent and no news source returned anything, so the " +
+      "results above are encyclopedia background rather than current reporting. Say plainly that " +
+      "you found no current reporting on it, and do not present the background as recent news.\n";
+  }
+  return out;
+}
+
 // The keyword string actually sent to the engines, and what the reply names
 // when nothing comes back.
 function searchQueryTerms(query) {
@@ -4268,8 +4414,10 @@ function narrowSearchTerm(text) {
 function searchQueryFor(question, conversation) {
   var q = String(question || "").trim();
   var stripped = q.replace(FOLLOW_UP_LEAD, "").trim() || q;
-  // Two subject words of its own is enough, unless a pronoun stands in for one
-  var leansOnThread = contentWordCount(stripped) < 2 ||
+  // Opening with "but"/"ok"/"no" says outright that this continues the last
+  // turn: "but some woman was just recently not found guilty" has three subject
+  // words of its own and still searched the useless "woman found guilty".
+  var leansOnThread = FOLLOW_UP_LEAD.test(q) || contentWordCount(stripped) < 2 ||
     (ANAPHORIC_REF.test(stripped) && !narrowSearchTerm(stripped));
   if (!leansOnThread) return q;
   if (!Array.isArray(conversation)) return stripped;
@@ -4342,8 +4490,10 @@ async function handleAsk(question, context, conversation, channelMessages, activ
         contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
       }
       contextBlock += "--- END SEARCH RESULTS ---\n";
-      contextBlock += "IMPORTANT: These live web search results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them. Never say 'the search results you provided' or imply the user supplied them. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web. Treat them as more current and authoritative than your training data: if they describe a recent event, that event is real and has happened — do NOT dismiss it as 'fictional', 'speculative', 'hypothetical', or 'a future event' just because it postdates your training. Answer naturally in your own voice without mentioning 'search results'. If they don't fully cover the question, supplement with your own knowledge.\n";
+      contextBlock += "IMPORTANT: These results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them, so never say 'the search results you provided'. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web, and do NOT call an event they describe 'fictional' or 'speculative' just because it postdates your training.\n" +
+        "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
       contextBlock += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
+      contextBlock += searchResultCaveats(question, searchResults);
     } else if (searchAttempted) {
       // Without this the model is told it has web search, given nothing, and
       // told never to say it can't browse — so it answers from training data in
@@ -5653,7 +5803,9 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 
 export {
   onRequest,
-  handleBotPMAction
+  handleBotPMAction,
+  botReleaseStrandedTurn,
+  botTurnKey
 };
 /*! Bundled license information:
 
