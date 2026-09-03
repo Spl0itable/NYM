@@ -1729,6 +1729,11 @@
                     <div class="form-group">
                         <label class="form-label">Quantum-resistant encryption</label>
                         <div class="form-hint" id="pqStatus"></div>
+                        <details class="form-hint" id="pqDiagnostics">
+                            <summary class="nm-clickable" data-action="refreshPqDiagnostics">Post-quantum diagnostics</summary>
+                            <pre id="pqDiagnosticsBody" class="pq-diag"></pre>
+                            <button type="button" class="btn-secondary" data-action="copyPqDiagnostics">Copy</button>
+                        </details>
                         <div class="form-hint">
                             Private messages and group chats with other Nymchat users add ML-KEM-768 (a post-quantum
                             key exchange) alongside the standard NIP&#8209;44 secp256k1 ECDH, so both would have to be

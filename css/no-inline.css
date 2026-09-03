@@ -231,3 +231,19 @@ html .nm-hidden { display: none; }
 .nm-panic-bar { width: min(320px, 80vw); height: 3px; background: rgb(from var(--primary) r g b / 0.18); overflow: hidden; border-radius: 2px; }
 .nm-panic-fill { height: 100%; width: 30%; background: var(--primary); border-radius: 2px; box-shadow: 0 0 8px rgb(from var(--primary) r g b / 0.6); animation: nmPanicSlide 1.2s linear infinite; will-change: transform; }
 @keyframes nmPanicSlide { from { transform: translateX(-100%); } to { transform: translateX(333.33%); } }
+
+/* Post-quantum diagnostics readout */
+.pq-diag {
+    font-family: monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 260px;
+    overflow-y: auto;
+    margin: 6px 0;
+    padding: 8px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-dim);
+}

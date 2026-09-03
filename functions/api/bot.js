@@ -1893,7 +1893,10 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       var pmReleases = await fetchNymchatReleases(15);
       pmChangelogCtx = buildChangelogContext(pmReleases);
     } else if (needsWebSearch(question)) {
-      pmSearchResults = await webSearch(question, null, context.env);
+      var pmTurns = (history || []).map(function (h) {
+        return { author: h && h.isBot ? "nymbot" : "", text: h && h.text };
+      });
+      pmSearchResults = await webSearch(searchQueryFor(question, pmTurns), null, context.env);
       pmSearchAttempted = true;
     }
   } catch (e) { }
@@ -3998,6 +4001,57 @@ async function searchWeather(query, geohash) {
   }
 }
 
+// Per-query news search over Google News' RSS. A feed is not a scrape — ?news
+// already reads four of them from this worker — so this is the one source that
+// reliably answers "what happened recently".
+async function searchNewsRss(query) {
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
+  try {
+    var resp = await fetch(
+      "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q=" + encodeURIComponent(query), {
+        headers: { "User-Agent": "Nymbot/1.0", "Accept": "application/rss+xml, application/xml" },
+        signal: controller.signal
+      });
+    clearTimeout(timer);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    return parseRssItems(await resp.text(), 5).map(function (item) {
+      // Google News titles carry a " - Publisher" suffix; keep it, it names the source.
+      return searchResultLine(item.title, "", item.link);
+    }).filter(Boolean);
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+
+// Mojeek runs its own crawler and does not gate server traffic the way Google
+// and DuckDuckGo do — the one general-web scrape with a chance from here.
+async function searchMojeek(query) {
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
+  try {
+    var resp = await fetch("https://www.mojeek.com/search?q=" + encodeURIComponent(query), {
+      headers: { "User-Agent": "Nymbot/1.0 (+https://nymchat.app)", "Accept": "text/html" },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var html = await resp.text();
+    var results = [];
+    var re = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*class="ob"[^>]*>([\s\S]*?)<\/a>[\s\S]{0,400}?<p class="s">([\s\S]*?)<\/p>/gi;
+    var m;
+    while ((m = re.exec(html)) !== null && results.length < 5) {
+      var line = searchResultLine(stripHtmlEntities(m[2]), stripHtmlEntities(m[3]), m[1]);
+      if (line) results.push(line);
+    }
+    return results;
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+
 async function searchBrave(env, query) {
   var key = env && env.BRAVE_SEARCH_API_KEY;
   if (!key) return [];
@@ -4047,6 +4101,8 @@ function searchResultLine(title, snippet, url) {
 // what the model gets.
 var WEB_SEARCH_DEADLINE = 6000;
 var WEB_SEARCH_MAX_RESULTS = 6;
+// No single source may fill the whole block; a mix beats six headlines.
+var WEB_SEARCH_MAX_PER_SOURCE = 3;
 
 // Every source runs and every outcome is logged. Failures used to be swallowed
 // by a bare .catch(() => []) at the call site, so a source that had been dead
@@ -4090,6 +4146,8 @@ async function webSearch(query, geohash, env) {
   // priority order and deduplicated, and the cap keeps the context bounded.
   var sources = [
     { name: "brave", run: function () { return searchBrave(env, query); } },
+    { name: "news-rss", run: function () { return searchNewsRss(query); } },
+    { name: "mojeek", run: function () { return searchMojeek(query); } },
     { name: "ddg-html", run: function () { return searchDDGHtml(query); } },
     { name: "google", run: function () { return searchGoogle(query); } },
     { name: "ddg-instant", run: function () { return searchDDGInstant(query); } },
@@ -4099,18 +4157,67 @@ async function webSearch(query, geohash, env) {
   var merged = [];
   var seen = {};
   for (var i = 0; i < collected.length; i++) {
+    var taken = 0;
     for (var j = 0; j < collected[i].length && merged.length < WEB_SEARCH_MAX_RESULTS; j++) {
+      if (taken >= WEB_SEARCH_MAX_PER_SOURCE) break;
       var line = String(collected[i][j] || "").trim();
       if (!line) continue;
       var key = line.toLowerCase().replace(/\s+/g, " ");
       if (seen[key]) continue;
       seen[key] = true;
       merged.push(line);
+      taken++;
     }
     if (merged.length >= WEB_SEARCH_MAX_RESULTS) break;
   }
   if (!merged.length) console.warn("nymbot web search: every source came back empty for " + JSON.stringify(query.slice(0, 80)));
   return merged;
+}
+
+// Filler a follow-up opens with, before its actual content.
+var FOLLOW_UP_LEAD = /^(?:no|nope|nah|yes|yeah|yep|ok|okay|well|but|and|also|actually|hmm)\b[,.\s]*(?:i\s+(?:mean|meant)|i'm\s+asking|as\s+in|what\s+about)?\b[,.\s]*/i;
+
+// Words that never identify a subject: question words, pronouns, auxiliaries,
+// vague verbs, and the time words that sound specific without naming anything.
+var QUERY_STOPWORDS = ("what which who whom whose when where why how a an the this that these those " +
+  "it its they them their there he she him her his hers we us our you your i me my " +
+  "is are was were be been being am do does did done have has had will would can could " +
+  "and or but so if then than of to in on at for from with about by as up out " +
+  "no not yes ok okay well also actually just only really very much more most " +
+  "mean meant tell say said give show know think want ask asking happened happening " +
+  "recently lately now today currently latest new update updates thing things stuff one any"
+).split(" ").reduce(function (set, w) { set[w] = true; return set; }, {});
+
+function contentWordCount(text) {
+  var words = String(text || "").toLowerCase().match(/[a-z0-9][a-z0-9'-]*/g) || [];
+  var n = 0;
+  for (var i = 0; i < words.length; i++) if (!QUERY_STOPWORDS[words[i]]) n++;
+  return n;
+}
+
+// A follow-up carries none of its own subject: searching "no i mean recently"
+// verbatim finds nothing, so the answer falls back to training data. The
+// subject is one turn up, in the conversation the thread already ships.
+function searchQueryFor(question, conversation) {
+  var q = String(question || "").trim();
+  var stripped = q.replace(FOLLOW_UP_LEAD, "").trim() || q;
+  // Two subject words of its own is enough to search on.
+  if (contentWordCount(stripped) >= 2) return q;
+  if (!Array.isArray(conversation)) return stripped;
+  // The most recent earlier turn from the user, never from Nymbot: the bot's
+  // own prose would drown the search terms.
+  for (var i = conversation.length - 1; i >= 0; i--) {
+    var entry = conversation[i];
+    if (!entry || !entry.text) continue;
+    if (/^nymbot(?:#[a-f0-9]{4})?$/i.test(entry.author || "")) continue;
+    var prior = stripWireEnvelope(sanitizeInput(entry.text), false)
+      .replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "")
+      .replace(/^\?ask\s*/i, "")
+      .trim();
+    if (!prior || prior === q || !contentWordCount(prior)) continue;
+    return truncateText((prior + " " + stripped).trim(), 300);
+  }
+  return stripped;
 }
 
 // Determine if a question would benefit from live web search
@@ -4154,7 +4261,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       var releases = await fetchNymchatReleases(15);
       changelogCtx = buildChangelogContext(releases);
     } else if (needsWebSearch(question)) {
-      searchResults = await webSearch(question, geohash, context.env);
+      searchResults = await webSearch(searchQueryFor(question, conversation), geohash, context.env);
       searchAttempted = true;
     }
 
@@ -4917,6 +5024,24 @@ async function handleBtc() {
 }
 
 // News Command (fetches from public RSS feeds)
+// Title + link out of an RSS/Atom body. Shared by ?news and searchNewsRss.
+function parseRssItems(xml, limit) {
+  if (!xml) return [];
+  var items = [];
+  var itemRegex = /<(?:item|entry)[\s>]([\s\S]*?)<\/(?:item|entry)>/gi;
+  var match;
+  while ((match = itemRegex.exec(xml)) !== null && items.length < limit) {
+    var body = match[1];
+    var titleMatch = body.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
+    var title = titleMatch ? stripHtmlEntities(titleMatch[1]) : "";
+    var linkMatch = body.match(/<link[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>/i) ||
+      body.match(/<link[^>]+href="([^"]+)"/i);
+    var link = linkMatch ? stripHtmlEntities(linkMatch[1]) : "";
+    if (title) items.push({ title: title, link: link });
+  }
+  return items;
+}
+
 var NEWS_FEEDS = [
   { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/rss.xml" },
   { name: "Reuters World", url: "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best" },
@@ -4930,21 +5055,9 @@ async function handleNews() {
     return fetch(feed.url, { headers: { "User-Agent": "Nymbot/1.0" } })
       .then(function(res) { return res.ok ? res.text() : ""; })
       .then(function(xml) {
-        if (!xml) return [];
-        var items = [];
-        var itemRegex = /<item[\s>]([\s\S]*?)<\/item>/gi;
-        var match;
-        while ((match = itemRegex.exec(xml)) !== null && items.length < 3) {
-          var itemXml = match[1];
-          var titleMatch = itemXml.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
-          var title = titleMatch ? titleMatch[1].trim().replace(/<[^>]+>/g, "") : null;
-          var linkMatch = itemXml.match(/<link>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>/i);
-          var link = linkMatch ? linkMatch[1].trim() : "";
-          if (title) {
-            items.push({ title: title, source: feed.name, link: link });
-          }
-        }
-        return items;
+        return parseRssItems(xml, 3).map(function (item) {
+          return { title: item.title, source: feed.name, link: item.link };
+        });
       })
       .catch(function() { return []; });
   });

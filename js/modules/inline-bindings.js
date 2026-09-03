@@ -483,6 +483,11 @@ window.nymHapticTap = function (ms) {
             nym().openNostrProfileCard(t && t.dataset ? t.dataset.nostrPubkey : '', e);
             return false;
         },
+        'refreshPqDiagnostics':       function (e, t) { nym().refreshPqDiagnostics(); },
+        'copyPqDiagnostics':          function (e, t) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().copyPqDiagnostics();
+        },
         'copyNostrEventRef':          function (e, t) {
             if (e && e.stopPropagation) e.stopPropagation();
             nym().copyNostrEventRef(t && t.dataset ? t.dataset.nostrCopy : '', t);

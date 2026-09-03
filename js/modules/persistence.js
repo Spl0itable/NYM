@@ -25,6 +25,9 @@
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
     const META_PQ_KEYS = 'pqKeys';
+    // The announcement TTL, mirrored from pq.js: a publish stamps
+    // `exp = now + TTL`, so a stored row's expiry doubles as its signing time.
+    const PQ_KEY_TTL_SEC = 7 * 24 * 3600;
     const META_NYMCHAT_VOUCHES = 'nymchatVouches';
     const META_TRUSTED_PUBKEYS = 'trustedPubkeys';
     const META_POOL_SHARD_LAST_SEEN = 'poolShardLastSeen';
@@ -380,6 +383,12 @@
                             // login that cannot open it.
                             rec.pq1 ? 1 : 0,
                             rec.pq2 ? 1 : 0,
+                            // WHEN they announced. The send plan weighs this
+                            // against the last Bitchat-format message from the
+                            // same peer, so a restore that dropped it made that
+                            // comparison read "no announcement" and handed the
+                            // verdict to any Bitchat traffic, however old.
+                            rec.at || 0,
                         ]);
                     }
                     if (entries.length) this._cachePut('meta', { key: META_PQ_KEYS, entries });
@@ -438,7 +447,7 @@
                 if (!m || m.key !== META_PQ_KEYS || !Array.isArray(m.entries)) continue;
                 for (const e of m.entries) {
                     if (!Array.isArray(e) || e.length < 3) continue;
-                    const [pubkey, pkB64, exp, epoch, root, pq1, pq2] = e;
+                    const [pubkey, pkB64, exp, epoch, root, pq1, pq2, at] = e;
                     if (typeof pubkey !== 'string' || typeof exp !== 'number') continue;
                     if (exp <= nowSec) continue;
                     let pk = null;
@@ -446,12 +455,23 @@
                         try { pk = window.NymCrypto._b64uDecode(pkB64); } catch (_) { continue; }
                         if (!(pk instanceof Uint8Array) || pk.length !== 1184) continue;
                     }
+                    // A row written BEFORE the formats were recorded says
+                    // nothing about which one this peer accepts, and the only
+                    // format still produced is the layered one. Restoring such
+                    // a row's key would hand the send path a key it must refuse
+                    // to seal to (`pqLayeredKeyFor` needs `pq2`), so the entry
+                    // comes back KEYLESS: still proof the peer runs Nymchat —
+                    // which is what suppresses the Bitchat wrap — while leaving
+                    // the announcement lookup a reason to go and ask again.
+                    const preSplit = pq2 === undefined;
                     this.pqKeys.set(pubkey, {
-                        pk, exp, epoch: epoch || 0, root: root === 1,
-                        // Rows written before the split carried the legacy
-                        // format only, which is what they actually were.
+                        pk: preSplit ? null : pk,
+                        exp, epoch: epoch || 0, root: root === 1,
                         pq1: pq1 === undefined ? true : pq1 === 1,
-                        pq2: pq2 === 1
+                        pq2: pq2 === 1,
+                        // Every publish stamps `exp = now + TTL`, so the expiry
+                        // IS the signing time for a row written without one.
+                        at: at || (exp - PQ_KEY_TTL_SEC)
                     });
                 }
             }
