@@ -116,10 +116,7 @@ export async function catalogProModels(env, opts) {
   var rows, overrides = {};
   try {
     var rs = await replica(db).prepare(
-      "SELECT id, slug, name, author, author_slug, description, context_window, " +
-      "max_output_tokens, transport, request_formats, params, api_path, vision, function_calling, reasoning, " +
-      "base_credits, out_tokens_per_credit, credit_basis, hosting " +
-      "FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
+      "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
       "AND hosting = 'third-party' AND task_slug IN ('text-generation', 'image-text-to-text') " +
       "ORDER BY author_slug, slug"
     ).all();

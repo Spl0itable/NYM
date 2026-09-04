@@ -372,18 +372,18 @@ var BOT_PM_MAX_TOKENS = {
 var BOT_PRO_SATS_PER_CREDIT = 100;
 
 var BOT_PRO_MODELS = {
-  "claude-fable": { label: "Claude Fable 5", transport: "anthropic", model: "anthropic/claude-fable-5", baseCredits: 2, outTokensPerCredit: 600, maxTokens: 8192, vision: true },
-  "claude-opus": { label: "Claude Opus 5", transport: "anthropic", model: "anthropic/claude-opus-5", baseCredits: 1, outTokensPerCredit: 1200, maxTokens: 8192, vision: true },
-  "claude-sonnet": { label: "Claude Sonnet 5", transport: "anthropic", model: "anthropic/claude-sonnet-5", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
-  "claude-haiku": { label: "Claude Haiku 4.5", transport: "anthropic", model: "anthropic/claude-haiku-4.5", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 4096, vision: true },
-  "gpt-5": { label: "GPT-5.6 Sol", transport: "compat", model: "openai/gpt-5.6-sol", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
-  "gpt-5-mini": { label: "GPT-5.4 mini", transport: "compat", model: "openai/gpt-5.4-mini", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 8192, vision: true },
-  "gemini-pro": { label: "Gemini 3.1 Pro", transport: "compat", model: "google/gemini-3.1-pro", baseCredits: 1, outTokensPerCredit: 2500, maxTokens: 8192, vision: true },
-  "gemini-flash": { label: "Gemini 3.6 Flash", transport: "compat", model: "google/gemini-3.6-flash", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
-  "grok": { label: "Grok 4.6", transport: "compat", model: "xai/grok-4.6", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true },
-  "kimi": { label: "Kimi K3", transport: "compat", model: "moonshotai/kimi-k3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true },
-  "qwen": { label: "Qwen 3.5", transport: "compat", model: "alibaba/qwen3.5-397b-a17b", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 },
-  "minimax": { label: "MiniMax M3", transport: "compat", model: "minimax/m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 }
+  "claude-fable": { label: "Claude Fable 5", transport: "anthropic", model: "anthropic/claude-fable-5", baseCredits: 2, outTokensPerCredit: 600, maxTokens: 8192, vision: true , author: "Anthropic"},
+  "claude-opus": { label: "Claude Opus 5", transport: "anthropic", model: "anthropic/claude-opus-5", baseCredits: 1, outTokensPerCredit: 1200, maxTokens: 8192, vision: true , author: "Anthropic"},
+  "claude-sonnet": { label: "Claude Sonnet 5", transport: "anthropic", model: "anthropic/claude-sonnet-5", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true , author: "Anthropic"},
+  "claude-haiku": { label: "Claude Haiku 4.5", transport: "anthropic", model: "anthropic/claude-haiku-4.5", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 4096, vision: true , author: "Anthropic"},
+  "gpt-5": { label: "GPT-5.6 Sol", transport: "compat", model: "openai/gpt-5.6-sol", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true , author: "OpenAI"},
+  "gpt-5-mini": { label: "GPT-5.4 mini", transport: "compat", model: "openai/gpt-5.4-mini", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 8192, vision: true , author: "OpenAI"},
+  "gemini-pro": { label: "Gemini 3.1 Pro", transport: "compat", model: "google/gemini-3.1-pro", baseCredits: 1, outTokensPerCredit: 2500, maxTokens: 8192, vision: true , author: "Google"},
+  "gemini-flash": { label: "Gemini 3.6 Flash", transport: "compat", model: "google/gemini-3.6-flash", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true , author: "Google"},
+  "grok": { label: "Grok 4.6", transport: "compat", model: "xai/grok-4.6", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true , author: "xAI"},
+  "kimi": { label: "Kimi K3", transport: "compat", model: "moonshotai/kimi-k3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true , author: "Moonshot AI"},
+  "qwen": { label: "Qwen 3.5", transport: "compat", model: "alibaba/qwen3.5-397b-a17b", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 , author: "Alibaba"},
+  "minimax": { label: "MiniMax M3", transport: "compat", model: "minimax/m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 , author: "MiniMax"}
 };
 
 var BOT_PRO_MODEL_ALIASES = {
@@ -2245,16 +2245,22 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var seq = {};
     byNewest.forEach(function (k, i) { seq[k] = i; });
     var keys = byNewest.slice();
+    // The built-in fallback entries carry an author but no slug; derive one so
+    // a fallback still groups by provider instead of collapsing into "Other".
+    var slugOf = function (m) {
+      return (m.authorSlug || String(m.author || "").toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""));
+    };
     var rank = function (k) {
-      var a = (cat.models[k].authorSlug || "").toLowerCase();
+      var a = slugOf(cat.models[k]).toLowerCase();
       var i = order.indexOf(a);
       return i === -1 ? order.length : i;
     };
     keys.sort(function (a, b) {
       var d = rank(a) - rank(b);
       if (d) return d;
-      var aa = (cat.models[a].authorSlug || "");
-      var bb = (cat.models[b].authorSlug || "");
+      var aa = slugOf(cat.models[a]);
+      var bb = slugOf(cat.models[b]);
       if (aa !== bb) return aa < bb ? -1 : 1;
       return seq[a] - seq[b];
     });
@@ -2269,7 +2275,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           : m.baseCredits),
         description: m.description || "",
         author: m.author || "",
-        authorSlug: m.authorSlug || "",
+        authorSlug: slugOf(m),
         vision: !!m.vision,
         reasoning: !!m.reasoning,
         tools: !!m.tools,
