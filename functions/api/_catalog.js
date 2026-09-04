@@ -82,6 +82,25 @@ export function catalogTransport(id, requestFormats, stored) {
   return st || "compat";
 }
 
+export function catalogMaxTokensField(paramsJson, id) {
+  var p = parseJson(paramsJson, null);
+  if (p && typeof p === "object") {
+    if (p.max_completion_tokens) return "max_completion_tokens";
+    if (p.max_tokens) return "max_tokens";
+  }
+  // Nothing declared: OpenAI's newer models reject max_tokens, everyone else
+  // still takes it.
+  return /^openai\//.test(String(id || "")) ? "max_completion_tokens" : "max_tokens";
+}
+
+// Recomputed on read like the transport, so rows stored before the column
+// existed still answer. Mirrors apiPathFor() in the catalog worker.
+export function catalogApiPath(transport) {
+  if (transport === "responses") return "responses";
+  if (transport === "anthropic" || transport === "anthropic-compat") return "messages";
+  return "chat/completions";
+}
+
 var CACHE_MS = 5 * 60 * 1000;
 var cache = { at: 0, data: null };
 
@@ -98,7 +117,7 @@ export async function catalogProModels(env, opts) {
   try {
     var rs = await replica(db).prepare(
       "SELECT id, slug, name, author, author_slug, description, context_window, " +
-      "max_output_tokens, transport, request_formats, vision, function_calling, reasoning, " +
+      "max_output_tokens, transport, request_formats, params, api_path, vision, function_calling, reasoning, " +
       "base_credits, out_tokens_per_credit, credit_basis, hosting " +
       "FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
       "AND hosting = 'third-party' AND task_slug IN ('text-generation', 'image-text-to-text') " +
@@ -119,12 +138,13 @@ export async function catalogProModels(env, opts) {
   var models = {};
   var byModelId = {};
   var used = {};
-
   rows.forEach(function (r) {
     var patch = overrides[r.id] || {};
     var pc = patch.credits || {};
     // The bare slug is the key; a collision takes the author prefix. Ordered
     // by (author_slug, slug), so the assignment is stable run to run.
+    var transport = patch.transport ||
+      catalogTransport(r.id, r.request_formats, r.transport);
     var key = String(r.slug || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     if (!key) return;
     if (used[key]) key = (r.author_slug || "x") + "-" + key;
@@ -135,8 +155,7 @@ export async function catalogProModels(env, opts) {
       r.context_window && r.context_window < 8192 ? r.context_window : 8192);
     var entry = {
       label: patch.name || r.name || r.slug,
-      transport: patch.transport ||
-        catalogTransport(r.id, r.request_formats, r.transport),
+      transport: transport,
       model: r.id,
       baseCredits: pc.base != null ? pc.base : (r.base_credits != null ? r.base_credits : 1),
       outTokensPerCredit: pc.outTokensPerCredit != null ? pc.outTokensPerCredit
@@ -149,6 +168,14 @@ export async function catalogProModels(env, opts) {
       author: patch.author || r.author || "",
       authorSlug: r.author_slug || "",
       description: catalogBlurb(patch.description || r.description),
+      // Which field this model's own docs page declares for the output cap.
+      // Guessing it from the provider prefix was wrong for anyone who does not
+      // follow their vendor's house style.
+      maxTokensField: catalogMaxTokensField(r.params, r.id),
+      // The path this model's request goes to under whichever base URL the
+      // worker picks, so the endpoint travels with the body shape.
+      apiPath: r.api_path || catalogApiPath(transport),
+      params: parseJson(r.params, null),
       // A model Cloudflare only prices in its dashboard is charged at the
       // conservative default; the apps grey these rather than hide them.
       priced: (pc.basis || r.credit_basis) !== "default"

@@ -815,6 +815,11 @@ function proApiToken(env) {
   return env.CF_API_TOKEN || env.AI_GATEWAY_API_TOKEN || "";
 }
 
+function proSwapApiPath(url, apiPath) {
+  if (!apiPath || apiPath === "chat/completions") return url;
+  return String(url).replace(/\/(?:chat\/completions|messages|responses)\/?$/, "/" + apiPath);
+}
+
 function proCompatEndpoints(env) {
   var ids = proGatewayIds(env);
   var out = [];
@@ -872,44 +877,85 @@ function proBoundProviderAvailable(env) {
 // declared home; the rest are the routes that can still answer if that one is
 // misconfigured. Nothing is charged until a transport actually returns text,
 // so a dead route costs the user nothing.
-function proTransportPlan(env, modelId, transport) {
+function proTransportPlan(env, modelId, transport, maxTokensField, apiPath) {
   var plan = [];
+  // Stamped onto every step below, so proAttempt does not have to re-derive it.
+  var stamp = function (steps) {
+    steps.forEach(function (st) {
+      if (maxTokensField) st.maxTokensField = maxTokensField;
+      if (!st.apiPath && apiPath) st.apiPath = apiPath;
+    });
+    return steps;
+  };
   if (transport === "wai" || /^@cf\//.test(modelId)) {
     // Cloudflare hosts these weights: the binding needs no gateway at all.
     if (proBindingAvailable(env)) plan.push({ kind: "bound", model: modelId });
     plan.push({ kind: "compat", model: proCompatSlug(modelId) });
-    return plan;
+    return stamp(plan);
   }
   if (transport === "anthropic" || /^anthropic\//.test(modelId)) {
+    plan.push({ kind: "compat", model: modelId, apiPath: "messages" });
     if (proAnthropicNativeUrl(env)) plan.push({ kind: "anthropic", model: modelId });
     if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId, anthropicBody: true });
-    if (!plan.length) plan.push({ kind: "compat", model: modelId });
-    return plan;
+    return stamp(plan);
   }
-  // Someone else's model that speaks the Anthropic Messages shape (Tinker's
-  // inkling, say). The gateway's /anthropic/ provider route forwards to
-  // Anthropic and answers "x-api-key header is required", so it is exactly the
-  // route to avoid — but the body still has to be anthropicized or the
-  // provider rejects it as malformed input.
   if (transport === "anthropic-compat") {
+    plan.push({ kind: "compat", model: modelId, apiPath: "messages" });
     if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId, anthropicBody: true });
-    plan.push({ kind: "compat", model: modelId });
-    return plan;
+    return stamp(plan);
   }
-  // OpenAI's Responses API. /v1/chat/completions rejects these outright
-  // ("this is not a chat model"), so that route is not worth an attempt — the
-  // binding is the only one we can speak today.
   if (transport === "responses") {
-    if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
-    return plan;
+    plan.push({ kind: "compat", model: modelId, apiPath: "responses" });
+    return stamp(plan);
   }
-  if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
   plan.push({ kind: "compat", model: modelId });
-  return plan;
+  if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
+  return stamp(plan);
+}
+
+// OpenAI's Responses API takes `input` rather than `messages`, hoists the
+// system prompt to `instructions`, and caps output with `max_output_tokens`.
+function responsesRequest(messages, maxTokens) {
+  var instructions = "";
+  var input = [];
+  for (var i = 0; i < (messages || []).length; i++) {
+    var m = messages[i];
+    if (!m) continue;
+    if (m.role === "system") {
+      instructions += (instructions ? "\n\n" : "") + (typeof m.content === "string" ? m.content : "");
+      continue;
+    }
+    input.push({ role: m.role, content: m.content });
+  }
+  var req = { input: input, max_output_tokens: maxTokens };
+  if (instructions) req.instructions = instructions;
+  return req;
+}
+
+// A Responses reply nests its text under output[] > content[] > output_text.
+function responsesText(payload) {
+  var body = payload;
+  if (body && typeof body === "object" && body.result && typeof body.result === "object") body = body.result;
+  if (!body || typeof body !== "object") return null;
+  if (typeof body.output_text === "string" && body.output_text) return { content: body.output_text };
+  if (!Array.isArray(body.output)) return null;
+  var text = "";
+  for (var i = 0; i < body.output.length; i++) {
+    var item = body.output[i];
+    if (!item || !Array.isArray(item.content)) continue;
+    for (var c = 0; c < item.content.length; c++) {
+      var block = item.content[c];
+      if (!block) continue;
+      if (block.type === "output_text" || block.type === "text") text += block.text || "";
+    }
+  }
+  return text ? { content: text } : null;
 }
 
 function proNormalizeMessage(resp) {
   if (!resp || typeof resp !== "object") return null;
+  var viaResponses = responsesText(resp);
+  if (viaResponses) return viaResponses;
   if (typeof resp.result === "string" && resp.result) return { content: resp.result };
   if (resp.result && typeof resp.result === "object" &&
       (resp.result.choices || resp.result.content || typeof resp.result.response === "string")) {
@@ -1054,9 +1100,10 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
     } else {
       boundReq = { messages: messages };
       if (tools && tools.length) boundReq.tools = tools;
-      // OpenAI's newest models reject max_tokens in favor of this.
-      if (/^openai\//.test(step.model)) boundReq.max_completion_tokens = maxTokens;
-      else boundReq.max_tokens = maxTokens;
+      // The field the model's own docs page declares, falling back to the
+      // provider-prefix guess when the catalog has nothing to say.
+      boundReq[step.maxTokensField || (/^openai\//.test(step.model)
+        ? "max_completion_tokens" : "max_tokens")] = maxTokens;
     }
     var opts = env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
     var bound;
@@ -1081,20 +1128,38 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
       Object.assign({ model: proAnthropicModelId(step.model) }, nativeReq));
   }
 
-  var req = { messages: messages };
-  if (tools && tools.length) req.tools = tools;
-  // OpenAI's newest models reject max_tokens in favor of this.
-  if (/^openai\//.test(step.model)) req.max_completion_tokens = maxTokens;
-  else req.max_tokens = maxTokens;
+  // The unified endpoints take the catalog id verbatim ("anthropic/
+  // claude-fable-5.1") and the body shape their path implies. Only the
+  // provider-native gateway route wants a bare, provider-local model name.
+  var req;
+  if (step.apiPath === "responses") {
+    req = responsesRequest(messages, maxTokens);
+  } else if (step.apiPath === "messages") {
+    req = anthropicizeRequest(messages, maxTokens, tools);
+  } else {
+    req = { messages: messages };
+    if (tools && tools.length) req.tools = tools;
+    req[step.maxTokensField || (/^openai\//.test(step.model)
+      ? "max_completion_tokens" : "max_tokens")] = maxTokens;
+  }
 
   var endpoints = proCompatEndpoints(env);
+  // /ai/v1/messages and /ai/v1/responses are documented on the account REST
+  // endpoint; the gateway's /compat/ path is the chat-completions shim. Try
+  // the documented one first for those paths so a working route isn't reached
+  // only after a 404 on a route that never carried them.
+  if (step.apiPath && step.apiPath !== "chat/completions") {
+    endpoints = endpoints.slice().sort(function (a, b) {
+      return (a.kind === "api" ? 0 : 1) - (b.kind === "api" ? 0 : 1);
+    });
+  }
   if (!endpoints.length) {
     throw new Error("Nymbot Pro needs AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_NAME (or AI_GATEWAY_URL) configured on the worker.");
   }
   var lastErr = null;
   for (var i = 0; i < endpoints.length; i++) {
     try {
-      return await proHttpChat(endpoints[i].url,
+      return await proHttpChat(proSwapApiPath(endpoints[i].url, step.apiPath),
         proCompatHeaders(env, endpoints[i].kind),
         Object.assign({ model: step.model }, req));
     } catch (e) {
@@ -1127,7 +1192,9 @@ function proWorthRetrying(err) {
 async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
   var modelId = typeof proModel === "string" ? proModel : proModel.model;
   var transport = typeof proModel === "string" ? "" : (proModel.transport || "");
-  var plan = proTransportPlan(env, modelId, transport);
+  var plan = proTransportPlan(env, modelId, transport,
+    typeof proModel === "string" ? "" : (proModel.maxTokensField || ""),
+    typeof proModel === "string" ? "" : (proModel.apiPath || ""));
   if (!plan.length) {
     if (transport === "responses") {
       throw new Error("This model uses OpenAI's Responses API, which needs the AI " +

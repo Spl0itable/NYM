@@ -2852,9 +2852,7 @@ Object.assign(NYM.prototype, {
         }
         this._renderBotModelList('');
         modal.classList.add('active');
-        // Refresh in the background: the picker shows the cached list at once
-        // and redraws if the catalog has moved on.
-        this._loadBotProCatalog().then((cat) => {
+        this._loadBotProCatalog(true).then((cat) => {
             if (cat && modal.classList.contains('active')) {
                 this._renderBotModelList(search ? search.value : '');
             }
