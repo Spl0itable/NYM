@@ -895,8 +895,8 @@ function proTransportPlan(env, modelId, transport, maxTokensField, apiPath) {
   }
   if (transport === "anthropic" || /^anthropic\//.test(modelId)) {
     plan.push({ kind: "compat", model: modelId, apiPath: "messages" });
-    if (proAnthropicNativeUrl(env)) plan.push({ kind: "anthropic", model: modelId });
     if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId, anthropicBody: true });
+    if (proAnthropicNativeUrl(env)) plan.push({ kind: "anthropic", model: modelId });
     return stamp(plan);
   }
   if (transport === "anthropic-compat") {
@@ -906,6 +906,9 @@ function proTransportPlan(env, modelId, transport, maxTokensField, apiPath) {
   }
   if (transport === "responses") {
     plan.push({ kind: "compat", model: modelId, apiPath: "responses" });
+    if (proBoundProviderAvailable(env)) {
+      plan.push({ kind: "bound", model: modelId, apiPath: "responses" });
+    }
     return stamp(plan);
   }
   plan.push({ kind: "compat", model: modelId });
@@ -1095,7 +1098,9 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
     // Anthropic speaks its own request shape even behind the binding — the
     // OpenAI-style body is what loses its content blocks.
     var boundReq;
-    if (step.anthropicBody || /^anthropic\//.test(step.model)) {
+    if (step.apiPath === "responses") {
+      boundReq = responsesRequest(messages, maxTokens);
+    } else if (step.anthropicBody || /^anthropic\//.test(step.model)) {
       boundReq = anthropicizeRequest(messages, maxTokens, tools);
     } else {
       boundReq = { messages: messages };
