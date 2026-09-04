@@ -57,6 +57,31 @@ export function catalogBlurb(text, limit) {
   return (sp > 40 ? cut.slice(0, sp) : cut) + "…";
 }
 
+export function catalogTransport(id, requestFormats, stored) {
+  var rf = String(requestFormats || "").toLowerCase();
+  if (/^@(?:cf|hf)\//.test(id)) return "wai";
+  // Anthropic's own models, and only those, may take the gateway's Anthropic
+  // provider route — it forwards to Anthropic and demands an x-api-key.
+  if (/^anthropic\//.test(id)) return "anthropic";
+  // request_formats is a LIST ("Responses, Chat Completions"), so pick the
+  // format we serve best rather than the first one that matches. Chat
+  // Completions wins wherever it is offered: it is the route the compat
+  // endpoint and the binding both speak, and most models list it alongside a
+  // second option they support equally.
+  if (/chat completions/.test(rf)) return "compat";
+  // Anthropic's body shape from a vendor that is not Anthropic (Tinker's
+  // inkling): same body, unified endpoint.
+  if (/anthropic\s*messages/.test(rf)) return "anthropic-compat";
+  // Responses-only. /v1/chat/completions rejects these outright.
+  if (/response/.test(rf)) return "responses";
+  if (rf) return "compat";
+  // No request_formats on the row: fall back to whatever was stored, but
+  // never to a provider-specific route we can't justify from the id.
+  var st = String(stored || "");
+  if (st === "anthropic") return "compat";
+  return st || "compat";
+}
+
 var CACHE_MS = 5 * 60 * 1000;
 var cache = { at: 0, data: null };
 
@@ -73,7 +98,7 @@ export async function catalogProModels(env, opts) {
   try {
     var rs = await replica(db).prepare(
       "SELECT id, slug, name, author, author_slug, description, context_window, " +
-      "max_output_tokens, transport, vision, function_calling, reasoning, " +
+      "max_output_tokens, transport, request_formats, vision, function_calling, reasoning, " +
       "base_credits, out_tokens_per_credit, credit_basis, hosting " +
       "FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
       "AND hosting = 'third-party' AND task_slug IN ('text-generation', 'image-text-to-text') " +
@@ -110,7 +135,8 @@ export async function catalogProModels(env, opts) {
       r.context_window && r.context_window < 8192 ? r.context_window : 8192);
     var entry = {
       label: patch.name || r.name || r.slug,
-      transport: patch.transport || r.transport || "compat",
+      transport: patch.transport ||
+        catalogTransport(r.id, r.request_formats, r.transport),
       model: r.id,
       baseCredits: pc.base != null ? pc.base : (r.base_credits != null ? r.base_credits : 1),
       outTokensPerCredit: pc.outTokensPerCredit != null ? pc.outTokensPerCredit
@@ -149,6 +175,20 @@ function familyOf(key) {
 function versionScore(key) {
   var nums = String(key || "").match(/[0-9]+/g) || [];
   return nums.reduce(function (acc, n, i) { return acc + parseInt(n, 10) / Math.pow(1000, i); }, 0);
+}
+
+// Newest first, by version
+export function catalogSortKeys(models, keys) {
+  var list = (keys || Object.keys(models)).slice();
+  var meta = {};
+  list.forEach(function (k) { meta[k] = { fam: familyOf(k), v: versionScore(k) }; });
+  list.sort(function (a, b) {
+    var ma = meta[a], mb = meta[b];
+    if (mb.v !== ma.v) return mb.v - ma.v;
+    if (ma.fam !== mb.fam) return ma.fam < mb.fam ? -1 : 1;
+    return a < b ? -1 : 1;
+  });
+  return list;
 }
 
 export function catalogAliases(models) {

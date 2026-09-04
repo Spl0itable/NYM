@@ -37,7 +37,7 @@
 import { ledgerCall } from "./_ledger.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
-import { catalogProModels, catalogAliases } from "./_catalog.js";
+import { catalogProModels, catalogAliases, catalogSortKeys } from "./_catalog.js";
 import {
   PQ_D_TAG,
   pqAwareDecrypt,
@@ -882,8 +882,25 @@ function proTransportPlan(env, modelId, transport) {
   }
   if (transport === "anthropic" || /^anthropic\//.test(modelId)) {
     if (proAnthropicNativeUrl(env)) plan.push({ kind: "anthropic", model: modelId });
-    if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
+    if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId, anthropicBody: true });
     if (!plan.length) plan.push({ kind: "compat", model: modelId });
+    return plan;
+  }
+  // Someone else's model that speaks the Anthropic Messages shape (Tinker's
+  // inkling, say). The gateway's /anthropic/ provider route forwards to
+  // Anthropic and answers "x-api-key header is required", so it is exactly the
+  // route to avoid — but the body still has to be anthropicized or the
+  // provider rejects it as malformed input.
+  if (transport === "anthropic-compat") {
+    if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId, anthropicBody: true });
+    plan.push({ kind: "compat", model: modelId });
+    return plan;
+  }
+  // OpenAI's Responses API. /v1/chat/completions rejects these outright
+  // ("this is not a chat model"), so that route is not worth an attempt — the
+  // binding is the only one we can speak today.
+  if (transport === "responses") {
+    if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
     return plan;
   }
   if (proBoundProviderAvailable(env)) plan.push({ kind: "bound", model: modelId });
@@ -1032,7 +1049,7 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
     // Anthropic speaks its own request shape even behind the binding — the
     // OpenAI-style body is what loses its content blocks.
     var boundReq;
-    if (/^anthropic\//.test(step.model)) {
+    if (step.anthropicBody || /^anthropic\//.test(step.model)) {
       boundReq = anthropicizeRequest(messages, maxTokens, tools);
     } else {
       boundReq = { messages: messages };
@@ -1111,7 +1128,13 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
   var modelId = typeof proModel === "string" ? proModel : proModel.model;
   var transport = typeof proModel === "string" ? "" : (proModel.transport || "");
   var plan = proTransportPlan(env, modelId, transport);
-  if (!plan.length) throw new Error("Nymbot Pro is not configured.");
+  if (!plan.length) {
+    if (transport === "responses") {
+      throw new Error("This model uses OpenAI's Responses API, which needs the AI " +
+        "binding and AI_GATEWAY_NAME configured on the worker. Pick another model with ?model.");
+    }
+    throw new Error("Nymbot Pro is not configured.");
+  }
   var errors = [];
   for (var i = 0; i < plan.length; i++) {
     try {
@@ -2150,7 +2173,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "models") {
     var cat = await botProCatalog(env);
     var order = ["anthropic", "openai", "google", "xai", "moonshotai", "minimax", "alibaba", "deepseek", "meta", "mistralai"];
-    var keys = Object.keys(cat.models);
+    // Providers in a curated order, then newest model first inside each one.
+    var byNewest = catalogSortKeys(cat.models);
+    var seq = {};
+    byNewest.forEach(function (k, i) { seq[k] = i; });
+    var keys = byNewest.slice();
     var rank = function (k) {
       var a = (cat.models[k].authorSlug || "").toLowerCase();
       var i = order.indexOf(a);
@@ -2162,7 +2189,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var aa = (cat.models[a].authorSlug || "");
       var bb = (cat.models[b].authorSlug || "");
       if (aa !== bb) return aa < bb ? -1 : 1;
-      return a < b ? -1 : 1;
+      return seq[a] - seq[b];
     });
     var list = keys.map(function (k) {
       var m = cat.models[k];
