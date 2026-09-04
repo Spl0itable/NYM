@@ -17,7 +17,55 @@ class ProModel {
     required this.modelId,
     required this.baseCredits,
     this.max,
+    this.description = '',
+    this.author = '',
+    this.authorSlug = '',
+    this.vision = false,
+    this.reasoning = false,
+    this.tools = false,
+    this.context,
+    this.priced = true,
   });
+
+  /// One entry from the worker's `models` action, which serves the live
+  /// Cloudflare catalog (mirrored hourly into D1) rather than [kProModels].
+  factory ProModel.fromJson(Map<String, dynamic> j) {
+    int? asInt(Object? v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
+    return ProModel(
+      key: (j['key'] ?? '').toString(),
+      label: (j['label'] ?? j['key'] ?? '').toString(),
+      // The live catalog keys by slug and carries the id separately; older
+      // payloads may omit it.
+      modelId: (j['model'] ?? j['modelId'] ?? '').toString(),
+      baseCredits: asInt(j['credits']) ?? asInt(j['baseCredits']) ?? 1,
+      max: asInt(j['max']),
+      description: (j['description'] ?? '').toString(),
+      author: (j['author'] ?? '').toString(),
+      authorSlug: (j['authorSlug'] ?? '').toString(),
+      vision: j['vision'] == true,
+      reasoning: j['reasoning'] == true,
+      tools: j['tools'] == true,
+      context: asInt(j['context']),
+      // Absent means "assume priced" so an older worker doesn't grey the list.
+      priced: j['priced'] != false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'key': key,
+        'label': label,
+        'model': modelId,
+        'credits': baseCredits,
+        if (max != null) 'max': max,
+        if (description.isNotEmpty) 'description': description,
+        if (author.isNotEmpty) 'author': author,
+        if (authorSlug.isNotEmpty) 'authorSlug': authorSlug,
+        'vision': vision,
+        'reasoning': reasoning,
+        'tools': tools,
+        if (context != null) 'context': context,
+        'priced': priced,
+      };
 
   /// Value passed to the worker as `proModel`, e.g. `claude-opus`.
   final String key;
@@ -41,6 +89,27 @@ class ProModel {
   /// `_botProModels[].max`, pms.js:2085-2091). Null/<= [baseCredits] means the
   /// model is flat-priced. Optional so existing call sites are unaffected.
   final int? max;
+
+  /// One-line blurb from the model's Cloudflare page. Empty for the built-in
+  /// fallback entries, which predate the live catalog.
+  final String description;
+
+  /// Provider display name (`Anthropic`) and slug (`anthropic`), used to group
+  /// the picker. Empty on the built-in fallback entries.
+  final String author;
+  final String authorSlug;
+
+  /// Capability flags from the catalog's tags.
+  final bool vision;
+  final bool reasoning;
+  final bool tools;
+
+  /// Context window in tokens, when the catalog knows it.
+  final int? context;
+
+  /// False when Cloudflare publishes no price for the model, so the worker is
+  /// charging its conservative default. Shown as a caveat rather than hidden.
+  final bool priced;
 
   /// The PWA's `_botProPriceLabel` (pms.js:2096-2098): `"<n> Pro credit(s)/reply"`
   /// for flat models, else `"from <base>, up to <max> for max-length replies"`.
@@ -152,6 +221,156 @@ const Map<String, String> kProModelAliases = {
   'claude-opus-4.8': 'claude-opus',
   'claude-sonnet-4.6': 'claude-sonnet',
 };
+
+/// One provider's models in the picker, in the order the worker returned them.
+class ProModelGroup {
+  const ProModelGroup({
+    required this.author,
+    required this.authorSlug,
+    required this.keys,
+  });
+
+  factory ProModelGroup.fromJson(Map<String, dynamic> j) {
+    final rawKeys = j['keys'];
+    return ProModelGroup(
+      author: (j['author'] ?? '').toString(),
+      authorSlug: (j['authorSlug'] ?? '').toString(),
+      keys: [
+        for (final k in (rawKeys is List ? rawKeys : const [])) k.toString(),
+      ],
+    );
+  }
+
+  Map<String, dynamic> toJson() =>
+      {'author': author, 'authorSlug': authorSlug, 'keys': keys};
+
+  final String author;
+  final String authorSlug;
+  final List<String> keys;
+}
+
+/// The Pro model list the picker renders.
+///
+/// [kProModelCatalogFallback] is [kProModels] — what ships in the binary and
+/// what renders whenever the live catalog can't be reached. A fetched catalog
+/// replaces it wholesale; nothing merges, so the worker stays the single
+/// source of truth for what a reply costs.
+class ProModelCatalog {
+  const ProModelCatalog({
+    required this.models,
+    this.groups = const [],
+    this.aliases = const {},
+    this.source = 'builtin',
+    this.fetchedAt = 0,
+  });
+
+  factory ProModelCatalog.fromJson(Map<String, dynamic> j) {
+    // Every field is type-checked rather than cast: a malformed response has
+    // to degrade to the built-in list, not throw out of a background refresh.
+    final rawModels = j['models'];
+    final rawGroups = j['groups'];
+    final rawAliases = j['aliases'];
+    final models = [
+      for (final m in (rawModels is List ? rawModels : const []))
+        if (m is Map) ProModel.fromJson(m.cast<String, dynamic>()),
+    ]..removeWhere((m) => m.key.isEmpty);
+    return ProModelCatalog(
+      models: models,
+      groups: [
+        for (final g in (rawGroups is List ? rawGroups : const []))
+          if (g is Map) ProModelGroup.fromJson(g.cast<String, dynamic>()),
+      ],
+      aliases: {
+        if (rawAliases is Map)
+          for (final e in rawAliases.entries)
+            e.key.toString(): e.value.toString(),
+      },
+      source: (j['source'] ?? '').toString(),
+      fetchedAt: (j['fetchedAt'] is num)
+          ? (j['fetchedAt'] as num).toInt()
+          : DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'models': [for (final m in models) m.toJson()],
+        'groups': [for (final g in groups) g.toJson()],
+        'aliases': aliases,
+        'source': source,
+        'fetchedAt': fetchedAt,
+      };
+
+  final List<ProModel> models;
+  final List<ProModelGroup> groups;
+
+  /// Retired/short keys mapped to a current one, so a model pinned before a
+  /// version bump (`claude-opus` → `claude-opus-5`) keeps resolving.
+  final Map<String, String> aliases;
+
+  /// `catalog` when the worker served the live list, `builtin` when it fell
+  /// back to its own table.
+  final String source;
+  final int fetchedAt;
+
+  bool get isEmpty => models.isEmpty;
+
+  ProModel? byKey(String key) {
+    final k = key.trim().toLowerCase();
+    if (k.isEmpty) return null;
+    ProModel? exact(String want) {
+      for (final m in models) {
+        if (m.key == want) return m;
+      }
+      return null;
+    }
+
+    final direct = exact(k);
+    if (direct != null) return direct;
+
+    // Aliases chain: a retired built-in key ("claude-opus-4.8") maps to a
+    // family name ("claude-opus"), which the live map maps to the current
+    // model ("claude-opus-5"). Bounded, and it never revisits a key, so a
+    // cycle in the served map can't hang the picker.
+    var cur = k;
+    final seen = <String>{cur};
+    for (var hop = 0; hop < 4; hop++) {
+      final next = aliases[cur] ?? kProModelAliases[cur];
+      if (next == null || !seen.add(next)) break;
+      final hit = exact(next);
+      if (hit != null) return hit;
+      cur = next;
+    }
+
+    // A full model id also resolves, for a preference stored by id.
+    for (final m in models) {
+      if (m.modelId.isNotEmpty && m.modelId == key) return m;
+    }
+    return null;
+  }
+
+  /// Groups as the picker draws them: the worker's grouping when present,
+  /// otherwise one unnamed group holding everything.
+  List<MapEntry<String, List<ProModel>>> grouped() {
+    if (groups.isEmpty) {
+      return [MapEntry('', List<ProModel>.unmodifiable(models))];
+    }
+    final byKeyMap = {for (final m in models) m.key: m};
+    final out = <MapEntry<String, List<ProModel>>>[];
+    for (final g in groups) {
+      final rows = [
+        for (final k in g.keys)
+          if (byKeyMap[k] != null) byKeyMap[k]!,
+      ];
+      if (rows.isNotEmpty) out.add(MapEntry(g.author, rows));
+    }
+    return out;
+  }
+}
+
+/// The catalog that ships in the binary — used until a live one arrives, and
+/// whenever the worker is unreachable.
+const ProModelCatalog kProModelCatalogFallback =
+    ProModelCatalog(models: kProModels);
 
 /// A single PM-only Nymbot command, surfaced by the `?…` suggestion palette
 /// inside the private bot chat (PWA `botPMCommands`, commands.js:272-281).

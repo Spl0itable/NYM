@@ -380,19 +380,25 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   void _showModelPicker(BuildContext context) {
     final c = _colors(context);
     final current = ref.read(botChatControllerProvider).proModel;
+    // Refresh in the background: the sheet opens on the cached list and
+    // rebuilds if the catalog has moved on.
+    ref.read(proModelCatalogProvider.notifier).refresh();
     showModalBottomSheet<void>(
       context: context,
       // Without this the sheet is capped at 9/16 of the screen, which the
       // catalog outgrew.
       isScrollControlled: true,
       backgroundColor: c.bgSecondary,
-      builder: (_) => ProModelPickerSheet(
-        colors: c,
-        current: current,
-        onSelected: (m) {
-          ref.read(botChatControllerProvider.notifier).setModelDirect(m);
-          Navigator.pop(context);
-        },
+      builder: (_) => Consumer(
+        builder: (_, sheetRef, __) => ProModelPickerSheet(
+          colors: c,
+          catalog: sheetRef.watch(proModelCatalogProvider),
+          current: current,
+          onSelected: (m) {
+            ref.read(botChatControllerProvider.notifier).setModelDirect(m);
+            Navigator.pop(context);
+          },
+        ),
       ),
     );
   }
@@ -2624,18 +2630,31 @@ class _BotTranslateLangRowState extends State<_BotTranslateLangRow> {
 /// catalog plus the standard auto-routing row.
 ///
 /// Split out of [_showModelPicker] so the layout can be pumped directly at a
-/// small surface size in tests. The row count tracks [kProModels], which grows
-/// as models are added, so "does it still fit" is not a safe assumption — the
-/// list scrolls and the sheet is capped below the screen height instead.
-class ProModelPickerSheet extends StatelessWidget {
+/// small surface size in tests. The rows come from the live catalog now, which
+/// runs to dozens of models and changes without an app release, so "does it
+/// still fit" is not a property to rely on — the list scrolls, the sheet is
+/// capped below the screen height, and a search field narrows it.
+///
+/// [catalog] null or empty falls back to [kProModelCatalogFallback], the list
+/// compiled into the binary, so the sheet is never blank.
+/// Identifies the scrolling model list inside [ProModelPickerSheet], so tests
+/// can target it rather than whichever Scrollable happens to come first.
+const Key proModelListKey = ValueKey('proModelList');
+
+class ProModelPickerSheet extends StatefulWidget {
   const ProModelPickerSheet({
     super.key,
     required this.colors,
     required this.current,
     required this.onSelected,
+    this.catalog,
   });
 
   final NymColors colors;
+
+  /// The live catalog. Null (or empty) falls back to the list compiled into
+  /// the binary, so the sheet is never blank.
+  final ProModelCatalog? catalog;
 
   /// Currently pinned model, or null for standard auto-routing.
   final ProModel? current;
@@ -2644,8 +2663,119 @@ class ProModelPickerSheet extends StatelessWidget {
   final ValueChanged<ProModel?> onSelected;
 
   @override
+  State<ProModelPickerSheet> createState() => _ProModelPickerSheetState();
+}
+
+class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  ProModelCatalog get _catalog {
+    final c = widget.catalog;
+    return (c == null || c.isEmpty) ? kProModelCatalogFallback : c;
+  }
+
+  bool _matches(ProModel m) {
+    if (_query.isEmpty) return true;
+    final q = _query;
+    return m.key.toLowerCase().contains(q) ||
+        m.label.toLowerCase().contains(q) ||
+        m.author.toLowerCase().contains(q) ||
+        m.description.toLowerCase().contains(q);
+  }
+
+  /// "vision · reasoning · tools" — only the flags the catalog actually set.
+  String _tagLine(ProModel m) {
+    final tags = <String>[
+      if (m.vision) tr('vision'),
+      if (m.reasoning) tr('reasoning'),
+      if (m.tools) tr('tools'),
+    ];
+    return tags.join(' · ');
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final c = colors;
+    final c = widget.colors;
+    final current = widget.current;
+    final groups = _catalog.grouped();
+    final rows = <Widget>[];
+
+    if (_query.isEmpty) {
+      rows.add(ListTile(
+        leading: Icon(Icons.auto_awesome, color: c.blue),
+        title:
+            Text(tr('Standard (auto-routed)'), style: TextStyle(color: c.text)),
+        subtitle: Text(tr('Best model per task · 10 sats each'),
+            style: TextStyle(color: c.textDim, fontSize: 11)),
+        trailing: current == null ? Icon(Icons.check, color: c.primary) : null,
+        onTap: () => widget.onSelected(null),
+      ));
+      rows.add(Divider(height: 1, color: c.border));
+    }
+
+    var shown = 0;
+    for (final g in groups) {
+      final models = g.value.where(_matches).toList();
+      if (models.isEmpty) continue;
+      if (g.key.isNotEmpty) {
+        rows.add(Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+          child: Text(g.key.toUpperCase(),
+              style: TextStyle(
+                  color: c.textDim,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.6)),
+        ));
+      }
+      for (final m in models) {
+        shown++;
+        final tags = _tagLine(m);
+        rows.add(ListTile(
+          leading: Icon(Icons.bolt, color: c.primary),
+          title: Text(m.label, style: TextStyle(color: c.text)),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (m.description.isNotEmpty)
+                Text(m.description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: c.text.withValues(alpha: 0.75), fontSize: 11)),
+              // The human price-range phrase, not the id (PWA `?model` list).
+              Text(
+                  tags.isEmpty
+                      ? m.priceLabel
+                      : '${m.priceLabel} — $tags',
+                  style: TextStyle(color: c.textDim, fontSize: 11)),
+            ],
+          ),
+          isThreeLine: m.description.isNotEmpty,
+          trailing:
+              current?.key == m.key ? Icon(Icons.check, color: c.primary) : null,
+          onTap: () => widget.onSelected(m),
+        ));
+      }
+    }
+
+    if (shown == 0) {
+      rows.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+        child: Text(tr('No model matches your search.'),
+            textAlign: TextAlign.center,
+            style: TextStyle(color: c.textDim, fontSize: 13)),
+      ));
+    }
+
     return SafeArea(
       child: ConstrainedBox(
         // Leaves the sheet clear of the status bar even when the catalog is
@@ -2682,38 +2812,42 @@ class ProModelPickerSheet extends StatelessWidget {
                 ],
               ),
             ),
-            // Only the models scroll; the header stays put.
+            // The catalog is live and can run to dozens of models, so the
+            // sheet needs a filter to stay usable.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: TextField(
+                controller: _search,
+                onChanged: (v) =>
+                    setState(() => _query = v.trim().toLowerCase()),
+                style: TextStyle(color: c.text, fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: tr('Search models…'),
+                  hintStyle: TextStyle(color: c.textDim, fontSize: 13),
+                  prefixIcon: Icon(Icons.search, size: 18, color: c.textDim),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: c.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: c.primary),
+                  ),
+                ),
+              ),
+            ),
+            // Only the models scroll; the header and search stay put. The
+            // key names this list specifically — the search field brings its
+            // own Scrollable, so "the first Scrollable" is no longer the list.
             Flexible(
               child: ListView(
+                key: proModelListKey,
                 shrinkWrap: true,
                 padding: EdgeInsets.zero,
-                children: [
-                  ListTile(
-                    leading: Icon(Icons.auto_awesome, color: c.blue),
-                    title: Text(tr('Standard (auto-routed)'),
-                        style: TextStyle(color: c.text)),
-                    subtitle: Text(tr('Best model per task · 10 sats each'),
-                        style: TextStyle(color: c.textDim, fontSize: 11)),
-                    trailing: current == null
-                        ? Icon(Icons.check, color: c.primary)
-                        : null,
-                    onTap: () => onSelected(null),
-                  ),
-                  Divider(height: 1, color: c.border),
-                  for (final m in kProModels)
-                    ListTile(
-                      leading: Icon(Icons.bolt, color: c.primary),
-                      title: Text(m.label, style: TextStyle(color: c.text)),
-                      // PWA `?model` list: the human price-range phrase, not
-                      // the id.
-                      subtitle: Text(m.priceLabel,
-                          style: TextStyle(color: c.textDim, fontSize: 11)),
-                      trailing: current?.key == m.key
-                          ? Icon(Icons.check, color: c.primary)
-                          : null,
-                      onTap: () => onSelected(m),
-                    ),
-                ],
+                children: rows,
               ),
             ),
           ],

@@ -1211,7 +1211,40 @@ class NostrService {
 
   /// Candidate secret keys for unwrap: our identity key plus any registered
   /// ephemeral group keys.
-  List<giftwrap.UnwrapCandidate> _candidates() {
+  /// How many ephemeral keys get paired with our ML-KEM epochs. The wrap's `p`
+  /// tag names the right one and [_orderedEphemeralSks] puts it first, so the
+  /// common case is one decapsulation; the spare covers a stale p tag.
+  static const int _ephPqPairingLimit = 2;
+
+  /// Our ephemeral group secret keys with the one [wrap] is addressed to first.
+  List<Uint8List> _orderedEphemeralSks(NostrEvent? wrap) {
+    if (wrap == null || _ephemeralSks.length < 2) return _ephemeralSks;
+    String? target;
+    for (final t in wrap.tags) {
+      if (t.length > 1 && t[0] == 'p') {
+        target = t[1];
+        break;
+      }
+    }
+    if (target == null) return _ephemeralSks;
+    for (var i = 0; i < _ephemeralSks.length; i++) {
+      if (keys.getPublicKeyHex(_ephemeralSks[i]) != target) continue;
+      if (i == 0) return _ephemeralSks;
+      return [
+        _ephemeralSks[i],
+        for (var j = 0; j < _ephemeralSks.length; j++)
+          if (j != i) _ephemeralSks[j],
+      ];
+    }
+    return _ephemeralSks;
+  }
+
+  /// The candidate list [_handleGiftWrap] builds, so tests drive the real one.
+  @visibleForTesting
+  List<giftwrap.UnwrapCandidate> unwrapCandidatesForTest(NostrEvent? wrap) =>
+      _candidates(wrap);
+
+  List<giftwrap.UnwrapCandidate> _candidates([NostrEvent? wrap]) {
     final out = <giftwrap.UnwrapCandidate>[];
     final sk = identity.privkey;
     if (sk != null) {
@@ -1224,8 +1257,20 @@ class NostrService {
       }
       out.add(giftwrap.classicalCandidate(sk, bitchat: true));
     }
-    // Group ephemeral keys stay classical: v1 hybridizes groups through the
-    // identity ML-KEM key, leaving the rotating secp keys exactly as they were.
+    // A group's post-quantum wrap uses two DIFFERENT keys: the classical leg
+    // goes to our rotating ephemeral secp key, the KEM leg to our long-lived
+    // identity ML-KEM key. Offered as separate candidates neither opens it —
+    // the pq2 branch skips a candidate with no KEM material, and the classical
+    // branch cannot read a pq2 payload — so every post-quantum group message
+    // was dropped. Pair them, p-tag match first and bounded, like the PWA's
+    // `pqUnwrapCandidates`.
+    if (_pqSelfKeys.isNotEmpty) {
+      for (final esk in _orderedEphemeralSks(wrap).take(_ephPqPairingLimit)) {
+        for (final k in _pqSelfKeys) {
+          out.add((sk: esk, bitchat: false, kemSk: k.kemSk, kemPk: k.kemPk));
+        }
+      }
+    }
     for (final esk in _ephemeralSks) {
       out.add(giftwrap.classicalCandidate(esk));
     }
@@ -1295,7 +1340,7 @@ class NostrService {
     // wrap whose archived copy this is)? Skip the expensive ECDH+decrypt+verify
     // — the produced rumor would only be discarded by the downstream id dedup.
     if (wrap.id.isNotEmpty && _processedWrapIds.contains(wrap.id)) return;
-    final candidates = _candidates();
+    final candidates = _candidates(wrap);
 
     // Remote-signer (NIP-46) path: no local identity key is available, so the
     // wrap addressed to *our* identity pubkey must be unwrapped via the remote

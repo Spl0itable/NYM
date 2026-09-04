@@ -243,7 +243,20 @@ class BotChatController extends StateNotifier<BotChatState> {
     _hydrate();
     // Anything already in the thread (restored history) is not a new send.
     _primeHandled(_thread);
+    // The stored pin may name a model only the live catalog knows, which
+    // hydrates asynchronously — re-resolve it the moment that list arrives so
+    // the pin isn't silently dropped back to standard routing.
+    _ref.listen<ProModelCatalog>(proModelCatalogProvider, (_, next) {
+      if (!mounted || _pendingModelKey.isEmpty) return;
+      final m = next.byKey(_pendingModelKey);
+      if (m == null) return;
+      _pendingModelKey = '';
+      state = state.copyWith(proModel: m);
+    });
   }
+
+  /// A pinned `?model` key that no catalog available at hydrate time knew.
+  String _pendingModelKey = '';
 
   final Ref _ref;
   final NymbotService _service;
@@ -303,10 +316,13 @@ class BotChatController extends StateNotifier<BotChatState> {
       final p = await _prefs;
       if (!mounted) return;
       final modelKey = p.getString(_kProModelPref) ?? '';
-      ProModel? model;
-      for (final m in kProModels) {
-        if (m.key == modelKey) model = m;
-      }
+      // Resolve through the live catalog first so a key pinned before a
+      // version bump ("claude-opus") still finds its model ("claude-opus-5").
+      final model = _catalog.byKey(modelKey) ??
+          kProModelCatalogFallback.byKey(modelKey);
+      // Unknown for now: hold the key so the listener above can resolve it
+      // once the live catalog loads.
+      _pendingModelKey = (model == null && modelKey.isNotEmpty) ? modelKey : '';
       GitConfig? git;
       final rawGit = p.getString(_kGitPref);
       if (rawGit != null && rawGit.isNotEmpty) {
@@ -1395,10 +1411,23 @@ class BotChatController extends StateNotifier<BotChatState> {
         .toLowerCase();
     final current = state.proModel;
     if (arg.isEmpty) {
-      final lines = [
-        for (final m in kProModels)
-          '• `${m.key}`${current?.key == m.key ? ' ✓' : ''} — ${m.label}, ${m.priceLabel}',
-      ];
+      unawaited(_ref.read(proModelCatalogProvider.notifier).refresh());
+      final all = _catalog.models;
+      final groups = _catalog.grouped();
+      // The live catalog runs to dozens of models — too many for a chat
+      // bubble — so summarise per provider and send the rest to the picker.
+      final lines = groups.length > 1
+          ? [
+              for (final g in groups)
+                '• **${g.key}** — ${g.value.take(6).map((m) => '`${m.key}`').join(', ')}'
+                    '${g.value.length > 6 ? ' +${g.value.length - 6} more' : ''}',
+              '_${all.length} models available. Tap the model button for the '
+                  'full list with prices._',
+            ]
+          : [
+              for (final m in all)
+                '• `${m.key}`${current?.key == m.key ? ' ✓' : ''} — ${m.label}, ${m.priceLabel}',
+            ];
       _displayBotInfoMessage([
         if (current != null)
           'Nymbot Pro model: **${current.label}** (${current.priceLabel}).'
@@ -1416,10 +1445,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           'Nymbot Pro off — back to standard multi-model routing (standard credits).');
       return;
     }
-    ProModel? picked;
-    for (final m in kProModels) {
-      if (m.key == arg) picked = m;
-    }
+    final picked = _catalog.byKey(arg);
     if (picked == null) {
       // Unknown model: KEEP the current pin (pms.js:2139-2142).
       _system(
@@ -1480,11 +1506,23 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   // --- ?help (pms.js `_displayBotPmHelp`, :1733-1770) -------------------------
 
+  /// The live Pro model catalog, or the built-in list when it hasn't loaded.
+  ProModelCatalog get _catalog {
+    final cat = _ref.read(proModelCatalogProvider);
+    return cat.isEmpty ? kProModelCatalogFallback : cat;
+  }
+
   void _displayBotPmHelp() {
     final proModel = state.proModel;
     final git = state.git;
+    // ?help lists a sample rather than the whole live catalog, which can run
+    // to dozens of models.
+    final allModels = _catalog.models;
     final modelLines = [
-      for (final m in kProModels) '  `${m.key}` — ${m.label}, ${m.priceLabel}',
+      for (final m in allModels.take(8))
+        '  `${m.key}` — ${m.label}, ${m.priceLabel}',
+      if (allModels.length > 8)
+        '  …and ${allModels.length - 8} more — type `?model` or tap the model button.',
     ];
     final statusBits = <String>[];
     if (state.balanceKnown) {
@@ -2030,8 +2068,70 @@ List<Message> mergeBotThreadWithInfo(List<Message> store, List<Message> info) {
 /// Convenience: the catalogue of public `?` commands (for help/autocomplete UI).
 final botCommandsProvider = Provider<List<BotCommand>>((_) => kBotCommands);
 
+/// The live Pro model catalog, cached on disk and refreshed in the background.
+///
+/// Reads the worker's `models` action, which serves whatever the hourly
+/// catalog worker mirrored out of Cloudflare's model docs — so a model
+/// Cloudflare adds becomes selectable without an app release. Every failure
+/// path lands on [kProModelCatalogFallback], the list compiled into the
+/// binary, so the picker is never empty.
+class ProModelCatalogNotifier extends StateNotifier<ProModelCatalog> {
+  ProModelCatalogNotifier(this._service) : super(kProModelCatalogFallback) {
+    _hydrate();
+  }
+
+  static const _prefKey = 'nym_botpm_model_catalog';
+  static const _ttl = Duration(hours: 6);
+
+  final NymbotService _service;
+  bool _loading = false;
+
+  Future<void> _hydrate() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final raw = p.getString(_prefKey);
+      if (raw != null && raw.isNotEmpty) {
+        final cached = ProModelCatalog.fromJson(
+            (jsonDecode(raw) as Map).cast<String, dynamic>());
+        if (!cached.isEmpty && mounted) state = cached;
+        final age = DateTime.now().millisecondsSinceEpoch - cached.fetchedAt;
+        if (age < _ttl.inMilliseconds) return;
+      }
+    } catch (_) {
+      // A corrupt cache is not worth surfacing — refresh over it.
+    }
+    await refresh();
+  }
+
+  /// Fetches the catalog. Safe to call often: overlapping calls collapse, and
+  /// a failure leaves whatever list is already showing in place.
+  Future<void> refresh() async {
+    if (_loading) return;
+    _loading = true;
+    try {
+      final cat = await _service.fetchModelCatalog();
+      if (cat == null || cat.isEmpty) return;
+      if (mounted) state = cat;
+      try {
+        final p = await SharedPreferences.getInstance();
+        await p.setString(_prefKey, jsonEncode(cat.toJson()));
+      } catch (_) {
+        // Cache write failures only cost a refetch next launch.
+      }
+    } finally {
+      _loading = false;
+    }
+  }
+}
+
+final proModelCatalogProvider =
+    StateNotifierProvider<ProModelCatalogNotifier, ProModelCatalog>((ref) {
+  return ProModelCatalogNotifier(ref.watch(nymbotServiceProvider));
+});
+
 /// Convenience: the Pro model list (for the `?model` picker).
-final proModelsProvider = Provider<List<ProModel>>((_) => kProModels);
+final proModelsProvider =
+    Provider<List<ProModel>>((ref) => ref.watch(proModelCatalogProvider).models);
 
 // =============================================================================
 /// The welcome copy, as the localizer needs to see it.

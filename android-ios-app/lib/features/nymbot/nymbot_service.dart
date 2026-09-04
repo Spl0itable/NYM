@@ -157,6 +157,22 @@ class NymbotService {
     return _extractEventContent(json);
   }
 
+  /// `action: models` — the live Pro model catalog.
+  ///
+  /// Unauthenticated: it is public catalog data (mirrored hourly from
+  /// Cloudflare's model docs into D1) and the picker has to render before the
+  /// user has a balance. Returns null on any failure so callers fall back to
+  /// [kProModelCatalogFallback] rather than showing an empty list.
+  Future<ProModelCatalog?> fetchModelCatalog() async {
+    try {
+      final json = await _post(<String, dynamic>{'action': 'models'});
+      final cat = ProModelCatalog.fromJson(json);
+      return cat.isEmpty ? null : cat;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ===========================================================================
   // Private paid chat
   // ===========================================================================
