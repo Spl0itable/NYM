@@ -273,10 +273,9 @@
                 ? (typeof this.stripPubkeySuffix === 'function'
                     ? this.stripPubkeySuffix(nymTag[1]) : nymTag[1])
                 : '';
-            const stored = this.users && this.users.get(event.pubkey);
-            const author = rawNym
-                || (stored && stored.nym)
-                || (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(event.pubkey) : '');
+            const author = typeof this.resolveDisplayNym === 'function'
+                ? this.resolveDisplayNym(event.pubkey, rawNym)
+                : rawNym;
             const channelTag = Array.isArray(event.tags)
                 ? event.tags.find(t => Array.isArray(t) && (t[0] === 'g' || t[0] === 'd'))
                 : null;
@@ -368,15 +367,12 @@
         _hydrateCardAuthor(cardEl, data) {
             const pubkey = data && data.pubkey;
             if (!cardEl || !pubkey) return;
-            if (this.users && this.users.get(pubkey)) return;
+            if (typeof this.hasResolvedNym === 'function' && this.hasResolvedNym(pubkey)) return;
             if (typeof this.fetchProfileDirect !== 'function') return;
             Promise.resolve(this.fetchProfileDirect(pubkey)).then(() => {
-                const user = this.users && this.users.get(pubkey);
-                if (!user) return;
                 const span = cardEl.querySelector('.nostr-card-author');
-                const nym = typeof this.parseNymFromDisplay === 'function'
-                    ? this.parseNymFromDisplay(user.nym) : (user.nym || '');
-                if (!span || !nym) return;
+                const nym = this.resolveDisplayNym(pubkey, '');
+                if (!span || !nym || nym.toLowerCase() === 'nym') return;
                 const fresh = this._cardAuthorHtml(Object.assign({}, data, { author: nym }));
                 if (fresh) span.outerHTML = fresh;
             }).catch(() => { });
@@ -502,9 +498,7 @@
             if (!ref) return;
             if (ref.type === 'profile') {
                 if (typeof this.showContextMenu !== 'function') return;
-                const user = this.users && this.users.get(ref.pubkey);
-                const nym = (user && user.nym)
-                    || (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(ref.pubkey) : '');
+                const nym = this.resolveDisplayNym(ref.pubkey, '');
                 const suffix = typeof this.getPubkeySuffix === 'function'
                     ? this.getPubkeySuffix(ref.pubkey) : '';
                 this.showContextMenu(e, suffix ? `${nym}#${suffix}` : nym, ref.pubkey, null, null, true);
@@ -522,9 +516,7 @@
         // same menu a tapped nym or avatar opens.
         openNostrProfileCard(pubkey, e) {
             if (!pubkey || typeof this.showContextMenu !== 'function') return;
-            const user = this.users && this.users.get(pubkey);
-            const raw = (user && user.nym)
-                || (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pubkey) : '');
+            const raw = this.resolveDisplayNym(pubkey, '');
             // Both sources can already carry `#xxxx` (getNymFromPubkey always
             // does), so strip before re-adding or the menu title reads
             // `name#abcd#abcd`.
@@ -571,8 +563,7 @@
                 const pubkey = key.slice(3);
                 if (!/^[0-9a-f]{64}$/i.test(pubkey)) return false;
                 if (typeof this.openPM !== 'function') return false;
-                const user = this.users && this.users.get(pubkey);
-                this.openPM((user && user.nym) || this.getNymFromPubkey(pubkey), pubkey);
+                this.openPM(this.resolveDisplayNym(pubkey, ''), pubkey);
                 return true;
             }
             if (key.startsWith('group-')) {

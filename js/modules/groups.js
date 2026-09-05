@@ -3133,7 +3133,7 @@ Object.assign(NYM.prototype, {
         for (const [pk, msgId] of latestReadByReader) {
             if (!displayReaders.has(msgId)) displayReaders.set(msgId, new Map());
             const readers = readersStore.get(msgId);
-            const name = readers ? readers.get(pk) : this.getNymFromPubkey(pk);
+            const name = this.resolveDisplayNym(pk, (readers && readers.get(pk)) || '');
             displayReaders.get(msgId).set(pk, name);
         }
         return displayReaders;

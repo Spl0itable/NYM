@@ -7,6 +7,9 @@ Object.assign(NYM.prototype, {
     },
 
     _nymForPubkey(pubkey) {
+        const resolved = typeof this.resolveDisplayNym === 'function'
+            ? this.resolveDisplayNym(pubkey, '') : '';
+        if (resolved && resolved.toLowerCase() !== 'nym') return resolved;
         const u = this.users && this.users.get(pubkey);
         if (u && u.nym) return typeof this.parseNymFromDisplay === 'function' ? this.parseNymFromDisplay(u.nym) : u.nym;
         return (pubkey || '').slice(0, 8);
@@ -1341,7 +1344,7 @@ Object.assign(NYM.prototype, {
         if (!mine) return;
         if (!ac.chatReaders) ac.chatReaders = new Map();
         if (!ac.chatReaders.has(data.mid)) ac.chatReaders.set(data.mid, new Map());
-        ac.chatReaders.get(data.mid).set(sender, this.getNymFromPubkey(sender));
+        ac.chatReaders.get(data.mid).set(sender, this._nymForPubkey(sender));
         this._renderCallChatReceipt(data.mid);
     },
 

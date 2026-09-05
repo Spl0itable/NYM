@@ -767,6 +767,8 @@ Object.assign(NYM.prototype, {
                     const lnAddress = profile.lud16 || profile.lud06;
                     this.userLightningAddresses.set(pubkey, lnAddress);
                     this.notifyLightningAddress(pubkey, lnAddress);
+                } else if (pubkey !== this.pubkey) {
+                    this.userLightningAddresses.delete(pubkey);
                 }
 
                 // Extract avatar from profile picture field
@@ -794,6 +796,12 @@ Object.assign(NYM.prototype, {
                         this.userAvatars.set(pubkey, pictureUrl);
                         this.cacheAvatarImage(pubkey, pictureUrl);
                     }
+                } else if (pubkey !== this.pubkey && this.userAvatars.has(pubkey)) {
+                    const oldBlob = this.avatarBlobCache.get(pubkey);
+                    if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
+                    if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
+                    this.userAvatars.delete(pubkey);
+                    this.updateRenderedAvatars(pubkey, this.getAvatarUrl(pubkey));
                 }
 
                 // Extract banner image
@@ -808,6 +816,14 @@ Object.assign(NYM.prototype, {
                     } else if (!this.bannerBlobCache.has(pubkey)) {
                         this.userBanners.set(pubkey, profile.banner);
                         this.cacheBannerImage(pubkey, profile.banner);
+                    }
+                } else if (pubkey !== this.pubkey && this.userBanners.has(pubkey)) {
+                    const oldBlob = this.bannerBlobCache.get(pubkey);
+                    if (oldBlob) { URL.revokeObjectURL(oldBlob); this.bannerBlobCache.delete(pubkey); }
+                    if (typeof this.deleteCachedBanner === 'function') this.deleteCachedBanner(pubkey);
+                    this.userBanners.delete(pubkey);
+                    if (typeof this.updateRenderedBanner === 'function') {
+                        this.updateRenderedBanner(pubkey);
                     }
                 }
 
@@ -842,13 +858,16 @@ Object.assign(NYM.prototype, {
                         this.users.set(pubkey, existingUser);
                     }
                     this.persistProfile(pubkey);
+                    if (typeof this.updateStoredNymsForPubkey === 'function') {
+                        this.updateStoredNymsForPubkey(pubkey, truncatedName);
+                    }
                     // Update PM sidebar and header if this user has a PM conversation
-                    if (pubkey !== this.pubkey) {
-                        this.updatePMNicknameFromProfile(pubkey, truncatedName);
+                    this.updatePMNicknameFromProfile(pubkey, truncatedName);
+                    if (pubkey === this.pubkey) {
+                        this._updateOwnSidebarProfile();
+                    } else if (typeof this.updateGroupMembershipDisplay === 'function') {
                         // Refresh group sidebar entries that include this member
-                        if (typeof this.updateGroupMembershipDisplay === 'function') {
-                            this.updateGroupMembershipDisplay(pubkey);
-                        }
+                        this.updateGroupMembershipDisplay(pubkey);
                     }
                     if (typeof this.updateNotificationModalProfile === 'function') {
                         this.updateNotificationModalProfile(pubkey, truncatedName);
@@ -2057,7 +2076,9 @@ Object.assign(NYM.prototype, {
         // Skip if we already have a fresh profile
         const lastFetch = this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || 0;
         const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
-        if (fresh && this.userAvatars && this.userAvatars.has(pubkey)) return;
+        const appliedKind0 = this._kind0Ts && this._kind0Ts.has(pubkey);
+        if (fresh && appliedKind0 && this.userAvatars && this.userAvatars.has(pubkey)
+            && this.hasResolvedNym(pubkey)) return;
 
         if (this._profileBatchSet && this._profileBatchSet.has(pubkey)) return;
         if (!this._profileBatchQueue) this._profileBatchQueue = [];
@@ -2081,7 +2102,9 @@ Object.assign(NYM.prototype, {
         let missing = pubkeys;
         try {
             const found = await this._fetchProfilesFromD1(pubkeys);
-            if (found && found.size) missing = pubkeys.filter(pk => !found.has(pk));
+            if (found && found.size) {
+                missing = pubkeys.filter(pk => !found.has(pk) || !this.hasResolvedNym(pk));
+            }
         } catch (_) { }
         if (missing.length === 0) return;
 
@@ -2518,6 +2541,7 @@ Object.assign(NYM.prototype, {
         try {
             const fromD1 = await this._fetchProfilesFromD1(Array.from(pubkeyMap.keys()));
             for (const pk of fromD1) {
+                if (!this.hasResolvedNym(pk)) continue;
                 const list = pubkeyMap.get(pk);
                 if (list) { list.forEach(r => r()); pubkeyMap.delete(pk); }
             }
@@ -2534,9 +2558,18 @@ Object.assign(NYM.prototype, {
         }
         if (pubkeyMap.size === 0) return;
 
-        if (this._getApiHost && this._getApiHost()) {
-            pubkeyMap.forEach(list => list.forEach(r => r()));
-            return;
+        if (!this._profileRelayAttemptAt) this._profileRelayAttemptAt = new Map();
+        const attemptNow = Date.now();
+        for (const pk of Array.from(pubkeyMap.keys())) {
+            if (attemptNow - (this._profileRelayAttemptAt.get(pk) || 0) < 5 * 60 * 1000) {
+                const list = pubkeyMap.get(pk);
+                if (list) { list.forEach(r => r()); pubkeyMap.delete(pk); }
+            }
+        }
+        if (pubkeyMap.size === 0) return;
+        for (const pk of pubkeyMap.keys()) this._profileRelayAttemptAt.set(pk, attemptNow);
+        while (this._profileRelayAttemptAt.size > 5000) {
+            this._profileRelayAttemptAt.delete(this._profileRelayAttemptAt.keys().next().value);
         }
 
         const pubkeys = Array.from(pubkeyMap.keys());
@@ -2588,8 +2621,25 @@ Object.assign(NYM.prototype, {
                         if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
                             const profileName = profile.name || profile.username || profile.display_name;
                             this.nym = profileName.substring(0, 20);
-                            document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+                            const ownUser = this.users.get(this.pubkey);
+                            if (ownUser) {
+                                ownUser.nym = this.nym;
+                            } else {
+                                this.users.set(this.pubkey, {
+                                    nym: this.nym,
+                                    pubkey: this.pubkey,
+                                    lastSeen: 0,
+                                    status: 'online',
+                                    channels: new Set()
+                                });
+                            }
+                            const currentNymEl = document.getElementById('currentNym');
+                            if (currentNymEl) currentNymEl.innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
                             this.updateSidebarAvatar();
+                            if (typeof this.updateStoredNymsForPubkey === 'function') {
+                                this.updateStoredNymsForPubkey(this.pubkey, this.nym);
+                            }
+                            this.updatePMNicknameFromProfile(this.pubkey, this.nym);
                         }
 
                         // Extract avatar from profile picture field, accepting
@@ -2641,6 +2691,9 @@ Object.assign(NYM.prototype, {
                                 this.users.set(event.pubkey, existingUser);
                                 this.persistProfile(event.pubkey);
                             }
+                            if (typeof this.updateStoredNymsForPubkey === 'function') {
+                                this.updateStoredNymsForPubkey(event.pubkey, profileName);
+                            }
                             // Update PM nickname displays
                             this.updatePMNicknameFromProfile(event.pubkey, profileName);
                             // Refresh group sidebar entries that include this member
@@ -2649,6 +2702,12 @@ Object.assign(NYM.prototype, {
                             }
                             if (typeof this.updateNotificationModalProfile === 'function') {
                                 this.updateNotificationModalProfile(event.pubkey, profileName);
+                            }
+                            if (typeof this.updateRenderedProfileCard === 'function') {
+                                this.updateRenderedProfileCard(event.pubkey);
+                            }
+                            if (typeof this.updateUserList === 'function') {
+                                this.updateUserList();
                             }
                         }
 

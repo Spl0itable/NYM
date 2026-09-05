@@ -200,11 +200,11 @@ Object.assign(NYM.prototype, {
         messageEl.dataset.messageId = pollId;
         messageEl.dataset.pollId = pollId;
         messageEl.dataset.pubkey = pubkey;
-        messageEl.dataset.author = nym;
+        messageEl.dataset.author = this.resolveDisplayNym(pubkey, nym);
 
         const avatarSrc = this.getAvatarUrl(pubkey);
         const suffix = this.getPubkeySuffix(pubkey);
-        const baseNym = this.stripPubkeySuffix(nym);
+        const baseNym = this.resolveDisplayNym(pubkey, nym);
 
         const pollCreatedAt = Math.floor(created_at) || 0;
         const timestamp = new Date(pollCreatedAt * 1000);
@@ -466,7 +466,7 @@ Object.assign(NYM.prototype, {
         const rows = shown.map(([pubkey, optIdx]) => {
             const isYou = pubkey === this.pubkey;
             const knownUser = this.users && this.users.get && this.users.get(pubkey);
-            const nym = knownUser ? this.parseNymFromDisplay(knownUser.nym) : (this.getNymFromPubkey ? this.getNymFromPubkey(pubkey) : 'nym');
+            const nym = this.resolveDisplayNym(pubkey, knownUser ? knownUser.nym : '');
             const suffix = this.getPubkeySuffix(pubkey);
             const choice = optionLabel.has(optIdx) ? optionLabel.get(optIdx) : `Option ${optIdx + 1}`;
             const avatar = this.getAvatarUrl(pubkey);
@@ -515,7 +515,7 @@ Object.assign(NYM.prototype, {
                 const pk = el.dataset.pubkey;
                 if (pk && pk !== this.pubkey) {
                     const user = this.users.get(pk);
-                    const baseNym = user ? this.parseNymFromDisplay(user.nym) : 'nym';
+                    const baseNym = this.resolveDisplayNym(pk, user ? user.nym : '');
                     if (typeof this.openUserPM === 'function') this.openUserPM(baseNym, pk);
                 }
                 this.closePollVotersModal();
@@ -567,7 +567,7 @@ Object.assign(NYM.prototype, {
         this._suppressBubbleRewrap = true;
         try {
             for (const [pollId, poll] of channelPolls) {
-                const nym = poll.nym || 'nym';
+                const nym = this.resolveDisplayNym(poll.pubkey, poll.nym);
                 const isOwn = poll.pubkey === this.pubkey;
                 this.displayPollMessage(pollId, nym, poll.pubkey, poll.question, poll.options, poll.votes, poll.created_at, isOwn);
             }

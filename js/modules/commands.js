@@ -131,7 +131,7 @@ Object.assign(NYM.prototype, {
             for (const chanKey of referencedChannels) {
                 const msgs = (this.messages.get(chanKey) || []).filter(m => !m._spamGated);
                 const mapped = msgs.slice(-msgLimit).map(m => ({
-                    nym: m.author || 'nym',
+                    nym: this.resolveDisplayNym(m.pubkey, m.author || ''),
                     pubkey: m.pubkey || '',
                     content: this.truncateText(m.content || '', 300),
                     timestamp: m.created_at || 0,
@@ -180,7 +180,7 @@ Object.assign(NYM.prototype, {
             channelMessages = [];
             for (const [chanKey, msgs] of this.messages) {
                 const mapped = msgs.filter(m => !m._spamGated).map(m => ({
-                    nym: m.author || 'nym',
+                    nym: this.resolveDisplayNym(m.pubkey, m.author || ''),
                     pubkey: m.pubkey || '',
                     content: this.truncateText(m.content || '', 300),
                     timestamp: m.created_at || 0,
@@ -680,6 +680,7 @@ Object.assign(NYM.prototype, {
         }
 
         // Update already-rendered messages and PM sidebar entries with the new nickname
+        this.updateStoredNymsForPubkey(this.pubkey, newNym);
         this.updatePMNicknameFromProfile(this.pubkey, newNym);
 
         // Publish updated kind 0 profile so other users see the new nickname

@@ -6054,7 +6054,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     nym.fetchProfileDirect(pubkey).then(() => {
         updateSidebarFromProfile();
         // If profile wasn't found on first try, retry after more relays have connected
-        if (!nym.users.has(pubkey) || !nym.users.get(pubkey).nym) {
+        if (!nym.hasResolvedNym(pubkey)) {
             setTimeout(() => {
                 nym.fetchProfileDirect(pubkey).then(() => {
                     updateSidebarFromProfile();
@@ -6618,7 +6618,7 @@ async function applyNostrSettingsAdditive(s) {
                 const inflated = backupMessages.map(m => {
                     if (m.conversationKey && m.isPM) return m;
                     return Object.assign({
-                        author: nym.getNymFromPubkey(m.pubkey) || 'nym',
+                        author: nym.resolveDisplayNym(m.pubkey, '') || 'nym',
                         timestamp: new Date((m.created_at || 0) * 1000),
                         isPM: true,
                         isGroup: true,
@@ -7313,7 +7313,7 @@ async function applyNostrSettings(s) {
                 const inflated = backupMessages.map(m => {
                     if (m.conversationKey && m.isPM) return m; // already full-fidelity
                     return Object.assign({
-                        author: nym.getNymFromPubkey(m.pubkey) || 'nym',
+                        author: nym.resolveDisplayNym(m.pubkey, '') || 'nym',
                         timestamp: new Date((m.created_at || 0) * 1000),
                         isPM: true,
                         isGroup: true,

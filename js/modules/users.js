@@ -802,6 +802,68 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    hasResolvedNym(pubkey) {
+        const user = this.users.get(pubkey);
+        if (!user || !user.nym) return false;
+        const base = this.parseNymFromDisplay(user.nym);
+        return !!base && base.toLowerCase() !== 'nym';
+    },
+
+    resolveDisplayNym(pubkey, storedAuthor) {
+        const user = pubkey && this.users.get(pubkey);
+        if (user && user.nym) {
+            const known = this.parseNymFromDisplay(user.nym);
+            if (known && known.toLowerCase() !== 'nym') return known;
+        }
+        const convo = pubkey && this.pmConversations && this.pmConversations.get(pubkey);
+        if (convo && convo.nym) {
+            const known = this.parseNymFromDisplay(convo.nym);
+            if (known && known.toLowerCase() !== 'nym') return known;
+        }
+        const stored = this.parseNymFromDisplay(storedAuthor);
+        return stored || 'nym';
+    },
+
+    _propagateNymChange(pubkey, nym, prevBase) {
+        const nextBase = this.parseNymFromDisplay(nym);
+        if (!nextBase || nextBase === prevBase || nextBase.toLowerCase() === 'nym') return;
+        this.updateStoredNymsForPubkey(pubkey, nextBase);
+        if (typeof this.updatePMNicknameFromProfile === 'function') {
+            this.updatePMNicknameFromProfile(pubkey, nextBase);
+        }
+    },
+
+    updateStoredNymsForPubkey(pubkey, baseNym) {
+        if (!pubkey || !baseNym) return;
+        const clean = this.parseNymFromDisplay(baseNym).substring(0, 20);
+        if (!clean || clean.toLowerCase() === 'nym') return;
+        const display = `${clean}#${this.getPubkeySuffix(pubkey)}`;
+        const sweep = (store, persist) => {
+            if (!store || typeof store.forEach !== 'function') return;
+            store.forEach((list, key) => {
+                if (!Array.isArray(list)) return;
+                let touched = false;
+                for (const m of list) {
+                    if (!m || m.pubkey !== pubkey || m.author === display) continue;
+                    m.author = display;
+                    touched = true;
+                }
+                if (!touched) return;
+                if (this.channelDOMCache) this.channelDOMCache.delete(key);
+                if (typeof persist === 'function') {
+                    try { persist.call(this, key); } catch (_) { }
+                }
+            });
+        };
+        sweep(this.messages, this.persistChannelMessages);
+        sweep(this.pmMessages, this.persistPMMessages);
+        const safePk = this._safePubkey(pubkey);
+        if (!safePk) return;
+        document.querySelectorAll(`.message[data-pubkey="${safePk}"]`).forEach(el => {
+            el.dataset.author = display;
+        });
+    },
+
     // Update already-rendered message avatars when a kind 0 profile picture arrives
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);
@@ -1367,7 +1429,11 @@ Object.assign(NYM.prototype, {
             // visibility is tracked separately via statusHiddenUsers so the
             // user still appears in the list, just without a status dot.
             if (status !== 'hidden') user.status = status;
-            if (nym) user.nym = nym;
+            if (nym) {
+                const prevBase = this.parseNymFromDisplay(user.nym);
+                user.nym = nym;
+                this._propagateNymChange(pubkey, nym, prevBase);
+            }
             this.updateUserList();
         }
         if (this.inPMMode && this.currentPM === pubkey && typeof this.refreshPMHeaderStatus === 'function') {
@@ -1410,7 +1476,9 @@ Object.assign(NYM.prototype, {
                 user.lastSeen = eventTime;
                 user.status = baseStatus;
             }
+            const prevBase = this.parseNymFromDisplay(user.nym);
             user.nym = nym; // Update nym in case it changed
+            this._propagateNymChange(pubkey, nym, prevBase);
             if (!user.channels) user.channels = new Set();
             user.channels.add(channelKey);
         }

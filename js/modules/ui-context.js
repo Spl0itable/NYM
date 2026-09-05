@@ -457,8 +457,7 @@ Object.assign(NYM.prototype, {
         if (ctxAvatarNym) {
             // The live nym, not the one the clicked row carried when the card
             // was opened.
-            const baseNym = this.stripPubkeySuffix(
-                this.parseNymFromDisplay(this.getNymFromPubkey(pubkey)));
+            const baseNym = this.resolveDisplayNym(pubkey, '');
             const html = this._ctxNymHtml(pubkey, baseNym, this.getPubkeySuffix(pubkey));
             if (ctxAvatarNym.innerHTML !== html) ctxAvatarNym.innerHTML = html;
             if (this.contextMenuData) this.contextMenuData.nym = baseNym;
@@ -479,7 +478,7 @@ Object.assign(NYM.prototype, {
 
         const menu = document.getElementById('contextMenu');
         // Parse base nym from display format - this removes HTML tags
-        const parsedNym = this.parseNymFromDisplay(nym);
+        const parsedNym = this.resolveDisplayNym(pubkey, nym);
         // Get just the base nym without any suffix
         const baseNym = this.stripPubkeySuffix(parsedNym);
         const suffix = this.getPubkeySuffix(pubkey);
@@ -1052,7 +1051,7 @@ Object.assign(NYM.prototype, {
             if (!pubkey) return;
             e.preventDefault();
             e.stopPropagation();
-            const nym = this.getNymFromPubkey(pubkey);
+            const nym = this.resolveDisplayNym(pubkey, '');
             const suffix = this.getPubkeySuffix(pubkey);
             this.showContextMenu(e, `${nym}#${suffix}`, pubkey, null, null, false);
         });
@@ -1546,8 +1545,8 @@ Object.assign(NYM.prototype, {
             popup.style.top = top + 'px';
 
             // Build the quick context menu (Slap, Hug, Zap, Quote, Copy)
-            const baseAuthor = this.parseNymFromDisplay(msgEl.dataset.author || 'nym');
             const targetPubkey = msgEl.dataset.pubkey || '';
+            const baseAuthor = this.resolveDisplayNym(targetPubkey, msgEl.dataset.author || '');
             const targetBaseNym = this.stripPubkeySuffix(baseAuthor);
             const contentEl = msgEl.querySelector('.message-content');
             const messageContent = msgEl.dataset.rawContent

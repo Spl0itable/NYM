@@ -554,10 +554,7 @@ Object.assign(NYM.prototype, {
                     const safePk = this._safePubkey(pubkey);
                     avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
                     // Use live profile lookup, fall back to stored senderNym
-                    const user = this.users.get(pubkey);
-                    const baseNym = user
-                        ? this.parseNymFromDisplay(user.nym)
-                        : this.parseNymFromDisplay(this.getNymFromPubkey(pubkey));
+                    const baseNym = this.resolveDisplayNym(pubkey, n.senderNym || '');
                     const suffix = this.getPubkeySuffix(pubkey);
                     const flairHtml = this.getFlairForUser(pubkey);
                     const verifiedBadge = this.isVerifiedDeveloper(pubkey)
@@ -715,9 +712,7 @@ Object.assign(NYM.prototype, {
     updateNotificationModalProfile(pubkey, profileName) {
         const modal = document.getElementById('notificationsModal');
         if (!modal || !modal.classList.contains('active')) return;
-        const baseNym = this.parseNymFromDisplay(
-            profileName || this.getNymFromPubkey(pubkey)
-        ).substring(0, 20);
+        const baseNym = this.resolveDisplayNym(pubkey, profileName || '').substring(0, 20);
         const suffix = this.getPubkeySuffix(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)

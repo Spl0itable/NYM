@@ -748,7 +748,7 @@ Object.assign(NYM.prototype, {
             messageEl.dataset.seq = message._seq || 0;
 
             // Get clean author name and flair
-            const cleanAuthor = this.parseNymFromDisplay(message.author);
+            const cleanAuthor = this.resolveDisplayNym(message.pubkey, message.author);
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk = this._safePubkey(message.pubkey);
@@ -793,7 +793,7 @@ Object.assign(NYM.prototype, {
             messageEl.className = classes.join(' ');
             // For PM messages use nymMessageId as the stable shared key (gift wrap IDs differ per recipient)
             messageEl.dataset.messageId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-            messageEl.dataset.author = message.author;
+            messageEl.dataset.author = this.resolveDisplayNym(message.pubkey, message.author);
             messageEl.dataset.pubkey = message.pubkey;
             messageEl.dataset.rawContent = message.content;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
@@ -909,7 +909,7 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            const baseNym = this.parseNymFromDisplay(message.author);
+            const baseNym = this.resolveDisplayNym(message.pubkey, message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk2 = this._safePubkey(message.pubkey);
             const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
@@ -919,7 +919,7 @@ Object.assign(NYM.prototype, {
                 authorExtraClass = 'cosmetic-redacted';
             }
 
-            const escapedAuthorBase = this.escapeHtml(this.stripPubkeySuffix(message.author));
+            const escapedAuthorBase = this.escapeHtml(baseNym);
             const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
             // Prepare full timestamp for tooltip

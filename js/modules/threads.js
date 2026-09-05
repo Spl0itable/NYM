@@ -164,7 +164,7 @@ Object.assign(NYM.prototype, {
     // `nym#abcd`, the shape quote-replies use, so /api/bot can tell the bot's
     // own turns apart from the humans' in a thread transcript.
     _threadMessageAuthor(msg) {
-        const nym = (msg && msg.author) || 'nym';
+        const nym = this.resolveDisplayNym(msg && msg.pubkey, (msg && msg.author) || '');
         const suffix = (msg && msg.pubkey && typeof this.getPubkeySuffix === 'function')
             ? this.getPubkeySuffix(msg.pubkey) : '';
         return suffix ? `${nym}#${suffix}` : nym;
@@ -282,8 +282,7 @@ Object.assign(NYM.prototype, {
             return g && g.name ? g.name : 'Group chat';
         }
         if (ctx.type === 'pm') {
-            const nym = ctx.nym || this.getNymFromPubkey(ctx.pubkey);
-            return `@${this.stripPubkeySuffix(nym || 'nym')}`;
+            return `@${this.resolveDisplayNym(ctx.pubkey, ctx.nym || '')}`;
         }
         return '';
     },

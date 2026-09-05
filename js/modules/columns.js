@@ -537,6 +537,8 @@ Object.assign(NYM.prototype, {
         if (col.type === 'channel') return col.geohash || col.channel;
         if (col.type === 'pm') {
             const conv = this.pmConversations && this.pmConversations.get(col.pubkey);
+            const resolved = this.resolveDisplayNym(col.pubkey, (conv && conv.nym) || col.nym || '');
+            if (resolved && resolved.toLowerCase() !== 'nym') return resolved;
             return (conv && conv.nym) || col.nym || (this.getDisplayNym && this.getDisplayNym(col.pubkey)) || 'Direct message';
         }
         if (col.type === 'group') {

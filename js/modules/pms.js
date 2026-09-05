@@ -105,7 +105,7 @@ Object.assign(NYM.prototype, {
                 if (!this.groupMessageReaders.has(msg.nymMessageId)) {
                     this.groupMessageReaders.set(msg.nymMessageId, new Map());
                 }
-                this.groupMessageReaders.get(msg.nymMessageId).set(entry.senderPubkey, this.getNymFromPubkey(entry.senderPubkey));
+                this.groupMessageReaders.get(msg.nymMessageId).set(entry.senderPubkey, this.resolveDisplayNym(entry.senderPubkey, ''));
             } else {
                 this._updateDeliveryStatusEl(msg.nymMessageId || msg.id, entry.receiptType);
             }
@@ -3372,8 +3372,7 @@ Object.assign(NYM.prototype, {
         if (!(this.inPMMode && this.currentPM === pubkey)) return;
         const channelEl = document.getElementById('currentChannel');
         if (!channelEl) return;
-        const known = this.users.get(pubkey);
-        const baseNym = this.parseNymFromDisplay(displayName || (known ? known.nym : this.getNymFromPubkey(pubkey))).substring(0, 20);
+        const baseNym = this.resolveDisplayNym(pubkey, displayName || '').substring(0, 20);
         const suffix = this.getPubkeySuffix(pubkey);
         const safePk = this._safePubkey(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
@@ -3504,9 +3503,7 @@ Object.assign(NYM.prototype, {
 
     addPMConversation(nym, pubkey, timestamp = Date.now()) {
         // Prefer known profile name if available
-        let baseNym = this.users.has(pubkey)
-            ? this.parseNymFromDisplay(this.users.get(pubkey).nym)
-            : this.parseNymFromDisplay(nym);
+        let baseNym = this.resolveDisplayNym(pubkey, nym);
 
         if (!this.pmConversations.has(pubkey)) {
             if (this.closedPMs.has(pubkey)) {
@@ -3697,8 +3694,7 @@ Object.assign(NYM.prototype, {
     // Render the PM conversation header into the shared chat header. Split out
     // of openPM so column-view focus can show the same header.
     _renderPMHeader(nym, pubkey) {
-        const known = this.users.get(pubkey);
-        const baseNym = known ? this.parseNymFromDisplay(known.nym) : this.parseNymFromDisplay(nym);
+        const baseNym = this.resolveDisplayNym(pubkey, nym);
         const suffix = this.getPubkeySuffix(pubkey);
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const safePk = this._safePubkey(pubkey);

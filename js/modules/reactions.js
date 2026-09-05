@@ -625,7 +625,7 @@ Object.assign(NYM.prototype, {
         const shown = entries.slice(0, MAX_ROWS);
         const userItems = shown.map(([pubkey, nym]) => {
             const isYou = pubkey === this.pubkey;
-            const baseNym = this.parseNymFromDisplay(nym);
+            const baseNym = this.resolveDisplayNym(pubkey, nym);
             const suffix = this.getPubkeySuffix(pubkey);
             const safePk = this._safePubkey(pubkey);
             return `<div class="reactors-modal-user" data-pubkey="${pubkey}">
@@ -679,7 +679,7 @@ Object.assign(NYM.prototype, {
             el.addEventListener('click', (e) => {
                 const [pubkey, nym] = shown[i];
                 this.closeReactorsModal();
-                const baseNym = this.parseNymFromDisplay(nym);
+                const baseNym = this.resolveDisplayNym(pubkey, nym);
                 const suffix = this.getPubkeySuffix(pubkey);
                 this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, false);
             });
