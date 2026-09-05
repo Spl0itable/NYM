@@ -2276,7 +2276,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Show/clear a synthetic "Nymbot is typing" indicator in the bot PM
     _setBotTyping(on) {
         const convKey = this.getPMConversationKey(this.verifiedBot.pubkey);
         if (!this.typingUsers.has(convKey)) this.typingUsers.set(convKey, new Map());
@@ -2284,9 +2283,26 @@ Object.assign(NYM.prototype, {
         const botPk = this.verifiedBot.pubkey;
         const existing = typers.get(botPk);
         if (existing && existing.timeout) clearTimeout(existing.timeout);
+        if (this._botTypingHeartbeat) {
+            clearInterval(this._botTypingHeartbeat);
+            this._botTypingHeartbeat = null;
+        }
         if (on) {
-            const timeout = setTimeout(() => { typers.delete(botPk); this.renderTypingIndicator(); }, 30000);
-            typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: Date.now() });
+            const arm = () => {
+                const prev = typers.get(botPk);
+                if (prev && prev.timeout) clearTimeout(prev.timeout);
+                const timeout = setTimeout(() => {
+                    typers.delete(botPk);
+                    if (this._botTypingHeartbeat) {
+                        clearInterval(this._botTypingHeartbeat);
+                        this._botTypingHeartbeat = null;
+                    }
+                    this.renderTypingIndicator();
+                }, 30000);
+                typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: Date.now() });
+            };
+            arm();
+            this._botTypingHeartbeat = setInterval(arm, 20000);
         } else {
             typers.delete(botPk);
         }
@@ -2395,7 +2411,10 @@ Object.assign(NYM.prototype, {
         { key: 'grok', label: 'Grok 4.6', credits: 1, max: 6 },
         { key: 'kimi', label: 'Kimi K3', credits: 1, max: 3 },
         { key: 'qwen', label: 'Qwen 3.5', credits: 1, max: 3 },
-        { key: 'minimax', label: 'MiniMax M3', credits: 1, max: 3 }
+        { key: 'minimax', label: 'MiniMax M3', credits: 1, max: 3 },
+        { key: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', credits: 1, max: 3, hosting: 'cloudflare-hosted', reasoning: true, tools: true },
+        { key: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', credits: 1, max: 1, hosting: 'cloudflare-hosted', reasoning: true, tools: true },
+        { key: 'deepseek-r1-distill-qwen-32b', label: 'DeepSeek R1 Distill Qwen 32B', credits: 1, max: 3, hosting: 'cloudflare-hosted', reasoning: true }
     ],
 
     // Live catalog, once fetched: { models: [...], groups: [...], aliases: {} }.
@@ -2897,6 +2916,9 @@ Object.assign(NYM.prototype, {
                 if (m.vision) tags.push('vision');
                 if (m.reasoning) tags.push('reasoning');
                 if (m.tools) tags.push('tools');
+                // Cloudflare-hosted weights run on the AI binding: no gateway
+                // hop, no upstream provider to be down or reject the call.
+                if (m.hosting === 'cloudflare-hosted') tags.push('cloudflare');
                 const meta = [this._botProPriceLabel(m)].concat(tags.length ? [tags.join(' · ')] : []).join(' — ');
                 rows.push(`<button class="bot-model-row bot-model-row-pro${sel ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="${this.escapeHtml(m.key)}">
                 <span class="bot-model-row-main">

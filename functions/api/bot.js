@@ -383,13 +383,18 @@ var BOT_PRO_MODELS = {
   "grok": { label: "Grok 4.6", transport: "compat", model: "xai/grok-4.6", baseCredits: 1, outTokensPerCredit: 2000, maxTokens: 8192, vision: true , author: "xAI"},
   "kimi": { label: "Kimi K3", transport: "compat", model: "moonshotai/kimi-k3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192, vision: true , author: "Moonshot AI"},
   "qwen": { label: "Qwen 3.5", transport: "compat", model: "alibaba/qwen3.5-397b-a17b", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 , author: "Alibaba"},
-  "minimax": { label: "MiniMax M3", transport: "compat", model: "minimax/m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 , author: "MiniMax"}
+  "minimax": { label: "MiniMax M3", transport: "compat", model: "minimax/m3", baseCredits: 1, outTokensPerCredit: 6000, maxTokens: 8192 , author: "MiniMax"},
+  "deepseek-v4-pro": { label: "DeepSeek V4 Pro", transport: "wai", model: "@cf/deepseek-ai/deepseek-v4-pro-0813", baseCredits: 1, outTokensPerCredit: 7600, maxTokens: 8192, author: "DeepSeek", hosting: "cloudflare-hosted" },
+  "deepseek-v4-flash": { label: "DeepSeek V4 Flash", transport: "wai", model: "@cf/deepseek-ai/deepseek-v4-flash-0731", baseCredits: 1, outTokensPerCredit: 0, maxTokens: 8192, author: "DeepSeek", hosting: "cloudflare-hosted" },
+  "deepseek-r1-distill-qwen-32b": { label: "DeepSeek R1 Distill Qwen 32B", transport: "wai", model: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", baseCredits: 1, outTokensPerCredit: 6100, maxTokens: 8192, author: "DeepSeek", hosting: "cloudflare-hosted" }
 };
 
 var BOT_PRO_MODEL_ALIASES = {
   "codex": "gpt-5",
   "claude-opus-4.8": "claude-opus",
-  "claude-sonnet-4.6": "claude-sonnet"
+  "claude-sonnet-4.6": "claude-sonnet",
+  "deepseek": "deepseek-v4-pro",
+  "deepseek-v4": "deepseek-v4-pro"
 };
 
 function botProResolveKey(key) {
@@ -411,7 +416,7 @@ async function botProCatalog(env) {
   if (!live || !live.models || !Object.keys(live.models).length) {
     return { models: BOT_PRO_MODELS, aliases: BOT_PRO_MODEL_ALIASES, byModelId: {}, source: "builtin" };
   }
-  var aliases = catalogAliases(live.models);
+  var aliases = catalogAliases(live.models, live.redirects);
   // Cloudflare's unified catalog pages link pricing to the dashboard instead
   // of printing it, so those models reach us with credit_basis "default" —
   // one flat conservative charge for everything. Where we already hand-tuned
@@ -2285,6 +2290,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         reasoning: !!m.reasoning,
         tools: !!m.tools,
         context: m.context || null,
+        // "cloudflare-hosted" vs "third-party" — the picker badges the former,
+        // since those are the ones that never depend on an upstream key.
+        hosting: m.hosting || "",
         priced: m.priced !== false
       };
     });

@@ -117,8 +117,9 @@ export async function catalogProModels(env, opts) {
   try {
     var rs = await replica(db).prepare(
       "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
-      "AND hosting = 'third-party' AND task_slug IN ('text-generation', 'image-text-to-text') " +
-      "ORDER BY author_slug, slug"
+      "AND hosting IN ('third-party', 'cloudflare-hosted') " +
+      "AND task_slug IN ('text-generation', 'image-text-to-text') " +
+      "ORDER BY (hosting = 'third-party') DESC, author_slug, slug"
     ).all();
     rows = rs.results || [];
   } catch (e) { return null; }
@@ -134,19 +135,29 @@ export async function catalogProModels(env, opts) {
 
   var models = {};
   var byModelId = {};
+  var redirects = {};
+  var hiddenIds = {};
   var used = {};
   rows.forEach(function (r) {
     var patch = overrides[r.id] || {};
     var pc = patch.credits || {};
-    // The bare slug is the key; a collision takes the author prefix. Ordered
-    // by (author_slug, slug), so the assignment is stable run to run.
     var transport = patch.transport ||
       catalogTransport(r.id, r.request_formats, r.transport);
     var key = String(r.slug || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     if (!key) return;
-    if (used[key]) key = (r.author_slug || "x") + "-" + key;
+    if (used[key]) {
+      key = (r.hosting === "cloudflare-hosted" ? "cf" : (r.author_slug || "x")) + "-" + key;
+    }
     if (used[key]) key = key + "-" + Object.keys(used).length;
     used[key] = true;
+
+    if (patch.hidden || patch.available === false) {
+      if (patch.replacedBy) {
+        redirects[key] = String(patch.replacedBy);
+        hiddenIds[r.id] = key;
+      }
+      return;
+    }
 
     var maxTokens = Math.min(r.max_output_tokens || 8192,
       r.context_window && r.context_window < 8192 ? r.context_window : 8192);
@@ -164,6 +175,7 @@ export async function catalogProModels(env, opts) {
       context: r.context_window || null,
       author: patch.author || r.author || "",
       authorSlug: r.author_slug || "",
+      hosting: r.hosting || "",
       description: catalogBlurb(patch.description || r.description),
       // Which field this model's own docs page declares for the output cap.
       // Guessing it from the provider prefix was wrong for anyone who does not
@@ -182,7 +194,22 @@ export async function catalogProModels(env, opts) {
     byModelId[r.id] = key;
   });
 
-  cache = { at: now, data: { models: models, byModelId: byModelId, count: rows.length } };
+  // A redirect that names a model id rather than a key resolves here, once
+  // every key is known. One that names neither is dropped, so a typo in the
+  // D1 console cannot strand a pin on a key that resolves to nothing.
+  Object.keys(redirects).forEach(function (k) {
+    var target = redirects[k];
+    if (models[target]) return;
+    if (byModelId[target] && models[byModelId[target]]) { redirects[k] = byModelId[target]; return; }
+    delete redirects[k];
+  });
+  // A pin written as the hidden model's full id lands on the replacement too.
+  Object.keys(hiddenIds).forEach(function (id) {
+    var to = redirects[hiddenIds[id]];
+    if (to && models[to] && !byModelId[id]) byModelId[id] = to;
+  });
+
+  cache = { at: now, data: { models: models, byModelId: byModelId, redirects: redirects, count: rows.length } };
   return cache.data;
 }
 
@@ -215,7 +242,7 @@ export function catalogSortKeys(models, keys) {
   return list;
 }
 
-export function catalogAliases(models) {
+export function catalogAliases(models, redirects) {
   var aliases = {};
   var families = {};
   var byAuthor = {};
@@ -230,6 +257,11 @@ export function catalogAliases(models) {
   });
   Object.keys(byAuthor).forEach(function (a) {
     if (byAuthor[a].length === 1 && !models[a] && !aliases[a]) aliases[a] = byAuthor[a][0];
+  });
+  // An explicit replacedBy from the overrides table outranks anything derived
+  // from the key names: it is the one alias a human wrote on purpose.
+  Object.keys(redirects || {}).forEach(function (k) {
+    if (models[redirects[k]] && !models[k]) aliases[k] = redirects[k];
   });
   return aliases;
 }
