@@ -10,9 +10,9 @@
 //   PUT  /api/proxy?action=mirror&server=<host>  — Ask a Blossom host to mirror a blob from a source URL
 //   GET  /api/proxy?action=geo-relays            — Fetch bitchat geo-relay CSV (edge-cached)
 //   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
-//   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt)
+//   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt / NIP-47 wallet lookup)
 
-import { validateZapReceipt } from './_shared.js';
+import { validateZapReceipt, nwcInvoicePaid } from './_shared.js';
 import { translateText, MAX_CHARS } from './_translate.js';
 
 const ALLOWED_MEDIA_TYPES = new Set([
@@ -104,7 +104,7 @@ export async function onRequest(context) {
     } else if (action === 'json') {
       return await handleJsonProxy(url.searchParams.get('url'), request);
     } else if (action === 'zap-verify') {
-      return await handleZapVerify(request);
+      return await handleZapVerify(request, context);
     } else {
       return await handleMediaProxy(url.searchParams.get('url'), request, url.searchParams.get('emoji') === '1');
     }
@@ -265,7 +265,7 @@ async function handleJsonProxy(targetUrl, request) {
 }
 
 // Server-side confirmation that a zap invoice was paid
-async function handleZapVerify(request) {
+async function handleZapVerify(request, context) {
   if (request.method !== 'POST') return jsonResponse({ error: 'POST required' }, 405);
   let body;
   try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid body' }, 400); }
@@ -293,6 +293,13 @@ async function handleZapVerify(request) {
     } catch (err) {
       if (err && err.ssrfBlocked) return jsonResponse({ error: 'Blocked URL' }, 403);
     }
+  }
+
+  const nwcUri = context && context.env && context.env.BOT_NWC_URI;
+  if (nwcUri && pr) {
+    try {
+      if (await nwcInvoicePaid(nwcUri, pr, 6000)) return jsonResponse({ paid: true });
+    } catch { /* fall through to unpaid */ }
   }
 
   return jsonResponse({ paid: false });

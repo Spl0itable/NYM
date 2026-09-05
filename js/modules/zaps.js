@@ -951,6 +951,7 @@ Object.assign(NYM.prototype, {
                     messageId: this.currentZapTarget.messageId,
                     recipientPubkey: this.currentZapTarget.recipientPubkey
                 };
+                this._addPendingZap(invoice, this.currentZapTarget);
 
                 // Display invoice
                 this.displayZapInvoice(invoice);
@@ -1042,23 +1043,22 @@ Object.assign(NYM.prototype, {
     },
 
     // Check if payment was made. The LUD-21 verify URL is the authoritative,
-    // invoice-scoped signal, confirmed server-side. Only when the provider
-    // returns no verify URL do we fall back to the NIP-57 receipt
+    // invoice-scoped signal, confirmed server-side. With no verify URL the
+    // NIP-57 receipt leads, backed by a slower server poll that can still
+    // settle the invoice over the bot wallet's NIP-47 connection
     async checkZapPayment(invoice) {
-        if (!invoice.verify) {
-            // No verify URL, fall back to the (best-effort) zap receipt
-            this.listenForZapReceipt();
-            return;
-        }
-
         // Clear any existing payment check interval to prevent stale invoice polling
         if (this.zapCheckInterval) {
             clearInterval(this.zapCheckInterval);
             this.zapCheckInterval = null;
         }
 
+        const lud21 = !!invoice.verify;
+        if (!lud21) this.listenForZapReceipt();
+
         let checkCount = 0;
-        const maxChecks = 180; // Poll for up to 3 minutes
+        const stepMs = lud21 ? 1000 : 3000;
+        const maxChecks = lud21 ? 180 : 60; // Poll for up to 3 minutes
 
         this.zapCheckInterval = setInterval(async () => {
             checkCount++;
@@ -1071,6 +1071,7 @@ Object.assign(NYM.prototype, {
             } else if (checkCount >= maxChecks) {
                 clearInterval(this.zapCheckInterval);
                 this.zapCheckInterval = null;
+                if (!lud21) return;
                 const zapStatusEl = document.getElementById('zapStatus');
                 if (zapStatusEl) {
                     zapStatusEl.style.display = 'block';
@@ -1078,7 +1079,7 @@ Object.assign(NYM.prototype, {
                     zapStatusEl.innerHTML = 'Payment timeout - please check your wallet';
                 }
             }
-        }, 1000); // Check every second
+        }, stepMs);
     },
 
     // Listen for the NIP-57 zap receipt and confirm payment by matching the
@@ -1159,6 +1160,10 @@ Object.assign(NYM.prototype, {
         }
 
         window.nymHapticTap && window.nymHapticTap();
+
+        if (this.currentZapInvoice && this.currentZapInvoice.pr) {
+            this._removePendingPurchase(this._pendingZapId(this.currentZapInvoice.pr));
+        }
 
         // Clear check interval
         if (this.zapCheckInterval) {
@@ -1639,6 +1644,50 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
             await this._sendGiftWrapsAsync([this.pubkey, pmPeer], rumor, null);
+        }
+    },
+
+    _pendingZapId(pr) {
+        return 'zap:' + String(pr || '').toLowerCase();
+    },
+
+    _addPendingZap(invoice, target) {
+        if (!invoice || !invoice.pr || !target) return;
+        if (!target.messageId) return;
+        this._addPendingPurchase({
+            kind: 'zap',
+            invoiceId: this._pendingZapId(invoice.pr),
+            pr: invoice.pr,
+            verify: invoice.verify || null,
+            providerPubkey: invoice.providerPubkey || null,
+            amount: Number(invoice.amount) || 0,
+            messageId: target.messageId || null,
+            recipientPubkey: target.recipientPubkey || null,
+            messageKind: target._messageKind || null,
+            geohash: target._geohash || null,
+            channelId: target._channelId || null,
+            groupId: target._groupId || null,
+            pmPeer: target._pmPeer || null
+        });
+    },
+
+    async _reconcileZapEntry(entry) {
+        if (!entry || !entry.pr) return;
+        if (this.currentZapInvoice && this.currentZapInvoice.pr === entry.pr) return;
+        const paid = await this._serverVerifyZapPaid({
+            pr: entry.pr,
+            verify: entry.verify,
+            providerPubkey: entry.providerPubkey
+        });
+        if (!paid) return;
+        this._removePendingPurchase(entry.invoiceId);
+        if (!entry.messageId) return;
+        const amount = Number(entry.amount) || this.parseAmountFromBolt11(entry.pr);
+        this._recordOwnMessageZap(entry.messageId, amount, entry.pr, false);
+        if (entry.groupId || entry.pmPeer) {
+            this._publishOwnPrivateZapEvent(entry.messageId, entry.recipientPubkey, entry.pr, entry.groupId, entry.pmPeer);
+        } else {
+            this._publishOwnMessageZapEvent(entry.messageId, entry.recipientPubkey, entry.pr, entry.messageKind, entry.geohash, entry.channelId);
         }
     },
 

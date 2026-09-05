@@ -2758,12 +2758,17 @@ function validateZapReceipt(receipt, pending) {
 // Parse a NIP-47 nostr+walletconnect:// URI into its wallet pubkey, relay and secret.
 function parseNwcUri(uri) {
   if (typeof uri !== "string") return null;
-  var m = uri.match(/^nostr\+walletconnect:\/\/([0-9a-f]{64})\??(.*)$/i);
+  var m = uri.trim().match(/^nostr\+walletconnect:(?:\/\/)?([0-9a-f]{64})(?:\?(.*))?$/i);
   if (!m) return null;
   var params = new URLSearchParams(m[2] || "");
-  var relay = params.get("relay");
   var secret = params.get("secret");
-  if (!relay || !secret || !/^[0-9a-f]{64}$/i.test(secret)) return null;
+  if (!secret || !/^[0-9a-f]{64}$/i.test(secret)) return null;
+  var relay = null;
+  var relays = params.getAll("relay");
+  for (var i = 0; i < relays.length; i++) {
+    if (/^wss?:\/\//i.test(relays[i])) { relay = relays[i]; break; }
+  }
+  if (!relay) return null;
   return { walletPubkey: m[1].toLowerCase(), relay: relay, secret: secret.toLowerCase() };
 }
 
@@ -2804,8 +2809,11 @@ async function nwcDecrypt(scheme, cfg, convKey, payload) {
 
 function nwcResultIsPaid(result) {
   if (!result || typeof result !== "object") return false;
-  if (result.settled_at && Number(result.settled_at) > 0) return true;
-  if (typeof result.preimage === "string" && /^[0-9a-f]{2,}$/i.test(result.preimage)) return true;
+  var state = typeof result.state === "string" ? result.state.toLowerCase() : "";
+  if (state) return state === "settled";
+  if (Number(result.settled_at) > 0) return true;
+  if (typeof result.preimage === "string" && /^[0-9a-f]{64}$/i.test(result.preimage) &&
+    !/^0+$/.test(result.preimage)) return true;
   return result.paid === true;
 }
 
@@ -2818,46 +2826,100 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
   if (!cfg || !bolt11) return false;
   var convKey = nip44ConversationKey(cfg.secret, cfg.walletPubkey);
   var clientPubkey = getPublicKey(cfg.secret);
+  var budget = timeoutMs || 8000;
   return await new Promise(function (resolve) {
-    var done = false, sent = false, scheme = null, ws;
+    var done = false, ws;
+    var timer = null, infoTimer = null, retryTimer = null;
     var infoSub = "nwci-" + Math.random().toString(36).slice(2, 10);
-    var respSub = "nwc-" + Math.random().toString(36).slice(2, 10);
+    var tried = [];
+    var subScheme = {};
+    var reqIds = {};
+    var open = 0;
+
     function finish(val) {
       if (done) return;
       done = true;
+      if (timer) clearTimeout(timer);
+      if (infoTimer) clearTimeout(infoTimer);
+      if (retryTimer) clearTimeout(retryTimer);
       try { ws.close(); } catch (e) {}
       resolve(val);
     }
-    async function sendLookup(sch) {
-      if (sent) return;
-      sent = true;
-      scheme = sch;
-      try { ws.send(JSON.stringify(["CLOSE", infoSub])); } catch (e) {}
-      var reqEvt = {
-        kind: 23194,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [["p", cfg.walletPubkey], ["encryption", sch]],
-        content: await nwcEncrypt(sch, cfg, convKey, JSON.stringify({
-          method: "lookup_invoice",
-          params: { invoice: bolt11 }
-        })),
-        pubkey: clientPubkey
-      };
-      signEvent(reqEvt, cfg.secret);
-      ws.send(JSON.stringify(["REQ", respSub, {
-        kinds: [23195], authors: [cfg.walletPubkey], "#e": [reqEvt.id], limit: 1
-      }]));
-      ws.send(JSON.stringify(["EVENT", reqEvt]));
+
+    function otherScheme() {
+      return tried.indexOf("nip44_v2") >= 0 ? "nip04" : "nip44_v2";
     }
+
+    function tryScheme(sch) {
+      sendLookup(sch).catch(function () {});
+    }
+
+    async function sendLookup(sch) {
+      if (done || tried.indexOf(sch) >= 0) return;
+      tried.push(sch);
+      if (infoTimer) { clearTimeout(infoTimer); infoTimer = null; }
+      try { ws.send(JSON.stringify(["CLOSE", infoSub])); } catch (e) {}
+      var sub = "nwc-" + Math.random().toString(36).slice(2, 10);
+      try {
+        var tags = [["p", cfg.walletPubkey]];
+        if (sch === "nip44_v2") tags.push(["encryption", sch]);
+        var reqEvt = {
+          kind: 23194,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: tags,
+          content: await nwcEncrypt(sch, cfg, convKey, JSON.stringify({
+            method: "lookup_invoice",
+            params: { invoice: bolt11 }
+          })),
+          pubkey: clientPubkey
+        };
+        signEvent(reqEvt, cfg.secret);
+        if (done) return;
+        subScheme[sub] = sch;
+        reqIds[reqEvt.id] = sub;
+        open++;
+        ws.send(JSON.stringify(["REQ", sub, {
+          kinds: [23195], authors: [cfg.walletPubkey], "#e": [reqEvt.id], limit: 1
+        }]));
+        ws.send(JSON.stringify(["EVENT", reqEvt]));
+      } catch (e) {
+        failAttempt(sub);
+        return;
+      }
+      if (tried.length < 2) {
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = setTimeout(function () { tryScheme(otherScheme()); }, Math.max(1200, Math.floor(budget / 3)));
+      }
+    }
+
+    function failAttempt(sub) {
+      if (subScheme[sub]) { dropSub(sub); return; }
+      if (done) return;
+      if (tried.length < 2) tryScheme(otherScheme());
+      else finish(false);
+    }
+
+    function dropSub(sub) {
+      if (!subScheme[sub]) return;
+      delete subScheme[sub];
+      open--;
+      if (open > 0 || done) return;
+      if (tried.length < 2) tryScheme(otherScheme());
+      else finish(false);
+    }
+
     try {
       ws = new WebSocket(cfg.relay);
     } catch (e) {
       resolve(false);
       return;
     }
-    var timer = setTimeout(function () { finish(false); }, timeoutMs || 10000);
+    timer = setTimeout(function () { finish(false); }, budget);
     ws.addEventListener("open", function () {
-      ws.send(JSON.stringify(["REQ", infoSub, { kinds: [13194], authors: [cfg.walletPubkey], limit: 1 }]));
+      try {
+        ws.send(JSON.stringify(["REQ", infoSub, { kinds: [13194], authors: [cfg.walletPubkey], limit: 1 }]));
+      } catch (e) { finish(false); return; }
+      infoTimer = setTimeout(function () { tryScheme("nip44_v2"); }, 1500);
     });
     ws.addEventListener("message", async function (msg) {
       try {
@@ -2865,26 +2927,33 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
         if (!Array.isArray(data)) return;
         if (data[0] === "EVENT" && data[1] === infoSub && data[2] && data[2].kind === 13194) {
           await sendLookup(nwcSchemeFromInfo(data[2]));
-        } else if (data[0] === "EOSE" && data[1] === infoSub) {
-          await sendLookup("nip44_v2");
-        } else if (data[0] === "EVENT" && data[1] === respSub && data[2] && data[2].kind === 23195) {
-          var parsed = JSON.parse(await nwcDecrypt(scheme, cfg, convKey, data[2].content));
-          clearTimeout(timer);
-          finish(!parsed.error && nwcResultIsPaid(parsed.result));
+        } else if ((data[0] === "EOSE" || data[0] === "CLOSED") && data[1] === infoSub) {
+          if (!tried.length) await sendLookup("nip44_v2");
+        } else if (data[0] === "EVENT" && subScheme[data[1]] && data[2] && data[2].kind === 23195) {
+          var evt = data[2];
+          if (evt.pubkey !== cfg.walletPubkey) return;
+          var parsed;
+          try {
+            parsed = JSON.parse(await nwcDecrypt(subScheme[data[1]], cfg, convKey, evt.content));
+          } catch (e) { dropSub(data[1]); return; }
+          if (parsed && !parsed.error && nwcResultIsPaid(parsed.result)) { finish(true); return; }
+          finish(false);
+        } else if (data[0] === "CLOSED" && subScheme[data[1]]) {
+          dropSub(data[1]);
+        } else if (data[0] === "OK" && data[2] === false && reqIds[data[1]]) {
+          dropSub(reqIds[data[1]]);
         }
       } catch (e) {}
     });
-    ws.addEventListener("error", function () { clearTimeout(timer); finish(false); });
-    ws.addEventListener("close", function () { clearTimeout(timer); finish(false); });
+    ws.addEventListener("error", function () { finish(false); });
+    ws.addEventListener("close", function () { finish(false); });
   });
 }
 
-// Authoritative payment check shared by the credit and shop flows. Prefers the
-// bot wallet's own NWC lookup, then falls back to LUD-21 verify or a NIP-57 receipt.
+// Authoritative payment check shared by the credit and shop flows. Takes the
+// invoice's own LUD-21 verify URL or NIP-57 receipt first, then falls back to
+// the bot wallet's NWC lookup, which is the only proof some wallets can give.
 async function invoicePaymentConfirmed(env, pending, receipt) {
-  if (env && env.BOT_NWC_URI) {
-    try { if (await nwcInvoicePaid(env.BOT_NWC_URI, pending.pr)) return true; } catch (e) {}
-  }
   if (pending.verifyMethod === "lud21" && pending.verifyUrl) {
     try {
       var vr = await fetch(pending.verifyUrl, { headers: { "Accept": "application/json" } });
@@ -2893,6 +2962,9 @@ async function invoicePaymentConfirmed(env, pending, receipt) {
     } catch (e) {}
   } else if (pending.verifyMethod === "nip57" && receipt) {
     if (!validateZapReceipt(receipt, pending)) return true;
+  }
+  if (env && env.BOT_NWC_URI) {
+    try { if (await nwcInvoicePaid(env.BOT_NWC_URI, pending.pr, 6000)) return true; } catch (e) {}
   }
   return false;
 }

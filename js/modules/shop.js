@@ -1423,6 +1423,7 @@ TRANSFER TO PUBKEY
                 try {
                     if (entry.kind === 'shop') await this._reconcileShopEntry(entry);
                     else if (entry.kind === 'credit') await this._reconcileCreditEntry(entry);
+                    else if (entry.kind === 'zap') await this._reconcileZapEntry(entry);
                 } catch (e) { /* leave for next foreground */ }
             }
         } finally {

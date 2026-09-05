@@ -213,18 +213,28 @@ export async function catalogProModels(env, opts) {
   return cache.data;
 }
 
+function isSizeToken(part) {
+  return /^(?:a?[0-9]+(?:x[0-9]+)?b|[0-9]+x[0-9]+|fp[0-9]+|bf[0-9]+|int[0-9]+|[0-9]+[ke])$/
+    .test(part);
+}
+
+function slugParts(key) {
+  return String(key || "").split("-").filter(function (p) {
+    return p && !isSizeToken(p);
+  });
+}
+
 // Family alias -> newest member, e.g. "claude-opus" -> "claude-opus-5", so a
 // key a user pinned before a version bump keeps working.
 function familyOf(key) {
-  var parts = String(key || "").split("-").filter(Boolean);
-  var kept = parts.filter(function (p) {
+  var kept = slugParts(key).filter(function (p) {
     return !/^v?[0-9]+$/.test(p) && !/^k[0-9]+$/.test(p);
   });
   return kept.length ? kept.join("-") : String(key || "");
 }
 
 function versionScore(key) {
-  var nums = String(key || "").match(/[0-9]+/g) || [];
+  var nums = slugParts(key).join("-").match(/[0-9]+/g) || [];
   return nums.reduce(function (acc, n, i) { return acc + parseInt(n, 10) / Math.pow(1000, i); }, 0);
 }
 
