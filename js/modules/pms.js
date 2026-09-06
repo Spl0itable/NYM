@@ -1137,11 +1137,12 @@ Object.assign(NYM.prototype, {
             // don't accidentally create phantom 1:1 PM entries.
             if (this.isNymReceipt(rumor)) {
                 const nymReceipt = this.parseNymReceipt(rumor);
-                if (nymReceipt && nymReceipt.messageId) {
-                    const receiptId = nymReceipt.messageId.toUpperCase();
+                const receiptIds = (nymReceipt && nymReceipt.messageIds) || [];
+                if (nymReceipt && receiptIds.length) {
                     const receiptType = nymReceipt.receiptType;
-
                     if (receiptType === 'read') this.recordUserActivity(senderPubkey);
+                    for (const rawId of receiptIds) {
+                    const receiptId = rawId.toUpperCase();
 
                     let receiptMatched = false;
                     for (const [convKey, messages] of this.pmMessages) {
@@ -1178,6 +1179,7 @@ Object.assign(NYM.prototype, {
                     // Receipt decrypted before its message (backlog ordering) —
                     // buffer it so the message picks it up when it arrives
                     if (!receiptMatched) this._bufferEarlyReceipt(receiptId, receiptType, senderPubkey);
+                    }
                 }
                 return;
             }
@@ -1727,17 +1729,51 @@ Object.assign(NYM.prototype, {
         }
         if (!this._pmDepositQueue) this._pmDepositQueue = [];
         this._pmDepositQueue.push(event);
-        if (this._pmDepositQueue.length > 300) this._pmDepositQueue.shift();
+        const depositCap = this.MAX_PM_DEPOSIT_QUEUE || 600;
+        while (this._pmDepositQueue.length > depositCap) {
+            this._pmDepositQueue.splice(Math.floor(Math.random() * this._pmDepositQueue.length), 1);
+            this._pmDepositDropped = (this._pmDepositDropped || 0) + 1;
+            if (!this._pmDepositDropWarnTs || Date.now() - this._pmDepositDropWarnTs > 30000) {
+                this._pmDepositDropWarnTs = Date.now();
+                console.warn('[PM] deposit queue full; dropped', this._pmDepositDropped, 'wraps');
+            }
+        }
         if (this._pmDepositFlushTimer) return;
         this._pmDepositFlushTimer = setTimeout(() => {
             this._pmDepositFlushTimer = null;
             this._flushPMDeposit();
-        }, 4000);
+        }, this._pmDepositDelay(false));
+    },
+
+    _pmDepositDelay(backlog) {
+        const base = backlog
+            ? (this.PM_DEPOSIT_BACKLOG_MS || 600)
+            : (this.PM_DEPOSIT_FLUSH_MS || 4000);
+        const jitter = this.PM_DEPOSIT_FLUSH_JITTER_MS || 0;
+        return base + Math.floor(Math.random() * (jitter + 1));
+    },
+
+    _pmDepositBatchSize() {
+        const min = this.PM_DEPOSIT_BATCH_MIN || 40;
+        const max = this.PM_DEPOSIT_BATCH_MAX || 100;
+        if (max <= min) return max;
+        return min + Math.floor(Math.random() * (max - min + 1));
+    },
+
+    _shufflePmDepositQueue() {
+        const q = this._pmDepositQueue;
+        for (let i = q.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const tmp = q[i];
+            q[i] = q[j];
+            q[j] = tmp;
+        }
     },
 
     async _flushPMDeposit() {
         if (!this._pmDepositQueue || this._pmDepositQueue.length === 0) return;
-        const batch = this._pmDepositQueue.splice(0, 100);
+        this._shufflePmDepositQueue();
+        const batch = this._pmDepositQueue.splice(0, this._pmDepositBatchSize());
         try {
             await this._storageApiRequest('pm-deposit', { events: batch });
         } catch (_) {
@@ -1747,7 +1783,7 @@ Object.assign(NYM.prototype, {
             this._pmDepositFlushTimer = setTimeout(() => {
                 this._pmDepositFlushTimer = null;
                 this._flushPMDeposit();
-            }, 4000);
+            }, this._pmDepositDelay(true));
         }
     },
 

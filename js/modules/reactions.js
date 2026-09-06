@@ -2,6 +2,54 @@
 
 Object.assign(NYM.prototype, {
 
+    _queueGroupReaction(groupId, messageId, emoji, action) {
+        if (!this._groupReactionQueue) this._groupReactionQueue = new Map();
+        if (!this._groupReactionQueue.has(groupId)) this._groupReactionQueue.set(groupId, []);
+        const q = this._groupReactionQueue.get(groupId);
+        const i = q.findIndex(e => e.e === messageId && e.c === emoji);
+        if (i >= 0) q.splice(i, 1);
+        q.push({ e: messageId, c: emoji, a: action });
+        if (q.length > 64) q.shift();
+        if (!this._groupReactionTimers) this._groupReactionTimers = new Map();
+        if (this._groupReactionTimers.has(groupId)) return;
+        this._groupReactionTimers.set(groupId, setTimeout(() => {
+            this._groupReactionTimers.delete(groupId);
+            this._flushGroupReactions(groupId).catch(() => { });
+        }, this.GROUP_REACTION_BATCH_MS));
+    },
+
+    flushPendingGroupReactions() {
+        if (!this._groupReactionQueue) return;
+        for (const groupId of [...this._groupReactionQueue.keys()]) {
+            const t = this._groupReactionTimers && this._groupReactionTimers.get(groupId);
+            if (t) { clearTimeout(t); this._groupReactionTimers.delete(groupId); }
+            this._flushGroupReactions(groupId).catch(() => { });
+        }
+    },
+
+    async _flushGroupReactions(groupId) {
+        const q = this._groupReactionQueue && this._groupReactionQueue.get(groupId);
+        if (!q || !q.length) return;
+        this._groupReactionQueue.set(groupId, []);
+        const group = this.groupConversations.get(groupId);
+        if (!group || !this._canSendGiftWraps()) return;
+        const primary = q[q.length - 1];
+        const rest = q.slice(0, -1);
+        const tags = [['g', groupId], ['e', primary.e], ['k', '14']];
+        if (primary.a === 'remove') tags.push(['action', 'remove']);
+        for (const it of q) tags.push(...this.customEmojiTagsForContent(it.c));
+        if (rest.length) tags.push(['batch', JSON.stringify(rest)]);
+        const rumor = {
+            kind: 7,
+            created_at: Math.floor(Date.now() / 1000),
+            tags,
+            content: primary.c,
+            pubkey: this.pubkey
+        };
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+    },
+
+
     _playReactionBurst(anchorEl, emoji) {
         if (!anchorEl) return;
         const rect = anchorEl.getBoundingClientRect();
@@ -1036,17 +1084,7 @@ ${this._emojiSectionsHtml()}`;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
-                    const now = Math.floor(Date.now() / 1000);
-                    const reactionTags = [['g', groupId], ['e', messageId], ['k', '14'],
-                        ...this.customEmojiTagsForContent(emoji)];
-                    const reactionRumor = {
-                        kind: 7,
-                        created_at: now,
-                        tags: reactionTags,
-                        content: emoji,
-                        pubkey: this.pubkey
-                    };
-                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null, groupId);
+                    this._queueGroupReaction(groupId, messageId, emoji, 'add');
                     this.addToRecentEmojis(emoji);
                     return;
                 }
@@ -1161,17 +1199,7 @@ ${this._emojiSectionsHtml()}`;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
-                    const now = Math.floor(Date.now() / 1000);
-                    const unreactTags = [['g', groupId], ['e', messageId], ['k', '14'], ['action', 'remove'],
-                        ...this.customEmojiTagsForContent(emoji)];
-                    const reactionRumor = {
-                        kind: 7,
-                        created_at: now,
-                        tags: unreactTags,
-                        content: emoji,
-                        pubkey: this.pubkey
-                    };
-                    await this._sendGiftWrapsAsync(group.members, reactionRumor, null, groupId);
+                    this._queueGroupReaction(groupId, messageId, emoji, 'remove');
                     return;
                 }
             }

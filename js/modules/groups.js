@@ -1,5 +1,28 @@
 // groups.js - NIP-17 group chats: create, send, ephemeral keys, members, readers, history
 
+const GROUP_ROLE_EVENTS = {
+    'group-promote-admin': {
+        tag: 'admin', list: 'admins', grant: true, ownerOnly: true,
+        log: 'promote-admin', verb: 'promoted to admin',
+        title: 'Promoted in', body: 'made you an admin.'
+    },
+    'group-revoke-admin': {
+        tag: 'admin', list: 'admins', grant: false, ownerOnly: true,
+        log: 'revoke-admin', verb: "'s admin role was revoked",
+        title: 'Admin removed in', body: 'revoked your admin role.'
+    },
+    'group-promote-mod': {
+        tag: 'mod', list: 'mods', grant: true, ownerOnly: false,
+        log: 'promote', verb: 'promoted to moderator',
+        title: 'Promoted in', body: 'made you a moderator.'
+    },
+    'group-revoke-mod': {
+        tag: 'mod', list: 'mods', grant: false, ownerOnly: false,
+        log: 'revoke', verb: "'s moderator role was revoked",
+        title: 'Moderator removed in', body: 'revoked your moderator role.'
+    }
+};
+
 Object.assign(NYM.prototype, {
 
     // Convert Uint8Array to hex string
@@ -375,6 +398,9 @@ Object.assign(NYM.prototype, {
                     memberProfiles,
                     lastMessageTime: group.lastMessageTime,
                     createdBy: group.createdBy,
+                    admins: Array.isArray(group.admins) ? group.admins : [],
+                    genesisOwner: group.genesisOwner || null,
+                    genesisNonce: group.genesisNonce || null,
                     mods: Array.isArray(group.mods) ? group.mods : [],
                     banned: Array.isArray(group.banned) ? group.banned : [],
                     banner: group.banner || null,
@@ -384,6 +410,7 @@ Object.assign(NYM.prototype, {
                     inviteEnabled: group.inviteEnabled === true,
                     inviteEpoch: group.inviteEpoch || 0,
                     metaUpdatedAt: group.metaUpdatedAt || 0,
+                    metaUpdatedBy: group.metaUpdatedBy || null,
                     lastModTs: group.lastModTs || 0,
                     lastModEventId: group.lastModEventId || null,
                     modTsByTarget: group.modTsByTarget || {},
@@ -402,12 +429,115 @@ Object.assign(NYM.prototype, {
         const g = this.groupConversations.get(groupId);
         return !!(g && g.createdBy && g.createdBy === pubkey);
     },
+    _isGroupAdmin(groupId, pubkey) {
+        const g = this.groupConversations.get(groupId);
+        return !!(g && Array.isArray(g.admins) && g.admins.includes(pubkey));
+    },
     _isGroupMod(groupId, pubkey) {
         const g = this.groupConversations.get(groupId);
         return !!(g && Array.isArray(g.mods) && g.mods.includes(pubkey));
     },
+    _canAdminister(groupId, pubkey) {
+        return this._isGroupOwner(groupId, pubkey) || this._isGroupAdmin(groupId, pubkey);
+    },
     _canModerate(groupId, pubkey) {
-        return this._isGroupOwner(groupId, pubkey) || this._isGroupMod(groupId, pubkey);
+        return this._canAdminister(groupId, pubkey) || this._isGroupMod(groupId, pubkey);
+    },
+    _roleRank(groupId, pubkey) {
+        if (this._isGroupOwner(groupId, pubkey)) return 0;
+        if (this._isGroupAdmin(groupId, pubkey)) return 1;
+        if (this._isGroupMod(groupId, pubkey)) return 2;
+        return 3;
+    },
+    _outranks(groupId, actorPubkey, targetPubkey) {
+        return this._roleRank(groupId, actorPubkey) < this._roleRank(groupId, targetPubkey);
+    },
+
+    _rosterHash(groupId, members) {
+        const NT = window.NostrTools;
+        const enc = new TextEncoder();
+        const sorted = [...new Set(members || [])].sort();
+        const h = NT._sha256(enc.encode(`nym-roster-v1:${groupId}:${sorted.join(',')}`));
+        return Array.from(h.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+    },
+
+    _groupRosterHash(groupId) {
+        const g = this.groupConversations.get(groupId);
+        return g ? this._rosterHash(groupId, g.members) : null;
+    },
+
+    _groupGenesisId(genesisOwner, nonceHex) {
+        const NT = window.NostrTools;
+        const enc = new TextEncoder();
+        const h = NT._sha256(enc.encode(`nym-group-v1:${genesisOwner}:${nonceHex}`));
+        return Array.from(h).map(b => b.toString(16).padStart(2, '0')).join('');
+    },
+
+    _verifyGroupGenesis(groupId, genesisOwner, nonceHex) {
+        if (!genesisOwner || !nonceHex) return null;
+        if (!/^[0-9a-f]{64}$/i.test(genesisOwner) || !/^[0-9a-f]{64}$/i.test(nonceHex)) return null;
+        try { return this._groupGenesisId(genesisOwner, nonceHex) === groupId; }
+        catch (_) { return null; }
+    },
+
+    _roleEventAuthorized(groupId, spec, senderPubkey, targetPubkey) {
+        if (spec.ownerOnly) return this._isGroupOwner(groupId, senderPubkey);
+        if (!this._canAdminister(groupId, senderPubkey)) return false;
+        if (this._isGroupOwner(groupId, targetPubkey)) return false;
+        if (spec.grant && this._isGroupAdmin(groupId, targetPubkey)) return false;
+        return this._isGroupOwner(groupId, senderPubkey)
+            || this._outranks(groupId, senderPubkey, targetPubkey)
+            || this._isGroupMod(groupId, targetPubkey);
+    },
+
+    async _applyGroupRoleEvent(type, rumor, groupId, senderPubkey, isOwn, ctx) {
+        const spec = GROUP_ROLE_EVENTS[type];
+        const tag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === spec.tag && t[1]);
+        if (!tag) return;
+        const targetPubkey = tag[1];
+        const grp = this.groupConversations.get(groupId);
+        if (!grp) return;
+        if (!this._roleEventAuthorized(groupId, spec, senderPubkey, targetPubkey)) return;
+        if (this._isStaleModEvent(grp, rumor, targetPubkey)) return;
+        this._recordModEvent(grp, rumor, targetPubkey);
+
+        if (!Array.isArray(grp[spec.list])) grp[spec.list] = [];
+        if (spec.grant) {
+            if (!grp[spec.list].includes(targetPubkey)) grp[spec.list].push(targetPubkey);
+            if (spec.list === 'admins' && Array.isArray(grp.mods)) {
+                grp.mods = grp.mods.filter(pk => pk !== targetPubkey);
+            }
+        } else {
+            grp[spec.list] = grp[spec.list].filter(pk => pk !== targetPubkey);
+        }
+        this._appendModLog(grp, { type: spec.log, actor: senderPubkey, target: targetPubkey });
+        this.groupConversations.set(groupId, grp);
+        this._saveGroupConversations();
+        this._debouncedNostrSettingsSave();
+        this.updateGroupConversationUI(groupId);
+        if (isOwn) return;
+
+        if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
+        if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+        const targetName = this.getNymFromPubkey(targetPubkey);
+        const actorName = this.getNymFromPubkey(senderPubkey);
+        if (this.inPMMode && this.currentGroup === groupId) {
+            const line = spec.grant
+                ? `${targetName} was ${spec.verb} by ${actorName}.`
+                : `${targetName}${spec.verb} by ${actorName}.`;
+            this.displaySystemMessage(line);
+            this.openGroup(groupId);
+        }
+        if (targetPubkey !== this.pubkey) return;
+        const tsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
+        const title = `${spec.title} ${grp.name || ctx.groupName}`;
+        const body = `${actorName} ${spec.body}`;
+        const info = { type: 'group', groupId, id: ctx.groupConvKey, pubkey: senderPubkey, eventId: ctx.eventId };
+        if ((Math.floor(Date.now() / 1000) - tsSec) > 10) {
+            this._addNotificationToHistory(title, body, info, tsSec * 1000);
+        } else {
+            this.showNotification(title, body, info, tsSec * 1000);
+        }
     },
     // Whether a user may add new members. The owner always can; everyone else
     // only when the group's "allow member invites" setting is enabled (the
@@ -415,7 +545,7 @@ Object.assign(NYM.prototype, {
     _canAddMembers(groupId, pubkey) {
         const g = this.groupConversations.get(groupId);
         if (!g) return false;
-        if (this._isGroupOwner(groupId, pubkey)) return true;
+        if (this._canModerate(groupId, pubkey)) return true;
         return g.allowMemberInvites !== false;
     },
 
@@ -542,6 +672,99 @@ Object.assign(NYM.prototype, {
 
     // Approver side: auto-admit only when invite links are enabled, the request's
     // epoch matches the current one, and the joiner is eligible.
+    _joinAdmitRank(groupId, joinerPubkey) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return -1;
+        const candidates = group.members.filter(pk => this._canAddMembers(groupId, pk));
+        if (!candidates.includes(this.pubkey)) return -1;
+        const NT = window.NostrTools;
+        const enc = new TextEncoder();
+        const score = (pk) => {
+            const h = NT._sha256(enc.encode(`${groupId}:${joinerPubkey}:${pk}`));
+            return Array.from(h.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+        };
+        const ordered = candidates
+            .map(pk => ({ pk, s: score(pk) }))
+            .sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : (a.pk < b.pk ? -1 : 1)))
+            .map(e => e.pk);
+        return ordered.indexOf(this.pubkey);
+    },
+
+    async _maybeRepairRoster(groupId, advertisedHash, senderPubkey) {
+        if (!advertisedHash || !this._canSendGiftWraps()) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        if (this._rosterHash(groupId, group.members) === advertisedHash) return;
+        const bareShell = !group.createdBy
+            && group.members.filter(pk => pk !== this.pubkey).length === 0;
+        if (!bareShell && !group.members.includes(senderPubkey)) return;
+        if (!this._rosterRepairTs) this._rosterRepairTs = new Map();
+        const nowMs = Date.now();
+        if ((this._rosterRepairTs.get(groupId) || 0) > nowMs - this.GROUP_ROSTER_REPAIR_COOLDOWN_MS) return;
+        this._rosterRepairTs.set(groupId, nowMs);
+        const tags = [
+            ['p', senderPubkey],
+            ['g', groupId],
+            ['subject', group.name],
+            ['type', 'group-roster-req'],
+            ['x', this._generateSharedEventId()]
+        ];
+        const rumor = { kind: 14, created_at: Math.floor(nowMs / 1000), tags, content: '', pubkey: this.pubkey };
+        await this._sendGiftWrapsAsync([senderPubkey], rumor, null, groupId);
+    },
+
+    async _replyGroupRoster(groupId, requesterPubkey) {
+        const group = this.groupConversations.get(groupId);
+        if (!group || !this._canSendGiftWraps()) return;
+        if (!this._canModerate(groupId, this.pubkey)) return;
+        if (!group.members.includes(requesterPubkey)) return;
+        if (!this._rosterReplyTs) this._rosterReplyTs = new Map();
+        const rlKey = `${groupId}:${requesterPubkey}`;
+        const nowMs = Date.now();
+        if ((this._rosterReplyTs.get(rlKey) || 0) > nowMs - this.GROUP_ROSTER_REPAIR_COOLDOWN_MS) return;
+        this._rosterReplyTs.set(rlKey, nowMs);
+        const tags = group.members.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'group-roster']);
+        if (group.createdBy) tags.push(['owner', group.createdBy]);
+        if (Array.isArray(group.admins)) for (const pk of group.admins) tags.push(['admin', pk]);
+        if (Array.isArray(group.mods)) for (const pk of group.mods) tags.push(['mod', pk]);
+        if (Array.isArray(group.banned)) for (const pk of group.banned) tags.push(['ban', pk]);
+        tags.push(['x', this._generateSharedEventId()]);
+        const rumor = { kind: 14, created_at: Math.floor(nowMs / 1000), tags, content: '', pubkey: this.pubkey };
+        await this._sendGiftWrapsAsync([requesterPubkey], rumor, null, groupId);
+    },
+
+    _applyGroupRoster(rumor, groupId, senderPubkey) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        const bareShell = !group.createdBy
+            && group.members.filter(pk => pk !== this.pubkey).length === 0;
+        if (!bareShell && !this._canModerate(groupId, senderPubkey)) return;
+        const tagged = (k) => (rumor.tags || [])
+            .filter(t => Array.isArray(t) && t[0] === k && t[1]).map(t => t[1]);
+        const members = tagged('p');
+        if (!members.length) return;
+        const banned = new Set(tagged('ban'));
+        const next = members.filter(pk => !banned.has(pk));
+        if (!next.includes(this.pubkey)) return;
+        group.members = [...new Set(next)];
+        group.banned = [...banned];
+        if (bareShell) {
+            const ownerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'owner' && t[1]);
+            if (ownerTag && !group.createdBy) group.createdBy = ownerTag[1];
+        }
+        const admins = tagged('admin'), mods = tagged('mod');
+        group.admins = admins.filter(pk => group.members.includes(pk));
+        group.mods = mods.filter(pk => group.members.includes(pk) && !group.admins.includes(pk));
+        this.groupConversations.set(groupId, group);
+        this._saveGroupConversations();
+        this._debouncedNostrSettingsSave();
+        this.updateGroupConversationUI(groupId);
+        if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
+    },
+
     async _handleGroupJoinRequest(rumor, groupId, joinerPubkey) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -553,6 +776,17 @@ Object.assign(NYM.prototype, {
         if (reqEpoch !== (group.inviteEpoch || 0)) return;
         if (group.members.includes(joinerPubkey)) return;
         if (Array.isArray(group.banned) && group.banned.includes(joinerPubkey)) return;
+
+        let rank = -1;
+        try { rank = this._joinAdmitRank(groupId, joinerPubkey); } catch (_) { rank = 0; }
+        if (rank < 0) rank = 0;
+        if (rank > 0) {
+            await new Promise(res => setTimeout(res, Math.min(rank, 6) * this.GROUP_ADMIT_BACKOFF_MS));
+            const now = this.groupConversations.get(groupId);
+            if (!now || now.members.includes(joinerPubkey)) return;
+            if (Array.isArray(now.banned) && now.banned.includes(joinerPubkey)) return;
+            if (!this._canAddMembers(groupId, this.pubkey)) return;
+        }
         await this.addMemberToGroup(groupId, joinerPubkey);
     },
     _appendModLog(group, entry) {
@@ -650,12 +884,25 @@ Object.assign(NYM.prototype, {
     handleGroupReaction(rumor, senderPubkey) {
         const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
         if (!eTag) return;
-        const messageId = eTag[1]; // nymMessageId of the target message
-        const emoji = rumor.content;
-        if (!emoji) return;
-
         const actionTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'action');
-        const isRemoval = actionTag && actionTag[1] === 'remove';
+        const batchTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'batch' && t[1]);
+        if (batchTag) {
+            let extra = null;
+            try { extra = JSON.parse(batchTag[1]); } catch (_) { extra = null; }
+            if (Array.isArray(extra)) {
+                for (const it of extra.slice(0, 64)) {
+                    if (!it || typeof it !== 'object') continue;
+                    if (!/^[0-9a-f]{64}$/i.test(it.e || '') || typeof it.c !== 'string' || !it.c) continue;
+                    this._applyGroupReaction(rumor, senderPubkey, it.e, it.c, it.a === 'remove');
+                }
+            }
+        }
+        this._applyGroupReaction(rumor, senderPubkey, eTag[1], rumor.content,
+            !!(actionTag && actionTag[1] === 'remove'));
+    },
+
+    _applyGroupReaction(rumor, senderPubkey, messageId, emoji, isRemoval) {
+        if (!emoji) return;
 
         // Timestamp-based dedup for out-of-order delivery
         const actionKey = `${messageId}:${emoji}:${senderPubkey}`;
@@ -767,10 +1014,33 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // group-unban: owner notified us that we were unbanned. Show a notification.
         if (typeTag && typeTag[1] === 'group-unban') {
             if (isOwn) return;
             if (this.blockedUsers.has(senderPubkey)) return;
+            const unbanTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'unban' && t[1]);
+            const unbannedPubkey = unbanTag ? unbanTag[1] : null;
+            const grpUnban = this.groupConversations.get(groupId);
+            if (grpUnban && unbannedPubkey) {
+                if (this._isStaleModEvent(grpUnban, rumor, unbannedPubkey)) return;
+                const isOwnerUnban = grpUnban.createdBy === senderPubkey;
+                const isModUnban = Array.isArray(grpUnban.mods) && grpUnban.mods.includes(senderPubkey);
+                if (!isOwnerUnban && !isModUnban) return;
+                this._recordModEvent(grpUnban, rumor, unbannedPubkey);
+                if (Array.isArray(grpUnban.banned) && grpUnban.banned.includes(unbannedPubkey)) {
+                    grpUnban.banned = grpUnban.banned.filter(pk => pk !== unbannedPubkey);
+                    this._appendModLog(grpUnban, { type: 'unban', actor: senderPubkey, target: unbannedPubkey });
+                    this.groupConversations.set(groupId, grpUnban);
+                    this._saveGroupConversations();
+                    this._debouncedNostrSettingsSave();
+                    this.updateGroupConversationUI(groupId);
+                    if (unbannedPubkey !== this.pubkey && this.inPMMode && this.currentGroup === groupId) {
+                        if (!this.users.has(unbannedPubkey)) await this.fetchProfileDirect(unbannedPubkey);
+                        if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                        this.displaySystemMessage(`${this.getNymFromPubkey(unbannedPubkey)} was unbanned by ${this.getNymFromPubkey(senderPubkey)}.`);
+                    }
+                }
+            }
+            if (unbannedPubkey && unbannedPubkey !== this.pubkey) return;
             if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
             const actorName = this.getNymFromPubkey(senderPubkey);
             const unbanTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
@@ -810,6 +1080,16 @@ Object.assign(NYM.prototype, {
 
         // group-history: a member shared recent chat history with us after we
         // were added (owner-controlled setting). Never displayed as a bubble.
+        if (typeTag && typeTag[1] === 'group-roster-req') {
+            if (!isOwn) await this._replyGroupRoster(groupId, senderPubkey);
+            return;
+        }
+
+        if (typeTag && typeTag[1] === 'group-roster') {
+            if (!isOwn) this._applyGroupRoster(rumor, groupId, senderPubkey);
+            return;
+        }
+
         if (typeTag && typeTag[1] === 'group-history') {
             if (!isOwn) this._handleGroupHistoryShare(rumor, groupId, senderPubkey);
             return;
@@ -820,6 +1100,8 @@ Object.assign(NYM.prototype, {
             const group = this.groupConversations.get(groupId);
             if (group) {
                 group.members = group.members.filter(pk => pk !== senderPubkey);
+                if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== senderPubkey);
+                if (Array.isArray(group.admins)) group.admins = group.admins.filter(pk => pk !== senderPubkey);
                 this.groupConversations.set(groupId, group);
                 this.updateGroupConversationUI(groupId);
                 this._saveGroupConversations();
@@ -865,6 +1147,14 @@ Object.assign(NYM.prototype, {
             const inviteMods = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'mod' && t[1])
                 .map(t => t[1]);
+            const inviteAdmins = (rumor.tags || [])
+                .filter(t => Array.isArray(t) && t[0] === 'admin' && t[1])
+                .map(t => t[1]);
+            const inviteGOwner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'gowner' && t[1])?.[1] || null;
+            const inviteGNonce = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'gnonce' && t[1])?.[1] || null;
+            const inviteGenesis = this._verifyGroupGenesis(groupId, inviteGOwner, inviteGNonce);
+            if (inviteGenesis === false) return;
+            if (inviteGenesis === true && senderPubkey !== inviteGOwner) return;
             const inviteAvatar = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar' && t[1])?.[1] || null;
             const inviteBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
             const inviteDesc = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description' && t[1])?.[1] || null;
@@ -882,7 +1172,10 @@ Object.assign(NYM.prototype, {
                     groupName,
                     inviteMembers,
                     (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                    { createdBy: senderPubkey, mods: inviteMods, avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites, inviteEnabled, inviteEpoch, shareHistory: inviteShareHistory }
+                    { createdBy: senderPubkey, mods: inviteMods, admins: inviteAdmins,
+                      genesisOwner: inviteGenesis === true ? inviteGOwner : null,
+                      genesisNonce: inviteGenesis === true ? inviteGNonce : null,
+                      avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites, inviteEnabled, inviteEpoch, shareHistory: inviteShareHistory }
                 );
             }
             const grp = this.groupConversations.get(groupId);
@@ -891,6 +1184,9 @@ Object.assign(NYM.prototype, {
             }
             if (grp && inviteMods.length > 0 && (!Array.isArray(grp.mods) || grp.mods.length === 0)) {
                 grp.mods = [...inviteMods];
+            }
+            if (grp && inviteAdmins.length > 0 && (!Array.isArray(grp.admins) || grp.admins.length === 0)) {
+                grp.admins = [...inviteAdmins];
             }
             if (grp && inviteAvatar && !grp.avatar) grp.avatar = inviteAvatar;
             if (grp && inviteBanner && !grp.banner) grp.banner = inviteBanner;
@@ -903,6 +1199,8 @@ Object.assign(NYM.prototype, {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
                 this._processPendingGroupHistory(groupId);
+            this._announceGroupEphemeralKey(groupId).catch(() => { });
+                this._announceGroupEphemeralKey(groupId).catch(() => { });
             }
 
             // Send notification for group invites
@@ -947,6 +1245,9 @@ Object.assign(NYM.prototype, {
             const addMods = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'mod' && t[1])
                 .map(t => t[1]);
+            const addAdmins = (rumor.tags || [])
+                .filter(t => Array.isArray(t) && t[0] === 'admin' && t[1])
+                .map(t => t[1]);
             const claimedOwner = ownerTag ? ownerTag[1] : null;
             const addAvatar = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar' && t[1])?.[1] || null;
             const addBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
@@ -956,7 +1257,14 @@ Object.assign(NYM.prototype, {
             const addInviteEpochTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'invite_epoch');
             const addShareHistTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'share_history');
             const existingGroup = this.groupConversations.get(groupId);
-            const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey;
+            const addGOwner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'gowner' && t[1])?.[1] || null;
+            const addGNonce = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'gnonce' && t[1])?.[1] || null;
+            const addGenesis = this._verifyGroupGenesis(groupId, addGOwner, addGNonce);
+            if (addGenesis === false) return;
+            if (existingGroup && existingGroup.genesisOwner && addGenesis === true
+                && addGOwner !== existingGroup.genesisOwner) return;
+            const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey
+                && (addGenesis !== true || claimedOwner === addGOwner);
             // Refuse to bootstrap a brand-new group entry from a non-owner, unless
             // the user is actively joining via an invite link they chose to accept.
             const joiningViaInvite = !!(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId));
@@ -989,13 +1297,18 @@ Object.assign(NYM.prototype, {
                 {
                     createdBy: trustBootstrap ? claimedOwner : undefined,
                     mods: trustBootstrap ? addMods : [],
+                    admins: trustBootstrap ? addAdmins : [],
+                    genesisOwner: addGenesis === true ? addGOwner : undefined,
+                    genesisNonce: addGenesis === true ? addGNonce : undefined,
                     avatar: trustBootstrap ? addAvatar : undefined,
                     banner: trustBootstrap ? addBanner : undefined,
                     description: trustBootstrap ? addDesc : undefined,
                     allowMemberInvites: trustBootstrap && addAllowInvTag ? addAllowInvTag[1] !== '0' : undefined,
                     inviteEnabled: trustBootstrap && addInviteEnabledTag ? addInviteEnabledTag[1] === '1' : undefined,
                     inviteEpoch: trustBootstrap && addInviteEpochTag ? (parseInt(addInviteEpochTag[1], 10) || 0) : undefined,
-                    shareHistory: trustBootstrap && addShareHistTag ? addShareHistTag[1] === '1' : undefined
+                    shareHistory: trustBootstrap && addShareHistTag ? addShareHistTag[1] === '1' : undefined,
+                    nameAuthoritative: trustBootstrap
+                        || (!!existingGroup && existingGroup.createdBy === senderPubkey)
                 }
             );
             const grpAdd = this.groupConversations.get(groupId);
@@ -1008,6 +1321,9 @@ Object.assign(NYM.prototype, {
             if (trustBootstrap && grpAdd && addShareHistTag) grpAdd.shareHistory = addShareHistTag[1] === '1';
             if (trustBootstrap && grpAdd && addMods.length > 0 && (!Array.isArray(grpAdd.mods) || grpAdd.mods.length === 0)) {
                 grpAdd.mods = [...addMods];
+            }
+            if (trustBootstrap && grpAdd && addAdmins.length > 0 && (!Array.isArray(grpAdd.admins) || grpAdd.admins.length === 0)) {
+                grpAdd.admins = [...addAdmins];
             }
             if (joiningViaInvite) this._pendingInviteJoins.delete(groupId);
             this._saveGroupConversations();
@@ -1040,18 +1356,12 @@ Object.assign(NYM.prototype, {
             if (!kickTag) return;
             const removedPubkey = kickTag[1];
             const banTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ban' && t[1] === '1');
-            // Verify the kick was actually issued by the owner or a moderator
             const grpForCheck = this.groupConversations.get(groupId);
             if (grpForCheck) {
                 if (this._isStaleModEvent(grpForCheck, rumor, removedPubkey)) return;
-                const isOwnerKick = grpForCheck.createdBy === senderPubkey;
-                const isModKick = Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(senderPubkey);
-                if (!isOwnerKick && !isModKick) return;
-                // Mods can't kick the owner or other mods
-                if (!isOwnerKick) {
-                    if (grpForCheck.createdBy === removedPubkey) return;
-                    if (Array.isArray(grpForCheck.mods) && grpForCheck.mods.includes(removedPubkey)) return;
-                }
+                if (!this._canModerate(groupId, senderPubkey)) return;
+                if (!this._isGroupOwner(groupId, senderPubkey)
+                    && !this._outranks(groupId, senderPubkey, removedPubkey)) return;
                 this._recordModEvent(grpForCheck, rumor, removedPubkey);
             }
             // Fetch profiles so nicknames display correctly instead of nym#xxxx
@@ -1083,7 +1393,7 @@ Object.assign(NYM.prototype, {
                 // Notify — the user might not have the group open.
                 const titleSelf = banTag ? `Banned from ${groupName}` : `Removed from ${groupName}`;
                 const bodySelf = banTag
-                    ? `${removerName} banned you. You can be re-invited only by the group owner.`
+                    ? `${removerName} banned you. You can be re-invited only by the group owner or a moderator.`
                     : `${removerName} removed you from the group.`;
                 const removeSelfChannelInfo = { type: 'group', groupId, id: gck, pubkey: senderPubkey, eventId: event.id };
                 const removeSelfTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
@@ -1099,6 +1409,7 @@ Object.assign(NYM.prototype, {
                 if (grp) {
                     grp.members = grp.members.filter(pk => pk !== removedPubkey);
                     if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== removedPubkey);
+                    if (Array.isArray(grp.admins)) grp.admins = grp.admins.filter(pk => pk !== removedPubkey);
                     if (banTag) {
                         if (!Array.isArray(grp.banned)) grp.banned = [];
                         if (!grp.banned.includes(removedPubkey)) grp.banned.push(removedPubkey);
@@ -1117,82 +1428,10 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // group-promote-mod: promote a member to moderator (owner-issued only).
-        if (typeTag && typeTag[1] === 'group-promote-mod') {
-            const modTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'mod' && t[1]);
-            if (!modTag) return;
-            const targetPubkey = modTag[1];
-            const grp = this.groupConversations.get(groupId);
-            if (!grp) return;
-            if (grp.createdBy !== senderPubkey) return; // only owner can promote
-            if (this._isStaleModEvent(grp, rumor, targetPubkey)) return;
-            this._recordModEvent(grp, rumor, targetPubkey);
-            if (!Array.isArray(grp.mods)) grp.mods = [];
-            if (!grp.mods.includes(targetPubkey)) grp.mods.push(targetPubkey);
-            this._appendModLog(grp, { type: 'promote', actor: senderPubkey, target: targetPubkey });
-            this.groupConversations.set(groupId, grp);
-            this._saveGroupConversations();
-            this._debouncedNostrSettingsSave();
-            if (!isOwn) {
-                if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
-                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
-                const targetName = this.getNymFromPubkey(targetPubkey);
-                const actorName = this.getNymFromPubkey(senderPubkey);
-                if (this.inPMMode && this.currentGroup === groupId) {
-                    this.displaySystemMessage(`${targetName} was promoted to moderator by ${actorName}.`);
-                    this.openGroup(groupId);
-                }
-                if (targetPubkey === this.pubkey) {
-                    const promoteTitle = `Promoted in ${grp.name || groupName}`;
-                    const promoteBody = `${actorName} made you a moderator.`;
-                    const promoteChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
-                    const promoteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-                    if ((Math.floor(Date.now() / 1000) - promoteTsSec) > 10) {
-                        this._addNotificationToHistory(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
-                    } else {
-                        this.showNotification(promoteTitle, promoteBody, promoteChannelInfo, promoteTsSec * 1000);
-                    }
-                }
-            }
-            return;
-        }
-
-        // group-revoke-mod: revoke a member's moderator role (owner-issued only).
-        if (typeTag && typeTag[1] === 'group-revoke-mod') {
-            const modTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'mod' && t[1]);
-            if (!modTag) return;
-            const targetPubkey = modTag[1];
-            const grp = this.groupConversations.get(groupId);
-            if (!grp) return;
-            if (grp.createdBy !== senderPubkey) return;
-            if (this._isStaleModEvent(grp, rumor, targetPubkey)) return;
-            this._recordModEvent(grp, rumor, targetPubkey);
-            if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== targetPubkey);
-            this._appendModLog(grp, { type: 'revoke', actor: senderPubkey, target: targetPubkey });
-            this.groupConversations.set(groupId, grp);
-            this._saveGroupConversations();
-            this._debouncedNostrSettingsSave();
-            if (!isOwn) {
-                if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
-                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
-                const targetName = this.getNymFromPubkey(targetPubkey);
-                const actorName = this.getNymFromPubkey(senderPubkey);
-                if (this.inPMMode && this.currentGroup === groupId) {
-                    this.displaySystemMessage(`${targetName}'s moderator role was revoked by ${actorName}.`);
-                    this.openGroup(groupId);
-                }
-                if (targetPubkey === this.pubkey) {
-                    const revokeTitle = `Moderator removed in ${grp.name || groupName}`;
-                    const revokeBody = `${actorName} revoked your moderator role.`;
-                    const revokeChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
-                    const revokeTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-                    if ((Math.floor(Date.now() / 1000) - revokeTsSec) > 10) {
-                        this._addNotificationToHistory(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
-                    } else {
-                        this.showNotification(revokeTitle, revokeBody, revokeChannelInfo, revokeTsSec * 1000);
-                    }
-                }
-            }
+        if (typeTag && GROUP_ROLE_EVENTS[typeTag[1]]) {
+            await this._applyGroupRoleEvent(typeTag[1], rumor, groupId, senderPubkey, isOwn, {
+                groupName, groupConvKey, eventId: event.id
+            });
             return;
         }
 
@@ -1207,8 +1446,14 @@ Object.assign(NYM.prototype, {
             // Ownership transfers keep global ordering: no target pubkey.
             if (this._isStaleModEvent(grp, rumor, null)) return;
             this._recordModEvent(grp, rumor, null);
+            const priorOwner = grp.createdBy;
             grp.createdBy = newOwner;
             if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== newOwner);
+            if (!Array.isArray(grp.admins)) grp.admins = [];
+            grp.admins = grp.admins.filter(pk => pk !== newOwner);
+            if (priorOwner && grp.members.includes(priorOwner) && !grp.admins.includes(priorOwner)) {
+                grp.admins.push(priorOwner);
+            }
             this._appendModLog(grp, { type: 'transfer', actor: senderPubkey, target: newOwner });
             this.groupConversations.set(groupId, grp);
             this._saveGroupConversations();
@@ -1246,9 +1491,9 @@ Object.assign(NYM.prototype, {
             const targetAuthor = targetAuthorTag ? targetAuthorTag[1] : null;
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
-            const isOwnerSender = grp.createdBy === senderPubkey;
-            const isModSender = Array.isArray(grp.mods) && grp.mods.includes(senderPubkey);
-            if (!isOwnerSender && !isModSender) return;
+            if (!this._canModerate(groupId, senderPubkey)) return;
+            if (!this._isGroupOwner(groupId, senderPubkey) && targetAuthor
+                && !this._outranks(groupId, senderPubkey, targetAuthor)) return;
             // Mods can't delete the owner's messages
             if (!isOwnerSender && targetAuthor && grp.createdBy === targetAuthor) return;
             this._applyGroupMessageDeletion(groupId, targetMessageId);
@@ -1265,10 +1510,13 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Extract all member pubkeys from 'p' tags
+        const grpForRoster = this.groupConversations.get(groupId);
+        const rosterBanned = (grpForRoster && Array.isArray(grpForRoster.banned))
+            ? new Set(grpForRoster.banned) : null;
         const memberPubkeys = (rumor.tags || [])
             .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
-            .map(t => t[1]);
+            .map(t => t[1])
+            .filter(pk => !rosterBanned || !rosterBanned.has(pk));
 
         if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
         let list = this.pmMessages.get(groupConvKey);
@@ -1380,7 +1628,13 @@ Object.assign(NYM.prototype, {
         if (isOwn) this._applyEarlyReceipt(msg, groupConvKey);
 
         // Update or create group conversation entry
-        this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000);
+        this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000, {
+            nameAuthoritative: !!grpForRoster && grpForRoster.createdBy === senderPubkey
+        });
+        const rhTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'rh' && t[1]);
+        if (rhTag && !isOwn) {
+            this._maybeRepairRoster(groupId, rhTag[1], senderPubkey).catch(() => { });
+        }
         const metaTsTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'meta_ts' && t[1]);
         if (metaTsTag) {
             this._applyGroupMetadataTags(rumor, groupId, senderPubkey, parseInt(metaTsTag[1], 10) || 0);
@@ -1485,8 +1739,8 @@ Object.assign(NYM.prototype, {
             return null;
         }
 
-        // CSPRNG (32-byte hex)
-        const groupId = this._generateSharedEventId();
+        const groupNonce = this._generateSharedEventId();
+        const groupId = this._groupGenesisId(this.pubkey, groupNonce);
         const now = Math.floor(Date.now() / 1000);
         const nymMessageId = this._generateSharedEventId();
         const inviteContent = `You've been added to group "${name}" (${allMembers.length} members).`;
@@ -1502,6 +1756,8 @@ Object.assign(NYM.prototype, {
         tags.push(['subject', name]);
         tags.push(['type', 'group-invite']);
         tags.push(['owner', this.pubkey]);
+        tags.push(['gowner', this.pubkey]);
+        tags.push(['gnonce', groupNonce]);
         if (groupAvatar) tags.push(['avatar', groupAvatar]);
         if (groupBanner) tags.push(['banner', groupBanner]);
         if (groupDescription) tags.push(['description', groupDescription]);
@@ -1547,7 +1803,7 @@ Object.assign(NYM.prototype, {
             return false;
         }
         if (!this._canAddMembers(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can add new members to this group.');
+            this.displaySystemMessage('Only the group owner or an admin can add new members to this group.');
             return false;
         }
         if (group.members.includes(newMemberPubkey)) {
@@ -1587,8 +1843,13 @@ Object.assign(NYM.prototype, {
         tags.push(['subject', group.name]);
         tags.push(['type', 'group-add-member']);
         if (group.createdBy) tags.push(['owner', group.createdBy]);
+        if (group.genesisOwner) tags.push(['gowner', group.genesisOwner]);
+        if (group.genesisNonce) tags.push(['gnonce', group.genesisNonce]);
         if (Array.isArray(group.mods)) {
             for (const modPk of group.mods) tags.push(['mod', modPk]);
+        }
+        if (Array.isArray(group.admins)) {
+            for (const adminPk of group.admins) tags.push(['admin', adminPk]);
         }
         if (group.avatar) tags.push(['avatar', group.avatar]);
         if (group.banner) tags.push(['banner', group.banner]);
@@ -1794,6 +2055,31 @@ Object.assign(NYM.prototype, {
 
     // Called after DM catch-up on (re)connect. Sends resync requests only when
     // the offline gap warrants it, at most once per group per cooldown window.
+    async _announceGroupEphemeralKey(groupId) {
+        if (!this._canSendGiftWraps()) return;
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        const others = (group.members || []).filter(pk => pk !== this.pubkey);
+        if (!others.length) return;
+        if (!this._ephAnnounceTs) this._ephAnnounceTs = new Map();
+        const nowMs = Date.now();
+        if ((this._ephAnnounceTs.get(groupId) || 0) > nowMs - this.GROUP_RESYNC_COOLDOWN_SEC * 1000) return;
+        this._ephAnnounceTs.set(groupId, nowMs);
+        const eph = this._ensureSelfEphemeralKey(groupId);
+        const tags = others.map(pk => ['p', pk]);
+        tags.push(['g', groupId]);
+        tags.push(['subject', group.name]);
+        tags.push(['type', 'key-resync']);
+        tags.push(['resync_req', '1']);
+        tags.push(['ephemeral_pk', eph.pk]);
+        tags.push(['x', this._generateSharedEventId()]);
+        const rumor = {
+            kind: 14, created_at: Math.floor(nowMs / 1000), tags, content: '', pubkey: this.pubkey
+        };
+        await this._sendGiftWrapsAsync(others, rumor, null, groupId, { forceRealPk: true });
+        this._saveEphemeralKeys();
+    },
+
     async _maybeSendGroupKeyResyncs() {
         try {
             const gap = this._initLastOnlineTracking();
@@ -1810,6 +2096,12 @@ Object.assign(NYM.prototype, {
                 if (!others.length) continue;
                 if ((cooldowns[groupId] || 0) > nowSec - this.GROUP_RESYNC_COOLDOWN_SEC) continue;
                 cooldowns[groupId] = nowSec;
+                if (sentAny || others.length > 8) {
+                    await new Promise(res => setTimeout(res,
+                        Math.floor(Math.random() * this.GROUP_RESYNC_JITTER_MS)));
+                    const still = this.groupConversations.get(groupId);
+                    if (!still || (this.leftGroups && this.leftGroups.has(groupId))) continue;
+                }
                 const eph = this._ensureSelfEphemeralKey(groupId);
                 const tags = others.map(pk => ['p', pk]);
                 tags.push(['g', groupId]);
@@ -2114,7 +2406,7 @@ Object.assign(NYM.prototype, {
 
         const nymMessageId = this._generateSharedEventId();
 
-        const tags = group.members.map(pk => ['p', pk]);
+        const tags = [['rh', this._rosterHash(groupId, group.members)]];
         tags.push(['g', groupId]);
         tags.push(['subject', group.name]);
         tags.push(['x', nymMessageId]);
@@ -2325,15 +2617,13 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
         if (!this._canModerate(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner or a moderator can remove members.');
+            this.displaySystemMessage('Only the group owner, an admin or a moderator can remove members.');
             return;
         }
         if (!group.members.includes(pubkey)) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            if (this._isGroupOwner(groupId, pubkey) || this._isGroupMod(groupId, pubkey)) {
-                this.displaySystemMessage("You can't remove the group owner or another moderator.");
-                return;
-            }
+        if (!this._isGroupOwner(groupId, this.pubkey) && !this._outranks(groupId, this.pubkey, pubkey)) {
+            this.displaySystemMessage("You can't remove someone at or above your own role.");
+            return;
         }
 
         if (!this.users.has(pubkey)) {
@@ -2363,6 +2653,7 @@ Object.assign(NYM.prototype, {
         if (ek) { delete ek.members[pubkey]; this._saveEphemeralKeys(); }
         group.members = group.members.filter(pk => pk !== pubkey);
         if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== pubkey);
+        if (Array.isArray(group.admins)) group.admins = group.admins.filter(pk => pk !== pubkey);
         if (ban) {
             if (!Array.isArray(group.banned)) group.banned = [];
             if (!group.banned.includes(pubkey)) group.banned.push(pubkey);
@@ -2382,8 +2673,8 @@ Object.assign(NYM.prototype, {
         if (!groupId) return;
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can unban users.');
+        if (!this._canModerate(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or a moderator can unban users.');
             return;
         }
         if (!Array.isArray(group.banned) || !group.banned.includes(pubkey)) {
@@ -2398,117 +2689,109 @@ Object.assign(NYM.prototype, {
         if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
         const targetName = this.getNymFromPubkey(pubkey);
         const actorName = this.getNymFromPubkey(this.pubkey);
-        // Notify the unbanned user via a gift-wrapped rumor so they see a notification.
         if (this._canSendGiftWraps()) {
             const now = Math.floor(Date.now() / 1000);
-            const tags = [
-                ['p', pubkey],
-                ['g', groupId],
-                ['subject', group.name],
-                ['type', 'group-unban'],
-                ['unban', pubkey],
-                ['x', this._generateSharedEventId()]
-            ];
+            const recipients = [...new Set([...group.members, pubkey])]
+                .filter(pk => pk !== this.pubkey);
+            const tags = recipients.map(pk => ['p', pk]);
+            tags.push(['g', groupId]);
+            tags.push(['subject', group.name]);
+            tags.push(['type', 'group-unban']);
+            tags.push(['unban', pubkey]);
+            tags.push(['x', this._generateSharedEventId()]);
             const rumor = {
                 kind: 14,
                 created_at: now,
                 tags,
-                content: `${actorName} unbanned you from "${group.name}". You may be re-invited.`,
+                content: `${actorName} unbanned ${targetName} from "${group.name}".`,
                 pubkey: this.pubkey
             };
-            await this._sendGiftWrapsAsync([pubkey], rumor, null);
+            if (recipients.length) {
+                await this._sendGiftWrapsAsync(recipients, rumor, null, groupId);
+            }
         }
+        this.updateGroupConversationUI(groupId);
         this.displaySystemMessage(`@${targetName} was unbanned. They can be re-invited.`);
     },
 
-    // Owner-only: promote a member to moderator
-    async promoteModerator(pubkey) {
+    async promoteModerator(pubkey) { return this._sendGroupRoleChange('group-promote-mod', pubkey); },
+    async revokeModerator(pubkey) { return this._sendGroupRoleChange('group-revoke-mod', pubkey); },
+    async promoteAdmin(pubkey) { return this._sendGroupRoleChange('group-promote-admin', pubkey); },
+    async revokeAdmin(pubkey) { return this._sendGroupRoleChange('group-revoke-admin', pubkey); },
+
+    async _sendGroupRoleChange(type, pubkey) {
         this.closeContextMenu();
+        const spec = GROUP_ROLE_EVENTS[type];
         const groupId = this.currentGroup;
         if (!groupId || !this._canSendGiftWraps()) return;
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can assign moderators.');
+        const roleWord = spec.list === 'admins' ? 'admin' : 'moderator';
+        if (spec.ownerOnly && !this._isGroupOwner(groupId, this.pubkey)) {
+            this.displaySystemMessage(`Only the group owner can ${spec.grant ? 'assign' : 'revoke'} ${roleWord}s.`);
+            return;
+        }
+        if (!spec.ownerOnly && !this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage(`Only the group owner or an admin can ${spec.grant ? 'assign' : 'revoke'} ${roleWord}s.`);
+            return;
+        }
+        if (pubkey === this.pubkey) {
+            this.displaySystemMessage("You can't change your own role.");
             return;
         }
         if (!group.members.includes(pubkey)) {
             this.displaySystemMessage('That user is not a member of this group.');
             return;
         }
-        if (pubkey === this.pubkey) {
-            this.displaySystemMessage("You're already the group owner.");
+        const holds = Array.isArray(group[spec.list]) && group[spec.list].includes(pubkey);
+        if (spec.grant && holds) {
+            this.displaySystemMessage(`That user is already ${roleWord === 'admin' ? 'an' : 'a'} ${roleWord}.`);
             return;
         }
-        if (this._isGroupMod(groupId, pubkey)) {
-            this.displaySystemMessage('That user is already a moderator.');
+        if (!spec.grant && !holds) {
+            this.displaySystemMessage(`That user is not ${roleWord === 'admin' ? 'an' : 'a'} ${roleWord}.`);
             return;
         }
-
-        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
-        const targetName = this.getNymFromPubkey(pubkey);
-        const actorName = this.getNymFromPubkey(this.pubkey);
-        const content = `${targetName} was promoted to moderator by ${actorName}.`;
-        const now = Math.floor(Date.now() / 1000);
-
-        const tags = group.members.map(pk => ['p', pk]);
-        tags.push(['g', groupId]);
-        tags.push(['subject', group.name]);
-        tags.push(['type', 'group-promote-mod']);
-        tags.push(['mod', pubkey]);
-        tags.push(['x', this._generateSharedEventId()]);
-        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
-
-        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
-
-        if (!Array.isArray(group.mods)) group.mods = [];
-        if (!group.mods.includes(pubkey)) group.mods.push(pubkey);
-        this._appendModLog(group, { type: 'promote', actor: this.pubkey, target: pubkey });
-        this.groupConversations.set(groupId, group);
-        this._saveGroupConversations();
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        this.displaySystemMessage(content);
-    },
-
-    // Owner-only: revoke a member's moderator role
-    async revokeModerator(pubkey) {
-        this.closeContextMenu();
-        const groupId = this.currentGroup;
-        if (!groupId || !this._canSendGiftWraps()) return;
-        const group = this.groupConversations.get(groupId);
-        if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can revoke moderators.');
-            return;
-        }
-        if (!this._isGroupMod(groupId, pubkey)) {
-            this.displaySystemMessage('That user is not a moderator.');
+        if (!this._roleEventAuthorized(groupId, spec, this.pubkey, pubkey)) {
+            this.displaySystemMessage(`You can't change that member's role.`);
             return;
         }
 
         if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
         const targetName = this.getNymFromPubkey(pubkey);
         const actorName = this.getNymFromPubkey(this.pubkey);
-        const content = `${targetName}'s moderator role was revoked by ${actorName}.`;
+        const content = spec.grant
+            ? `${targetName} was ${spec.verb} by ${actorName}.`
+            : `${targetName}${spec.verb} by ${actorName}.`;
         const now = Math.floor(Date.now() / 1000);
 
         const tags = group.members.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
         tags.push(['subject', group.name]);
-        tags.push(['type', 'group-revoke-mod']);
-        tags.push(['mod', pubkey]);
+        tags.push(['type', type]);
+        tags.push([spec.tag, pubkey]);
         tags.push(['x', this._generateSharedEventId()]);
         const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
 
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
 
-        if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== pubkey);
-        this._appendModLog(group, { type: 'revoke', actor: this.pubkey, target: pubkey });
+        if (!Array.isArray(group[spec.list])) group[spec.list] = [];
+        if (spec.grant) {
+            if (!group[spec.list].includes(pubkey)) group[spec.list].push(pubkey);
+            if (spec.list === 'admins' && Array.isArray(group.mods)) {
+                group.mods = group.mods.filter(pk => pk !== pubkey);
+            }
+        } else {
+            group[spec.list] = group[spec.list].filter(pk => pk !== pubkey);
+        }
+        this._appendModLog(group, { type: spec.log, actor: this.pubkey, target: pubkey });
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.updateGroupConversationUI(groupId);
         this.displaySystemMessage(content);
     },
+
 
     // Owner-only: transfer ownership of the group to another member
     async transferOwner(pubkey) {
@@ -2543,8 +2826,14 @@ Object.assign(NYM.prototype, {
 
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
 
+        const priorOwnerSelf = group.createdBy;
         group.createdBy = pubkey;
         if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== pubkey);
+        if (!Array.isArray(group.admins)) group.admins = [];
+        group.admins = group.admins.filter(pk => pk !== pubkey);
+        if (priorOwnerSelf && group.members.includes(priorOwnerSelf) && !group.admins.includes(priorOwnerSelf)) {
+            group.admins.push(priorOwnerSelf);
+        }
         this._appendModLog(group, { type: 'transfer', actor: this.pubkey, target: pubkey });
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
@@ -2556,8 +2845,8 @@ Object.assign(NYM.prototype, {
     async _broadcastGroupMetadata(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group || !this._canSendGiftWraps()) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can change group settings.');
+        if (!this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can change group settings.');
             return;
         }
         // Send only to other members. We already applied the change locally and
@@ -2583,7 +2872,8 @@ Object.assign(NYM.prototype, {
     },
 
     _attachGroupMetaTags(tags, group, groupId) {
-        if (!group || !this._isGroupOwner(groupId, this.pubkey)) return;
+        if (!group || !this._canAdminister(groupId, this.pubkey)) return;
+        if (group.metaUpdatedBy && group.metaUpdatedBy !== this.pubkey) return;
         const metaTs = group.metaUpdatedAt || 0;
         if (!metaTs) return;
         if (Math.floor(Date.now() / 1000) - metaTs > this.GROUP_META_PIGGYBACK_WINDOW) return;
@@ -2668,8 +2958,13 @@ Object.assign(NYM.prototype, {
     _applyGroupMetadataTags(rumor, groupId, senderPubkey, metaTs) {
         const grp = this.groupConversations.get(groupId);
         if (!grp) return false;
-        if (grp.createdBy !== senderPubkey) return false; // owner-issued only
-        if (!metaTs || metaTs < (grp.metaUpdatedAt || 0)) return false;
+        const senderIsOwner = grp.createdBy === senderPubkey;
+        const senderIsAdmin = Array.isArray(grp.admins) && grp.admins.includes(senderPubkey);
+        if (!senderIsOwner && !senderIsAdmin) return false;
+        if (!metaTs) return false;
+        const curTs = grp.metaUpdatedAt || 0;
+        if (metaTs < curTs) return false;
+        if (metaTs === curTs && (grp.metaUpdatedBy || '') > senderPubkey) return false;
         const tag = (k) => (rumor.tags || []).find(t => Array.isArray(t) && t[0] === k);
         const subjectTag = tag('subject');
         const bannerTag = tag('banner');
@@ -2711,6 +3006,7 @@ Object.assign(NYM.prototype, {
         }
         if (changed) {
             grp.metaUpdatedAt = metaTs;
+            grp.metaUpdatedBy = senderPubkey;
             this.groupConversations.set(groupId, grp);
             this.updateGroupConversationUI(groupId);
             this._saveGroupConversations();
@@ -2734,14 +3030,15 @@ Object.assign(NYM.prototype, {
     async setGroupName(groupId, name) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can rename the group.');
+        if (!this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can rename the group.');
             return;
         }
         const trimmed = this.sanitizeGroupName(name);
         if (!trimmed || trimmed === group.name) return;
         group.name = trimmed;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        group.metaUpdatedBy = this.pubkey;
         this.groupConversations.set(groupId, group);
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
@@ -2755,14 +3052,15 @@ Object.assign(NYM.prototype, {
     async setGroupDescription(groupId, description) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can change the description.');
+        if (!this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can change the description.');
             return;
         }
         const trimmed = this.sanitizeGroupDescription(description) || null;
         if (trimmed === (group.description || null)) return;
         group.description = trimmed;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        group.metaUpdatedBy = this.pubkey;
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2775,21 +3073,22 @@ Object.assign(NYM.prototype, {
     async setGroupAllowMemberInvites(groupId, allow) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can change this setting.');
+        if (!this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can change this setting.');
             return;
         }
         const next = !!allow;
         if (next === (group.allowMemberInvites !== false)) return;
         group.allowMemberInvites = next;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        group.metaUpdatedBy = this.pubkey;
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         await this._broadcastGroupMetadata(groupId);
         this.displaySystemMessage(next
             ? 'Group members can now add new users.'
-            : 'Only the group owner can add new users now.');
+            : 'Only the group owner, admins and moderators can add new users now.');
     },
 
     // Owner-only: toggle sharing recent chat history with newly added members,
@@ -2798,14 +3097,15 @@ Object.assign(NYM.prototype, {
     async setGroupShareHistory(groupId, enabled) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can change this setting.');
+        if (!this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can change this setting.');
             return;
         }
         const next = !!enabled;
         if (next === (group.shareHistory === true)) return;
         group.shareHistory = next;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        group.metaUpdatedBy = this.pubkey;
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2819,14 +3119,15 @@ Object.assign(NYM.prototype, {
     async setGroupInviteEnabled(groupId, enabled) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can change this setting.');
+        if (!this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can change this setting.');
             return;
         }
         const next = !!enabled;
         if (next === !!group.inviteEnabled) return;
         group.inviteEnabled = next;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        group.metaUpdatedBy = this.pubkey;
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2840,12 +3141,13 @@ Object.assign(NYM.prototype, {
     async rotateGroupInviteEpoch(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner can reset the invite link.');
+        if (!this._canAdminister(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can reset the invite link.');
             return;
         }
         group.inviteEpoch = (group.inviteEpoch || 0) + 1;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        group.metaUpdatedBy = this.pubkey;
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2860,6 +3162,7 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         group[kind] = url;
         group.metaUpdatedAt = Math.floor(Date.now() / 1000);
+        group.metaUpdatedBy = this.pubkey;
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2872,7 +3175,7 @@ Object.assign(NYM.prototype, {
     async _setGroupImage(groupId, kind, file) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        if (!this._isGroupOwner(groupId, this.pubkey)) {
+        if (!this._canAdminister(groupId, this.pubkey)) {
             this.displaySystemMessage(`Only the group owner can change the ${kind}.`);
             return;
         }
@@ -2888,7 +3191,7 @@ Object.assign(NYM.prototype, {
     // Owner-only: clear a group avatar/banner.
     async _clearGroupImage(groupId, kind) {
         const group = this.groupConversations.get(groupId);
-        if (!group || !this._isGroupOwner(groupId, this.pubkey)) return;
+        if (!group || !this._canAdminister(groupId, this.pubkey)) return;
         await this._applyGroupImage(groupId, kind, null);
         this.displaySystemMessage(`Group ${kind} removed.`);
     },
@@ -2906,12 +3209,12 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
         if (!this._canModerate(groupId, this.pubkey)) {
-            this.displaySystemMessage('Only the group owner or a moderator can delete messages.');
+            this.displaySystemMessage('Only the group owner, an admin or a moderator can delete messages.');
             return;
         }
-        // Mods can't delete the owner's messages; only the owner can.
-        if (!this._isGroupOwner(groupId, this.pubkey) && this._isGroupOwner(groupId, authorPubkey)) {
-            this.displaySystemMessage("Moderators can't delete the group owner's messages.");
+        if (!this._isGroupOwner(groupId, this.pubkey)
+            && !this._outranks(groupId, this.pubkey, authorPubkey)) {
+            this.displaySystemMessage("You can't delete messages from someone at or above your own role.");
             return;
         }
         if (!messageId) return;
@@ -2994,6 +3297,9 @@ Object.assign(NYM.prototype, {
                 members: allMembers,
                 lastMessageTime: timestamp,
                 createdBy: opts.createdBy || null,
+                admins: Array.isArray(opts.admins) ? [...opts.admins] : [],
+                genesisOwner: opts.genesisOwner || null,
+                genesisNonce: opts.genesisNonce || null,
                 mods: Array.isArray(opts.mods) ? [...opts.mods] : [],
                 banned: Array.isArray(opts.banned) ? [...opts.banned] : [],
                 banner: opts.banner || null,
@@ -3035,15 +3341,20 @@ Object.assign(NYM.prototype, {
             const merged = [...new Set([...existing.members, ...allMembers])];
             const next = {
                 ...existing,
-                name: name || existing.name,
+                name: opts.nameAuthoritative === false
+                    ? (existing.name || name)
+                    : (name || existing.name),
                 members: merged,
                 lastMessageTime: Math.max(existing.lastMessageTime || 0, timestamp),
+                admins: Array.isArray(existing.admins) ? existing.admins : [],
                 mods: Array.isArray(existing.mods) ? existing.mods : [],
                 banned: Array.isArray(existing.banned) ? existing.banned : [],
                 modLog: Array.isArray(existing.modLog) ? existing.modLog : []
             };
             // Adopt createdBy if missing and provided
             if (!next.createdBy && opts.createdBy) next.createdBy = opts.createdBy;
+            if (!next.genesisOwner && opts.genesisOwner) next.genesisOwner = opts.genesisOwner;
+            if (!next.genesisNonce && opts.genesisNonce) next.genesisNonce = opts.genesisNonce;
             if (opts.banner !== undefined && opts.banner !== null) next.banner = opts.banner;
             if (opts.avatar !== undefined && opts.avatar !== null) next.avatar = opts.avatar;
             if (opts.description !== undefined && opts.description !== null) next.description = opts.description;
@@ -3547,6 +3858,8 @@ Object.assign(NYM.prototype, {
         this._groupCtxGroupId = groupId;
         this._groupCtxTransferMode = false;
         const iAmOwner = this._isGroupOwner(groupId, this.pubkey);
+        const iCanAdminister = this._canAdminister(groupId, this.pubkey);
+        const iCanModerate = this._canModerate(groupId, this.pubkey);
 
         const menu = document.getElementById('groupContextMenu');
         const overlay = document.getElementById('groupContextMenuOverlay');
@@ -3600,7 +3913,7 @@ Object.assign(NYM.prototype, {
         // Role-based action buttons
         const icon = (p) => `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico8">${p}</svg>`;
         const actions = [];
-        if (iAmOwner) {
+        if (iCanAdminister) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxEditName">${icon('<path d="M 11.5 2.5 L 13.5 4.5 L 5 13 L 2 14 L 3 11 Z" stroke-linejoin="round"/><path d="M 10 4 L 12 6" stroke-linecap="round"/>')}Edit Group Name</div>`);
             actions.push(`<div class="context-menu-item" data-action="groupCtxEditDescription">${icon('<line x1="3" y1="4" x2="13" y2="4" stroke-linecap="round"/><line x1="3" y1="8" x2="13" y2="8" stroke-linecap="round"/><line x1="3" y1="12" x2="9" y2="12" stroke-linecap="round"/>')}Edit Description</div>`);
             actions.push(`<div class="context-menu-item" data-action="groupCtxChangeAvatar">${icon('<circle cx="8" cy="6" r="3"/><path d="M 2.5 14 C 2.5 10.5 5 9 8 9 C 11 9 13.5 10.5 13.5 14" stroke-linecap="round"/>')}Change Avatar</div>`);
@@ -3614,13 +3927,13 @@ Object.assign(NYM.prototype, {
         const checkbox = (on) => on
             ? '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5" stroke-linecap="round" stroke-linejoin="round"/>'
             : '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>';
-        if (iAmOwner) {
+        if (iCanAdminister) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInviteJoin">${icon(checkbox(!!group.inviteEnabled))}Allow joining via invite link</div>`);
             if (group.inviteEnabled) {
                 actions.push(`<div class="context-menu-item" data-action="groupCtxResetInviteLink">${icon('<path d="M 13 8 A 5 5 0 1 1 11.5 4.5" stroke-linecap="round"/><path d="M 11.5 2 L 11.5 5 L 8.5 5" stroke-linecap="round" stroke-linejoin="round"/>')}Reset Invite Link</div>`);
             }
         }
-        if (iAmOwner) {
+        if (iCanAdminister) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInvites">${icon(checkbox(group.allowMemberInvites !== false))}Allow members to add others</div>`);
             actions.push(`<div class="context-menu-item" data-action="groupCtxToggleShareHistory">${icon(checkbox(group.shareHistory === true))}Share history with new members</div>`);
         }
@@ -3632,21 +3945,56 @@ Object.assign(NYM.prototype, {
 
         // Members list (owner first, then mods, then members)
         document.getElementById('grpCtxMembersTitle').textContent = `Members · ${group.members.length}`;
-        const sorted = [...group.members].sort((a, b) => this._memberRoleRank(groupId, a) - this._memberRoleRank(groupId, b));
+        const sorted = [...group.members].sort((a, b) => this._roleRank(groupId, a) - this._roleRank(groupId, b));
         document.getElementById('grpCtxMembers').innerHTML = sorted.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
         if (typeof this.ensureListProfiles === 'function') {
             this.ensureListProfiles(document.getElementById('grpCtxMembers'), sorted);
         }
+
+        this._renderGroupBannedList(groupId, iCanModerate);
 
         menu.scrollTop = 0;
         overlay.classList.add('active');
         menu.classList.add('active');
     },
 
-    _memberRoleRank(groupId, pubkey) {
-        if (this._isGroupOwner(groupId, pubkey)) return 0;
-        if (this._isGroupMod(groupId, pubkey)) return 1;
-        return 2;
+
+    _renderGroupBannedList(groupId, canModerate) {
+        const titleEl = document.getElementById('grpCtxBannedTitle');
+        const listEl = document.getElementById('grpCtxBanned');
+        if (!titleEl || !listEl) return;
+        const group = this.groupConversations.get(groupId);
+        const banned = (canModerate && group && Array.isArray(group.banned)) ? group.banned : [];
+        if (!banned.length) {
+            titleEl.classList.add('nm-hidden');
+            listEl.innerHTML = '';
+            return;
+        }
+        titleEl.classList.remove('nm-hidden');
+        titleEl.textContent = `Banned · ${banned.length}`;
+        listEl.innerHTML = banned.map(pk => this._groupCtxBannedRowHtml(pk)).join('');
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(listEl, banned);
+        }
+    },
+
+    _groupCtxBannedRowHtml(pubkey) {
+        const safePk = this._safePubkey(pubkey);
+        const baseNym = this.escapeHtml(this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
+        const suffix = this.getPubkeySuffix(pubkey);
+        const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
+        const unban = `<button type="button" class="group-ctx-unban" data-action="groupCtxUnban" data-pubkey="${safePk}">Unban</button>`;
+        return `<div class="group-ctx-member banned">${avatar}<span class="group-ctx-member-name">${baseNym}<span class="nym-suffix">#${suffix}</span></span>${unban}</div>`;
+    },
+
+    async groupCtxUnban(pubkey) {
+        const groupId = this._groupCtxGroupId;
+        if (!groupId) return;
+        const prev = this.currentGroup;
+        this.currentGroup = groupId;
+        try { await this.unbanFromGroup(pubkey); }
+        finally { this.currentGroup = prev; }
+        this._renderGroupBannedList(groupId, this._canModerate(groupId, this.pubkey));
     },
 
     _groupCtxMemberRowHtml(groupId, pubkey) {
@@ -3656,9 +4004,11 @@ Object.assign(NYM.prototype, {
         const isSelf = pubkey === this.pubkey;
         const roleBadge = this._isGroupOwner(groupId, pubkey)
             ? '<span class="group-ctx-role owner">Owner</span>'
-            : this._isGroupMod(groupId, pubkey)
-                ? '<span class="group-ctx-role mod">Mod</span>'
-                : '';
+            : this._isGroupAdmin(groupId, pubkey)
+                ? '<span class="group-ctx-role admin">Admin</span>'
+                : this._isGroupMod(groupId, pubkey)
+                    ? '<span class="group-ctx-role mod">Mod</span>'
+                    : '';
         const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
         const youTag = isSelf ? '<span class="group-ctx-you">you</span>' : '';
         return `<div class="group-ctx-member" data-action="groupCtxMemberClick" data-pubkey="${safePk}" data-nym="${baseNym}">${avatar}<span class="group-ctx-member-name">${baseNym}<span class="nym-suffix">#${suffix}</span>${youTag}</span>${roleBadge}</div>`;
@@ -3680,7 +4030,7 @@ Object.assign(NYM.prototype, {
         this._groupCtxTransferMode = true;
         document.getElementById('grpCtxMembersTitle').textContent = 'Select a member to make owner';
         const others = group.members.filter(pk => pk !== this.pubkey)
-            .sort((a, b) => this._memberRoleRank(groupId, a) - this._memberRoleRank(groupId, b));
+            .sort((a, b) => this._roleRank(groupId, a) - this._roleRank(groupId, b));
         document.getElementById('grpCtxMembers').innerHTML = others.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
     },
 
@@ -3907,14 +4257,18 @@ Object.assign(NYM.prototype, {
         const groupId = this.currentGroup;
         const messages = this.pmMessages.get(this.getGroupConversationKey(groupId));
         if (!messages || !messages.length) return;
-        let sentAny = false;
+        const byAuthor = new Map();
         for (const m of messages) {
             if (m.isOwn || m.readReceiptSent || m.isHistorical || !m.nymMessageId) continue;
-            this.sendNymReceipt(m.nymMessageId, 'read', m.pubkey, 'group', groupId);
+            if (!byAuthor.has(m.pubkey)) byAuthor.set(m.pubkey, []);
+            byAuthor.get(m.pubkey).push(m.nymMessageId);
             m.readReceiptSent = true;
-            sentAny = true;
         }
-        if (sentAny) this.recordOwnActivity();
+        if (!byAuthor.size) return;
+        for (const [author, ids] of byAuthor) {
+            this.sendNymReceipt(ids, 'read', author, 'group', groupId);
+        }
+        this.recordOwnActivity();
     },
 
     // Bubble a group item to the top of the PM list
@@ -3957,7 +4311,7 @@ Object.assign(NYM.prototype, {
             const now = Math.floor(Date.now() / 1000);
             const nymMessageId = this._generateSharedEventId();
 
-            const tags = group.members.map(pk => ['p', pk]);
+            const tags = [['rh', this._rosterHash(groupId, group.members)]];
             tags.push(['g', groupId]);
             tags.push(['subject', group.name]);
             tags.push(['x', nymMessageId]);
@@ -4071,10 +4425,12 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(this.currentGroup);
         if (!group) return;
         const mods = Array.isArray(group.mods) ? group.mods : [];
-        // Sort: owner first, then mods, then everyone else (each group alphabetized by nym)
+        const admins = Array.isArray(group.admins) ? group.admins : [];
+        // Sort: owner first, then admins, then mods, then everyone else
+        // (each group alphabetized by nym)
         const ownerPk = group.createdBy;
         const sorted = [...group.members].sort((a, b) => {
-            const rank = (pk) => (pk === ownerPk ? 0 : mods.includes(pk) ? 1 : 2);
+            const rank = (pk) => this._roleRank(this.currentGroup, pk);
             const ra = rank(a), rb = rank(b);
             if (ra !== rb) return ra - rb;
             const na = (this.getNymFromPubkey(a) || '').toLowerCase();
@@ -4089,6 +4445,7 @@ Object.assign(NYM.prototype, {
             const flairHtml = this.getFlairForUser(pk) || '';
             const labels = [];
             if (pk === ownerPk) labels.push('owner');
+            else if (admins.includes(pk)) labels.push('admin');
             else if (mods.includes(pk)) labels.push('mod');
             if (pk === this.pubkey) labels.push('you');
             const labelHtml = labels.length

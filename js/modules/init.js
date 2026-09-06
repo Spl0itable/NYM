@@ -87,6 +87,10 @@ Object.assign(NYM.prototype, {
                     typeof this.refreshUnresolvedPlaces === 'function') {
                     this.refreshUnresolvedPlaces(true);
                 }
+                if (document.visibilityState === 'hidden' &&
+                    typeof this.flushPendingGroupReactions === 'function') {
+                    this.flushPendingGroupReactions();
+                }
             });
             applyMessageLayout(this.settings.chatLayout);
 

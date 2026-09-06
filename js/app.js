@@ -648,14 +648,23 @@ class NYM {
         this.groupEphemeralKeys = new Map();
         this.EPHEMERAL_PREV_KEYS_MAX = 30;
         this.GROUP_META_PIGGYBACK_WINDOW = 7 * 24 * 60 * 60;
-        // Each group message costs one gift wrap per member, so cap membership
-        // to keep per-message fan-out (encrypt + publish work) bounded.
         this.MAX_GROUP_MEMBERS = 100;
         // Key-resync heartbeat: after being offline this long, our stored view
         // of other members' rotating ephemeral keys may have expired off relays,
         // so we proactively re-exchange current keys (per-group cooldown).
         this.GROUP_RESYNC_OFFLINE_GAP_SEC = 3 * 24 * 60 * 60;
         this.GROUP_RESYNC_COOLDOWN_SEC = 24 * 60 * 60;
+        this.GROUP_ADMIT_BACKOFF_MS = 4000;
+        this.GROUP_RESYNC_JITTER_MS = 120000;
+        this.GROUP_ROSTER_REPAIR_COOLDOWN_MS = 300000;
+        this.MAX_SOCKET_QUEUE = 2048;
+        this.GROUP_REACTION_BATCH_MS = 1500;
+        this.MAX_PM_DEPOSIT_QUEUE = Math.max(600, this.MAX_GROUP_MEMBERS * 3);
+        this.PM_DEPOSIT_FLUSH_MS = 4000;
+        this.PM_DEPOSIT_FLUSH_JITTER_MS = 1500;
+        this.PM_DEPOSIT_BACKLOG_MS = 600;
+        this.PM_DEPOSIT_BATCH_MIN = 40;
+        this.PM_DEPOSIT_BATCH_MAX = 100;
         this._ephemeralSubIds = [];
         this._dmCatchupReady = Promise.resolve();
         this.currentGroup = null;
@@ -802,8 +811,11 @@ class NYM {
         this.statusHiddenUsers = new Set();
         this.typingUsers = new Map();
         this._typingThrottleTime = 0;
-        this._typingSendInterval = 3000;
-        this._typingExpireMs = 5000;
+        this._typingSendInterval = 12000;
+        this._typingExpireMs = 15000;
+        this._typingExpireMax = 30000;
+        this._typingStartDebounce = 1500;
+        this._typingStopDelay = 4000;
         this._typingStopTimer = null;
         this.notificationHistory = this._loadNotificationHistory();
         this.seenNotificationKeys = this._loadSeenNotificationKeys();
@@ -6520,6 +6532,10 @@ async function applyNostrSettingsAdditive(s) {
                     if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
                     if (group.shareHistory === true) g.shareHistory = true;
                     if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
+                    g.admins = Array.isArray(group.admins) ? [...group.admins] : [];
+                    if (group.genesisOwner) g.genesisOwner = group.genesisOwner;
+                    if (group.genesisNonce) g.genesisNonce = group.genesisNonce;
+                    if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
             } else {
@@ -6542,12 +6558,25 @@ async function applyNostrSettingsAdditive(s) {
                         // flip the owner's setting off.
                         if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
+                        if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
                         nym.updateGroupConversationUI(groupId);
                     } else {
                         if (!g.banner && group.banner) g.banner = group.banner;
                         if (!g.avatar && group.avatar) g.avatar = group.avatar;
                         if (!g.description && group.description) g.description = group.description;
                     }
+                    if (Array.isArray(group.members) && group.members.length) {
+                        const cur = new Set(Array.isArray(g.members) ? g.members : []);
+                        for (const pk of group.members) cur.add(pk);
+                        g.members = [...cur];
+                    }
+                    if (Array.isArray(group.admins)) {
+                        const cur = new Set(Array.isArray(g.admins) ? g.admins : []);
+                        for (const pk of group.admins) cur.add(pk);
+                        g.admins = [...cur];
+                    }
+                    if (!g.genesisOwner && group.genesisOwner) g.genesisOwner = group.genesisOwner;
+                    if (!g.genesisNonce && group.genesisNonce) g.genesisNonce = group.genesisNonce;
                     if (Array.isArray(group.mods)) {
                         const cur = new Set(Array.isArray(g.mods) ? g.mods : []);
                         for (const pk of group.mods) cur.add(pk);
@@ -7258,12 +7287,25 @@ async function applyNostrSettings(s) {
                         // blobs have no shareHistory key).
                         if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
+                        if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
                         nym.updateGroupConversationUI(groupId);
                     } else {
                         if (!g.banner && group.banner) g.banner = group.banner;
                         if (!g.avatar && group.avatar) g.avatar = group.avatar;
                         if (!g.description && group.description) g.description = group.description;
                     }
+                    if (Array.isArray(group.members) && group.members.length) {
+                        const cur = new Set(Array.isArray(g.members) ? g.members : []);
+                        for (const pk of group.members) cur.add(pk);
+                        g.members = [...cur];
+                    }
+                    if (Array.isArray(group.admins)) {
+                        const cur = new Set(Array.isArray(g.admins) ? g.admins : []);
+                        for (const pk of group.admins) cur.add(pk);
+                        g.admins = [...cur];
+                    }
+                    if (!g.genesisOwner && group.genesisOwner) g.genesisOwner = group.genesisOwner;
+                    if (!g.genesisNonce && group.genesisNonce) g.genesisNonce = group.genesisNonce;
                 }
             }
         }

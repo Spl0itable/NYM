@@ -1390,13 +1390,15 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        const messageIds = Array.isArray(messageId) ? messageId : [messageId];
+        if (!messageIds.length) return;
         const now = Math.floor(Date.now() / 1000);
         const rumor = {
             kind: 69420,
             created_at: now,
             tags: [
                 ['p', recipientPubkey],
-                ['x', messageId],  // Reference to original message
+                ...messageIds.map(id => ['x', id]),
                 ['receipt', receiptType]  // 'delivered' or 'read'
             ],
             content: '',  // Empty content for receipts
@@ -1438,7 +1440,9 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        return status ? { status, groupId, pubkey: rumor.pubkey } : null;
+        const ttlTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ttl' && t[1]);
+        const ttl = ttlTag ? parseInt(ttlTag[1], 10) : 0;
+        return status ? { status, groupId, ttl: ttl > 0 ? ttl : 0, pubkey: rumor.pubkey } : null;
     },
 
     // Called when input changes in PM/group mode to signal typing
@@ -1448,20 +1452,30 @@ Object.assign(NYM.prototype, {
         if (!this.isTypingIndicatorAllowedFor(context)) return;
 
         const now = Date.now();
-        if (now - this._typingThrottleTime < this._typingSendInterval) return;
-        this._typingThrottleTime = now;
-
-        if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
-
         const convKey = this.currentGroup ? `group:${this.currentGroup}` : `pm:${this.currentPM}`;
         if (!this._pmTypingStartedFor) this._pmTypingStartedFor = new Set();
-        this._pmTypingStartedFor.add(convKey);
-        this._sendTypingEvent('start');
+        const already = this._pmTypingStartedFor.has(convKey);
 
+        if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingStopTimer = setTimeout(() => {
-            if (this._pmTypingStartedFor) this._pmTypingStartedFor.delete(convKey);
+            if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
+            if (!this._pmTypingStartedFor || !this._pmTypingStartedFor.delete(convKey)) return;
             this._sendTypingEvent('stop');
-        }, 4000);
+        }, this._typingStopDelay);
+
+        if (already) {
+            if (now - this._typingThrottleTime < this._typingSendInterval) return;
+            this._typingThrottleTime = now;
+            this._sendTypingEvent('start');
+            return;
+        }
+        if (this._typingStartTimer) return;
+        this._typingStartTimer = setTimeout(() => {
+            this._typingStartTimer = null;
+            this._typingThrottleTime = Date.now();
+            this._pmTypingStartedFor.add(convKey);
+            this._sendTypingEvent('start');
+        }, this._typingStartDebounce);
     },
 
     // Send typing stop immediately (e.g. when message is sent)
@@ -1470,6 +1484,7 @@ Object.assign(NYM.prototype, {
         const context = this.currentGroup ? 'group' : 'pm';
         if (!this.isTypingIndicatorAllowedFor(context)) return;
         const convKey = this.currentGroup ? `group:${this.currentGroup}` : `pm:${this.currentPM}`;
+        if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
         if (!this._pmTypingStartedFor || !this._pmTypingStartedFor.has(convKey)) return;
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
@@ -1483,6 +1498,7 @@ Object.assign(NYM.prototype, {
 
         const now = Math.floor(Date.now() / 1000);
         const tags = [['typing', status]];
+        if (status === 'start') tags.push(['ttl', String(Math.floor(this._typingExpireMs / 1000))]);
 
         if (this.currentGroup) {
             const group = this.groupConversations.get(this.currentGroup);
@@ -1536,12 +1552,14 @@ Object.assign(NYM.prototype, {
 
             const nym = this.getNymFromPubkey(senderPubkey);
 
+            const ttlMs = parsed.ttl ? Math.min(parsed.ttl * 1000, this._typingExpireMax)
+                : this._typingExpireMs;
             const timeout = setTimeout(() => {
                 convTypers.delete(senderPubkey);
                 this.renderTypingIndicator();
-            }, this._typingExpireMs);
+            }, ttlMs);
 
-            convTypers.set(senderPubkey, { nym, timeout, timestamp: Date.now() });
+            convTypers.set(senderPubkey, { nym, timeout, timestamp: Date.now(), ttlMs });
         }
 
         this.renderTypingIndicator();
@@ -1574,7 +1592,7 @@ Object.assign(NYM.prototype, {
         if (convTypers) {
             const now = Date.now();
             for (const [pk, entry] of convTypers) {
-                if (now - entry.timestamp > this._typingExpireMs) {
+                if (now - entry.timestamp > (entry.ttlMs || this._typingExpireMs)) {
                     if (entry.timeout) clearTimeout(entry.timeout);
                     convTypers.delete(pk);
                 }
@@ -1645,21 +1663,21 @@ Object.assign(NYM.prototype, {
     parseNymReceipt(rumor) {
         if (!rumor || !rumor.tags) return null;
 
-        let messageId = null;
+        const messageIds = [];
         let receiptType = null;
 
         for (const tag of rumor.tags) {
             if (Array.isArray(tag)) {
                 if (tag[0] === 'x' && tag[1]) {
-                    messageId = tag[1];
+                    messageIds.push(tag[1]);
                 } else if (tag[0] === 'receipt' && tag[1]) {
                     receiptType = tag[1];
                 }
             }
         }
 
-        if (messageId && receiptType) {
-            return { messageId, receiptType };
+        if (messageIds.length && receiptType) {
+            return { messageId: messageIds[0], messageIds, receiptType };
         }
         return null;
     },

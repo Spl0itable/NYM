@@ -330,11 +330,13 @@ Object.assign(NYM.prototype, {
             '/share':         { desc: 'Share #channel URL',             cat: 'channels',   fn: () => this.cmdShare() },
             '/leave':         { desc: 'Leave conversation',             cat: 'pms',        fn: () => this.cmdLeave() },
             '/poll':          { desc: 'Create poll',                    cat: 'channels',   fn: () => this.cmdPoll() },
-            '/kick':          { desc: 'Remove member (owner/mod)',      cat: 'groups',     fn: (args) => this.cmdKick(args) },
-            '/ban':           { desc: 'Ban member (owner/mod)',         cat: 'groups',     fn: (args) => this.cmdBanFromGroup(args) },
-            '/unban':         { desc: 'Unban member (owner)',           cat: 'groups',     fn: (args) => this.cmdUnbanFromGroup(args) },
-            '/addmod':        { desc: 'Promote to moderator (owner)',   cat: 'groups',     fn: (args) => this.cmdAddMod(args) },
-            '/removemod':     { desc: 'Remove moderator (owner)',       cat: 'groups',     fn: (args) => this.cmdRemoveMod(args) },
+            '/kick':          { desc: 'Remove member (owner/admin/mod)', cat: 'groups',     fn: (args) => this.cmdKick(args) },
+            '/ban':           { desc: 'Ban member (owner/admin/mod)',  cat: 'groups',     fn: (args) => this.cmdBanFromGroup(args) },
+            '/unban':         { desc: 'Unban member (owner/admin/mod)', cat: 'groups',     fn: (args) => this.cmdUnbanFromGroup(args) },
+            '/addmod':        { desc: 'Promote to moderator (owner/admin)', cat: 'groups', fn: (args) => this.cmdAddMod(args) },
+            '/removemod':     { desc: 'Remove moderator (owner/admin)',  cat: 'groups',     fn: (args) => this.cmdRemoveMod(args) },
+            '/addadmin':      { desc: 'Promote to admin (owner)',       cat: 'groups',     fn: (args) => this.cmdAddAdmin(args) },
+            '/removeadmin':   { desc: 'Remove admin (owner)',           cat: 'groups',     fn: (args) => this.cmdRemoveAdmin(args) },
             '/transferowner': { desc: 'Change group ownership',         cat: 'groups',     fn: (args) => this.cmdTransferOwner(args) },
             '/slap':          { desc: 'Slap someone with a trout 🐟',   cat: 'misc', fn: (args) => this.cmdSlap(args) },
             '/hug':           { desc: 'Give someone a warm hug 🫂',     cat: 'misc', fn: (args) => this.cmdHug(args) },
@@ -938,6 +940,18 @@ Object.assign(NYM.prototype, {
         const pk = this._resolveGroupTarget(args, 'Usage: /removemod @nym (or hex pubkey)');
         if (!pk) return;
         await this.revokeModerator(pk);
+    },
+
+    async cmdAddAdmin(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /addadmin @nym (or hex pubkey)');
+        if (!pk) return;
+        await this.promoteAdmin(pk);
+    },
+
+    async cmdRemoveAdmin(args) {
+        const pk = this._resolveGroupTarget(args, 'Usage: /removeadmin @nym (or hex pubkey)');
+        if (!pk) return;
+        await this.revokeAdmin(pk);
     },
 
     async cmdTransferOwner(args) {

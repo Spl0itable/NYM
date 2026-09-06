@@ -537,22 +537,23 @@ Object.assign(NYM.prototype, {
         // Group moderation entries: visibility only — actions are bound via
         // data-action in index.html and dispatched through inline-bindings.js,
         // which reads the target pubkey from this.contextMenuData.
-        const grpForCtx = (this.inPMMode && this.currentGroup) ? this.groupConversations.get(this.currentGroup) : null;
+        const gid = (this.inPMMode && this.currentGroup) ? this.currentGroup : null;
+        const grpForCtx = gid ? this.groupConversations.get(gid) : null;
         const targetIsMember = !!(grpForCtx && grpForCtx.members.includes(pubkey));
-        const iAmOwner = !!(grpForCtx && grpForCtx.createdBy === this.pubkey);
-        const iAmMod = !!(grpForCtx && Array.isArray(grpForCtx.mods) && grpForCtx.mods.includes(this.pubkey));
-        const iCanModerate = iAmOwner || iAmMod;
-        const targetIsOwner = !!(grpForCtx && grpForCtx.createdBy === pubkey);
-        const targetIsMod = !!(grpForCtx && Array.isArray(grpForCtx.mods) && grpForCtx.mods.includes(pubkey));
+        const other = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey);
+        const iAmOwner = !!(gid && this._isGroupOwner(gid, this.pubkey));
+        const iCanAdminister = !!(gid && this._canAdminister(gid, this.pubkey));
+        const iCanModerate = !!(gid && this._canModerate(gid, this.pubkey));
+        const iOutrank = !!(gid && (iAmOwner || this._outranks(gid, this.pubkey, pubkey)));
+        const targetIsAdmin = !!(gid && this._isGroupAdmin(gid, pubkey));
+        const targetIsMod = !!(gid && this._isGroupMod(gid, pubkey));
 
-        const showKickOrBan = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey
-            && iCanModerate
-            && (iAmOwner || (!targetIsOwner && !targetIsMod)));
-        const showAddMod = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey
-            && iAmOwner && !targetIsOwner && !targetIsMod);
-        const showRemoveMod = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey
-            && iAmOwner && targetIsMod);
-        const showTransfer = !!(grpForCtx && targetIsMember && pubkey !== this.pubkey && iAmOwner);
+        const showKickOrBan = other && iCanModerate && iOutrank;
+        const showAddMod = other && iCanAdminister && iOutrank && !targetIsMod && !targetIsAdmin;
+        const showRemoveMod = other && iCanAdminister && iOutrank && targetIsMod;
+        const showAddAdmin = other && iAmOwner && !targetIsAdmin;
+        const showRemoveAdmin = other && iAmOwner && targetIsAdmin;
+        const showTransfer = other && iAmOwner;
 
         const setDisplay = (id, show) => {
             const el = document.getElementById(id);
@@ -563,6 +564,8 @@ Object.assign(NYM.prototype, {
         setDisplay('ctxBanMember', showKickOrBan);
         setDisplay('ctxAddMod', showAddMod);
         setDisplay('ctxRemoveMod', showRemoveMod);
+        setDisplay('ctxAddAdmin', showAddAdmin);
+        setDisplay('ctxRemoveAdmin', showRemoveAdmin);
         setDisplay('ctxTransferOwner', showTransfer);
 
         // Add slap option if it doesn't exist
@@ -717,7 +720,7 @@ Object.assign(NYM.prototype, {
             if (hugOption) hugOption.style.display = 'none';
             if (kickOption) kickOption.style.display = 'none';
             if (editOption) editOption.style.display = 'none';
-            const idsToHide = ['ctxBanMember', 'ctxAddMod', 'ctxRemoveMod', 'ctxTransferOwner'];
+            const idsToHide = ['ctxBanMember', 'ctxAddMod', 'ctxRemoveMod', 'ctxAddAdmin', 'ctxRemoveAdmin', 'ctxTransferOwner'];
             for (const id of idsToHide) {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';

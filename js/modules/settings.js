@@ -324,6 +324,9 @@ Object.assign(NYM.prototype, {
                 members: group.members,
                 lastMessageTime: group.lastMessageTime,
                 createdBy: group.createdBy,
+                admins: Array.isArray(group.admins) ? group.admins : [],
+                genesisOwner: group.genesisOwner || null,
+                genesisNonce: group.genesisNonce || null,
                 mods: Array.isArray(group.mods) ? group.mods : [],
                 banned: Array.isArray(group.banned) ? group.banned : [],
                 banner: group.banner || null,
@@ -334,6 +337,7 @@ Object.assign(NYM.prototype, {
                 inviteEpoch: group.inviteEpoch || 0,
                 shareHistory: group.shareHistory === true,
                 metaUpdatedAt: group.metaUpdatedAt || 0,
+                metaUpdatedBy: group.metaUpdatedBy || null,
                 modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
             };
         }
@@ -589,7 +593,6 @@ Object.assign(NYM.prototype, {
             } catch (_) { }
         }
 
-        // Group conversation metadata → nymchat-groups
         try {
             const groupConversations = this._buildGroupConversationsSync();
             if (groupConversations) {
@@ -603,7 +606,37 @@ Object.assign(NYM.prototype, {
                     }
                     return trimmed;
                 };
-                await this._publishCategoryWrap({ groupConversations }, 'nymchat-groups', now, [trimGroupModLogs]);
+                const BUDGET = Math.floor(
+                    this._maxRumorBytesForWrap(65000, this._selfWrapUsesPq2()) * 0.628);
+                const entryBytes = (g) => JSON.stringify(g).length + 80;
+                const inline = {};
+                const oversized = [];
+                for (const [groupId, g] of Object.entries(groupConversations)) {
+                    if (entryBytes(g) > BUDGET) oversized.push([groupId, g]);
+                    else inline[groupId] = g;
+                }
+                if (Object.keys(inline).length) {
+                    await this._publishCategoryWrap({ groupConversations: inline },
+                        'nymchat-groups', now, [trimGroupModLogs]);
+                }
+                for (const [groupId, g] of oversized) {
+                    const base = this._groupSyncDTag('nymchat-groups', groupId);
+                    const members = Array.isArray(g.members) ? g.members : [];
+                    const head = { ...g, members: [] };
+                    const perShard = Math.max(1,
+                        Math.floor((BUDGET - entryBytes(head)) / 70));
+                    let shard = 0;
+                    for (let i = 0; i < members.length; i += perShard) {
+                        const chunk = members.slice(i, i + perShard);
+                        const payload = shard === 0
+                            ? { ...head, members: chunk }
+                            : { members: chunk };
+                        await this._publishCategoryWrap(
+                            { groupConversations: { [groupId]: payload } },
+                            `${base}-${shard}`, now, [trimGroupModLogs]);
+                        shard++;
+                    }
+                }
             }
         } catch (_) { }
 

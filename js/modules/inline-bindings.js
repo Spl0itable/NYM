@@ -538,7 +538,7 @@ window.nymHapticTap = function (ms) {
         'banMemberFromContext':       function () {
             var d = nym().contextMenuData;
             if (!d || !d.pubkey) return;
-            window.showAppConfirm('Ban this user from the group? They cannot be re-invited unless the owner unbans them.', { danger: true, okLabel: 'Ban' }).then(function (ok) {
+            window.showAppConfirm('Ban this user from the group? They cannot be re-invited unless an owner or moderator unbans them.', { danger: true, okLabel: 'Ban' }).then(function (ok) {
                 if (ok) nym().banFromGroup(d.pubkey);
             });
         },
@@ -549,6 +549,14 @@ window.nymHapticTap = function (ms) {
         'removeModFromContext':       function () {
             var d = nym().contextMenuData;
             if (d && d.pubkey) nym().revokeModerator(d.pubkey);
+        },
+        'addAdminFromContext':        function () {
+            var d = nym().contextMenuData;
+            if (d && d.pubkey) nym().promoteAdmin(d.pubkey);
+        },
+        'removeAdminFromContext':     function () {
+            var d = nym().contextMenuData;
+            if (d && d.pubkey) nym().revokeAdmin(d.pubkey);
         },
         'addToGroupFromContext':      function () {
             var n = nym();
@@ -600,6 +608,10 @@ window.nymHapticTap = function (ms) {
         'groupCtxResetInviteLink':    function () { nym().groupCtxResetInviteLink(); },
         'groupCtxTransferOwner':      function () { nym().groupCtxTransferOwner(); },
         'groupCtxLeave':              function () { nym().groupCtxLeave(); },
+        'groupCtxUnban':              function (e, t) {
+            e.stopPropagation();
+            if (t && t.dataset.pubkey) nym().groupCtxUnban(t.dataset.pubkey);
+        },
         'groupCtxMemberClick':        function (_e, t) {
             nym()._openMemberFromGroupCtx(t.dataset.pubkey, t.dataset.nym);
         },

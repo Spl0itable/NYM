@@ -5512,7 +5512,23 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
     border-radius: 10px;
     flex-shrink: 0;
 }
+.group-ctx-member.banned .group-ctx-member-name { color: var(--text-dim); }
+.group-ctx-unban {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    color: var(--primary);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 3px 10px;
+    cursor: pointer;
+}
+.group-ctx-unban:hover { background: rgba(0, 255, 0, 0.1); }
+.group-ctx-unban:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .group-ctx-role.owner { color: var(--lightning); background: rgba(247, 147, 26, 0.12); }
+.group-ctx-role.admin { color: var(--primary); background: rgba(0, 255, 0, 0.12); }
 .group-ctx-role.mod { color: var(--secondary); background: rgba(255, 255, 255, 0.08); }
 
 .group-avatar-wrap {

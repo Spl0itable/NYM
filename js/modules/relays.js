@@ -4400,7 +4400,17 @@ Object.assign(NYM.prototype, {
 
     _queueSocketSend(ws, msg) {
         if (!ws._sendQueue) ws._sendQueue = [];
-        if (ws._sendQueue.length > 256) return;
+        if (ws._sendQueue.length >= this.MAX_SOCKET_QUEUE) {
+            ws._droppedSends = (ws._droppedSends || 0) + 1;
+            if (this.relayStats) {
+                this.relayStats.droppedSends = (this.relayStats.droppedSends || 0) + 1;
+            }
+            if (!this._dropWarnTs || Date.now() - this._dropWarnTs > 30000) {
+                this._dropWarnTs = Date.now();
+                console.warn('[Relay] send queue full; dropped', ws._droppedSends, 'frames');
+            }
+            return;
+        }
         ws._sendQueue.push(msg);
         if (ws._draining) return;
         ws._draining = true;
