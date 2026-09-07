@@ -1,23 +1,5 @@
 // Which callers may reach the API at all.
-//
-// Its own module rather than a helper inside _shared.js: the relay proxies need
-// exactly this and nothing else, and importing _shared.js would pull the whole
-// crypto surface into their bundles. Three copies of it used to drift here
-// instead, which is the failure this replaces.
 
-// Browser origins allowed to reach this API besides the deployment's own.
-//
-// `nymbot.ai` is the standalone Nymbot service. It shares this worker on
-// purpose: credits, the Nymbot conversation thread and the anonymous-mode
-// throwaway key are all keyed to a pubkey, so one key is one account across
-// both products, and pointing that app at its own copy of this worker would
-// split every account in two.
-//
-// An Origin header is set by the browser and cannot be forged by a page on
-// another origin, which is what makes this list worth anything. The
-// User-Agent branch below is the native apps' route and is not a security
-// boundary — every money path is separately authenticated by a signature over
-// the request.
 const CLIENT_ORIGIN_HOSTS = new Set([
   "nymbot.ai",
   "www.nymbot.ai"
