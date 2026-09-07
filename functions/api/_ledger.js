@@ -22,6 +22,16 @@ const BOT_TURN_LEASE_S = 45;
 const BOT_TURN_RESULT_TTL_S = 900;
 // Comfortably above a gift-wrapped reply, comfortably below the row limit.
 const BOT_TURN_MAX_RESULT_BYTES = 512 * 1024;
+// A truncated agent run parks its conversation here so the next turn picks it
+// up rather than starting over. Long enough for a person to read the partial
+// answer and decide, short enough that abandoned runs cost nothing for long.
+const BOT_RESUME_TTL_S = 1800;
+const BOT_RESUME_MAX_BYTES = 512 * 1024;
+// Progress is advisory and read while the turn is still generating, so it dies
+// with the turn rather than outliving it.
+const BOT_PROGRESS_TTL_S = 900;
+const BOT_PROGRESS_MAX_STEPS = 120;
+const BOT_PROGRESS_MAX_BYTES = 128 * 1024;
 
 export class NymLedger {
   constructor(state, env) {
@@ -48,6 +58,17 @@ export class NymLedger {
     // replayed verbatim to any retry of the same message.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS bot_turns (id TEXT PRIMARY KEY, result TEXT, exp INTEGER NOT NULL);"
+    );
+    // A run that hit its turn cap with work left, parked so the next message
+    // continues it. `owner` is the pubkey that paid for it — a token is only
+    // ever redeemable by the key that made it, so a leaked token buys nothing.
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bot_resume (id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL, exp INTEGER NOT NULL);"
+    );
+    // What the running attempt is doing, for the client watching it. Advisory:
+    // losing it costs a progress line, never an answer.
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bot_progress (id TEXT PRIMARY KEY, steps TEXT NOT NULL, exp INTEGER NOT NULL);"
     );
   }
 
@@ -91,6 +112,10 @@ export class NymLedger {
       case "turn-touch": return this._turnTouch(a.key);
       case "turn-abort": return this._turnAbort(a.key);
       case "turn-finish": return this._turnFinish(a.key, a.result);
+      case "resume-put": return this._resumePut(a.id, a.owner, a.state);
+      case "resume-take": return this._resumeTake(a.id, a.owner);
+      case "progress-push": return this._progressPush(a.key, a.step);
+      case "progress-read": return this._progressRead(a.key, a.after);
       default: return { error: "unknown op" };
     }
   }
@@ -217,6 +242,112 @@ export class NymLedger {
       now + BOT_TURN_RESULT_TTL_S
     );
     return { ok: true };
+  }
+
+  // --- resuming a truncated run -------------------------------------------
+
+  _resumePut(id, owner, state) {
+    if (typeof id !== "string" || !/^[0-9a-f]{32,64}$/i.test(id)) return { ok: false };
+    if (typeof owner !== "string" || !/^[0-9a-f]{64}$/i.test(owner)) return { ok: false };
+    let encoded;
+    try {
+      encoded = JSON.stringify(state);
+    } catch {
+      return { ok: false };
+    }
+    // Too big to park is not an error: the run simply cannot be continued, and
+    // the user keeps the partial answer they already paid for.
+    if (!encoded || encoded.length > BOT_RESUME_MAX_BYTES) return { ok: false, tooLarge: true };
+    const now = Math.floor(Date.now() / 1000);
+    this.sql.exec("DELETE FROM bot_resume WHERE exp < ?;", now);
+    this.sql.exec(
+      "INSERT INTO bot_resume (id, owner, state, exp) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, state = excluded.state, exp = excluded.exp;",
+      id,
+      owner.toLowerCase(),
+      encoded,
+      now + BOT_RESUME_TTL_S
+    );
+    return { ok: true, expiresIn: BOT_RESUME_TTL_S };
+  }
+
+  // Single use: taking a token consumes it, so a resend of the continuing
+  // message replays the finished turn rather than continuing the run twice.
+  _resumeTake(id, owner) {
+    if (typeof id !== "string" || !/^[0-9a-f]{32,64}$/i.test(id)) return { ok: false };
+    if (typeof owner !== "string" || !/^[0-9a-f]{64}$/i.test(owner)) return { ok: false };
+    const now = Math.floor(Date.now() / 1000);
+    this.sql.exec("DELETE FROM bot_resume WHERE exp < ?;", now);
+    const rows = this.sql
+      .exec("SELECT owner, state FROM bot_resume WHERE id = ? LIMIT 1;", id)
+      .toArray();
+    if (!rows.length) return { ok: false, missing: true };
+    if (rows[0].owner !== owner.toLowerCase()) return { ok: false, missing: true };
+    this.sql.exec("DELETE FROM bot_resume WHERE id = ?;", id);
+    try {
+      return { ok: true, state: JSON.parse(rows[0].state) };
+    } catch {
+      return { ok: false, missing: true };
+    }
+  }
+
+  // --- what the running attempt is doing ----------------------------------
+
+  _progressPush(key, step) {
+    if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
+    if (!step || typeof step !== "object") return { ok: false };
+    const now = Math.floor(Date.now() / 1000);
+    this.sql.exec("DELETE FROM bot_progress WHERE exp < ?;", now);
+    let steps = [];
+    const rows = this.sql
+      .exec("SELECT steps FROM bot_progress WHERE id = ? LIMIT 1;", key)
+      .toArray();
+    if (rows.length) {
+      try {
+        const parsed = JSON.parse(rows[0].steps);
+        if (Array.isArray(parsed)) steps = parsed;
+      } catch {
+        steps = [];
+      }
+    }
+    steps.push({ n: steps.length + 1, at: Date.now(), ...step });
+    // Oldest first out: a watcher that joined late wants the recent picture,
+    // and the numbering keeps its "after" cursor meaningful either way.
+    if (steps.length > BOT_PROGRESS_MAX_STEPS) {
+      steps = steps.slice(steps.length - BOT_PROGRESS_MAX_STEPS);
+    }
+    let encoded = JSON.stringify(steps);
+    while (encoded.length > BOT_PROGRESS_MAX_BYTES && steps.length > 1) {
+      steps = steps.slice(1);
+      encoded = JSON.stringify(steps);
+    }
+    this.sql.exec(
+      "INSERT INTO bot_progress (id, steps, exp) VALUES (?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET steps = excluded.steps, exp = excluded.exp;",
+      key,
+      encoded,
+      now + BOT_PROGRESS_TTL_S
+    );
+    return { ok: true, n: steps.length ? steps[steps.length - 1].n : 0 };
+  }
+
+  _progressRead(key, after) {
+    if (typeof key !== "string" || !key || key.length > 256) return { steps: [] };
+    const now = Math.floor(Date.now() / 1000);
+    this.sql.exec("DELETE FROM bot_progress WHERE exp < ?;", now);
+    const rows = this.sql
+      .exec("SELECT steps FROM bot_progress WHERE id = ? LIMIT 1;", key)
+      .toArray();
+    if (!rows.length) return { steps: [] };
+    let steps = [];
+    try {
+      const parsed = JSON.parse(rows[0].steps);
+      if (Array.isArray(parsed)) steps = parsed;
+    } catch {
+      return { steps: [] };
+    }
+    const from = Number(after) || 0;
+    return { steps: steps.filter((s) => (s && s.n ? s.n : 0) > from) };
   }
 
   // Limited-edition supply (numbered drops)

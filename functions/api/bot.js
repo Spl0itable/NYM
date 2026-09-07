@@ -1286,11 +1286,16 @@ function proMessageText(msg) {
 // Reasoning models behind the gateway return their thinking in a separate
 // OpenAI-compat field; fold it into a <think> block so the PM pipeline can
 // surface it to the user like the standard tier's reasoning route.
+function proMessageReasoning(msg) {
+  var reasoning = msg && (msg.reasoning_content || msg.reasoning);
+  return typeof reasoning === "string" && reasoning.trim() ? reasoning.trim() : "";
+}
+
 function proMessageWithThinking(msg) {
   var text = proMessageText(msg);
-  var reasoning = msg && (msg.reasoning_content || msg.reasoning);
-  if (typeof reasoning === "string" && reasoning.trim() && text) {
-    return "<think>\n" + reasoning.trim() + "\n</think>\n" + text;
+  var reasoning = proMessageReasoning(msg);
+  if (reasoning && text) {
+    return "<think>\n" + reasoning + "\n</think>\n" + text;
   }
   return text;
 }
@@ -1306,6 +1311,12 @@ async function runProGatewayModel(env, proModel, messages, maxTokens) {
 // and self-hosted instances). The token arrives with each request and is
 // never persisted server-side.
 var BOT_GIT_MAX_TURNS = 6;
+// What a continued run is told when it picks the conversation back up. It has
+// every tool result it already paid for, so this only has to say "carry on".
+var BOT_GIT_CONTINUE_PROMPT =
+  "Continue the task from exactly where you stopped. You have a fresh budget of "
+  + "tool calls. Do not repeat work already done above — build on it. When you "
+  + "run out of budget again, stop with a short note saying what is left.";
 var BOT_GIT_MAX_TOOLS_PER_TURN = 8;
 var BOT_GIT_MAX_RESULT_CHARS = 20000;
 var BOT_GIT_MAX_FILE_CHARS = 48000;
@@ -1749,27 +1760,53 @@ async function execGitTool(cfg, name, args) {
 
 // Agentic loop: let the Pro model call repo tools until it answers in text.
 // The final turn is forced tool-less so the user always gets a reply.
-async function runProGitChat(env, proModel, cfg, messages) {
+//
+// A run that reaches the cap with the model still reaching for tools is
+// TRUNCATED, not finished: it hands back the conversation so far so the caller
+// can park it and let the user buy the rest. `progress` is called as it goes,
+// which is what the client renders under "thinking".
+async function runProGitChat(env, proModel, cfg, messages, options) {
+  var opts = options || {};
+  var progress = typeof opts.progress === "function" ? opts.progress : function () { };
   var tools = gitToolDefs(cfg.allowWrites);
   var convo = messages.slice();
   var calls = 0;
   var outputTokens = 0;
+  // A resumed run keeps counting from where it stopped, so the credit figures
+  // the client shows are for the whole task rather than the last leg of it.
+  var priorCalls = Math.max(0, Math.floor(Number(opts.priorCalls) || 0));
+  var budget = Math.max(1, Math.floor(Number(opts.maxCalls) || BOT_GIT_MAX_TURNS));
+  var wantedMore = false;
   while (true) {
     calls++;
-    var lastTurn = calls >= BOT_GIT_MAX_TURNS;
+    var lastTurn = calls >= budget;
+    progress({ kind: "model", call: priorCalls + calls, of: priorCalls + budget,
+      model: proModel.label || proModel.model || "" });
     var r = await proGatewayChat(env, proModel, convo, proModel.maxTokens, lastTurn ? null : tools);
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
+    var thought = proMessageReasoning(msg);
+    if (thought) progress({ kind: "thinking", text: truncateText(thought, 600) });
     var toolCalls = msg && Array.isArray(msg.tool_calls) ? msg.tool_calls.slice(0, BOT_GIT_MAX_TOOLS_PER_TURN) : [];
     if (!toolCalls.length || lastTurn) {
-      return { reply: proMessageWithThinking(msg), modelCalls: calls, outputTokens: outputTokens };
+      return {
+        reply: proMessageWithThinking(msg),
+        modelCalls: calls,
+        outputTokens: outputTokens,
+        // The cap was forced tool-less, so an empty tool list on the last turn
+        // says nothing. What the turn before it wanted is the honest signal.
+        truncated: lastTurn && wantedMore,
+        convo: lastTurn && wantedMore ? convo.concat([{ role: "assistant", content: proMessageText(msg) || null }]) : null
+      };
     }
+    wantedMore = true;
     convo.push({ role: "assistant", content: msg.content || null, tool_calls: toolCalls });
     for (var i = 0; i < toolCalls.length; i++) {
       var tc = toolCalls[i];
       var fnName = tc && tc.function && tc.function.name;
       var fnArgs = {};
       try { fnArgs = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
+      progress({ kind: "tool", tool: String(fnName || ""), target: gitToolTarget(fnName, fnArgs) });
       var result;
       try {
         result = await execGitTool(cfg, fnName, fnArgs);
@@ -1779,6 +1816,15 @@ async function runProGitChat(env, proModel, cfg, messages) {
       convo.push({ role: "tool", tool_call_id: tc && tc.id, content: String(result).slice(0, BOT_GIT_MAX_RESULT_CHARS) });
     }
   }
+}
+
+// The one argument worth naming in a progress line: the path, the branch, the
+// query — whatever the reader would recognise. Never the whole argument blob,
+// which can carry file contents.
+function gitToolTarget(name, args) {
+  if (!args || typeof args !== "object") return "";
+  var pick = args.path || args.query || args.name || args.head || args.title || args.ref || args.branch || "";
+  return String(pick).slice(0, 120);
 }
 // Premium Nymbot: classify the user's message so it can be routed to the best model.
 async function classifyBotTask(ai, question) {
@@ -2098,9 +2144,12 @@ function parseBotPMRequest(rawMessage) {
   return { freshOnly: freshOnly, split: split, question: question };
 }
 
-async function handleBotPMChat(rawMessage, history, context, preTaskType, proModel, ghConfig) {
+async function handleBotPMChat(rawMessage, history, context, preTaskType, proModel, ghConfig, run) {
   var ai = context.env.AI || null;
   if (!ai && !proModel) throw new Error("AI is not configured.");
+  // Progress reporting and resumed state, both optional: a caller that passes
+  // neither gets exactly the behaviour this function always had.
+  var runOpts = run || {};
 
   var parsed = parseBotPMRequest(rawMessage);
   var freshOnly = parsed.freshOnly;
@@ -2136,6 +2185,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       var pmResolved = searchQueryFor(question, pmTurns);
       if (needsWebSearch(question, pmResolved)) {
         pmSearchedQuery = pmResolved;
+        if (runOpts.progress) runOpts.progress({ kind: "search", query: truncateText(pmSearchedQuery, 120) });
         pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
         pmSearchAttempted = true;
       }
@@ -2199,9 +2249,34 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // back to a free route — surface the failure and leave credits unspent.
   if (proModel) {
     if (ghConfig) {
-      messages[0].content += "\n" + await buildGitContext(ghConfig);
-      var ghResult = await runProGitChat(context.env, proModel, ghConfig, messages);
-      return { reply: sanitizeBotResponse(ghResult.reply, true), taskType: taskType, modelCalls: ghResult.modelCalls, outputTokens: ghResult.outputTokens };
+      var ghMessages;
+      if (runOpts.resume && Array.isArray(runOpts.resume.convo) && runOpts.resume.convo.length) {
+        // Continuing: the parked conversation already carries the system
+        // prompt, the repo context and everything the model has read.
+        ghMessages = runOpts.resume.convo.concat([
+          { role: "user", content: BOT_GIT_CONTINUE_PROMPT }
+        ]);
+      } else {
+        messages[0].content += "\n" + await buildGitContext(ghConfig);
+        ghMessages = messages;
+      }
+      var ghResult = await runProGitChat(context.env, proModel, ghConfig, ghMessages, {
+        progress: runOpts.progress,
+        priorCalls: runOpts.resume ? (runOpts.resume.calls || 0) : 0
+      });
+      return {
+        reply: sanitizeBotResponse(ghResult.reply, true),
+        taskType: taskType,
+        modelCalls: ghResult.modelCalls,
+        outputTokens: ghResult.outputTokens,
+        truncated: !!ghResult.truncated,
+        resumeState: ghResult.truncated && ghResult.convo
+          ? { convo: ghResult.convo, calls: (runOpts.resume ? (runOpts.resume.calls || 0) : 0) + ghResult.modelCalls }
+          : null
+      };
+    }
+    if (runOpts.progress) {
+      runOpts.progress({ kind: "model", call: 1, of: 1, model: proModel.label || proModel.model || "" });
     }
     var proResult = await runProGatewayModel(context.env, proModel, messages, proModel.maxTokens);
     return { reply: sanitizeBotResponse(proResult.text, true), taskType: taskType, outputTokens: proResult.outputTokens };
@@ -2387,6 +2462,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     return buildPqGiftWrappedDMPair(
       text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(),
       threadRoot ? { threadRoot: threadRoot } : null);
+  }
+
+  // What the turn answering `eventId` is doing right now. Read-only, advisory,
+  // and scoped by the same authentication the turn itself used: the key that
+  // asked is the only key that can watch. In anonymous mode that is the
+  // throwaway key, so watching a turn reveals nothing the message did not.
+  if (body.action === "pm-progress") {
+    if (!isHex64(body.eventId)) return json({ error: "Missing message event id" }, 400);
+    var progRead = await ledgerCall(env, {
+      op: "progress-read",
+      key: botTurnKey(userPubkey, body.eventId),
+      after: Number(body.after) || 0
+    });
+    if (!progRead || progRead._noLedger) return json({ steps: [] });
+    return json({ steps: Array.isArray(progRead.steps) ? progRead.steps : [] });
   }
 
   if (body.action === "balance") {
@@ -2725,7 +2815,13 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (wrapClaimed) return wrapClaimed;
 
     var thread = await botGetThread(env, userPubkey);
-    var historyIds = fresh ? [] : thread.filter(function (id) { return id !== currentId; });
+    // A continued run carries its own conversation, tool results and all, so
+    // re-fetching and re-decrypting the thread would cost latency to rebuild
+    // context the parked state already holds.
+    var continuing = typeof body.resume === "string" && !!body.resume;
+    var historyIds = (fresh || continuing)
+      ? []
+      : thread.filter(function (id) { return id !== currentId; });
 
     var fetchIds = historyIds.slice();
     if (fetchIds.indexOf(currentId) === -1) fetchIds.push(currentId);
@@ -2910,9 +3006,42 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         error: "This " + taskType + " query needs " + cost + " credits and you have " + record.balance + ". Type ?buy for more."
       });
     }
+    // Continuing a run that hit its tool-call cap. The token is single-use and
+    // only redeemable by the key that made it, so it can neither be replayed
+    // nor spent by anyone else.
+    var resumeState = null;
+    if (typeof body.resume === "string" && body.resume) {
+      var took = await ledgerCall(env, { op: "resume-take", id: body.resume, owner: userPubkey });
+      if (took && took.ok && took.state) resumeState = took.state;
+      else if (!took || !took._noLedger) {
+        return await turnFail({
+          error: "That continuation has expired or was already used. Ask again and Nymbot will start it fresh.",
+          resumeExpired: true
+        }, 410);
+      }
+    }
+
+    // Progress is advisory: every write is best-effort and a failure never
+    // touches the answer. The key is the turn's own, so only the authenticated
+    // key that owns the turn can read it back — anonymous mode included, where
+    // that key is the throwaway one and the nym is never involved.
+    var progressKey = turnKeys.length ? turnKeys[0] : null;
+    var pushProgress = function (step) {
+      if (!progressKey) return;
+      try {
+        var p = ledgerCall(env, { op: "progress-push", key: progressKey, step: step });
+        if (p && typeof p.then === "function") p.then(function () { }, function () { });
+      } catch (e) { }
+    };
+    pushProgress({ kind: "routing", task: taskType, model: proModel ? (proModel.label || proModelKey) : "auto",
+      repos: ghConfig ? 1 : 0, resumed: !!resumeState });
+
     var chatResult;
     try {
-      chatResult = await handleBotPMChat(message, history, context, taskType, proModel, ghConfig);
+      chatResult = await handleBotPMChat(message, history, context, taskType, proModel, ghConfig, {
+        progress: pushProgress,
+        resume: resumeState
+      });
     } catch (e) {
       return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
     }
@@ -2943,6 +3072,23 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     } else {
       spendRecord.balance = consumed.balance;
     }
+    // The run stopped at its tool-call cap with work left. Park the
+    // conversation so continuing it costs another turn rather than starting
+    // the whole task again — and say so, because the user has just been
+    // charged for a partial answer.
+    var resumeToken = null;
+    var resumeExpiresIn = 0;
+    if (chatResult.truncated && chatResult.resumeState) {
+      var token = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      var parked = await ledgerCall(env, {
+        op: "resume-put", id: token, owner: userPubkey, state: chatResult.resumeState
+      });
+      if (parked && parked.ok) {
+        resumeToken = token;
+        resumeExpiresIn = parked.expiresIn || 0;
+      }
+    }
+
     var pair = await wrapReplyPair(reply, threadRoot);
     var updatedThread = thread.filter(function (id) { return id !== currentId; });
     updatedThread.push(currentId);
@@ -2958,6 +3104,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       proModel: proModel ? proModelKey : undefined,
       git: !!ghConfig,
       modelCalls: chatResult.modelCalls,
+      truncated: !!chatResult.truncated,
+      resumeToken: resumeToken || undefined,
+      resumeExpiresIn: resumeToken ? resumeExpiresIn : undefined,
+      // What one more leg would reserve, so the client can decide against a
+      // budget rather than guessing.
+      nextReserve: resumeToken && proModel ? proRequired : undefined,
       lowBalance: spendRecord.balance <= 3
     };
     // Charged and delivered. If the socket carrying this response is already
@@ -3087,7 +3239,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "models" || body.action === "pm" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
+  if (body && (body.action === "models" || body.action === "pm" || body.action === "pm-progress" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
