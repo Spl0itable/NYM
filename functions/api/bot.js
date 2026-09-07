@@ -779,6 +779,55 @@ function parseBotMediaCommand(message) {
   return { kind: kind, prompt: rest, modelKey: modelKey };
 }
 
+// Asking for a picture or for something read aloud, without knowing the
+// commands exist. Generating either COSTS CREDITS, so this is deliberately
+// narrow: it wants a plain instruction to make one, not a question about
+// pictures, not a request for code that draws one, and not a passing mention.
+// Anything it is unsure about falls through to an ordinary reply, which is the
+// cheap failure — reading a question as a purchase is the expensive one.
+var MEDIA_INTENT_EXCLUDE = new RegExp(
+  "\\b(?:python|javascript|typescript|java|kotlin|swift|rust|golang|dart|c\\+\\+|" +
+  "html|css|svg|canvas|matplotlib|pillow|imagemagick|ffmpeg|code|script|function|" +
+  "library|api|endpoint|component|css|ascii)\\b", "i");
+
+function parseBotMediaIntent(message) {
+  var text = String(message || "").trim();
+  if (!text || text.length > 400) return null;
+  // A command was typed: the parser above owns that case.
+  if (/^\s*\?/.test(text)) return null;
+  if (MEDIA_INTENT_EXCLUDE.test(text)) return null;
+
+  // Speech first, because "out loud" is unambiguous in a way "image" is not —
+  // and because the question guard below would otherwise swallow the perfectly
+  // clear "can you read it aloud".
+  //
+  // "read this out loud", "say that aloud", "text to speech this"
+  var speak = /^(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?(?:read|say|speak)\s+(?:this|that|it|the following|me)?\s*(?:out\s+loud|aloud|in\s+your\s+voice)\s*[:,-]?\s*([\s\S]*)$/i.exec(text);
+  if (!speak) {
+    speak = /^(?:please\s+)?(?:text[\s-]?to[\s-]?speech|tts)\s*[:,-]?\s*([\s\S]+)$/i.exec(text);
+  }
+  if (speak) {
+    var said = (speak[1] || "").trim();
+    // "read that aloud" with nothing after it means the last thing said, which
+    // is what a person means by it.
+    return { kind: "speak", prompt: said, modelKey: "", inferred: true, wantsLast: !said };
+  }
+
+  // A question about pictures is not an instruction to draw one.
+  if (/^\s*(?:what|which|who|why|how|when|where|is|are|do|does|did|can you (?:read|see|describe|explain))\b/i.test(text)) return null;
+
+  // "draw me a lighthouse", "generate an image of a lighthouse at dusk"
+  var draw = /^(?:please\s+)?(?:can you\s+|could you\s+|would you\s+|i(?:'| a)m looking for\s+)?(?:draw|paint|sketch|illustrate)\s+(?:me\s+)?(?:a|an|some|the)?\s*([\s\S]+)$/i.exec(text);
+  if (!draw) {
+    draw = /^(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?(?:generate|create|make|render|design)\s+(?:me\s+)?(?:a|an|some|the)\s+(?:picture|image|photo|photograph|drawing|illustration|painting|logo|icon|artwork|poster|wallpaper|render)\s+(?:of|showing|with|depicting)?\s*([\s\S]+)$/i.exec(text);
+  }
+  if (draw) {
+    var subject = (draw[1] || "").trim().replace(/^(?:picture|image|photo|drawing|illustration)\s+of\s+/i, "");
+    return subject ? { kind: "image", prompt: subject, modelKey: "", inferred: true } : null;
+  }
+  return null;
+}
+
 function botProMaxCost(m) {
   return (m.baseCredits || 1) + (m.outTokensPerCredit ? Math.ceil(m.maxTokens / m.outTokensPerCredit) : 0);
 }
@@ -1300,6 +1349,135 @@ function proMessageWithThinking(msg) {
   return text;
 }
 
+// How hard a reply is asked to think, as a number of model calls. The user
+// picks this per chat and pays for it: a careful reply plans before it answers,
+// a deep one also reads its own answer back against the question before it
+// sends it. Both are honest extra work, and both are charged as what they are —
+// extra model calls — rather than as a vaguer "premium".
+var BOT_EFFORT_LEVELS = { normal: 1, careful: 2, deep: 3 };
+var BOT_EFFORT_PLAN_TOKENS = 900;
+
+function botEffortLevel(name) {
+  var n = BOT_EFFORT_LEVELS[String(name || "").toLowerCase()];
+  return n || 1;
+}
+
+var BOT_EFFORT_PLAN_PROMPT = "Before answering, think this through. Write a "
+  + "short plan for yourself: what is actually being asked, what the answer "
+  + "depends on, what could make an obvious answer wrong, and what to check. "
+  + "Do not answer the question yet and do not address the user — this is a "
+  + "note to yourself and they will not see it.";
+
+var BOT_EFFORT_ANSWER_PROMPT = "Now write the answer for the user, using that "
+  + "plan. Do not mention the plan or that you made one.";
+
+var BOT_EFFORT_REVISE_PROMPT = "Read your answer back against the question. "
+  + "Correct anything wrong, cut anything that does not earn its place, and "
+  + "add what is missing. Reply with the corrected answer alone — no preamble, "
+  + "no notes about what you changed. If it was already right, send it "
+  + "unchanged.";
+
+/// The extra passes an effort level buys, around whatever produces the answer.
+/// Kept as a wrapper rather than folded into the answer call, so it composes
+/// with looking back past the window instead of competing with it.
+async function runProEffort(env, proModel, messages, effort, opts, answer) {
+  var progress = (opts && opts.progress) || function () { };
+  var of = effort + (opts && opts.extraCalls ? opts.extraCalls : 0);
+  var calls = 0;
+  var outputTokens = 0;
+  var convo = messages.slice();
+
+  if (effort >= 2) {
+    calls++;
+    progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
+    progress({ kind: "effort", stage: "planning" });
+    var planned = await proGatewayChat(env, proModel,
+      convo.concat([{ role: "user", content: BOT_EFFORT_PLAN_PROMPT }]),
+      BOT_EFFORT_PLAN_TOKENS, null);
+    outputTokens += planned.outputTokens || 0;
+    var planText = proMessageText(planned.msg);
+    if (planText) {
+      progress({ kind: "thinking", text: truncateText(planText, 600) });
+      convo.push({ role: "assistant", content: planText });
+      convo.push({ role: "user", content: BOT_EFFORT_ANSWER_PROMPT });
+    }
+  }
+
+  var core = await answer(convo, calls, of);
+  calls += core.modelCalls || 1;
+  outputTokens += core.outputTokens || 0;
+  var reply = core.reply;
+
+  if (effort >= 3 && reply) {
+    calls++;
+    progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
+    progress({ kind: "effort", stage: "checking" });
+    var revised = await proGatewayChat(env, proModel,
+      convo.concat([
+        { role: "assistant", content: reply },
+        { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
+      ]), proModel.maxTokens, null);
+    outputTokens += revised.outputTokens || 0;
+    var better = proMessageWithThinking(revised.msg);
+    // A revision that came back empty is a failed pass, not a better answer.
+    if (better && better.trim()) reply = better;
+  }
+
+  return { reply: reply, modelCalls: calls, outputTokens: outputTokens };
+}
+
+/// A Pro reply that may look back past its own window. One round of tool calls
+/// at most: a reply that still cannot answer after reading what it asked for
+/// will not be rescued by a third pass, and every round is another model call
+/// on the user's balance.
+///
+/// The turns it reads were fetched and decrypted on the way in and were about
+/// to be discarded, so a look-up costs a model call and nothing else — no
+/// second trip to the relays, no index to keep, nothing stored.
+async function runProRecallChat(env, proModel, messages, dropped, opts) {
+  var progress = (opts && opts.progress) || function () { };
+  var convo = messages.slice();
+  var calls = 0;
+  var outputTokens = 0;
+  var budget = 1 + BOT_RECALL_ROUNDS;
+  // Where this sits in the reply as a whole, so the progress lines count once
+  // rather than restarting when the effort passes hand over.
+  var priorCalls = Math.max(0, Math.floor(Number(opts && opts.priorCalls) || 0));
+  var of = Math.max(budget, Math.floor(Number(opts && opts.of) || budget));
+  while (true) {
+    calls++;
+    var lastTurn = calls >= budget;
+    progress({ kind: "model", call: priorCalls + calls, of: of,
+      model: proModel.label || proModel.model || "" });
+    var r = await proGatewayChat(env, proModel, convo, proModel.maxTokens,
+      lastTurn ? null : recallToolDefs());
+    var msg = r.msg;
+    outputTokens += r.outputTokens || 0;
+    var thought = proMessageReasoning(msg);
+    if (thought) progress({ kind: "thinking", text: truncateText(thought, 600) });
+    var toolCalls = msg && Array.isArray(msg.tool_calls) ? msg.tool_calls.slice(0, 2) : [];
+    if (!toolCalls.length || lastTurn) {
+      return {
+        reply: proMessageWithThinking(msg),
+        modelCalls: calls,
+        outputTokens: outputTokens
+      };
+    }
+    convo.push({ role: "assistant", content: msg.content || null, tool_calls: toolCalls });
+    for (var i = 0; i < toolCalls.length; i++) {
+      var tc = toolCalls[i];
+      var args = {};
+      try { args = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
+      progress({ kind: "tool", tool: "recall", target: truncateText(String(args.query || ""), 120) });
+      convo.push({
+        role: "tool",
+        tool_call_id: tc && tc.id,
+        content: execRecall(dropped, args)
+      });
+    }
+  }
+}
+
 async function runProGatewayModel(env, proModel, messages, maxTokens) {
   var r = await proGatewayChat(env, proModel, messages, maxTokens, null);
   return { text: proMessageWithThinking(r.msg), outputTokens: r.outputTokens };
@@ -1431,6 +1609,25 @@ var GIT_PROVIDERS = {
       var csha = j && j.commit && j.commit.sha;
       return "Committed '" + path + "' to '" + branch + "'" + (csha ? " (" + csha.slice(0, 7) + ")" : "") + ".";
     },
+    // Where the branch stood before a run touched it, and how to put one file
+    // back. Together these are what makes a repo run undoable: the checkpoint
+    // is a commit id, and undoing it is reading each touched path at that id
+    // and committing what was there.
+    async headSha(cfg, branch) {
+      var r = await gitFetch(cfg, "/repos/" + cfg.repo + "/git/ref/heads/" + gitPath(branch));
+      var j = gitJson(r);
+      return r.ok && j && j.object ? j.object.sha : null;
+    },
+    async deleteFile(cfg, branch, path, message) {
+      var existing = await gitFetch(cfg, "/repos/" + cfg.repo + "/contents/" + gitPath(path) + "?ref=" + encodeURIComponent(branch));
+      if (!existing.ok) return true;
+      var ej = gitJson(existing);
+      if (!ej || !ej.sha) return false;
+      var r = await gitFetch(cfg, "/repos/" + cfg.repo + "/contents/" + gitPath(path), {
+        method: "DELETE", body: { message: message, sha: ej.sha, branch: branch }
+      });
+      return r.ok;
+    },
     async createBranch(cfg, name, from) {
       var ref = await gitFetch(cfg, "/repos/" + cfg.repo + "/git/ref/heads/" + gitPath(from));
       var rj = gitJson(ref);
@@ -1492,6 +1689,19 @@ var GIT_PROVIDERS = {
       var r = await gitFetch(cfg, fileUrl, { method: existing.ok ? "PUT" : "POST", body: body });
       if (!r.ok) return "Error: HTTP " + r.status + " committing '" + path + "': " + r.text.slice(0, 300);
       return "Committed '" + path + "' to '" + branch + "'.";
+    },
+    async headSha(cfg, branch) {
+      var r = await gitFetch(cfg, "/projects/" + glProj(cfg) + "/repository/branches/" + encodeURIComponent(branch));
+      var j = gitJson(r);
+      return r.ok && j && j.commit ? j.commit.id : null;
+    },
+    async deleteFile(cfg, branch, path, message) {
+      var r = await gitFetch(cfg,
+        "/projects/" + glProj(cfg) + "/repository/files/" + encodeURIComponent(path)
+        + "?branch=" + encodeURIComponent(branch)
+        + "&commit_message=" + encodeURIComponent(message),
+        { method: "DELETE" });
+      return r.ok || r.status === 404;
     },
     async createBranch(cfg, name, from) {
       var r = await gitFetch(cfg, "/projects/" + glProj(cfg) + "/repository/branches?branch=" + encodeURIComponent(name) + "&ref=" + encodeURIComponent(from), { method: "POST" });
@@ -1556,6 +1766,21 @@ var GIT_PROVIDERS = {
       var j = gitJson(r);
       var csha = j && j.commit && j.commit.sha;
       return "Committed '" + path + "' to '" + branch + "'" + (csha ? " (" + csha.slice(0, 7) + ")" : "") + ".";
+    },
+    async headSha(cfg, branch) {
+      var r = await gitFetch(cfg, "/repos/" + cfg.repo + "/branches/" + gitPath(branch));
+      var j = gitJson(r);
+      return r.ok && j && j.commit ? j.commit.id : null;
+    },
+    async deleteFile(cfg, branch, path, message) {
+      var existing = await gitFetch(cfg, "/repos/" + cfg.repo + "/contents/" + gitPath(path) + "?ref=" + encodeURIComponent(branch));
+      if (!existing.ok) return true;
+      var ej = gitJson(existing);
+      if (!ej || !ej.sha) return false;
+      var r = await gitFetch(cfg, "/repos/" + cfg.repo + "/contents/" + gitPath(path), {
+        method: "DELETE", body: { message: message, sha: ej.sha, branch: branch }
+      });
+      return r.ok;
     },
     async createBranch(cfg, name, from) {
       var r = await gitFetch(cfg, "/repos/" + cfg.repo + "/branches", { method: "POST", body: { new_branch_name: name, old_branch_name: from } });
@@ -1699,8 +1924,9 @@ function gitToolDefs(allowWrites) {
   ]);
 }
 
-async function execGitTool(cfg, name, args) {
+async function execGitTool(cfg, name, args, record) {
   args = args && typeof args === "object" ? args : {};
+  record = record || { paths: [], branches: [], pulls: [] };
   var provider = GIT_PROVIDERS[cfg.provider];
   var branch = cfg.resolvedBranch;
   function cleanPath(p) {
@@ -1739,20 +1965,35 @@ async function execGitTool(cfg, name, args) {
     if (!wp) return "Error: path is required";
     var target = refOr(args.branch, branch);
     var msg = String(args.message || ("Update " + wp)).slice(0, 200);
-    return provider.writeFile(cfg, target, wp, String(args.content || ""), msg);
+    var wrote = await provider.writeFile(cfg, target, wp, String(args.content || ""), msg);
+    // Only a write that worked is worth remembering how to undo. A path
+    // written twice is one path: the checkpoint is where the branch stood
+    // before the run, not a list of every commit inside it.
+    if (!/^Error:/.test(String(wrote))
+      && target === branch
+      && record.paths.indexOf(wp) === -1) {
+      record.paths.push(wp);
+    }
+    return wrote;
   }
 
   if (name === "create_branch") {
     var bn = String(args.name || "").trim();
     if (!BOT_GIT_REF_RE.test(bn)) return "Error: invalid branch name";
-    return provider.createBranch(cfg, bn, refOr(args.from, branch));
+    var made = await provider.createBranch(cfg, bn, refOr(args.from, branch));
+    if (!/^Error:/.test(String(made)) && record.branches.indexOf(bn) === -1) {
+      record.branches.push(bn);
+    }
+    return made;
   }
 
   if (name === "open_pull_request") {
     var title = String(args.title || "").slice(0, 200).trim();
     var head = String(args.head || "").trim();
     if (!title || !BOT_GIT_REF_RE.test(head)) return "Error: title and a valid head branch are required";
-    return provider.openPullRequest(cfg, title, String(args.body || "").slice(0, 4000), head, refOr(args.base, cfg.defaultBranch));
+    var opened = await provider.openPullRequest(cfg, title, String(args.body || "").slice(0, 4000), head, refOr(args.base, cfg.defaultBranch));
+    if (!/^Error:/.test(String(opened))) record.pulls.push(truncateText(String(opened), 200));
+    return opened;
   }
 
   return "Error: unknown tool '" + name + "'";
@@ -1772,6 +2013,31 @@ async function runProGitChat(env, proModel, cfg, messages, options) {
   var convo = messages.slice();
   var calls = 0;
   var outputTokens = 0;
+  // Where the working branch stood before this run touched anything. One
+  // commit id is the whole checkpoint: undoing the run means reading each
+  // path it wrote back at this id and committing what was there. A revert,
+  // not a rewrite — the history of what the model did stays.
+  var record = { paths: [], branches: [], pulls: [] };
+  var baseSha = null;
+  if (cfg.allowWrites && provider.headSha) {
+    try { baseSha = await provider.headSha(cfg, cfg.resolvedBranch); } catch (e) { }
+  }
+  var checkpointOf = function () {
+    if (!record.paths.length && !record.branches.length && !record.pulls.length) return null;
+    return {
+      repo: cfg.repo,
+      provider: cfg.provider,
+      host: cfg.host || "",
+      branch: cfg.resolvedBranch,
+      baseSha: baseSha,
+      paths: record.paths.slice(0, 60),
+      branches: record.branches.slice(0, 10),
+      pulls: record.pulls.slice(0, 10),
+      // Without a base commit there is nothing to read the old files back
+      // from, so the client must not offer an undo it cannot honour.
+      undoable: !!baseSha && record.paths.length > 0
+    };
+  };
   // A resumed run keeps counting from where it stopped, so the credit figures
   // the client shows are for the whole task rather than the last leg of it.
   var priorCalls = Math.max(0, Math.floor(Number(opts.priorCalls) || 0));
@@ -1793,6 +2059,7 @@ async function runProGitChat(env, proModel, cfg, messages, options) {
         reply: proMessageWithThinking(msg),
         modelCalls: calls,
         outputTokens: outputTokens,
+        checkpoint: checkpointOf(),
         // The cap was forced tool-less, so an empty tool list on the last turn
         // says nothing. What the turn before it wanted is the honest signal.
         truncated: lastTurn && wantedMore,
@@ -1809,7 +2076,7 @@ async function runProGitChat(env, proModel, cfg, messages, options) {
       progress({ kind: "tool", tool: String(fnName || ""), target: gitToolTarget(fnName, fnArgs) });
       var result;
       try {
-        result = await execGitTool(cfg, fnName, fnArgs);
+        result = await execGitTool(cfg, fnName, fnArgs, record);
       } catch (e) {
         result = "Error: " + (e.message || String(e));
       }
@@ -2102,6 +2369,10 @@ async function botReleaseStrandedTurn(context) {
 
 function isHex64(x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); }
 
+// A commit id: 40 hex for SHA-1, 64 for SHA-256, and anything in between that
+// a forge might hand back as an abbreviation it will still resolve.
+function isHex40OrMore(x) { return typeof x === "string" && /^[0-9a-f]{7,64}$/i.test(x); }
+
 // Per-user ordered list of NIP-17 gift-wrap event IDs for the private Nymbot
 var BOT_THREAD_MAX = 40;
 async function botGetThread(env, pubkey) {
@@ -2158,16 +2429,24 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
 
   var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null) }];
 
+  var dropped = [];
   if (!freshOnly && Array.isArray(history) && history.length > 0) {
-    var recent = history.slice(-MAX_CONVERSATION_HISTORY);
-    for (var i = 0; i < recent.length; i++) {
-      var entry = recent[i];
+    var window = buildWindow(history);
+    dropped = window.dropped;
+    for (var i = 0; i < window.kept.length; i++) {
+      var entry = window.kept[i];
       if (!entry || !entry.text) continue;
       var text = sanitizeInput(entry.text);
       if (!text) continue;
       messages.push({ role: entry.isBot ? "assistant" : "user", content: text });
     }
   }
+  // Everything the window could not hold, one line each. A model that knows
+  // what it is missing asks for it; a model that does not know answers from
+  // the half of the conversation it happens to have.
+  var canRecall = !!(proModel && !ghConfig && runOpts.canRecall && dropped.length);
+  var indexBlock = recallIndexBlock(dropped, canRecall);
+  if (indexBlock) messages.push({ role: "system", content: indexBlock });
 
   // Live web search / changelog lookup — same capability as public channels.
   var pmSearchResults = [];
@@ -2187,7 +2466,10 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         pmSearchedQuery = pmResolved;
         if (runOpts.progress) runOpts.progress({ kind: "search", query: truncateText(pmSearchedQuery, 120) });
         pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
-        pmSearchAttempted = true;
+        // Only a search that actually reached a source counts as one having
+        // happened. A search nothing answered is our plumbing failing, and a
+        // reply must not report that to the user as a fact about the web.
+        pmSearchAttempted = pmSearchResults.length > 0 || pmSearchResults.reachable === true;
       }
     }
   } catch (e) { }
@@ -2269,17 +2551,38 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         taskType: taskType,
         modelCalls: ghResult.modelCalls,
         outputTokens: ghResult.outputTokens,
+        checkpoint: ghResult.checkpoint || null,
         truncated: !!ghResult.truncated,
         resumeState: ghResult.truncated && ghResult.convo
           ? { convo: ghResult.convo, calls: (runOpts.resume ? (runOpts.resume.calls || 0) : 0) + ghResult.modelCalls }
           : null
       };
     }
-    if (runOpts.progress) {
-      runOpts.progress({ kind: "model", call: 1, of: 1, model: proModel.label || proModel.model || "" });
-    }
-    var proResult = await runProGatewayModel(context.env, proModel, messages, proModel.maxTokens);
-    return { reply: sanitizeBotResponse(proResult.text, true), taskType: taskType, outputTokens: proResult.outputTokens };
+    // The effort level wraps whatever produces the answer, so planning and
+    // checking compose with looking back past the window rather than competing
+    // with it for the same call.
+    var effort = botEffortLevel(runOpts.effort);
+    var wrapped = await runProEffort(context.env, proModel, messages, effort, {
+      progress: runOpts.progress,
+      extraCalls: canRecall ? BOT_RECALL_ROUNDS : 0
+    }, async function (convo, done, of) {
+      if (canRecall) {
+        return await runProRecallChat(context.env, proModel, convo, dropped, {
+          progress: runOpts.progress, priorCalls: done, of: of
+        });
+      }
+      if (runOpts.progress) {
+        runOpts.progress({ kind: "model", call: done + 1, of: of, model: proModel.label || proModel.model || "" });
+      }
+      var one = await runProGatewayModel(context.env, proModel, convo, proModel.maxTokens);
+      return { reply: one.text, modelCalls: 1, outputTokens: one.outputTokens };
+    });
+    return {
+      reply: sanitizeBotResponse(wrapped.reply, true),
+      taskType: taskType,
+      modelCalls: wrapped.modelCalls,
+      outputTokens: wrapped.outputTokens
+    };
   }
   var pmModel = BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general;
   var maxOut = BOT_PM_MAX_TOKENS[taskType] || BOT_PM_MAX_TOKENS.general;
@@ -2409,7 +2712,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var WRITE_ACTIONS = {
       "transfer-credits": 1, "create-invoice": 1, "claim-credits": 1, "clear-history": 1,
-      "voucher-issue": 1, "voucher-redeem": 1
+      "voucher-issue": 1, "voucher-redeem": 1,
+      // Undoing a run writes to someone's repository, so a replayed request
+      // must not be able to do it twice.
+      "pm-revert": 1
     };
     if (WRITE_ACTIONS[body.action]) {
       var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
@@ -2477,6 +2783,75 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     });
     if (!progRead || progRead._noLedger) return json({ steps: [] });
     return json({ steps: Array.isArray(progRead.steps) ? progRead.steps : [] });
+  }
+
+  // Putting a repo run back. The device kept the checkpoint the run reported —
+  // where the branch stood before it, and which paths it wrote — and hands it
+  // back with the token to undo them.
+  //
+  // A revert, not a rewrite: each path is read at the base commit and
+  // committed as it was, so what the model did stays in the history and what
+  // it did is simply no longer the state of the branch. Free: it touches no
+  // model and spends no credits.
+  if (body.action === "pm-revert") {
+    var revCfg = parseGitConfig(body.git);
+    if (!revCfg) return json({ error: "That repository is not connected." }, 400);
+    if (!revCfg.allowWrites) {
+      return json({ error: "Writes are off for that repository." }, 400);
+    }
+    var mark = body.checkpoint && typeof body.checkpoint === "object" ? body.checkpoint : null;
+    if (!mark || !isHex40OrMore(mark.baseSha)) {
+      return json({ error: "There is nothing recorded to put back." }, 400);
+    }
+    if (mark.repo && mark.repo !== revCfg.repo) {
+      return json({ error: "That checkpoint belongs to a different repository." }, 400);
+    }
+    var revProvider = GIT_PROVIDERS[revCfg.provider];
+    var revBranch = BOT_GIT_REF_RE.test(String(mark.branch || "")) ? mark.branch : null;
+    if (!revProvider || !revBranch) {
+      return json({ error: "That checkpoint cannot be read." }, 400);
+    }
+    var wanted = Array.isArray(mark.paths) ? mark.paths.slice(0, 60) : [];
+    if (!wanted.length) return json({ error: "That reply changed no files." }, 400);
+
+    var putBack = [];
+    var removed = [];
+    var failed = [];
+    for (var pi = 0; pi < wanted.length; pi++) {
+      var rp = String(wanted[pi] || "").replace(/^\/+|\/+$/g, "");
+      if (!rp || rp.indexOf("..") !== -1) { failed.push(wanted[pi]); continue; }
+      var was;
+      try {
+        was = await revProvider.readFile(revCfg, mark.baseSha, rp);
+      } catch (e) {
+        was = "Error: " + (e.message || String(e));
+      }
+      var note = "Undo Nymbot's changes to " + rp;
+      try {
+        if (typeof was === "string" && !/^Error: HTTP 404/.test(was) && !/^Error:/.test(was)) {
+          var back = await revProvider.writeFile(revCfg, revBranch, rp, was, note);
+          if (/^Error:/.test(String(back))) failed.push(rp); else putBack.push(rp);
+        } else if (typeof was === "string" && /^Error: HTTP 404/.test(was)) {
+          // It did not exist at the checkpoint, so putting it back means
+          // taking it away again.
+          var gone = await revProvider.deleteFile(revCfg, revBranch, rp, note);
+          if (gone) removed.push(rp); else failed.push(rp);
+        } else {
+          failed.push(rp);
+        }
+      } catch (e) {
+        failed.push(rp);
+      }
+    }
+    return json({
+      restored: putBack,
+      deleted: removed,
+      failed: failed,
+      // Branches and pull requests are not files and are left where they are:
+      // closing someone's pull request on their behalf is not an undo.
+      branches: Array.isArray(mark.branches) ? mark.branches : [],
+      pulls: Array.isArray(mark.pulls) ? mark.pulls : []
+    });
   }
 
   if (body.action === "balance") {
@@ -2727,7 +3102,17 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (proModel) {
       // Reserve the per-message worst case (base + max-length output, times
       // max calls for repo tasks); only the actual usage-based cost is spent.
-      var proRequired = botProMaxCost(proModel) * (ghConfig ? BOT_GIT_MAX_TURNS : 1);
+      var proBase = botProMaxCost(proModel);
+      // A repo task loops; otherwise the effort level says how many passes the
+      // user asked and agreed to pay for.
+      var effortWanted = ghConfig ? 1 : botEffortLevel(body.effort);
+      var proRequired = proBase * (ghConfig ? BOT_GIT_MAX_TURNS : effortWanted);
+      // Looking back past the window is one more model call on top. Room for it
+      // is held only when the balance can spare it, so a chat that was never
+      // going to look anything up is not refused for room it would not use.
+      var recallAffordable = !ghConfig
+        && (proRecord.balance || 0) >= proRequired + proBase * BOT_RECALL_ROUNDS;
+      if (recallAffordable) proRequired += proBase * BOT_RECALL_ROUNDS;
       if ((proRecord.balance || 0) < proRequired) {
         return json({
           noCredits: true,
@@ -2875,12 +3260,19 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var hText = String(hu.rumor.content);
       // Old reasoning blocks are for the user's eyes, not model context.
       if (isBotTurn) hText = hText.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "");
-      history.push({ text: truncateText(hText, 1000), isBot: isBotTurn });
+      // The client repeats its standing context every turn; only the copy on
+      // the turn being answered is worth room in the window.
+      if (!isBotTurn) hText = stripStandingContext(hText);
+      history.push({ text: truncateText(hText, BOT_HISTORY_DECRYPT_MAX), isBot: isBotTurn });
     }
 
     // Media generation (?image / ?speak). Billed per generation rather than per
     // output token, so it charges its own flat cost instead of botProCost.
     var media = parseBotMediaCommand(message);
+    // No command, but the message plainly asks for one. Read narrowly, and the
+    // reply says how it was read so a misread costs one credit and an apology
+    // rather than leaving the user wondering what they paid for.
+    if (!media) media = parseBotMediaIntent(message);
     if (media) {
       var mediaTier = proModel ? "pro" : "standard";
       // ?image models — a free listing, so it returns before any charge.
@@ -2907,6 +3299,18 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         // Free, but it still publishes a wrap pair and advances the thread —
         // a resend must replay this one, not mint a second pair.
         return await turnDone(listBody);
+      }
+      // "read that aloud": the thing to read is the last thing Nymbot said.
+      if (media.wantsLast && !media.prompt) {
+        for (var lb = history.length - 1; lb >= 0; lb--) {
+          if (history[lb] && history[lb].isBot && history[lb].text) {
+            media.prompt = truncateText(String(history[lb].text).replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, ""), 1800).trim();
+            break;
+          }
+        }
+        if (!media.prompt) {
+          return await turnFail({ error: "There is nothing to read back yet — say what you would like read aloud." }, 400);
+        }
       }
       if (!media.prompt) {
         return await turnFail({ error: media.kind === "image"
@@ -2963,6 +3367,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         mediaRecord.balance = mediaSpend.balance;
       }
       var mediaReply = mediaUrl;
+      // Read as a request rather than typed as one: say so, so a misreading
+      // costs one credit and a correction rather than leaving the user
+      // wondering what they just paid for.
+      if (media.inferred) {
+        mediaReply = mediaUrl + "\n\n_I read that as a request to "
+          + (media.kind === "image" ? "draw something" : "read that aloud")
+          + ". Use `?" + (media.kind === "image" ? "image" : "speak")
+          + "` to be explicit, or just say so if you meant something else._";
+      }
       var mediaPair = await wrapReplyPair(mediaReply, threadRoot);
       var mediaThread = thread.filter(function (id) { return id !== currentId; });
       mediaThread.push(currentId);
@@ -3040,7 +3453,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     try {
       chatResult = await handleBotPMChat(message, history, context, taskType, proModel, ghConfig, {
         progress: pushProgress,
-        resume: resumeState
+        resume: resumeState,
+        canRecall: typeof recallAffordable === "boolean" ? recallAffordable : false,
+        effort: body.effort
       });
     } catch (e) {
       return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
@@ -3091,8 +3506,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
     var pair = await wrapReplyPair(reply, threadRoot);
     var updatedThread = thread.filter(function (id) { return id !== currentId; });
-    updatedThread.push(currentId);
-    updatedThread.push(pair.selfEvent.id);
+    // A '!' question is answered without the conversation and stays out of it.
+    // It was asked that way precisely so it would not become context, and
+    // joining the thread afterwards made every later turn inherit the tangent
+    // it was meant to keep out. The device still shows it in the transcript:
+    // this list is only what the model is given next time.
+    if (!fresh) {
+      updatedThread.push(currentId);
+      updatedThread.push(pair.selfEvent.id);
+    }
     try { await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
     var chatBody = {
       event: pair.event,
@@ -3104,6 +3526,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       proModel: proModel ? proModelKey : undefined,
       git: !!ghConfig,
       modelCalls: chatResult.modelCalls,
+      // What this reply changed in the repository, and where the branch stood
+      // before it did. The device keeps it so a run can be put back.
+      checkpoint: chatResult.checkpoint || undefined,
       truncated: !!chatResult.truncated,
       resumeToken: resumeToken || undefined,
       resumeExpiresIn: resumeToken ? resumeExpiresIn : undefined,
@@ -3239,7 +3664,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "models" || body.action === "pm" || body.action === "pm-progress" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
+  if (body && (body.action === "models" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -4108,6 +4533,204 @@ function sanitizeBotResponse(text, keepThinking) {
 
 var MAX_CONVERSATION_HISTORY = 20;
 
+// What the conversation is allowed to spend of the model's context, in
+// characters (~4 chars/token), and the most any single turn may take of it.
+//
+// This used to be a flat 1000 characters per turn, which spent the budget
+// evenly on twenty turns whether or not there were twenty. Three long turns
+// got 3000 characters between them while the room for 20000 went unused, and
+// a turn over the cap was cut mid-line — a code block arrived as its first
+// third with nothing to say the rest had existed, which reads to the model as
+// a complete and very strange piece of code.
+var BOT_HISTORY_CHAR_BUDGET = 24000;
+var BOT_HISTORY_TURN_MAX = 4000;
+var BOT_HISTORY_TURN_MIN = 300;
+
+// A ceiling on one decrypted turn before budgeting, so a pathological message
+// cannot sit in memory at its full length while the rest of the turn runs.
+var BOT_HISTORY_DECRYPT_MAX = 32000;
+
+// The standing context the client repeats on every message so that none of it
+// ages out of the window: instructions, the repositories in scope, and the
+// slice of project knowledge that matches the question. Worth keeping on the
+// turn being answered and worthless on the nineteen before it, where twenty
+// copies of the same instructions would eat the budget saying one thing.
+//
+// Deliberately not the branch seed: the client sends that once and then
+// forgets it, so stripping it from history would lose it altogether.
+var BOT_STANDING_BLOCK = /^\[(?:custom instructions|repositories in scope|project knowledge|remembered about you|recalled from earlier)\]\n/i;
+
+// A block of project knowledge has blank lines inside it, so where the
+// standing context ends cannot be worked out by looking at the text. The
+// client marks it instead. A message published before that marker existed has
+// no terminator and is left as it is: it is history either way, and will age
+// out of the window on its own.
+var BOT_STANDING_END = "[end of standing context]";
+
+function stripStandingContext(text) {
+  var s = String(text || "");
+  if (!BOT_STANDING_BLOCK.test(s)) return s;
+  var mark = "\n\n" + BOT_STANDING_END + "\n\n";
+  var at = s.indexOf(mark);
+  if (at < 0) return s;
+  return s.slice(at + mark.length);
+}
+
+/// Fills the context budget newest-first, so what survives a tight budget is
+/// what was just said. A turn that had to be cut says so, because a model
+/// told a turn is partial asks for the rest; a model handed a silent
+/// fragment answers from it.
+function budgetHistory(history) {
+  var recent = history.slice(-MAX_CONVERSATION_HISTORY);
+  var budget = BOT_HISTORY_CHAR_BUDGET;
+  var out = [];
+  for (var i = recent.length - 1; i >= 0; i--) {
+    var entry = recent[i];
+    if (!entry || !entry.text) continue;
+    if (budget < BOT_HISTORY_TURN_MIN) break;
+    var room = Math.min(BOT_HISTORY_TURN_MAX, budget);
+    var text = entry.text;
+    if (text.length > room) {
+      text = truncateText(text, room)
+        + "\n[\u2026 this turn was trimmed to fit; recall it to read the rest]";
+    }
+    budget -= text.length;
+    out.unshift({ n: entry.n, text: text, isBot: entry.isBot });
+  }
+  return out;
+}
+
+/// Numbers every turn once, then splits them into what fits and what does not.
+/// The numbers are what let the index and the model talk about the same turn:
+/// "turn 7" has to mean one thing on both sides.
+function buildWindow(history) {
+  var numbered = [];
+  for (var i = 0; i < history.length; i++) {
+    var h = history[i];
+    if (!h || !h.text) continue;
+    numbered.push({ n: numbered.length + 1, text: h.text, isBot: h.isBot });
+  }
+  var kept = budgetHistory(numbered);
+  var inWindow = {};
+  for (var k = 0; k < kept.length; k++) inWindow[kept[k].n] = true;
+  var dropped = numbered.filter(function (h) { return !inWindow[h.n]; });
+  return { kept: kept, dropped: dropped };
+}
+
+// How much of the conversation the model may pull back per look-up, and how
+// many look-ups one reply may make. One round is the honest default: a reply
+// that still cannot answer after reading what it asked for is not going to be
+// rescued by a third pass, and every round is another model call the user pays
+// for.
+var BOT_RECALL_ROUNDS = 1;
+var BOT_RECALL_MAX_TURNS = 6;
+var BOT_RECALL_RESULT_CHARS = 8000;
+var BOT_RECALL_INDEX_MAX = 40;
+var BOT_RECALL_LINE_CHARS = 90;
+
+/// A list of what fell out of the window, one line each. Cheap enough to send
+/// on every turn, and it is what turns "I don't have that" into "you asked
+/// about the retry loop on turn 7, shall I read it back?".
+function recallIndexBlock(dropped, canRecall) {
+  if (!dropped.length) return "";
+  var shown = dropped.slice(-BOT_RECALL_INDEX_MAX);
+  var lines = [];
+  for (var i = 0; i < shown.length; i++) {
+    var turn = shown[i];
+    var first = "";
+    var rows = String(turn.text).split("\n");
+    for (var r = 0; r < rows.length; r++) {
+      if (rows[r].trim()) { first = rows[r].trim(); break; }
+    }
+    lines.push(turn.n + ". (" + (turn.isBot ? "you" : "them") + ") "
+      + truncateText(first, BOT_RECALL_LINE_CHARS));
+  }
+  var missing = dropped.length - shown.length;
+  return "[earlier turns you cannot see]\n"
+    + "These turns of this conversation are no longer in front of you"
+    + (missing > 0 ? " (" + missing + " older still are not listed)" : "")
+    + ". Their opening lines:\n"
+    + lines.join("\n") + "\n"
+    + (canRecall
+      ? "Call recall to read any of them in full before answering from memory."
+      : "You cannot read them here. Say which turn you would need rather than guessing at it.");
+}
+
+function recallToolDefs() {
+  return [{
+    type: "function",
+    function: {
+      name: "recall",
+      description: "Read earlier turns of this conversation that are no longer "
+        + "in your context. Use it when the answer depends on something said "
+        + "earlier that you cannot see, rather than guessing or asking the user "
+        + "to repeat themselves.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "What to look for, in the words it would have been said in"
+          },
+          turns: {
+            type: "array",
+            items: { type: "integer" },
+            description: "Turn numbers from the index, when you already know which you want"
+          }
+        }
+      }
+    }
+  }];
+}
+
+/// Serves a look-up out of the turns already fetched for this request. No
+/// extra round trip to the relays: the worker decrypted these on the way in
+/// and was throwing them away.
+function execRecall(dropped, args) {
+  var picked = [];
+  var wanted = (args && Array.isArray(args.turns)) ? args.turns : [];
+  for (var w = 0; w < wanted.length && picked.length < BOT_RECALL_MAX_TURNS; w++) {
+    for (var d = 0; d < dropped.length; d++) {
+      if (dropped[d].n === Number(wanted[w]) && picked.indexOf(dropped[d]) === -1) {
+        picked.push(dropped[d]);
+      }
+    }
+  }
+  var query = String((args && args.query) || "");
+  if (picked.length < BOT_RECALL_MAX_TURNS && query.trim()) {
+    var terms = query.toLowerCase().split(/[^a-z0-9]+/).filter(function (t) {
+      return t.length > 2;
+    });
+    var scored = [];
+    for (var i = 0; i < dropped.length; i++) {
+      if (picked.indexOf(dropped[i]) !== -1) continue;
+      var haystack = String(dropped[i].text).toLowerCase();
+      var score = 0;
+      for (var t = 0; t < terms.length; t++) {
+        if (haystack.indexOf(terms[t]) !== -1) score++;
+      }
+      if (score > 0) scored.push({ turn: dropped[i], score: score });
+    }
+    scored.sort(function (a, b) { return b.score - a.score || a.turn.n - b.turn.n; });
+    for (var q = 0; q < scored.length && picked.length < BOT_RECALL_MAX_TURNS; q++) {
+      picked.push(scored[q].turn);
+    }
+  }
+  if (!picked.length) {
+    return "Nothing in the earlier turns matches that. Say so rather than inventing it.";
+  }
+  picked.sort(function (a, b) { return a.n - b.n; });
+  var out = [];
+  var room = BOT_RECALL_RESULT_CHARS;
+  for (var p = 0; p < picked.length && room > 0; p++) {
+    var body = truncateText(picked[p].text, Math.min(2400, room));
+    room -= body.length;
+    out.push("--- turn " + picked[p].n + " ("
+      + (picked[p].isBot ? "you" : "them") + ") ---\n" + body);
+  }
+  return out.join("\n\n");
+}
+
 // Ceiling on the channel-context block handed to the model, in characters
 // (~4 chars/token). Trimmed newest-first so the most recent conversation
 // always survives.
@@ -4703,6 +5326,15 @@ async function webSearch(query, geohash, env) {
   var used = [];
   var seen = {};
   var dropped = 0;
+  // Whether any source answered at all, as opposed to whether anything it said
+  // was on topic. These are different failures and the reply must not conflate
+  // them: "we searched and found nothing" is a fact about the web, while "no
+  // source would answer us" is a fact about our own plumbing, and telling a
+  // user the first when the second happened is a lie the model then repeats.
+  var reachable = false;
+  for (var c = 0; c < collected.length; c++) {
+    if (collected[c] && collected[c].length) { reachable = true; break; }
+  }
   for (var i = 0; i < collected.length; i++) {
     var taken = 0;
     var engine = sources[i].name.split(":")[0];
@@ -4723,11 +5355,20 @@ async function webSearch(query, geohash, env) {
   if (dropped) console.warn("nymbot web search: dropped " + dropped + " off-topic results");
   if (!merged.length) {
     // Nothing came back at all, or nothing that was about the question
-    console.warn("nymbot web search: " + (dropped ? "nothing on topic" : "every source came back empty") +
+    console.warn("nymbot web search: " + (reachable ? "nothing on topic" : "every source came back empty") +
       " for " + JSON.stringify(truncateText(terms, 80)) + (narrow ? " (narrow: " + narrow + ")" : ""));
+    if (!reachable && !(env && env.BRAVE_SEARCH_API_KEY)) {
+      // The scraped engines block datacentre egress as a matter of course, so
+      // a worker with no search API key has no working source at all. Named
+      // here because "every source came back empty" reads like a bad query.
+      console.warn("nymbot web search: no BRAVE_SEARCH_API_KEY is set, and the " +
+        "scraped engines routinely refuse datacentre IPs — there is no reliable " +
+        "source configured for this worker.");
+    }
   }
   // Which engines contributed, so the reply can say when it rests on just one
   merged.sources = used;
+  merged.reachable = reachable;
   return merged.length ? await attachPageContent(merged) : merged;
 }
 
@@ -5018,7 +5659,9 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     } else if (needsWebSearch(question, resolvedQuery)) {
       searchedQuery = resolvedQuery;
       searchResults = await webSearch(searchedQuery, geohash, context.env);
-      searchAttempted = true;
+      // As above: a search no source answered is not a search that found
+      // nothing, and must not be reported as one.
+      searchAttempted = searchResults.length > 0 || searchResults.reachable === true;
     }
 
     var channelCtx = buildChannelContext(channelMessages, activeUsers);
