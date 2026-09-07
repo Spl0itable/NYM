@@ -97,8 +97,8 @@ import {
   BOT_LIGHTNING_ADDRESS,
   botLightningAddresses,
   CLIENT_CORS_HEADERS,
-  isNymchatClient
 } from "./_shared.js";
+import { isNymchatClient } from "./_client.js";
 
 
 // NIP-59 unwrap with the bot's key. Accepts every payload the bot can meet:
@@ -3049,8 +3049,9 @@ async function onRequest(context) {
     });
   }
 
-  // Reject requests that aren't from the official Nymchat web app or native apps
-  if (!isNymchatClient(request)) {
+  // Reject requests that aren't from a client allowed to reach this API — the
+  // Nymchat web app, the standalone Nymbot service, or the native apps.
+  if (!isNymchatClient(request, context.env)) {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }

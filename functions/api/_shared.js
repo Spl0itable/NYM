@@ -3020,17 +3020,6 @@ const CLIENT_CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type"
 };
 
-function isNymchatClient(request) {
-  const origin = request.headers.get("Origin") || "";
-  if (origin) {
-    try {
-      if (new URL(origin).host.toLowerCase() === new URL(request.url).host.toLowerCase()) return true;
-    } catch (_) {}
-  }
-  const ua = request.headers.get("User-Agent") || "";
-  return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
-}
-
 export {
   getPublicKey,
   getEventHash,
@@ -3069,6 +3058,5 @@ export {
   BOT_LIGHTNING_ADDRESS,
   BOT_LIGHTNING_ADDRESS_FALLBACK,
   botLightningAddresses,
-  CLIENT_CORS_HEADERS,
-  isNymchatClient
+  CLIENT_CORS_HEADERS
 };

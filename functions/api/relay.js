@@ -6,18 +6,11 @@
 // Worker connects to the target relay via new WebSocket() and forwards
 // messages bidirectionally through a WebSocketPair.
 
+// One definition for every route; see _client.js.
+import { isNymchatClient } from './_client.js';
+
 const APP_RELAY = 'wss://relay.nymchat.app';
 
-function isNymchatClient(request) {
-  const origin = request.headers.get('Origin') || '';
-  if (origin) {
-    try {
-      if (new URL(origin).host.toLowerCase() === new URL(request.url).host.toLowerCase()) return true;
-    } catch (_) {}
-  }
-  const ua = request.headers.get('User-Agent') || '';
-  return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
-}
 // Reject relay hostnames that resolve to private/loopback/link-local space so
 // the proxy can't be used to reach internal services (SSRF).
 function isPrivateRelayHost(hostname) {
@@ -50,7 +43,7 @@ function isPrivateRelayHost(hostname) {
 function buildUpstreamUrl(targetRelay, request, env) {
   if (targetRelay !== APP_RELAY) return targetRelay;
   if (!env || !env.NYMCHAT_PROXY_SECRET) return targetRelay;
-  if (!isNymchatClient(request)) return targetRelay;
+  if (!isNymchatClient(request, env)) return targetRelay;
   const u = new URL(targetRelay);
   u.searchParams.set('nymchat_proxy', env.NYMCHAT_PROXY_SECRET);
   return u.toString();
@@ -64,7 +57,7 @@ export async function onRequest(context) {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
 
-  if (!isNymchatClient(request)) {
+  if (!isNymchatClient(request, env)) {
     return new Response('Forbidden', { status: 403 });
   }
 

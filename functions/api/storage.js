@@ -52,8 +52,8 @@ import {
   BOT_LIGHTNING_ADDRESS,
   botLightningAddresses,
   CLIENT_CORS_HEADERS,
-  isNymchatClient
 } from "./_shared.js";
+import { isNymchatClient } from "./_client.js";
 
 var SHOP_CATALOG = {
   "style-satoshi": { price: 21420, type: "message-style", tier: "legendary" },
@@ -1554,7 +1554,7 @@ async function onRequest(context) {
       status: 405, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   }
-  if (!isNymchatClient(request)) {
+  if (!isNymchatClient(request, context.env)) {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });

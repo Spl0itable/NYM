@@ -12,7 +12,8 @@
 
 import { routeStorageAction } from './api/storage.js';
 import { handleBotPMAction, botReleaseStrandedTurn } from './api/bot.js';
-import { verifyClientAuth, isNymchatClient, getPublicKey } from './api/_shared.js';
+import { verifyClientAuth, getPublicKey } from './api/_shared.js';
+import { isNymchatClient } from './api/_client.js';
 
 // Actions handled by the bot worker (Nymbot PM, credits, invoices, Ledger).
 const BOT_ACTIONS = {
@@ -57,7 +58,7 @@ export async function onRequest(context) {
   if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
-  if (!isNymchatClient(request)) {
+  if (!isNymchatClient(request, env)) {
     return new Response('Forbidden', { status: 403 });
   }
 

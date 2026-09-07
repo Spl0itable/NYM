@@ -24,17 +24,8 @@
 //   ["POOL:STATUS", { connected, count, latency, events }]
 
 import { getEventHash, schnorr } from './_shared.js';
+import { isNymchatClient } from './_client.js';
 
-function isNymchatClient(request) {
-  const origin = request.headers.get('Origin') || '';
-  if (origin) {
-    try {
-      if (new URL(origin).host.toLowerCase() === new URL(request.url).host.toLowerCase()) return true;
-    } catch (_) {}
-  }
-  const ua = request.headers.get('User-Agent') || '';
-  return /NymchatApp\//i.test(ua) || /\bNYMApp\b/.test(ua);
-}
 
 // Reject relay hostnames that resolve to private/loopback/link-local space so
 // the proxy can't be used to reach internal services (SSRF).
@@ -73,7 +64,7 @@ export async function onRequest(context) {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
 
-  const clientIsNymchat = isNymchatClient(request);
+  const clientIsNymchat = isNymchatClient(request, env);
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
 
   const { 0: client, 1: server } = new WebSocketPair();
