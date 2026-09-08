@@ -874,6 +874,10 @@ function botDMRumor(plaintext, botPubkey, recipientPubkey, opts) {
     pubkey: botPubkey
   };
   if (threadRoot) rumor.tags.push(["nymthread", threadRoot]);
+  // Which model wrote this reply. Inside the rumor, so it is sealed and
+  // wrapped with the text and never travels in the clear — and read back on a
+  // later turn, so a model can tell its own earlier work from another model's.
+  if (opts && opts.model) rumor.tags.push(["model", String(opts.model).slice(0, 60)]);
   rumor.id = getEventHash(rumor);
   return rumor;
 }

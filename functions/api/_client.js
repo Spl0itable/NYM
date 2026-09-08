@@ -40,4 +40,21 @@ function isNymchatClient(request, env) {
   return /Nym(?:chat|bot)App\//i.test(ua) || /\bNYMApp\b/.test(ua);
 }
 
-export { CLIENT_ORIGIN_HOSTS, isNymchatClient };
+/// Whether the caller IS the standalone Nymbot
+function isStandaloneNymbot(request, env) {
+  const origin = request.headers.get("Origin") || "";
+  if (origin) {
+    try {
+      const url = new URL(origin);
+      const host = url.host.toLowerCase();
+      if (originIsTrustworthy(url)) {
+        if (CLIENT_ORIGIN_HOSTS.has(host)) return true;
+        const extra = envClientHosts(env);
+        if (extra && extra.has(host)) return true;
+      }
+    } catch (_) {}
+  }
+  return /NymbotApp\//i.test(request.headers.get("User-Agent") || "");
+}
+
+export { CLIENT_ORIGIN_HOSTS, isNymchatClient, isStandaloneNymbot };

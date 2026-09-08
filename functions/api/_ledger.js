@@ -53,6 +53,10 @@ export class NymLedger {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS edition_resv (invoice TEXT PRIMARY KEY, item TEXT NOT NULL, user TEXT, exp INTEGER NOT NULL);"
     );
+    // The free tier's daily allowance, one row per key
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS free_usage (pubkey TEXT PRIMARY KEY, day TEXT NOT NULL, used INTEGER NOT NULL);"
+    );
     // One Nymbot PM turn, keyed by the gift wrap it answers. result NULL means
     // an attempt is in flight; a non-null result is the finished response body,
     // replayed verbatim to any retry of the same message.
@@ -101,6 +105,8 @@ export class NymLedger {
       case "replay": return this._replay(a.id, a.ttl);
       case "transfer-credits": return this._transferCredits(a.from, a.to);
       case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier);
+      case "free-claim": return this._freeClaim(a.pubkey, a.limit);
+      case "free-peek": return this._freePeek(a.pubkey, a.limit);
       case "claim-credits": return this._claimCredits(a);
       case "shop-claim": return this._shopClaim(a);
       case "shop-transfer": return this._shopTransfer(a);
@@ -505,6 +511,67 @@ export class NymLedger {
     }
     await this._putCredits(pubkey, rec, tier);
     return { ok: true, balance: rec.balance };
+  }
+
+  // free tier's daily allowance
+  _freeDay(at) {
+    return new Date(typeof at === "number" ? at : Date.now()).toISOString().slice(0, 10);
+  }
+
+  _freeResetsAt() {
+    const now = new Date();
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  }
+
+  _freeRow(pubkey) {
+    const day = this._freeDay();
+    const rows = this.sql.exec(
+      "SELECT day, used FROM free_usage WHERE pubkey = ? LIMIT 1;", pubkey
+    ).toArray();
+    const row = rows && rows[0];
+    // A row from a day that has passed is not a used-up allowance, it is
+    // yesterday's — read as zero rather than migrated, so nothing has to sweep
+    // the table at midnight.
+    return { day, used: (row && row.day === day) ? (row.used || 0) : 0 };
+  }
+
+  _freeLimit(limit) {
+    const n = Math.floor(Number(limit) || 0);
+    return n > 0 && n <= 1000 ? n : 0;
+  }
+
+  /// What is left today, without spending any of it.
+  _freePeek(pubkey, limit) {
+    if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
+    const cap = this._freeLimit(limit);
+    if (!cap) return { error: "Invalid free limit." };
+    const at = this._freeRow(pubkey);
+    return {
+      ok: true, used: at.used, limit: cap,
+      left: Math.max(0, cap - at.used),
+      resetsAt: this._freeResetsAt()
+    };
+  }
+
+  /// Takes one off today's allowance, or says there is none left. The read and
+  /// the write are one op precisely so two messages sent at once cannot both
+  /// see the last one as available.
+  _freeClaim(pubkey, limit) {
+    if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
+    const cap = this._freeLimit(limit);
+    if (!cap) return { error: "Invalid free limit." };
+    const at = this._freeRow(pubkey);
+    const resetsAt = this._freeResetsAt();
+    if (at.used >= cap) {
+      return { ok: false, used: at.used, limit: cap, left: 0, resetsAt: resetsAt };
+    }
+    const used = at.used + 1;
+    this.sql.exec(
+      "INSERT INTO free_usage (pubkey, day, used) VALUES (?, ?, ?) " +
+      "ON CONFLICT(pubkey) DO UPDATE SET day = excluded.day, used = excluded.used;",
+      pubkey, at.day, used
+    );
+    return { ok: true, used: used, limit: cap, left: cap - used, resetsAt: resetsAt };
   }
 
   // Atomic claim of a paid credit invoice. The caller has already verified

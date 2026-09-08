@@ -98,7 +98,7 @@ import {
   botLightningAddresses,
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
-import { isNymchatClient } from "./_client.js";
+import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
 
 
 // NIP-59 unwrap with the bot's key. Accepts every payload the bot can meet:
@@ -368,6 +368,10 @@ var BOT_PM_MAX_TOKENS = {
   creative: 4096,
   translation: 3072
 };
+
+// The free tier.
+var BOT_FREE_DAILY = 20;
+var BOT_FREE_HISTORY_BUDGET = 5000;
 
 var BOT_PRO_SATS_PER_CREDIT = 100;
 
@@ -2128,8 +2132,51 @@ var NYMBOT_PM_ADDENDUM = [
 
 // proModel (a BOT_PRO_MODELS entry) swaps the multi-model-routing section for
 // Pro-mode instructions; null builds the standard premium prompt.
-function buildNymbotPmSystemPrompt(proModel) {
-  var tierSection = proModel ? [
+// Live search is a switch in a private chat, and the prompt has to say which
+// way it is set. Told it always has the web, the model narrated lookups that
+// never ran and dressed its own recall up as a finding — so the off state is
+// stated as plainly as the on state.
+var NYMBOT_PM_WEB_ON = [
+  "",
+  "=== LIVE WEB ACCESS (ON FOR THIS CHAT) ===",
+  "The user has web search switched on. If the system injects search results or release notes into your context, treat them as real-time facts more current than your training. Never tell the user to go check a website themselves — answer with the live data.",
+  "Search results end with their source URL in square brackets. Cite the ones you used inline as [1], [2] in the order they appear in your context, and only for a claim that result actually supports. The client draws the numbered sources under your reply, so do not paste a list of URLs at the end yourself.",
+  "When your context says a search ran and found nothing, say so plainly and answer from what you know. Admitting one lookup came up empty is not the same as claiming you cannot search; never pass training data off as a live finding, and never invent a source or a URL."
+];
+
+var NYMBOT_PM_WEB_OFF = [
+  "",
+  "=== LIVE WEB ACCESS (OFF FOR THIS CHAT) ===",
+  "Web search is switched off for this chat, so nothing in your context was looked up just now. Answer from what you know.",
+  "Never say or imply that you searched, checked, looked up or found anything online, and never cite a URL as something you just read. If the answer depends on facts that change — prices, scores, releases, news, weather — say so and note that your knowledge has a cutoff.",
+  "If current information would genuinely settle the question, say once that turning on the Web switch in the chat toolbar lets you search. Do not repeat that offer in every reply."
+];
+
+// There is more of Nymbot than fits in a 1:1 PM, and the person most likely to
+// want it is the one already using this. Told only to a Nymchat user — the
+// standalone app's own users do not need pointing at the app they are in, and
+// being told to go there would read as the bot not knowing where it is.
+//
+// The listed features are the ones the PM genuinely cannot do. Repositories,
+// pictures, voice and web search are all here too, so naming them would be a
+// pitch that falls apart the moment someone tries them.
+var NYMBOT_PM_ELSEWHERE = [
+  "",
+  "=== THE FULL NYMBOT (nymbot.ai) ===",
+  "This chat is Nymbot inside Nymchat: one thread, and everything below is done by typing to it. There is a fuller Nymbot at https://nymbot.ai — a web app plus native iOS and Android apps, same account, same credits, same keys, so nothing has to be moved or signed up for.",
+  "What it has that a PM cannot: many chats at once, titled and searchable, in folders; artifacts, where a file a reply wrote opens beside the conversation to be edited and kept through versions; workspaces, where documents you upload are searched per question rather than pasted into it; saved personas and a prompt library; memory that carries between chats; two models asked the same question side by side; and scheduled prompts that run on their own and send you the answer.",
+  "There is also a free daily allowance there, so it can be tried without credits.",
+  "Mention it when it is the actual answer to what someone asked — they want to keep chats apart, work on a document, save a persona, compare two models, have something run daily — and when you do, say the one thing that solves their problem rather than reciting the list. Say it once. Never open a reply with it, never add it to an answer it has nothing to do with, and never imply this chat is the lesser one: a PM is the whole product for plenty of people."
+];
+
+function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp) {
+  var tierSection = freeTurn ? [
+    "=== FREE DAILY ALLOWANCE ===",
+    "This user is out of credits and this reply is coming from the free tier: " + BOT_FREE_DAILY + " replies a day on a single small model, with a shorter memory of the conversation than a paid reply gets. Be as useful as you can inside that.",
+    "Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — say 'AI models' or 'large language models' instead. If asked which model you are, say Nymbot's free tier runs one small general model and that credits unlock multi-model routing and the frontier models.",
+    "What credits buy, if it comes up and only then: sharper models routed per question (coding, reasoning, creative, translation), Nymbot Pro with a specific frontier model pinned by ?model, connected git repositories, image generation, voice clips, live web search, and a much longer memory of the conversation. ?buy opens the purchase flow.",
+    "Do not apologise for the free tier, do not mention the daily count — the app shows it — and do not push the upgrade. Answer the question."
+  ] : proModel ? [
     "=== PRO MODE (USER-SELECTED MODEL) ===",
     "This user has Nymbot Pro and chose " + proModel.label + " — every reply in this chat is generated by that frontier model. You ARE " + proModel.label + " speaking as Nymbot; if the user asks which model they're talking to, tell them it's " + proModel.label + ". Don't name the gateway infrastructure used to reach it.",
     "MODEL IDENTITY IS NOT A GUESS: " + proModel.label + " is the model actually serving this reply — it was selected by the user and routed here. Never answer with a different model name, a different version number, or a name you infer from your training data. If you would have said anything other than \"" + proModel.label + "\", you are wrong: say " + proModel.label + ".",
@@ -2143,7 +2190,10 @@ function buildNymbotPmSystemPrompt(proModel) {
     "Pricing: coding and reasoning queries cost 2 credits each (they use larger, more expensive models). General chat, creative writing, and translation cost 1 credit each. If a user asks why some queries cost more, explain it's because those routes use bigger models.",
     "NYMBOT PRO: An even higher tier exists — ?model lets the user pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.6 Sol, GPT-5.4 mini, Gemini 3.1 Pro, Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5, MiniMax M3) for every reply, paid with separate Pro credits (?buy has a Pro switch). Pro can also connect a git repo (?git — GitHub, GitLab, or Gitea/Codeberg) so replies read the user's actual code and can even commit, branch, and open PRs. If a user wants a specific named model, stronger answers, or repo-aware coding help, point them at ?model and ?git."
   ];
-  return NYMBOT_PM_PROMPT_HEAD.concat(tierSection, NYMBOT_PM_PROMPT_TAIL).join("\n");
+  var web = webOn ? NYMBOT_PM_WEB_ON : NYMBOT_PM_WEB_OFF;
+  // The app does not need telling about itself.
+  var elsewhere = inApp ? [] : NYMBOT_PM_ELSEWHERE;
+  return NYMBOT_PM_PROMPT_HEAD.concat(tierSection, web, elsewhere, NYMBOT_PM_PROMPT_TAIL).join("\n");
 }
 
 var NYMBOT_PM_PROMPT_HEAD = [
@@ -2178,11 +2228,6 @@ var NYMBOT_PM_PROMPT_TAIL = [
   "=== RESPONSE FORMATTING ===",
   "Use markdown. The client renders **bold**, *italic*, `inline code`, fenced code blocks with syntax highlighting (```python, ```javascript, etc. — always include the language tag), headers, blockquotes, lists, and links.",
   "For code answers, prefer a fenced block with the correct language tag. For math, write expressions inline or in code blocks — no LaTeX rendering is available.",
-  "",
-  "=== LIVE WEB ACCESS ===",
-  "You have live web search and live changelog access here. If the system injects search results or release notes into your context, treat them as real-time facts more current than your training. Never tell the user to go check a website themselves — answer with the live data.",
-  "Search results end with their source URL in square brackets. Cite the one you used — the site by name, and the URL — so the user can check it.",
-  "When your context says a search ran and found nothing, say so plainly and answer from what you know. Admitting one lookup came up empty is not the same as claiming you cannot search; never pass training data off as a live finding, and never invent a source or a URL.",
   "",
   "=== QUOTE-REPLIES ===",
   "When the user quote-replies, the quoted text appears labeled as QUOTED MESSAGE with the original author. Read it for what the user's follow-up refers to. Reply to the user only — never address the quoted person, never @mention anyone.",
@@ -2427,12 +2472,14 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var split = parsed.split;
   var question = parsed.question;
 
-  var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null) }];
+  var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null, runOpts.web === true, runOpts.free === true, runOpts.inApp === true) }];
 
   var dropped = [];
+  var keptTurns = [];
   if (!freshOnly && Array.isArray(history) && history.length > 0) {
-    var window = buildWindow(history);
+    var window = buildWindow(history, runOpts.historyBudget);
     dropped = window.dropped;
+    keptTurns = window.kept;
     for (var i = 0; i < window.kept.length; i++) {
       var entry = window.kept[i];
       if (!entry || !entry.text) continue;
@@ -2445,11 +2492,17 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // what it is missing asks for it; a model that does not know answers from
   // the half of the conversation it happens to have.
   var canRecall = !!(proModel && !ghConfig && runOpts.canRecall && dropped.length);
-  var indexBlock = recallIndexBlock(dropped, canRecall);
+  var nowVoice = botReplyVoice(proModel || null, runOpts.free === true);
+  var indexBlock = recallIndexBlock(dropped, canRecall, nowVoice);
   if (indexBlock) messages.push({ role: "system", content: indexBlock });
+  // Which of the replies above somebody else wrote. Nothing at all in a chat
+  // that has only ever used one model, which is most of them.
+  var voicesBlock = modelVoicesBlock(keptTurns, nowVoice);
+  if (voicesBlock) messages.push({ role: "system", content: voicesBlock });
 
   // Live web search / changelog lookup — same capability as public channels.
   var pmSearchResults = [];
+  var pmCitations = [];
   var pmSearchAttempted = false;
   var pmSearchedQuery = question;
   var pmChangelogCtx = "";
@@ -2462,7 +2515,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         return { author: h && h.isBot ? "nymbot" : "", text: h && h.text };
       });
       var pmResolved = searchQueryFor(question, pmTurns);
-      if (needsWebSearch(question, pmResolved)) {
+      if (runOpts.web === true && needsWebSearch(question, pmResolved)) {
         pmSearchedQuery = pmResolved;
         if (runOpts.progress) runOpts.progress({ kind: "search", query: truncateText(pmSearchedQuery, 120) });
         pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
@@ -2486,6 +2539,9 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       pmCtx += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
       pmCtx += searchPageBlock(pmSearchResults);
       pmCtx += searchResultCaveats(question, pmSearchResults);
+      // The same results the model was numbered against, handed to the device
+      // so the reply's [1] and [2] have cards to point at.
+      pmCitations = searchCitations(pmSearchResults);
     } else if (pmSearchAttempted) {
       pmCtx += "A live web search ran just now for \"" + searchQueryTerms(pmSearchedQuery) +
         "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news, and put no link at all in a reply that says you found nothing.\n";
@@ -2549,6 +2605,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       return {
         reply: sanitizeBotResponse(ghResult.reply, true),
         taskType: taskType,
+        sources: pmCitations,
         modelCalls: ghResult.modelCalls,
         outputTokens: ghResult.outputTokens,
         checkpoint: ghResult.checkpoint || null,
@@ -2580,12 +2637,20 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     return {
       reply: sanitizeBotResponse(wrapped.reply, true),
       taskType: taskType,
+      sources: pmCitations,
       modelCalls: wrapped.modelCalls,
       outputTokens: wrapped.outputTokens
     };
   }
-  var pmModel = BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general;
-  var maxOut = BOT_PM_MAX_TOKENS[taskType] || BOT_PM_MAX_TOKENS.general;
+  // The free tier is one model, the same one the public channels already run
+  // on, at the public channels' reply length. Per-task routing to bigger models
+  // is one of the things credits buy.
+  var pmModel = runOpts.free === true
+    ? BOT_MODEL_DEFAULT
+    : (BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general);
+  var maxOut = runOpts.free === true
+    ? BOT_FREE_MAX_TOKENS
+    : (BOT_PM_MAX_TOKENS[taskType] || BOT_PM_MAX_TOKENS.general);
   var reply = "";
   try {
     var primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
@@ -2611,7 +2676,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       reply = fb && fb.response ? sanitizeBotResponse(fb.response, true) : "";
     } catch (e) { }
   }
-  return { reply: reply, taskType: taskType };
+  return { reply: reply, taskType: taskType, sources: pmCitations };
 }
 async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   var env = context.env;
@@ -2764,10 +2829,20 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   // `threadRoot`: set when the user's message arrived inside a thread — the
   // reply pair then carries the same `nymthread` marker so clients file it in
   // that thread instead of the flat conversation.
-  async function wrapReplyPair(text, threadRoot) {
+  /// `model` names what wrote the reply, and is read back on a later turn so
+  /// whichever model picks the conversation up can tell its own earlier work
+  /// from somebody else's. Omitted for a reply no model wrote — a listing, a
+  /// refusal, a receipt — because claiming one for those would be a lie the
+  /// next turn reads as truth.
+  async function wrapReplyPair(text, threadRoot, model) {
+    var opts = null;
+    if (threadRoot || model) {
+      opts = {};
+      if (threadRoot) opts.threadRoot = threadRoot;
+      if (model) opts.model = model;
+    }
     return buildPqGiftWrappedDMPair(
-      text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(),
-      threadRoot ? { threadRoot: threadRoot } : null);
+      text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(), opts);
   }
 
   // What the turn answering `eventId` is doing right now. Read-only, advisory,
@@ -2857,9 +2932,17 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "balance") {
     var rec = await botGetCredits(env, userPubkey);
     var prec = await botGetProCredits(env, userPubkey);
+    // What the free allowance has left, read without spending any of it, so
+    // the count is on screen before the first message rather than after it.
+    var peek = await ledgerCall(env, {
+      op: "free-peek", pubkey: userPubkey, limit: BOT_FREE_DAILY
+    });
     return json({
       balance: rec.balance, totalPurchased: rec.totalPurchased, totalUsed: rec.totalUsed,
-      proBalance: prec.balance, proTotalPurchased: prec.totalPurchased, proTotalUsed: prec.totalUsed
+      proBalance: prec.balance, proTotalPurchased: prec.totalPurchased, proTotalUsed: prec.totalUsed,
+      free: (peek && peek.ok) ? {
+        used: peek.used, limit: peek.limit, left: peek.left, resetsAt: peek.resetsAt
+      } : undefined
     });
   }
 
@@ -3106,7 +3189,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // A repo task loops; otherwise the effort level says how many passes the
       // user asked and agreed to pay for.
       var effortWanted = ghConfig ? 1 : botEffortLevel(body.effort);
-      var proRequired = proBase * (ghConfig ? BOT_GIT_MAX_TURNS : effortWanted);
+      var proRequired = proBase * (ghConfig ? BOT_GIT_MAX_TURNS : effortWanted)
+        + botPartSurcharge(botPartsCount(body));
       // Looking back past the window is one more model call on top. Room for it
       // is held only when the balance can spare it, so a chat that was never
       // going to look anything up is not refused for room it would not use.
@@ -3124,8 +3208,32 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
             : proModel.label + " replies reserve " + proRequired + " Pro credits and charge by reply length (from " + proModel.baseCredits + ") — you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up, or ?model off for standard replies."
         });
       }
-    } else if (record.balance <= 0) {
-      return json({ noCredits: true, balance: 0 });
+    }
+
+    // Out of credits, but not necessarily out of replies: the free tier is a
+    // daily allowance on the cheap model, claimed here so that two messages
+    // sent at once cannot both spend the last one. Only ever reached with an
+    // empty balance, so nobody who has paid is quietly moved onto it.
+    var freeTurn = false;
+    var freeState = null;
+    if (!proModel && record.balance <= 0) {
+      var claim = await ledgerCall(env, {
+        op: "free-claim", pubkey: userPubkey, limit: BOT_FREE_DAILY
+      });
+      if (claim && claim.ok) {
+        freeTurn = true;
+        freeState = { used: claim.used, limit: claim.limit, left: claim.left, resetsAt: claim.resetsAt };
+      } else {
+        return json({
+          noCredits: true,
+          balance: 0,
+          // What ran out and when it comes back, so the answer is a time
+          // rather than a wall.
+          free: (claim && claim.limit) ? {
+            used: claim.used, limit: claim.limit, left: 0, resetsAt: claim.resetsAt
+          } : undefined
+        });
+      }
     }
 
     // The message and history never travel as plaintext
@@ -3208,7 +3316,26 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       ? []
       : thread.filter(function (id) { return id !== currentId; });
 
+    // A question too long for one wrap arrives as several. `eventId` is still
+    // the last of them, so a client that never splits — and an older one that
+    // cannot — is unchanged.
+    var partIds = [];
+    if (Array.isArray(body.parts)) {
+      for (var pi = 0; pi < body.parts.length; pi++) {
+        var pid = body.parts[pi];
+        if (!isHex64(pid) || partIds.indexOf(pid) !== -1) continue;
+        partIds.push(pid);
+      }
+      if (partIds.length > BOT_MESSAGE_PARTS_MAX) {
+        return await turnFail({ error: "That message is too long, even split up." }, 413);
+      }
+      if (partIds.indexOf(currentId) === -1) partIds.push(currentId);
+    }
+
     var fetchIds = historyIds.slice();
+    for (var fi = 0; fi < partIds.length; fi++) {
+      if (fetchIds.indexOf(partIds[fi]) === -1) fetchIds.push(partIds[fi]);
+    }
     if (fetchIds.indexOf(currentId) === -1) fetchIds.push(currentId);
 
     var fetched = await fetchGiftWrapsByIds(fetchIds, currentId, 3000);
@@ -3223,7 +3350,35 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       return await turnFail({ error: "Message author does not match the authenticated user." }, 403);
     }
     var message = sanitizeInput(currentUnwrapped.rumor.content || "");
+    // Put the pieces back. Every part must open, must be authored by the same
+    // user and must carry the same message id as the one that arrived — a
+    // question assembled from someone else's events would be a question the
+    // user never asked. Anything that fails those is a hole in the message, so
+    // the whole thing is refused rather than silently answered short.
+    if (partIds.length > 1) {
+      var wantMsgId = rumorTagValue(currentUnwrapped.rumor, "x");
+      var pieces = [];
+      for (var qi = 0; qi < partIds.length; qi++) {
+        var pw = fetched[partIds[qi]];
+        if (!pw) {
+          return await turnFail({ error: "Part of your message has not reached the relays yet — please try again." }, 504);
+        }
+        var pu = unwrapBotGiftWrap(pw, botPrivkey, botPq);
+        if (!pu || pu.author !== userPubkey) {
+          return await turnFail({ error: "Could not read every part of your message." }, 400);
+        }
+        if (!wantMsgId || rumorTagValue(pu.rumor, "x") !== wantMsgId) {
+          return await turnFail({ error: "Those parts are not all from the same message." }, 400);
+        }
+        pieces.push({ at: rumorPartIndex(pu.rumor) || (qi + 1), text: String(pu.rumor.content || "") });
+      }
+      pieces.sort(function (a, b) { return a.at - b.at; });
+      message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""));
+    }
     if (!message) return await turnFail({ error: "Empty message" }, 400);
+    // Every event the question travelled in, so the next turn replays the
+    // whole of it and not just the piece that happened to arrive last.
+    var askedIds = partIds.length > 1 ? partIds.slice() : [currentId];
     // Now that the rumor is open, claim the MESSAGE as well as the wrap that
     // carried it. Two wraps of one rumor are one question and must buy one
     // answer, however many of the user's devices decided to ask.
@@ -3263,7 +3418,25 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // The client repeats its standing context every turn; only the copy on
       // the turn being answered is worth room in the window.
       if (!isBotTurn) hText = stripStandingContext(hText);
-      history.push({ text: truncateText(hText, BOT_HISTORY_DECRYPT_MAX), isBot: isBotTurn });
+      // A turn that was split across several events is one turn. Rejoined by
+      // the message id they share, in the order their tags give — otherwise a
+      // long question replays as a handful of fragments and the model reads
+      // each as its own thing.
+      var hMsgId = isBotTurn ? null : rumorTagValue(hu.rumor, "x");
+      var hPart = isBotTurn ? 0 : rumorPartIndex(hu.rumor);
+      var last = history[history.length - 1];
+      if (hPart && last && !last.isBot && last.msgId && last.msgId === hMsgId) {
+        last.text = truncateText(last.text + hText, BOT_HISTORY_DECRYPT_MAX);
+        continue;
+      }
+      history.push({
+        text: truncateText(hText, BOT_HISTORY_DECRYPT_MAX),
+        isBot: isBotTurn,
+        msgId: hMsgId,
+        // What wrote it, when the reply said so. Replies published before this
+        // was recorded carry nothing, and nothing is what they are read as.
+        model: isBotTurn ? rumorTagValue(hu.rumor, "model") : null
+      });
     }
 
     // Media generation (?image / ?speak). Billed per generation rather than per
@@ -3273,6 +3446,23 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // reply says how it was read so a misread costs one credit and an apology
     // rather than leaving the user wondering what they paid for.
     if (!media) media = parseBotMediaIntent(message);
+    if (media && freeTurn) {
+      // Generating a picture or a voice clip has a bill of its own, so it is
+      // one of the reasons to pay rather than something the allowance covers.
+      // Said out loud, and the turn is handed back rather than spent.
+      var noMedia = await wrapReplyPair(
+        "Pictures and voice clips need credits — they cost real money to generate, so they are not part of the free daily allowance. Type ?buy to top up; " +
+        BOT_FREE_DAILY + " free replies a day stay free.", threadRoot);
+      var noMediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
+      noMediaThread.push.apply(noMediaThread, askedIds);
+      noMediaThread.push(noMedia.selfEvent.id);
+      try { await botPutThread(env, userPubkey, noMediaThread); } catch (e) { }
+      return await turnDone({
+        event: noMedia.event, selfEvent: noMedia.selfEvent,
+        balance: 0, cost: 0, taskType: "general", pro: false,
+        free: freeState
+      });
+    }
     if (media) {
       var mediaTier = proModel ? "pro" : "standard";
       // ?image models — a free listing, so it returns before any charge.
@@ -3284,8 +3474,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           : "Frontier image models need a Pro model selected (?model <name>). Standard ?image uses the built-in generator for "
             + BOT_MEDIA_COSTS.image.standard + " credits.";
         var listPair = await wrapReplyPair(listText, threadRoot);
-        var listThread = thread.filter(function (id) { return id !== currentId; });
-        listThread.push(currentId);
+        var listThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
+        listThread.push.apply(listThread, askedIds);
         listThread.push(listPair.selfEvent.id);
         try { await botPutThread(env, userPubkey, listThread); } catch (e) { }
         var listBody = {
@@ -3377,8 +3567,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           + "` to be explicit, or just say so if you meant something else._";
       }
       var mediaPair = await wrapReplyPair(mediaReply, threadRoot);
-      var mediaThread = thread.filter(function (id) { return id !== currentId; });
-      mediaThread.push(currentId);
+      var mediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
+      mediaThread.push.apply(mediaThread, askedIds);
       mediaThread.push(mediaPair.selfEvent.id);
       try { await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
       var mediaBody = {
@@ -3402,6 +3592,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var taskType;
     if (proModel) {
       taskType = "pro";
+    } else if (freeTurn) {
+      // Classifying costs a model call of its own, and there is nothing to
+      // route to: the free tier is one model.
+      taskType = "general";
     } else {
       try {
         taskType = await classifyBotTask(ai, parsed.question);
@@ -3409,8 +3603,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         taskType = "general";
       }
     }
-    var cost = proModel ? (proModel.baseCredits || 1) : botCreditsForTask(taskType);
-    if (!proModel && record.balance < cost) {
+    var cost = freeTurn ? 0
+      : (proModel ? (proModel.baseCredits || 1) : botCreditsForTask(taskType))
+        + botPartSurcharge(askedIds.length);
+
+    if (!proModel && !freeTurn && record.balance < cost) {
       return await turnFail({
         noCredits: true,
         balance: record.balance,
@@ -3455,7 +3652,22 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         progress: pushProgress,
         resume: resumeState,
         canRecall: typeof recallAffordable === "boolean" ? recallAffordable : false,
-        effort: body.effort
+        effort: body.effort,
+        // A free reply carries a fifth of the history a paid one does. At
+        // these model prices the cost of a reply is set by the context it
+        // hauls, not by which small model writes it, so this is what keeps the
+        // subsidy flat however long the chat runs.
+        historyBudget: freeTurn ? BOT_FREE_HISTORY_BUDGET : 0,
+        free: freeTurn,
+        // In a public channel Nymbot searches whenever a question looks like
+        // it needs current facts, because there is no chip to ask. A private
+        // chat has one, and it was being ignored: every message searched, and
+        // every reply narrated a lookup nobody asked for. The chat's own
+        // switch decides here.
+        web: body.web === true && !freeTurn,
+        // Which of the two products is asking. Only ever decides whether the
+        // reply may mention the other one.
+        inApp: isStandaloneNymbot(context.request, env)
       });
     } catch (e) {
       return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
@@ -3466,14 +3678,20 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // Charge by what was actually generated; estimate from reply size when a
       // transport returns no usage. Never exceed the reserved amount.
       var outTok = chatResult.outputTokens || Math.ceil(String(reply).length / 4);
-      cost = Math.min(botProCost(proModel, chatResult.modelCalls || 1, outTok), proRequired);
+      cost = Math.min(
+        botProCost(proModel, chatResult.modelCalls || 1, outTok) + botPartSurcharge(askedIds.length),
+        proRequired);
     }
     // Atomic spend (re-checks balance under the ledger lock so concurrent
     // messages can't overspend). Falls back to a direct write only if the
     // ledger binding is absent.
     var spendTier = proModel ? "pro" : "standard";
     var spendRecord = proModel ? proRecord : record;
-    var consumed = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier });
+    // A free reply was already paid for by claiming one off the day's
+    // allowance, before any of this ran. There is nothing to charge.
+    var consumed = freeTurn
+      ? { ok: true, balance: 0 }
+      : await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier });
     if (consumed && consumed._noLedger) {
       spendRecord.balance -= cost;
       spendRecord.totalUsed = (spendRecord.totalUsed || 0) + cost;
@@ -3504,15 +3722,17 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       }
     }
 
-    var pair = await wrapReplyPair(reply, threadRoot);
-    var updatedThread = thread.filter(function (id) { return id !== currentId; });
+    // Signed with what wrote it, so the next turn — which may be a different
+    // model — can tell this reply from its own.
+    var pair = await wrapReplyPair(reply, threadRoot, botReplyVoice(proModel, freeTurn));
+    var updatedThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
     // A '!' question is answered without the conversation and stays out of it.
     // It was asked that way precisely so it would not become context, and
     // joining the thread afterwards made every later turn inherit the tangent
     // it was meant to keep out. The device still shows it in the transcript:
     // this list is only what the model is given next time.
     if (!fresh) {
-      updatedThread.push(currentId);
+      updatedThread.push.apply(updatedThread, askedIds);
       updatedThread.push(pair.selfEvent.id);
     }
     try { await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
@@ -3529,13 +3749,20 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // What this reply changed in the repository, and where the branch stood
       // before it did. The device keeps it so a run can be put back.
       checkpoint: chatResult.checkpoint || undefined,
+      // Where the reply's [1] and [2] point, so a claim can be checked rather
+      // than taken on trust. Only ever present when the chat asked for search.
+      sources: (chatResult.sources && chatResult.sources.length) ? chatResult.sources : undefined,
+      // What the day's allowance has left, on the reply that just spent one of
+      // it — so the count on screen is what the ledger says and not the
+      // client's own tally.
+      free: freeState || undefined,
       truncated: !!chatResult.truncated,
       resumeToken: resumeToken || undefined,
       resumeExpiresIn: resumeToken ? resumeExpiresIn : undefined,
       // What one more leg would reserve, so the client can decide against a
       // budget rather than guessing.
       nextReserve: resumeToken && proModel ? proRequired : undefined,
-      lowBalance: spendRecord.balance <= 3
+      lowBalance: !freeTurn && spendRecord.balance <= 3
     };
     // Charged and delivered. If the socket carrying this response is already
     // gone, the client's HTTP retry reads the reply back out of here.
@@ -4549,6 +4776,60 @@ var BOT_HISTORY_TURN_MIN = 300;
 // A ceiling on one decrypted turn before budgeting, so a pathological message
 // cannot sit in memory at its full length while the rest of the turn runs.
 var BOT_HISTORY_DECRYPT_MAX = 32000;
+// NIP-44 caps one plaintext at 65535 bytes, and a gift wrap nests two of them,
+// so a long question does not fit in one event. It arrives as several instead,
+// each tagged with where it sits and all sharing one message id. What stays
+// capped is how many: eight wraps is roughly 180 KB, well past what any model
+// reads in a turn.
+var BOT_MESSAGE_PARTS_MAX = 8;
+
+// What a split question costs on top of the reply's own price.
+//
+// Splitting is a transport detail — NIP-44 will not carry the message in one
+// event — and the parts are joined back into one question before any model
+// sees them, so it is still one call and one answer. What it is not is free:
+// a question spread over several wraps is several times the input a normal
+// turn carries, and input is the one thing the published price has never
+// charged for. One credit per extra wrap is the honest middle: it tracks a
+// real, countable resource, and the client can work it out before sending so
+// the composer says the price rather than the receipt.
+var BOT_PART_SURCHARGE = 1;
+
+function botPartSurcharge(parts) {
+  var n = Math.max(1, Math.min(BOT_MESSAGE_PARTS_MAX, Number(parts) || 1));
+  return (n - 1) * BOT_PART_SURCHARGE;
+}
+
+/// How many events a request says its question is spread over, counted the
+/// same way the assembly below counts them so the price quoted up front is the
+/// price charged at the end.
+function botPartsCount(body) {
+  if (!body || !Array.isArray(body.parts)) return 1;
+  var seen = [];
+  for (var i = 0; i < body.parts.length; i++) {
+    var id = body.parts[i];
+    if (typeof id !== "string" || !/^[0-9a-f]{64}$/i.test(id)) continue;
+    if (seen.indexOf(id) === -1) seen.push(id);
+  }
+  if (typeof body.eventId === "string" && seen.indexOf(body.eventId) === -1) seen.push(body.eventId);
+  return Math.max(1, seen.length);
+}
+
+/// The order a part goes in, or 0 when the rumor is a whole message. Read off
+/// the tag rather than the order the relays happened to deliver in, which is
+/// not an order at all.
+function rumorPartIndex(rumor) {
+  var tags = rumor && Array.isArray(rumor.tags) ? rumor.tags : [];
+  for (var i = 0; i < tags.length; i++) {
+    var tag = tags[i];
+    if (Array.isArray(tag) && tag[0] === "part") {
+      var n = parseInt(tag[1], 10);
+      if (n > 0 && n <= BOT_MESSAGE_PARTS_MAX) return n;
+    }
+  }
+  return 0;
+}
+
 
 // The standing context the client repeats on every message so that none of it
 // ages out of the window: instructions, the repositories in scope, and the
@@ -4580,9 +4861,13 @@ function stripStandingContext(text) {
 /// what was just said. A turn that had to be cut says so, because a model
 /// told a turn is partial asks for the rest; a model handed a silent
 /// fragment answers from it.
-function budgetHistory(history) {
+function budgetHistory(history, budgetOverride) {
   var recent = history.slice(-MAX_CONVERSATION_HISTORY);
-  var budget = BOT_HISTORY_CHAR_BUDGET;
+  // A free reply is given a tighter window than a paid one. At these model
+  // prices what a reply costs is set by the context it hauls rather than by
+  // which small model writes it, so the budget is the lever that keeps a
+  // subsidised chat's cost flat however long it runs.
+  var budget = budgetOverride > 0 ? budgetOverride : BOT_HISTORY_CHAR_BUDGET;
   var out = [];
   for (var i = recent.length - 1; i >= 0; i--) {
     var entry = recent[i];
@@ -4595,7 +4880,7 @@ function budgetHistory(history) {
         + "\n[\u2026 this turn was trimmed to fit; recall it to read the rest]";
     }
     budget -= text.length;
-    out.unshift({ n: entry.n, text: text, isBot: entry.isBot });
+    out.unshift({ n: entry.n, text: text, isBot: entry.isBot, model: entry.model || null });
   }
   return out;
 }
@@ -4603,14 +4888,14 @@ function budgetHistory(history) {
 /// Numbers every turn once, then splits them into what fits and what does not.
 /// The numbers are what let the index and the model talk about the same turn:
 /// "turn 7" has to mean one thing on both sides.
-function buildWindow(history) {
+function buildWindow(history, budgetOverride) {
   var numbered = [];
   for (var i = 0; i < history.length; i++) {
     var h = history[i];
     if (!h || !h.text) continue;
-    numbered.push({ n: numbered.length + 1, text: h.text, isBot: h.isBot });
+    numbered.push({ n: numbered.length + 1, text: h.text, isBot: h.isBot, model: h.model || null });
   }
-  var kept = budgetHistory(numbered);
+  var kept = budgetHistory(numbered, budgetOverride);
   var inWindow = {};
   for (var k = 0; k < kept.length; k++) inWindow[kept[k].n] = true;
   var dropped = numbered.filter(function (h) { return !inWindow[h.n]; });
@@ -4628,10 +4913,70 @@ var BOT_RECALL_RESULT_CHARS = 8000;
 var BOT_RECALL_INDEX_MAX = 40;
 var BOT_RECALL_LINE_CHARS = 90;
 
+// What a reply is signed with, and how that reads back on a later turn.
+//
+// A Pro reply names its model, because the user chose it and the prompt already
+// tells that model to say so. A standard reply names the tier, not the route:
+// the routes are Workers AI models the prompt is under standing orders never to
+// name, and a history that leaks them would undo that in one turn.
+function botReplyVoice(proModel, freeTurn) {
+  if (proModel) return proModel.label || proModel.model || "a Pro model";
+  return freeTurn ? "free" : "standard";
+}
+
+/// How a voice tag reads in front of a model. The two tier words become
+/// sentences; anything else is a model's own label and stands as it is.
+function botVoiceName(tag) {
+  var v = String(tag || "").trim();
+  if (!v) return "";
+  if (v === "standard") return "Nymbot's standard routing";
+  if (v === "free") return "Nymbot's free tier";
+  return v;
+}
+
+/// Says which of the replies in front of the model were written by something
+/// else.
+///
+/// Every earlier turn arrives as a plain assistant message, so a model reads
+/// the whole conversation as its own: asked why it said something three turns
+/// ago, it explains reasoning it never had, and it picks up another model's
+/// half-finished plan as though it had made the plan. Naming the voices costs
+/// a few lines and only when there is more than one, which is most of the time
+/// nothing at all.
+function modelVoicesBlock(kept, now) {
+  var nowName = botVoiceName(now);
+  var byVoice = {};
+  var order = [];
+  for (var i = 0; i < kept.length; i++) {
+    var turn = kept[i];
+    if (!turn || !turn.isBot) continue;
+    var name = botVoiceName(turn.model);
+    // An untagged turn predates this being recorded. Silence is the honest
+    // answer there: claiming it for anyone would be a guess.
+    if (!name || name === nowName) continue;
+    if (!byVoice[name]) { byVoice[name] = []; order.push(name); }
+    byVoice[name].push(turn.n);
+  }
+  if (!order.length) return "";
+  var lines = [];
+  for (var v = 0; v < order.length; v++) {
+    var turns = byVoice[order[v]];
+    lines.push("- " + order[v] + " wrote turn" + (turns.length === 1 ? " " : "s ") + turns.join(", "));
+  }
+  return "[who wrote the earlier replies]\n"
+    + "More than one model has answered in this conversation. Of the replies "
+    + "above:\n" + lines.join("\n") + "\n"
+    + (nowName ? "You are " + nowName + ", and you are writing the next reply.\n" : "")
+    + "Read those turns as another assistant's work. Do not describe their "
+    + "reasoning as your own, and if the user asks who wrote one, say which "
+    + "model did. Build on what is right in them; where you disagree, say so "
+    + "plainly rather than quietly contradicting them.";
+}
+
 /// A list of what fell out of the window, one line each. Cheap enough to send
 /// on every turn, and it is what turns "I don't have that" into "you asked
 /// about the retry loop on turn 7, shall I read it back?".
-function recallIndexBlock(dropped, canRecall) {
+function recallIndexBlock(dropped, canRecall, now) {
   if (!dropped.length) return "";
   var shown = dropped.slice(-BOT_RECALL_INDEX_MAX);
   var lines = [];
@@ -4642,7 +4987,14 @@ function recallIndexBlock(dropped, canRecall) {
     for (var r = 0; r < rows.length; r++) {
       if (rows[r].trim()) { first = rows[r].trim(); break; }
     }
-    lines.push(turn.n + ". (" + (turn.isBot ? "you" : "them") + ") "
+    // "you" for every bot turn is the same confabulation the voices block
+    // exists to stop: a turn another model wrote is not one you can explain.
+    // An untagged turn predates the tag and is left as "you", which is what it
+    // has always read as.
+    var voice = turn.isBot ? botVoiceName(turn.model) : "";
+    var who = !turn.isBot ? "them"
+      : (!voice || voice === botVoiceName(now)) ? "you" : voice;
+    lines.push(turn.n + ". (" + who + ") "
       + truncateText(first, BOT_RECALL_LINE_CHARS));
   }
   var missing = dropped.length - shown.length;
@@ -5251,6 +5603,40 @@ async function searchBrave(env, query) {
 // One result, as the model reads it. The URL rides along so a reply can point
 // at where a claim came from — which is also the only way a user can tell the
 // lookup ran at all.
+// The reverse of searchResultLine: the results are strings by the time they
+// reach the model, and the reply cites them by number — so the same list has
+// to reach the device as something it can draw and someone can click.
+// Parsed rather than threaded through every engine, because the line format is
+// the one thing all of them already agree on.
+function searchCitations(results) {
+  var out = [];
+  var lines = Array.isArray(results) ? results : [];
+  // One card per result, in the order the model was given them and with
+  // nothing dropped: the numbering in the reply is an index into this list, so
+  // a tidier list would point [2] at the wrong page.
+  for (var i = 0; i < lines.length; i++) {
+    var line = String(lines[i] || "").trim();
+    if (!line) continue;
+    var url = "";
+    var body = line;
+    var m = /^([\s\S]*?)\s*\[(https?:\/\/[^\]\s]+)\]$/.exec(line);
+    if (m) { body = m[1].trim(); url = m[2]; }
+    var title = body;
+    var snippet = "";
+    var cut = body.indexOf(": ");
+    if (cut > 0) {
+      title = body.slice(0, cut).trim();
+      snippet = body.slice(cut + 2).trim();
+    }
+    out.push({
+      title: truncateText(title, 160),
+      snippet: truncateText(snippet, 300),
+      url: url || undefined
+    });
+  }
+  return out;
+}
+
 function searchResultLine(title, snippet, url) {
   var t = String(title || "").trim();
   var s = String(snippet || "").trim();
