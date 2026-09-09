@@ -578,7 +578,10 @@ function botGeneratorCatalog() {
       var slug = String(m.model || "").split("/")[0].toLowerCase();
       out.push({
         key: kind + ":" + k,
-        command: command + " " + k,
+        // --model, not a bare key: the parser reads the generator only from
+        // that flag, so `?image flux` puts "flux" at the front of the prompt
+        // and quietly draws with the default generator instead.
+        command: command + " --model " + k,
         label: m.label,
         credits: m.credits,
         max: m.credits,
