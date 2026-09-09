@@ -375,13 +375,21 @@ var BOT_FREE_HISTORY_BUDGET = 5000;
 // And what one network gets, however many keys it makes.
 var BOT_FREE_NET_DAILY = 5 * BOT_FREE_DAILY;
 
+function botFreeNetSalt(env) {
+  var explicit = (env && env.FREE_NET_SALT) || "";
+  if (explicit) return explicit;
+  var seed = (env && env.BOT_PRIVKEY) || "";
+  if (!seed) return "";
+  return bytesToHex(sha256(utf8ToBytes("nymbot-free-net-v1|" + seed)));
+}
+
 /// A stable id for the network a request came from, for today only: the address
 /// hashed with a server secret and the day, bucketed by /64 on IPv6.
 async function botFreeNetId(request, env) {
   try {
     var ip = (request && request.headers && request.headers.get("CF-Connecting-IP")) || "";
     if (!ip) return "";
-    var salt = (env && env.FREE_NET_SALT) || "";
+    var salt = botFreeNetSalt(env);
     // Without a secret there is nothing to hash against, and a bare hash of an
     // address is an address.
     if (!salt) return "";
