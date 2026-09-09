@@ -707,6 +707,9 @@ function botExtractGeneratedVideo(payload, depth) {
   for (var d = 0; d < direct.length; d++) {
     var dv = payload[direct[d]];
     if (typeof dv === "string") {
+      // A field the provider named as the video is the video, whatever the path
+      // ends in: presigned storage links carry an id and no extension.
+      if (/^https?:\/\//.test(dv)) return { url: dv };
       var got = botExtractGeneratedVideo(dv, depth + 1);
       if (got) return got;
     }
