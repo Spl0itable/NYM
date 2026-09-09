@@ -409,6 +409,18 @@ Object.assign(NYM.prototype, {
   // first-run instead of restoring a key-less, half-logged-in state. Reloads to
   // a bare URL (drops any channel/hash route) so no stale state survives.
   _forgetIdentityAndReload() {
+    // Bounded, and before resetVault takes the key that signs it.
+    try {
+      Promise.race([
+        this.purgeServerRecords('nymchat'),
+        new Promise((done) => setTimeout(done, 2500))
+      ]).catch(() => { }).then(() => this._forgetIdentityNow());
+      return;
+    } catch (e) { }
+    this._forgetIdentityNow();
+  },
+
+  _forgetIdentityNow() {
     this.resetVault();
     for (const name of [
       'nym_nostr_login_method', 'nym_nostr_login_pubkey', 'nym_nostr_login_npub',

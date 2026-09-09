@@ -544,7 +544,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 // many sub-category and per-group gift wraps (e.g. nymchat-settings-appearance,
 // nymchat-keys-<groupId>) without enumerating each one here.
 // Bound covers the longest dynamic category: nymchat-history-<64-hex groupId>-<YYYYMM>-<shard>.
-var SETTINGS_CATEGORY_RE = /^nymchat-[a-z0-9-]{1,120}$/i;
+// Nymbot keeps its own rows here; the prefix only says which app's sync it is.
+var SETTINGS_CATEGORY_RE = /^nym(?:chat|bot)-[a-z0-9-]{1,120}$/i;
 // Effectively unlimited: time-bucketed group history accumulates one category
 // per group per month, so the full backlog can span many thousands of wraps.
 // A very high ceiling is kept only as an abuse backstop.
@@ -612,6 +613,64 @@ async function handleSettingsAction(context, body) {
   }
 
   return json({ error: "Unknown action" }, 400);
+}
+
+// Erases what this account left behind, when a device is wiped or panics.
+//
+// Scoped by app: a Nymbot wipe takes the `nymbot-` settings rows, a Nymchat one
+// takes everything else it owns. Deliberately NOT touched: credits and shop
+// items (value the key still holds), the free-tier counter (whose whole job is
+// to survive a wipe) and zap receipts (public records of public payments).
+//
+// The `nymchat-pq-root` record is a settings row, so a purged account mints a
+// fresh root — and a fresh nympq1 code — the next time it signs in.
+async function handleAccountAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  };
+
+  if (body.action !== "account-purge") return json({ error: "Unknown action" }, 400);
+
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
+  userPubkey = userPubkey.toLowerCase();
+  if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
+
+  var app = String(body.app || "nymchat").toLowerCase();
+  if (app !== "nymchat" && app !== "nymbot") return json({ error: "Unknown app" }, 400);
+
+  var removed = { settings: 0, profile: 0, pm: 0 };
+  var changes = function (r) { return (r && r.meta && r.meta.changes) || 0; };
+
+  if (hasD1(env.DB_SETTINGS)) {
+    try {
+      var sql = app === "nymbot"
+        ? "DELETE FROM settings WHERE pubkey = ? AND category LIKE 'nymbot-%'"
+        : "DELETE FROM settings WHERE pubkey = ? AND category NOT LIKE 'nymbot-%'";
+      removed.settings = changes(await env.DB_SETTINGS.prepare(sql).bind(userPubkey).run());
+    } catch (e) { }
+  }
+
+  if (app === "nymchat") {
+    if (hasD1(env.DB_PROFILES)) {
+      try {
+        removed.profile = changes(await env.DB_PROFILES.prepare(
+          "DELETE FROM profiles WHERE pubkey = ?").bind(userPubkey).run());
+      } catch (e) { }
+    }
+    if (hasD1(env.DB_PM)) {
+      try {
+        removed.pm = changes(await env.DB_PM.prepare(
+          "DELETE FROM pm WHERE pubkey = ?").bind(userPubkey).run());
+      } catch (e) { }
+    }
+  }
+
+  return json({ ok: true, app: app, removed: removed });
 }
 
 // Public Nostr kind 0 profile mirror. Stored as the signed event so clients can
@@ -1459,6 +1518,17 @@ async function routeStorageAction(context, body) {
   if (body && typeof body.action === "string" && body.action.indexOf("settings-") === 0) {
     try {
       return await handleSettingsAction(context, body);
+    } catch (e) {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("account-") === 0) {
+    try {
+      return await handleAccountAction(context, body);
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {

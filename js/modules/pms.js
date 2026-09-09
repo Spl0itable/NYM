@@ -1966,7 +1966,7 @@ Object.assign(NYM.prototype, {
             'shop-buy-invoice': 1, 'shop-claim': 1, 'shop-transfer': 1, 'shop-redeem': 1,
             'voucher-issue': 1
         };
-        const sensitive = !!MONEY[action] || action === 'clear-history';
+        const sensitive = !!MONEY[action] || action === 'clear-history' || action === 'account-purge';
         const cacheKey = (action || '') + '|' + url;
         if (!(this._botAuthCache instanceof Map)) this._botAuthCache = new Map();
         if (!sensitive) {

@@ -133,6 +133,54 @@
             catch (_) { return 0; }
         },
 
+        /// How far back to look for the epoch our own announcement is at.
+        _PQ_EPOCH_SCAN: 12,
+
+        /// Puts this device on the epoch the ACCOUNT is on.
+        _pqAdoptAnnouncedEpoch() {
+            try {
+                const NC = window.NymCrypto;
+                if (!NC) return false;
+                const root = this.pqRoot();
+                // Whichever seed this account's key comes from — the same choice
+                // pqSelfKeys makes.
+                const derive = root
+                    ? (e) => NC.pqKeypairFromRoot(root, e)
+                    : (this.privkey ? (e) => NC.pqKeypairFromPrivkey(this.privkey, e) : null);
+                if (!derive) return false;
+                const mine = this._pqEntry(this.pubkey);
+                const announced = mine && mine.pk;
+                if (!announced) return false;
+                const here = this._pqEpoch();
+                const same = (a, b) => {
+                    if (!a || !b || a.length !== b.length) return false;
+                    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+                    return true;
+                };
+                // Already right: the common case, and it costs one derivation.
+                let at = null;
+                try { at = derive(here); } catch (_) { at = null; }
+                if (at && same(at.publicKey, announced)) return false;
+                // The announced epoch is the first thing to try, then a scan — an
+                // older announcement may name an epoch a newer rotation has
+                const tried = new Set([here]);
+                const order = [];
+                if (Number.isInteger(mine.epoch) && mine.epoch >= 0) order.push(mine.epoch);
+                for (let e = 0; e <= this._PQ_EPOCH_SCAN; e++) order.push(e);
+                for (const epoch of order) {
+                    if (tried.has(epoch)) continue;
+                    tried.add(epoch);
+                    let keys;
+                    try { keys = derive(epoch); } catch (_) { continue; }
+                    if (!keys || !same(keys.publicKey, announced)) continue;
+                    try { localStorage.setItem('nym_pq_epoch', String(epoch)); } catch (_) { }
+                    this._pqSelfCache = null;
+                    return true;
+                }
+                return false;
+            } catch (_) { return false; }
+        },
+
         // the root secret — docs/PQ-ROOT-SPEC.md
 
         /// Reads through the secret accessors so the at-rest vault covers the
@@ -454,6 +502,8 @@
                 // Spec §7: the announcement is replaceable, so a device that
                 // cannot open the account's root would clobber the real one.
                 if (this.pqRootLocked()) return false;
+                // The root travels in the recovery code; the epoch does not.
+                this._pqAdoptAnnouncedEpoch();
                 // A KEM key only when we can decapsulate with it, and only once
                 // §6 has decided where it comes from: on a fresh account the
                 // settings load that generates the root has not finished when
@@ -649,26 +699,67 @@
         /// as legacy marked every opening message legacy. Unknown is not
         /// legacy; it is a lookup that has not landed.
         pqSealRootVerdict(peerPubkey) {
-            if (!this.pqHasRoot()) return false;      // our own half settles it
+            // Our own half settles it — but only once §6 has decided whether
+            // this account HAS a root. Before that, "no root" is a load that
+            // has not finished, and answering false stamps every message
+            // ingested during boot as legacy for good.
+            if (!this.pqSupported()) return false;
+            if (this.pqRootSettled() && !this.pqHasRoot()) return false;
+            if (!this.pqRootSettled()) return null;
             const rec = this._pqEntry(peerPubkey);
-            if (!rec) return null;
-            return !!(rec.pk && rec.root);
+            // A record restored from a pre-split cache row comes back KEYLESS
+            // on purpose. It is proof the peer runs Nymchat, not an answer
+            // about their key — so ask, rather than reading it as legacy.
+            if (!rec || !rec.pk) return null;
+            return !!rec.root;
         },
 
         /// Resolves a pending verdict once the peer's announcement lands, then
         /// repaints that one row. No-op when we already know.
         pqResolveRootVerdict(peerPubkey, nymMessageId, apply) {
             if (this.pqSealRootVerdict(peerPubkey) !== null) return;
+            const settle = () => {
+                const v = this.pqSealRootVerdict(peerPubkey);
+                if (v === null) return false;
+                apply(v);
+                if (typeof this.refreshMessagePqBadge === 'function') {
+                    this.refreshMessagePqBadge(nymMessageId);
+                }
+                return true;
+            };
             Promise.resolve(this.ensurePqAnnouncement(peerPubkey))
                 .then(() => {
-                    const v = this.pqSealRootVerdict(peerPubkey);
-                    if (v === null) return;
-                    apply(v);
-                    if (typeof this.refreshMessagePqBadge === 'function') {
-                        this.refreshMessagePqBadge(nymMessageId);
-                    }
+                    if (settle()) return;
+                    // Still unknown: our own root has not settled yet. Every
+                    // message of the boot burst is waiting on the same thing,
+                    // so wait for it rather than leaving them all legacy.
+                    this._pqWhenRootSettles(settle);
                 })
                 .catch(() => { });
+        },
+
+        /// Runs `fn` once §6 has decided where our key comes from. Polls,
+        /// because settling happens inside the settings load rather than
+        /// through an event this module can subscribe to.
+        _pqWhenRootSettles(fn) {
+            if (this.pqRootSettled()) { try { fn(); } catch (_) { } return; }
+            if (!Array.isArray(this._pqRootWaiters)) this._pqRootWaiters = [];
+            if (this._pqRootWaiters.length >= 500) return;
+            this._pqRootWaiters.push(fn);
+            if (this._pqRootWaitTimer) return;
+            let tries = 0;
+            const tick = () => {
+                this._pqRootWaitTimer = null;
+                if (!this.pqRootSettled()) {
+                    if (++tries > 60) { this._pqRootWaiters = []; return; }
+                    this._pqRootWaitTimer = setTimeout(tick, 1000);
+                    return;
+                }
+                const waiters = this._pqRootWaiters || [];
+                this._pqRootWaiters = [];
+                for (const w of waiters) { try { w(); } catch (_) { } }
+            };
+            this._pqRootWaitTimer = setTimeout(tick, 1000);
         },
 
         /// Ingests a peer's kind-30078 'nym-pq' announcement. Relay events are
@@ -729,7 +820,12 @@
                     // layered one only — a signer login.
                     { pq1: pk1 !== undefined, pq2: pk2 !== undefined },
                     at);
-                if (event.pubkey === this.pubkey) this._pqSelfAnnouncement = payload;
+                if (event.pubkey === this.pubkey) {
+                    this._pqSelfAnnouncement = payload;
+                    // Our own announcement is how a freshly linked device finds
+                    // out which epoch the account is on — the code it was given
+                    this._pqAdoptAnnouncedEpoch();
+                }
             } catch (_) { }
         },
 

@@ -2225,6 +2225,13 @@
                         </button>
                         <div class="form-hint">Resets preferences (theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, blocked keywords) to defaults. Preserves your login, group memberships, PM history, and flair purchases.</div>
                     </div>
+
+                    <div class="form-group nm-h-74">
+                        <button class="icon-btn nm-danger-btn" id="wipeDeviceBtn" data-action="wipeThisDevice">
+                            Wipe This Device
+                        </button>
+                        <div class="form-hint">Everything, permanently: your key, your settings, your message history and your post-quantum recovery code, on this device and on our servers. The same emergency wipe as holding your Nym for two seconds. Credits on your key are not touched. This cannot be undone.</div>
+                    </div>
                     </div>
                 </div>
 
@@ -2530,6 +2537,25 @@
             </div>
             <div class="tutorial-body" id="tutorialBody">
                 Let's take a quick 60‑second tour so you know where everything lives.
+            </div>
+            <div class="tutorial-keys nm-hidden" id="tutorialKeys">
+                <div class="tutorial-key nm-hidden" id="tutorialNsecRow">
+                    <label for="tutorialNsecValue">Private key (nsec)</label>
+                    <div class="tutorial-key-row">
+                        <input type="password" id="tutorialNsecValue" readonly>
+                        <button class="tutorial-key-btn" id="tutorialNsecEye" type="button">Show</button>
+                        <button class="tutorial-key-btn" id="tutorialNsecCopy" type="button">Copy</button>
+                    </div>
+                </div>
+                <div class="tutorial-key nm-hidden" id="tutorialPqRow">
+                    <label for="tutorialPqValue">Recovery code (nympq1…)</label>
+                    <div class="tutorial-key-row">
+                        <input type="password" id="tutorialPqValue" readonly>
+                        <button class="tutorial-key-btn" id="tutorialPqEye" type="button">Show</button>
+                        <button class="tutorial-key-btn" id="tutorialPqCopy" type="button">Copy</button>
+                    </div>
+                </div>
+                <div class="tutorial-keys-note" id="tutorialKeysNote"></div>
             </div>
             <div class="tutorial-progress" id="tutorialProgress">Step 1 of 1</div>
             <div class="tutorial-actions">

@@ -51,6 +51,32 @@ Object.assign(NYM.prototype, {
     }
   },
 
+  /// Asks the worker to delete this account's rows. Signed while the key is
+  /// still here; the worker verifies the signature, so nobody can purge a
+  /// pubkey they do not hold. Sent keepalive so the reload cannot cancel it.
+  ///
+  /// Skipped for a signer login: it would put a prompt in front of a panic.
+  async purgeServerRecords(app) {
+    try {
+      if (!this.pubkey || !this.privkey) return false;
+      const apiHost = this._getApiHost && this._getApiHost();
+      if (!apiHost) return false;
+      const body = JSON.stringify({
+        action: 'account-purge',
+        app: app || 'nymchat',
+        pubkey: this.pubkey,
+        auth: await this._signBotAuth('account-purge', 'storage')
+      });
+      await fetch(`https://${apiHost}/api/storage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true
+      });
+      return true;
+    } catch (e) { return false; }
+  },
+
   async panicWipe() {
     if (this._panicking) return;
     this._panicking = true;
@@ -59,6 +85,14 @@ Object.assign(NYM.prototype, {
     // Cover the screen instantly with the encryption-scramble animation so
     // nothing sensitive remains visible while we destroy the data underneath.
     const ui = this._panicShowOverlay();
+
+    // Before the key goes, and bounded: a wipe that waits on the network is a
+    // wipe that did not happen.
+    const purged = Promise.race([
+      this.purgeServerRecords('nymchat'),
+      new Promise((done) => setTimeout(done, 2500))
+    ]);
+    try { await purged; } catch (e) { }
 
     // Stop persistence and network so nothing re-writes data mid-wipe.
     try { this._cacheDisabled = true; } catch (e) {}

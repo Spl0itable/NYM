@@ -25,7 +25,8 @@
             {
                 title: 'Nymchat Tutorial',
                 body: 'Take a quick tour so you know where important functionality is across the app. You can skip anytime. And use our helpful chat bot @Nymbot or the /help command in any channel to learn more.',
-                selector: null
+                selector: null,
+                keys: true
             },
             {
                 title: 'Your Nym',
@@ -282,12 +283,95 @@
         }
     }
 
+    /// The nsec and the nympq1 code, on the first step, so they are saved before
+    /// anything else. An extension or remote signer holds the key, so there is
+    /// only ever a recovery code to show there.
+    function renderKeys(show) {
+        const panel = document.getElementById('tutorialKeys');
+        if (!panel) return;
+        const nsecRow = document.getElementById('tutorialNsecRow');
+        const pqRow = document.getElementById('tutorialPqRow');
+        const note = document.getElementById('tutorialKeysNote');
+        const nsecInput = document.getElementById('tutorialNsecValue');
+        const pqInput = document.getElementById('tutorialPqValue');
+
+        let nsec = '';
+        try {
+            if (show && window.nym && nym.privkey && window.NostrTools) {
+                nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
+            }
+        } catch (_) { nsec = ''; }
+        let code = '';
+        try {
+            if (show && window.nym && typeof nym.pqRootCode === 'function') code = nym.pqRootCode() || '';
+        } catch (_) { code = ''; }
+
+        clearTimeout(state._keysTimer);
+        if (!show || (!nsec && !code)) {
+            panel.classList.add('nm-hidden');
+            if (nsecInput) nsecInput.value = '';
+            if (pqInput) pqInput.value = '';
+            if (show) waitForKeys();
+            return;
+        }
+        // A fresh account mints its root while the tour is already up.
+        if (!code) waitForKeys();
+
+        panel.classList.remove('nm-hidden');
+        nsecRow.classList.toggle('nm-hidden', !nsec);
+        pqRow.classList.toggle('nm-hidden', !code);
+        if (nsecInput) { nsecInput.value = nsec; nsecInput.type = 'password'; }
+        if (pqInput) { pqInput.value = code; pqInput.type = 'password'; }
+        const eye = (id) => { const b = document.getElementById(id); if (b) b.textContent = 'Show'; };
+        eye('tutorialNsecEye'); eye('tutorialPqEye');
+        if (note) {
+            note.textContent = nsec && code
+                ? 'Save both now and keep them together. The nsec is your identity; the nympq1… code is what lets another device read your quantum-resistant messages. Nobody can send them back to you.'
+                : (code
+                    ? 'Your signer holds the private key, so there is no nsec to show here. Save this nympq1… recovery code — it is what lets another device read your quantum-resistant messages, and nobody can send it back to you.'
+                    : 'Save this now. It is your identity, and nobody can send it back to you.');
+        }
+    }
+
+    function waitForKeys() {
+        if ((state._keysTries = (state._keysTries || 0) + 1) > 20) return;
+        state._keysTimer = setTimeout(() => {
+            if (!state.started) return;
+            const step = state.steps[state.idx];
+            if (step && step.keys) renderKeys(true);
+        }, 1000);
+    }
+
+    function wireKeyButtons() {
+        const pair = (eyeId, copyId, inputId) => {
+            const eye = document.getElementById(eyeId);
+            const copy = document.getElementById(copyId);
+            const input = document.getElementById(inputId);
+            if (!eye || !copy || !input) return;
+            eye.onclick = () => {
+                input.type = input.type === 'password' ? 'text' : 'password';
+                eye.textContent = input.type === 'password' ? 'Show' : 'Hide';
+            };
+            copy.onclick = () => {
+                if (!input.value) return;
+                navigator.clipboard.writeText(input.value).then(() => {
+                    const orig = copy.textContent;
+                    copy.textContent = 'Copied!';
+                    setTimeout(() => { copy.textContent = orig; }, 1500);
+                }).catch(() => { });
+            };
+        };
+        pair('tutorialNsecEye', 'tutorialNsecCopy', 'tutorialNsecValue');
+        pair('tutorialPqEye', 'tutorialPqCopy', 'tutorialPqValue');
+    }
+
     function renderStep() {
         const step = state.steps[state.idx];
 
         const updateAndPosition = () => {
             state.elTitle.textContent = step.title || 'Nymchat';
             state.elBody.textContent = step.body || '';
+            renderKeys(!!step.keys);
             state.elProgress.textContent = `Step ${state.idx + 1} of ${state.steps.length}`;
 
             state.btnPrev.disabled = state.idx === 0;
@@ -405,6 +489,7 @@
             else nextStep();
         };
         state.btnSkip.onclick = () => endTutorial(true);
+        wireKeyButtons();
         state._onResize = () => positionStep();
         state._onScroll = () => positionStep();
         window.addEventListener('resize', state._onResize);
@@ -436,6 +521,8 @@
             state.overlay.setAttribute('aria-hidden', 'true');
         }
         if (state.highlight) state.highlight.style.display = 'none';
+        state._keysTries = 0;
+        renderKeys(false);
 
         // Save flag and sync it so other devices won't re-prompt
         if (markSeen) {
@@ -4327,6 +4414,16 @@ async function clearLocalStorageCache() {
 // keys, nicknames), group memberships, PM history, ephemeral keys, and the
 // app cache. Useful when the user wants to start over visually without
 // nuking conversations.
+/// The settings-modal twin of the press-and-hold panic gesture: the same wipe,
+/// reached deliberately rather than by accident.
+async function wipeThisDevice() {
+    const ok = await window.showAppConfirm(
+        'Wipe this device? Your key, your settings, your message history and your post-quantum recovery code go — here and on our servers. Credits on your key are not touched. This cannot be undone.',
+        { danger: true, okLabel: 'Wipe' });
+    if (!ok) return;
+    try { window.closeModal('settingsModal'); } catch (_) { }
+    nym.panicWipe();
+}
 async function resetSettings() {
     if (!(await window.showAppConfirm('Reset all settings and preferences to defaults? This will reset theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, and blocked keywords. Your login, group memberships, and PMs will be preserved.', { danger: true, okLabel: 'Reset' }))) {
         return;

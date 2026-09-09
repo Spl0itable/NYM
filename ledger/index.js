@@ -151,12 +151,13 @@ class NymLedger {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS edition_resv (invoice TEXT PRIMARY KEY, item TEXT NOT NULL, user TEXT, exp INTEGER NOT NULL);"
     );
-    // The free tier's daily allowance, one row per key. Kept in the Durable
-    // Object's own storage rather than in D1 because it is not money: it is a
-    // counter read and written on every free reply, and it wants to be next to
-    // the lock that serializes those, not a round trip away.
+    // The free tier's daily allowance, one row per key
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS free_usage (pubkey TEXT PRIMARY KEY, day TEXT NOT NULL, used INTEGER NOT NULL);"
+    );
+    // And one row per network, so wiping the device does not reset it.
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS free_net (id TEXT PRIMARY KEY, day TEXT NOT NULL, used INTEGER NOT NULL);"
     );
     // One Nymbot PM turn, keyed by the gift wrap it answers. result NULL means
     // an attempt is in flight; a non-null result is the finished response body,
@@ -206,8 +207,8 @@ class NymLedger {
       case "replay": return this._replay(a.id, a.ttl);
       case "transfer-credits": return this._transferCredits(a.from, a.to);
       case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier);
-      case "free-claim": return this._freeClaim(a.pubkey, a.limit);
-      case "free-peek": return this._freePeek(a.pubkey, a.limit);
+      case "free-claim": return this._freeClaim(a.pubkey, a.limit, a.net, a.netLimit);
+      case "free-peek": return this._freePeek(a.pubkey, a.limit, a.net, a.netLimit);
       case "claim-credits": return this._claimCredits(a);
       case "shop-claim": return this._shopClaim(a);
       case "shop-transfer": return this._shopTransfer(a);
@@ -417,7 +418,10 @@ class NymLedger {
         steps = [];
       }
     }
-    steps.push({ n: steps.length + 1, at: Date.now(), ...step });
+    // Numbered from the highest already handed out, not from the array's length:
+    // once trimming starts, length stops growing and a length-derived number is
+    const lastN = steps.length ? Number(steps[steps.length - 1].n) || 0 : 0;
+    steps.push({ n: lastN + 1, at: Date.now(), ...step });
     // Oldest first out: a watcher that joined late wants the recent picture,
     // and the numbering keeps its "after" cursor meaningful either way.
     if (steps.length > BOT_PROGRESS_MAX_STEPS) {
@@ -614,18 +618,7 @@ class NymLedger {
     return { ok: true, balance: rec.balance };
   }
 
-  // --- the free tier's daily allowance ---------------------------------------
-  //
-  // Nymbot has no accounts, so an allowance keyed to a pubkey is free to
-  // anyone willing to generate another keypair. That is understood: the cap is
-  // sized as marketing spend, not as a limit anyone expects to hold. What it
-  // does hold is the honest case — one person, one key, one day — and it holds
-  // it exactly, because the count moves under the same lock every other
-  // balance moves under.
-
-  // The day boundary is UTC. A local one would need a timezone the worker does
-  // not have and the user could simply claim, and "resets at midnight UTC" is
-  // at least a thing that can be said out loud and checked.
+  // free tier's daily allowance
   _freeDay(at) {
     return new Date(typeof at === "number" ? at : Date.now()).toISOString().slice(0, 10);
   }
@@ -652,15 +645,39 @@ class NymLedger {
     return n > 0 && n <= 1000 ? n : 0;
   }
 
+  _freeNetId(id) {
+    return typeof id === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(id) ? id : "";
+  }
+
+  _freeNetRow(id) {
+    const day = this._freeDay();
+    const rows = this.sql.exec(
+      "SELECT day, used FROM free_net WHERE id = ? LIMIT 1;", id
+    ).toArray();
+    const row = rows && rows[0];
+    return { day, used: (row && row.day === day) ? (row.used || 0) : 0 };
+  }
+
   /// What is left today, without spending any of it.
-  _freePeek(pubkey, limit) {
+  _freePeek(pubkey, limit, net, netLimit) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     const cap = this._freeLimit(limit);
     if (!cap) return { error: "Invalid free limit." };
     const at = this._freeRow(pubkey);
+    let left = Math.max(0, cap - at.used);
+    let netLeft = null;
+    const nid = this._freeNetId(net);
+    const netCap = this._freeLimit(netLimit);
+    if (nid && netCap) {
+      const nAt = this._freeNetRow(nid);
+      netLeft = Math.max(0, netCap - nAt.used);
+      left = Math.min(left, netLeft);
+    }
     return {
-      ok: true, used: at.used, limit: cap,
-      left: Math.max(0, cap - at.used),
+      ok: true, used: at.used, limit: cap, left: left,
+      // Set only when the network is the binding one, so the reader is told which
+      // wall they are against rather than a number that will not move.
+      netSpent: netLeft === 0,
       resetsAt: this._freeResetsAt()
     };
   }
@@ -668,7 +685,7 @@ class NymLedger {
   /// Takes one off today's allowance, or says there is none left. The read and
   /// the write are one op precisely so two messages sent at once cannot both
   /// see the last one as available.
-  _freeClaim(pubkey, limit) {
+  _freeClaim(pubkey, limit, net, netLimit) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     const cap = this._freeLimit(limit);
     if (!cap) return { error: "Invalid free limit." };
@@ -677,12 +694,38 @@ class NymLedger {
     if (at.used >= cap) {
       return { ok: false, used: at.used, limit: cap, left: 0, resetsAt: resetsAt };
     }
+    // The network's own allowance, checked under the same lock.
+    const nid = this._freeNetId(net);
+    const netCap = this._freeLimit(netLimit);
+    let netUsed = 0;
+    let netDay = null;
+    if (nid && netCap) {
+      const nAt = this._freeNetRow(nid);
+      if (nAt.used >= netCap) {
+        return {
+          ok: false, used: at.used, limit: cap, left: 0,
+          netSpent: true, resetsAt: resetsAt
+        };
+      }
+      netUsed = nAt.used + 1;
+      netDay = nAt.day;
+    }
     const used = at.used + 1;
     this.sql.exec(
       "INSERT INTO free_usage (pubkey, day, used) VALUES (?, ?, ?) " +
       "ON CONFLICT(pubkey) DO UPDATE SET day = excluded.day, used = excluded.used;",
       pubkey, at.day, used
     );
+    if (nid && netCap) {
+      this.sql.exec(
+        "INSERT INTO free_net (id, day, used) VALUES (?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET day = excluded.day, used = excluded.used;",
+        nid, netDay, netUsed
+      );
+      // Yesterday's buckets are no longer reachable — the salt folds the day in,
+      // so they can never be hit again.
+      this.sql.exec("DELETE FROM free_net WHERE day <> ?;", netDay);
+    }
     return { ok: true, used: used, limit: cap, left: cap - used, resetsAt: resetsAt };
   }
 

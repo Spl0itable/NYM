@@ -398,6 +398,7 @@ window.nymHapticTap = function (ms) {
         'executeSettingsTransfer':    function () { nym().executeSettingsTransfer(); },
         'clearLocalStorageCache':     function () { window.clearLocalStorageCache(); },
         'resetSettings':              function () { window.resetSettings(); },
+        'wipeThisDevice':             function () { window.wipeThisDevice(); },
         'saveSettings':               function () { window.saveSettings(); },
         'onRandomKeypairChange':      function (_e, t) {
             var w = byId('hardcoreKeypairWarning');

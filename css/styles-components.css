@@ -308,6 +308,17 @@ html.nym-needs-setup #setupModal {
     margin-top: 5px;
 }
 
+.nm-danger-btn {
+    color: var(--danger);
+    border-color: rgb(from var(--danger) r g b / 0.4);
+}
+
+.nm-danger-btn:hover {
+    color: var(--danger);
+    background: rgb(from var(--danger) r g b / 0.12);
+    border-color: rgb(from var(--danger) r g b / 0.6);
+}
+
 .form-warning {
     font-size: 11px;
     color: var(--danger);
@@ -2139,6 +2150,67 @@ body.chat-bubbles .crypto-lock-irc {
     font-size: 13px;
     line-height: 1.4;
     color: var(--text);
+}
+
+.tutorial-keys {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tutorial-key label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}
+
+.tutorial-key-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.tutorial-key-row input {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xs);
+    color: var(--text);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    padding: 7px 9px;
+}
+
+.tutorial-key-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xs);
+    color: var(--text-dim);
+    padding: 7px 10px;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all var(--transition);
+}
+
+.tutorial-key-btn:hover {
+    color: var(--primary);
+    background: rgb(from var(--primary) r g b / 0.12);
+    border-color: rgb(from var(--primary) r g b / 0.3);
+}
+
+.tutorial-keys-note {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-dim);
 }
 
 .tutorial-progress {
