@@ -13,6 +13,7 @@
 //   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt / NIP-47 wallet lookup)
 
 import { validateZapReceipt, nwcInvoicePaid } from './_shared.js';
+import { clientOriginAllowed } from './_client.js';
 import { translateText, MAX_CHARS } from './_translate.js';
 
 const ALLOWED_MEDIA_TYPES = new Set([
@@ -51,22 +52,6 @@ const CORS_HEADERS = {
   'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
 };
 
-const ALLOWED_APP_ORIGINS = new Set([
-  'https://web.nymchat.app',
-  'https://nymchat.app',
-]);
-
-function originAllowed(request) {
-  const origin = request.headers.get('Origin');
-  if (!origin) return true; // native clients / same-origin GETs send none
-  if (ALLOWED_APP_ORIGINS.has(origin)) return true;
-  try {
-    // Whatever host this deployment is served from is also the app.
-    return origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
-}
 
 export async function onRequest(context) {
   const { request } = context;
@@ -74,7 +59,7 @@ export async function onRequest(context) {
   const reqUrl = new URL(request.url);
   const reqAction = reqUrl.searchParams.get('action');
 
-  if (!originAllowed(request)) {
+  if (!clientOriginAllowed(request, context.env)) {
     return jsonResponse({ error: 'Origin not allowed' }, 403);
   }
 

@@ -552,6 +552,54 @@ var BOT_PRO_VIDEO_MODELS = {
   "runway": { label: "Runway Gen-4.5", model: "runwayml/gen-4.5", family: "runway", credits: 24 }
 };
 
+// Who makes each generator, read off the model id's own vendor prefix.
+var BOT_GEN_AUTHORS = {
+  "google": "Google",
+  "openai": "OpenAI",
+  "xai": "xAI",
+  "minimax": "MiniMax",
+  "alibaba": "Alibaba",
+  "bytedance": "ByteDance",
+  "black-forest-labs": "Black Forest Labs",
+  "recraft": "Recraft",
+  "pixverse": "Pixverse",
+  "lightricks": "Lightricks",
+  "vidu": "Vidu",
+  "runwayml": "Runway"
+};
+
+/// The picture and video models as picker rows. Priced flat rather than per
+/// token, so `credits` and `max` are the same number.
+function botGeneratorCatalog() {
+  var out = [];
+  var add = function (kind, command, table) {
+    Object.keys(table).forEach(function (k) {
+      var m = table[k];
+      var slug = String(m.model || "").split("/")[0].toLowerCase();
+      out.push({
+        key: kind + ":" + k,
+        command: command + " " + k,
+        label: m.label,
+        credits: m.credits,
+        max: m.credits,
+        description: "",
+        author: BOT_GEN_AUTHORS[slug] || slug,
+        authorSlug: slug,
+        vision: false, reasoning: false, tools: false, context: null,
+        hosting: "third-party", priced: true, kind: kind
+      });
+    });
+  };
+  add("image", "?image", BOT_PRO_IMAGE_MODELS);
+  add("video", "?video", BOT_PRO_VIDEO_MODELS);
+  out.sort(function (a, b) {
+    if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
+    if (a.author !== b.author) return a.author < b.author ? -1 : 1;
+    return a.credits - b.credits;
+  });
+  return out;
+}
+
 // An image-to-video model animates a picture instead of starting from nothing, so
 // a ?video sent with a picture in the message uses the reference where the chosen
 var BOT_VIDEO_MAX_SECONDS = 8;
@@ -3176,11 +3224,16 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         priced: m.priced !== false
       };
     });
+    list.forEach(function (m) { m.kind = "chat"; });
+    // The picture and video generators, so the picker can price them too. They
+    // are not chat models — picking one writes the command rather than pinning
+    // it — which is why they carry a kind and a command.
+    list = list.concat(botGeneratorCatalog());
     var groups = [];
     list.forEach(function (m) {
       var last = groups[groups.length - 1];
-      if (last && last.authorSlug === m.authorSlug) last.keys.push(m.key);
-      else groups.push({ author: m.author || m.authorSlug || "Other", authorSlug: m.authorSlug, keys: [m.key] });
+      if (last && last.authorSlug === m.authorSlug && last.kind === m.kind) last.keys.push(m.key);
+      else groups.push({ author: m.author || m.authorSlug || "Other", authorSlug: m.authorSlug, kind: m.kind, keys: [m.key] });
     });
     var unpriced = list.filter(function (m) { return !m.priced; }).length;
     return json({

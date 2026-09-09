@@ -40,6 +40,31 @@ function isNymchatClient(request, env) {
   return /Nym(?:chat|bot)App\//i.test(ua) || /\bNYMApp\b/.test(ua);
 }
 
+/// Hosts this worker's own app is served from, alongside the Nymbot ones.
+const APP_ORIGIN_HOSTS = new Set([
+  "web.nymchat.app",
+  "nymchat.app"
+]);
+
+/// Whether an Origin names one of our apps. The proxy had its own shorter list
+/// that predated the standalone Nymbot, so an upload from nymbot.ai was turned
+/// away at the preflight and read in the browser as a CORS failure.
+function clientOriginAllowed(request, env) {
+  const origin = request.headers.get("Origin");
+  if (!origin) return true;   // native clients and same-origin GETs send none
+  try {
+    const url = new URL(origin);
+    if (url.origin === new URL(request.url).origin) return true;
+    if (!originIsTrustworthy(url)) return false;
+    const host = url.host.toLowerCase();
+    if (APP_ORIGIN_HOSTS.has(host) || CLIENT_ORIGIN_HOSTS.has(host)) return true;
+    const extra = envClientHosts(env);
+    return !!(extra && extra.has(host));
+  } catch (_) {
+    return false;
+  }
+}
+
 /// Whether the caller IS the standalone Nymbot
 function isStandaloneNymbot(request, env) {
   const origin = request.headers.get("Origin") || "";
@@ -57,4 +82,4 @@ function isStandaloneNymbot(request, env) {
   return /NymbotApp\//i.test(request.headers.get("User-Agent") || "");
 }
 
-export { CLIENT_ORIGIN_HOSTS, isNymchatClient, isStandaloneNymbot };
+export { CLIENT_ORIGIN_HOSTS, APP_ORIGIN_HOSTS, clientOriginAllowed, isNymchatClient, isStandaloneNymbot };
