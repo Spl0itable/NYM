@@ -37,7 +37,7 @@
 import { ledgerCall } from "./_ledger.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
-import { catalogProModels, catalogAliases, catalogSortKeys } from "./_catalog.js";
+import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams } from "./_catalog.js";
 import {
   PQ_D_TAG,
   pqAwareDecrypt,
@@ -531,7 +531,6 @@ var BOT_PRO_IMAGE_DEFAULT = "nano-banana";
 var BOT_PRO_IMAGE_MODELS = {
   "nano-banana": { label: "Nano Banana Pro", model: "google/nano-banana-pro", family: "google", credits: 3 },
   "nano-banana-2": { label: "Nano Banana 2", model: "google/nano-banana-2", family: "google", credits: 2 },
-  "imagen": { label: "Imagen 4", model: "google/imagen-4", family: "imagen", credits: 2 },
   "flux": { label: "FLUX 2 Max", model: "black-forest-labs/flux-2-max", family: "bfl", credits: 3 },
   "flux-pro": { label: "FLUX 2 Pro", model: "black-forest-labs/flux-2-pro-preview", family: "bfl", credits: 3 },
   "seedream": { label: "Seedream 5 Pro", model: "bytedance/seedream-5-pro", family: "openai", credits: 2 },
@@ -551,7 +550,7 @@ var BOT_PRO_VIDEO_MODELS = {
   "hailuo": { label: "Hailuo 2.3", model: "minimax/hailuo-2.3", family: "hailuo", credits: 18 },
   "hailuo-fast": { label: "Hailuo 2.3 Fast", model: "minimax/hailuo-2.3-fast", family: "hailuo", credits: 12 },
   "wan": { label: "Wan 3.0", model: "alibaba/wan-3.0", family: "wan", credits: 16 },
-  "kling": { label: "HappyHorse 1.1", model: "alibaba/hh1.1-t2v", family: "wan", credits: 16 },
+  "kling": { label: "HappyHorse 1.1", model: "alibaba/hh1.1-t2v", family: "hh", credits: 16 },
   "grok-video": { label: "Grok Imagine Video", model: "xai/grok-imagine-video", family: "grok", credits: 18 },
   "pixverse": { label: "Pixverse v6", model: "pixverse/v6", family: "pixverse", credits: 12 },
   "ltx": { label: "LTX-2.5 Fast", model: "lightricks/ltx-2-5-fast", family: "ltx", credits: 10 },
@@ -661,17 +660,118 @@ function botVideoRequestBody(family, prompt, imageUrl) {
   }
   if (family === "wan") {
     body.resolution = "720P";
+    body.ratio = "adaptive";
+    body.duration = 5;
+    return body;
+  }
+  if (family === "hh") {
+    body.resolution = "720P";
     body.duration = 5;
     if (imageUrl) body.img_url = imageUrl;
     return body;
   }
-  if (family === "ltx" || family === "bfl" || family === "runway" || family === "grok") {
+  if (family === "grok") {
+    body.aspect_ratio = "16:9";
+    body.duration = 5;
+    body.resolution = "720p";
+    return body;
+  }
+  if (family === "runway") {
+    body.prompt = p.slice(0, 1000);
+    body.ratio = "1280:720";
+    body.duration = 5;
+    if (imageUrl) body.image_input = imageUrl;
+    return body;
+  }
+  if (family === "ltx" || family === "bfl") {
     body.duration = 5;
     if (imageUrl) body.image_url = imageUrl;
     return body;
   }
   if (imageUrl) body.image_url = imageUrl;
   return body;
+}
+
+var BOT_MEDIA_PARAM_ALIASES = [
+  ["ratio", "aspect_ratio"],
+  ["resolution", "size"],
+  ["duration", "duration_seconds"],
+  ["image_input", "img_url", "image_url", "image"],
+  ["negative_prompt", "negativePrompt"]
+];
+
+function botMediaAliasGroup(name) {
+  for (var i = 0; i < BOT_MEDIA_PARAM_ALIASES.length; i++) {
+    if (BOT_MEDIA_PARAM_ALIASES[i].indexOf(name) !== -1) return BOT_MEDIA_PARAM_ALIASES[i];
+  }
+  return null;
+}
+
+function botMediaParamFacts(declared, name) {
+  if (!declared) return null;
+  var f = declared[name];
+  return f && typeof f === "object" ? f : null;
+}
+
+function botMediaFitValue(facts, value) {
+  if (!facts) return value;
+  if (typeof value === "number") {
+    if (typeof facts.min === "number" && value < facts.min) value = facts.min;
+    if (typeof facts.max === "number" && value > facts.max) value = facts.max;
+    return value;
+  }
+  if (typeof value === "string") {
+    if (Array.isArray(facts.options) && facts.options.length) {
+      if (facts.options.indexOf(value) !== -1) return value;
+      var lower = value.toLowerCase();
+      for (var i = 0; i < facts.options.length; i++) {
+        if (String(facts.options[i]).toLowerCase() === lower) return facts.options[i];
+      }
+      if (facts.default !== undefined) return facts.default;
+      return value;
+    }
+    if (typeof facts.max === "number" && facts.max > 0 && value.length > facts.max) {
+      return value.slice(0, facts.max);
+    }
+  }
+  return value;
+}
+
+function botMediaBodyFromParams(body, declared) {
+  if (!declared || typeof declared !== "object" || !Object.keys(declared).length) return body;
+  var out = {};
+  Object.keys(body).forEach(function (key) {
+    var value = body[key];
+    if (value === undefined || value === null || value === "") return;
+    var target = Object.prototype.hasOwnProperty.call(declared, key) ? key : "";
+    if (!target) {
+      var group = botMediaAliasGroup(key);
+      for (var i = 0; group && i < group.length; i++) {
+        if (Object.prototype.hasOwnProperty.call(declared, group[i])) { target = group[i]; break; }
+      }
+    }
+    if (!target) return;
+    out[target] = botMediaFitValue(botMediaParamFacts(declared, target), value);
+  });
+  Object.keys(declared).forEach(function (name) {
+    var facts = declared[name];
+    if (!facts || !facts.required || out[name] !== undefined) return;
+    var group = botMediaAliasGroup(name);
+    for (var i = 0; group && i < group.length; i++) {
+      if (out[group[i]] !== undefined) return;
+    }
+    if (facts.default !== undefined) out[name] = facts.default;
+    else if (Array.isArray(facts.options) && facts.options.length) out[name] = facts.options[0];
+  });
+  if (body.prompt !== undefined && out.prompt === undefined) out.prompt = body.prompt;
+  return out;
+}
+
+async function botDeclaredMediaParams(env, modelId) {
+  var live = null;
+  try { live = await catalogMediaParams(env); } catch (e) { live = null; }
+  var row = live && live.byModelId && live.byModelId[modelId];
+  return (row && row.params) || null;
 }
 
 function botSniffVideoMime(bytes) {
@@ -781,6 +881,7 @@ async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubk
     throw new Error("Video generation needs the AI binding and AI_GATEWAY_NAME configured on the worker.");
   }
   var body = botVideoRequestBody(videoModel.family, prompt, imageUrl);
+  body = botMediaBodyFromParams(body, await botDeclaredMediaParams(env, videoModel.model));
   var result;
   try {
     result = await aiRun(env.AI, videoModel.model, body, { gateway: { id: env.AI_GATEWAY_NAME } });
@@ -846,10 +947,6 @@ function botImageRequestBody(family, prompt) {
     // nano-banana / -pro / -2: prompt, image_input[], aspect_ratio,
     // output_format (jpg|png|webp), image_size (1K|2K|4K).
     return { prompt: p, aspect_ratio: "1:1", image_size: "1K" };
-  }
-  if (family === "imagen") {
-    // imagen-4: prompt, aspect_ratio, person_generation.
-    return { prompt: p, aspect_ratio: "1:1" };
   }
   if (family === "bfl") {
     // flux-2-max / -pro-preview: prompt, input_images, width, height.
@@ -1041,6 +1138,7 @@ async function botProImageGenerate(env, imageModel, prompt) {
     throw new Error("Frontier image models need the AI binding and AI_GATEWAY_NAME configured on the worker. Standard-tier ?image still works.");
   }
   var body = botImageRequestBody(imageModel.family, prompt);
+  body = botMediaBodyFromParams(body, await botDeclaredMediaParams(env, imageModel.model));
   var result;
   try {
     result = await aiRun(env.AI, imageModel.model, body, { gateway: { id: env.AI_GATEWAY_NAME } });

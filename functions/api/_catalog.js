@@ -275,3 +275,44 @@ export function catalogAliases(models, redirects) {
   });
   return aliases;
 }
+
+var MEDIA_TASKS = [
+  "text-to-image", "image-to-image", "text-to-video", "image-to-video",
+  "text-to-speech", "text-to-audio"
+];
+
+var mediaCache = { at: 0, data: null };
+
+export async function catalogMediaParams(env, opts) {
+  var now = Date.now();
+  if (!(opts && opts.fresh) && mediaCache.data && now - mediaCache.at < CACHE_MS) {
+    return mediaCache.data;
+  }
+  var db = await resolveCatalogDb(env);
+  if (!db) return null;
+  var rows;
+  try {
+    var rs = await replica(db).prepare(
+      "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 " +
+      "AND task_slug IN (" + MEDIA_TASKS.map(function () { return "?"; }).join(", ") + ")"
+    ).bind.apply(null, MEDIA_TASKS).all();
+    rows = rs.results || [];
+  } catch (e) { return null; }
+  if (!rows.length) return null;
+
+  var byModelId = {};
+  rows.forEach(function (r) {
+    var params = parseJson(r.params, null);
+    if (!params || typeof params !== "object") return;
+    byModelId[r.id] = {
+      params: params,
+      task: r.task || "",
+      taskSlug: r.task_slug || "",
+      docUrl: r.doc_url || ""
+    };
+  });
+  if (!Object.keys(byModelId).length) return null;
+  var out = { byModelId: byModelId, count: Object.keys(byModelId).length };
+  mediaCache = { at: now, data: out };
+  return out;
+}
