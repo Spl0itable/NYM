@@ -1543,14 +1543,33 @@ function anthropicizeRequest(messages, maxTokens, tools) {
     out.push({ role: m.role, content: m.content });
   }
   var req = { messages: out, max_tokens: maxTokens };
-  if (system) req.system = system;
+  if (system) {
+    req.system = proCacheBreakpoints
+      ? [{ type: "text", text: system, cache_control: { type: "ephemeral" } }]
+      : system;
+  }
   if (tools && tools.length) {
     req.tools = tools.map(function (t) {
       var f = t.function || {};
       return { name: f.name, description: f.description || "", input_schema: f.parameters || { type: "object" } };
     });
+    if (proCacheBreakpoints) proMarkLastBlock(out);
   }
   return req;
+}
+
+function proMarkLastBlock(out) {
+  var last = out[out.length - 1];
+  if (!last) return;
+  if (typeof last.content === "string") {
+    last.content = [{ type: "text", text: last.content }];
+  }
+  if (!Array.isArray(last.content) || !last.content.length) return;
+  var at = last.content.length - 1;
+  var block = last.content[at];
+  if (!block || typeof block !== "object") return;
+  last.content = last.content.slice();
+  last.content[at] = Object.assign({}, block, { cache_control: { type: "ephemeral" } });
 }
 
 async function proHttpChat(url, headers, body) {
@@ -1691,6 +1710,37 @@ function proWorthRetrying(err) {
 
 var PRO_BUSY_WAITS_MS = [1200, 3500, 7000];
 
+var PRO_PACE_MS = 900;
+var PRO_PACE_LIMITED_MS = 4500;
+var PRO_LIMIT_MEMORY_MS = 90000;
+var PRO_PACE_QUEUE_MAX_MS = 9000;
+
+var proLastLimitedAt = 0;
+var proNextCallAt = 0;
+
+var proCacheBreakpoints = true;
+
+function proCacheRejected(err) {
+  return !!(err && err.httpStatus === 400 &&
+    /cache_?control/i.test(String((err && err.message) || "")));
+}
+
+function proPaceGapMs() {
+  var since = Date.now() - proLastLimitedAt;
+  if (!proLastLimitedAt || since >= PRO_LIMIT_MEMORY_MS) return PRO_PACE_MS;
+  var share = 1 - since / PRO_LIMIT_MEMORY_MS;
+  return Math.round(PRO_PACE_MS + (PRO_PACE_LIMITED_MS - PRO_PACE_MS) * share);
+}
+
+async function proPace() {
+  var now = Date.now();
+  var at = proNextCallAt > now ? proNextCallAt : now;
+  var ceiling = now + PRO_PACE_QUEUE_MAX_MS;
+  if (at > ceiling) at = ceiling;
+  proNextCallAt = at + proPaceGapMs();
+  if (at > now) await proWait(at - now);
+}
+
 function proRateLimited(err) {
   var status = err && err.httpStatus;
   if (status === 429 || status === 503 || status === 529) return true;
@@ -1720,6 +1770,7 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
     throw new Error("Nymbot Pro is not configured.");
   }
   var errors = [];
+  await proPace();
   for (var i = 0; i < plan.length; i++) {
     var held = 0;
     while (true) {
@@ -1729,8 +1780,13 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
       } catch (e) {
         failure = e;
       }
+      if (proRateLimited(failure)) proLastLimitedAt = Date.now();
       if (proRateLimited(failure) && held < PRO_BUSY_WAITS_MS.length) {
         await proWait(PRO_BUSY_WAITS_MS[held++]);
+        continue;
+      }
+      if (proCacheRejected(failure) && proCacheBreakpoints) {
+        proCacheBreakpoints = false;
         continue;
       }
       errors.push(plan[i].kind + ": " + String((failure && failure.message) || failure));
@@ -1969,7 +2025,7 @@ var BOT_GIT_CONTINUE_PROMPT =
 var BOT_GIT_MAX_TOOLS_PER_TURN = 8;
 var BOT_GIT_MAX_RESULT_CHARS = 20000;
 var BOT_GIT_MAX_FILE_CHARS = 48000;
-var BOT_GIT_MAX_TREE_ENTRIES = 300;
+var BOT_GIT_MAX_TREE_ENTRIES = 600;
 var BOT_GIT_TREE_SKIP_DIRS = {
   "node_modules": 1, ".git": 1, "dist": 1, "build": 1, "out": 1, "target": 1,
   ".next": 1, ".nuxt": 1, ".svelte-kit": 1, ".cache": 1, ".parcel-cache": 1,
@@ -2022,8 +2078,19 @@ function gitTreeForPrompt(files, limit) {
     }
     if (!added) break;
   }
+  var named = {};
+  var namedCount = 0;
+  for (var n = 0; n < shown.length; n++) {
+    var owner = shown[n].split("/").slice(0, -1).join("/");
+    if (!named[owner]) { named[owner] = 1; namedCount++; }
+  }
   shown.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
-  return { files: shown, extra: Math.max(0, total - shown.length), dirs: order.length };
+  return {
+    files: shown,
+    extra: Math.max(0, total - shown.length),
+    dirs: order.length,
+    named: namedCount
+  };
 }
 var BOT_GIT_REF_RE = /^[\w./-]{1,100}$/;
 var BOT_GIT_DEFAULT_HOSTS = { github: "github.com", gitlab: "gitlab.com", gitea: "codeberg.org" };
@@ -2387,7 +2454,10 @@ async function buildGitContext(repos) {
   for (var i = 0; i < all.length; i++) {
     var files = await prepareGitRepo(all[i]);
     var shown = gitTreeForPrompt(files, perRepo);
-    trees.push({ cfg: all[i], files: shown.files, extra: shown.extra });
+    trees.push({
+      cfg: all[i], files: shown.files, extra: shown.extra,
+      dirs: shown.dirs, named: shown.named
+    });
   }
   var writable = all.filter(function (c) { return c.allowWrites; });
   var lines = [
@@ -2441,9 +2511,14 @@ async function buildGitContext(repos) {
     var tr = trees[k];
     lines.push("FILE TREE of " + (all.length > 1 ? tr.cfg.repo + " " : "") + "'" + tr.cfg.resolvedBranch + "'" +
       (tr.extra
-        ? " (" + tr.files.length + " of " + (tr.files.length + tr.extra) + " files: every one of its " +
-          tr.dirs + " directories is named here, with the rest of each one's contents omitted " +
-          "along with dependencies and build output — list_files a directory you need in full)"
+        ? " (" + tr.files.length + " of " + (tr.files.length + tr.extra) + " files, spread as widely " +
+          "as the budget allows: " +
+          (tr.named >= tr.dirs
+            ? "every one of its " + tr.dirs + " directories appears below"
+            : tr.named + " of its " + tr.dirs + " directories appear below, and " +
+              (tr.dirs - tr.named) + " do not") +
+          ", with the rest of each one's contents omitted along with dependencies and " +
+          "build output — list_files a directory you need in full)"
         : "") + ":");
     lines.push(tr.files.join("\n") || "(no files listed — use list_files)");
   }
