@@ -1715,6 +1715,7 @@ var proLastLimitedAt = 0;
 var proNextCallAt = 0;
 
 var proCacheBreakpoints = true;
+var proCacheSeen = null;
 
 function proCacheRejected(err) {
   if (proRateLimited(err)) return false;
@@ -1815,6 +1816,7 @@ function proRefusalDetail(payload) {
 function proCheckedMessage(payload) {
   var msg = proNormalizeMessage(payload);
   if (msg && (proMessageText(msg).trim() || (msg.tool_calls && msg.tool_calls.length))) {
+    proReportCacheUsage(payload);
     return { msg: msg, outputTokens: proUsageOutputTokens(payload) };
   }
   var refusal = proRefusalDetail(payload);
@@ -1835,6 +1837,39 @@ function proCheckedMessage(payload) {
 
 // Billable output tokens across response shapes (Anthropic usage.output_tokens,
 // OpenAI usage.completion_tokens, either possibly under a CF result envelope).
+function proCacheUsage(resp) {
+  if (!resp || typeof resp !== "object") return null;
+  if (resp.result && typeof resp.result === "object") return proCacheUsage(resp.result);
+  var u = resp.usage;
+  if (!u || typeof u !== "object") return null;
+  var read = Number(u.cache_read_input_tokens);
+  var wrote = Number(u.cache_creation_input_tokens);
+  var fresh = Number(u.input_tokens != null ? u.input_tokens : u.prompt_tokens);
+  var known = [read, wrote, fresh].some(function (n) { return Number.isFinite(n); });
+  if (!known) return null;
+  return {
+    read: Number.isFinite(read) ? read : 0,
+    wrote: Number.isFinite(wrote) ? wrote : 0,
+    fresh: Number.isFinite(fresh) ? fresh : 0
+  };
+}
+
+function proReportCacheUsage(payload) {
+  if (!proCacheBreakpoints) return;
+  var u = proCacheUsage(payload);
+  if (!u) return;
+  var working = !!(u.read || u.wrote);
+  if (working === proCacheSeen) return;
+  proCacheSeen = working;
+  console.warn(working
+    ? "nymbot pro: prompt cache in use — read " + u.read + ", wrote " + u.wrote +
+      ", fresh " + u.fresh
+    : "nymbot pro: prompt cache NOT in use — " + u.fresh + " input tokens, none " +
+      "read or written. Anthropic prompt caching is not the gateway's own " +
+      "response cache; if this never changes, cache_control is not reaching the " +
+      "provider and the breakpoint can come out.");
+}
+
 function proUsageOutputTokens(resp) {
   if (!resp || typeof resp !== "object") return 0;
   if (resp.result && typeof resp.result === "object") return proUsageOutputTokens(resp.result);
