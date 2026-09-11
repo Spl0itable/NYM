@@ -1672,7 +1672,12 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
 // Retry the next route only when the failure says "this route can't serve this
 // model" - a bad slug, wrong credentials, a route that isn't wired up. A quota
 // rejection, a rate limit or a content refusal would come back identically
-// from every route, so those stop the walk and surface as-is.
+// from every route, so those stop the walk and surface as-is. Every route here
+// reaches its provider through the one AI Gateway on unified billing, so a
+// wholesale limit is a property of the gateway rather than of the route: the
+// walk cannot escape it, and each attempt spends another request against it.
+// Waiting, which proGatewayChat does before it gives up, is the only thing that
+// helps.
 function proWorthRetrying(err) {
   // A refusal is the model's answer, not a transport failure — every other
   // route would refuse the same thread, and each attempt bills.
@@ -1682,6 +1687,19 @@ function proWorthRetrying(err) {
   // Binding/transport errors carry no status - an unknown model id is the
   // common case there, so let the next transport have a turn.
   return true;
+}
+
+var PRO_BUSY_WAITS_MS = [1200, 3500, 7000];
+
+function proRateLimited(err) {
+  var status = err && err.httpStatus;
+  if (status === 429 || status === 503 || status === 529) return true;
+  return /rate[- ]?limit|too many requests|overloaded|over capacity|no capacity|temporarily unavailable/i
+    .test(String((err && err.message) || ""));
+}
+
+function proWait(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
 // Runs a Pro model over its transports in order (see proTransportPlan) and
@@ -1703,12 +1721,21 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
   }
   var errors = [];
   for (var i = 0; i < plan.length; i++) {
-    try {
-      return await proAttempt(env, plan[i], messages, maxTokens, tools);
-    } catch (e) {
-      var message = String((e && e.message) || e);
-      errors.push(plan[i].kind + ": " + message);
-      if (!proWorthRetrying(e)) throw e;
+    var held = 0;
+    while (true) {
+      var failure = null;
+      try {
+        return await proAttempt(env, plan[i], messages, maxTokens, tools);
+      } catch (e) {
+        failure = e;
+      }
+      if (proRateLimited(failure) && held < PRO_BUSY_WAITS_MS.length) {
+        await proWait(PRO_BUSY_WAITS_MS[held++]);
+        continue;
+      }
+      errors.push(plan[i].kind + ": " + String((failure && failure.message) || failure));
+      if (!proWorthRetrying(failure)) throw failure;
+      break;
     }
   }
   // Every route rejected it. Name them all - "HTTP 401" alone doesn't say
@@ -1943,6 +1970,61 @@ var BOT_GIT_MAX_TOOLS_PER_TURN = 8;
 var BOT_GIT_MAX_RESULT_CHARS = 20000;
 var BOT_GIT_MAX_FILE_CHARS = 48000;
 var BOT_GIT_MAX_TREE_ENTRIES = 300;
+var BOT_GIT_TREE_SKIP_DIRS = {
+  "node_modules": 1, ".git": 1, "dist": 1, "build": 1, "out": 1, "target": 1,
+  ".next": 1, ".nuxt": 1, ".svelte-kit": 1, ".cache": 1, ".parcel-cache": 1,
+  "coverage": 1, "__pycache__": 1, ".venv": 1, "venv": 1, "Pods": 1,
+  ".dart_tool": 1, ".gradle": 1, ".idea": 1, ".vscode": 1, "bower_components": 1,
+  ".terraform": 1, "DerivedData": 1, ".pub-cache": 1, ".mypy_cache": 1,
+  ".pytest_cache": 1, ".tox": 1, ".expo": 1, ".angular": 1
+};
+var BOT_GIT_TREE_SKIP_FILES = {
+  "package-lock.json": 1, "yarn.lock": 1, "pnpm-lock.yaml": 1,
+  "npm-shrinkwrap.json": 1, "pubspec.lock": 1, "Cargo.lock": 1,
+  "composer.lock": 1, "Gemfile.lock": 1, "poetry.lock": 1, "go.sum": 1,
+  "Podfile.lock": 1, "mix.lock": 1, "flake.lock": 1, ".DS_Store": 1
+};
+
+function gitTreeForPrompt(files, limit) {
+  var dirs = {};
+  var order = [];
+  var total = 0;
+  for (var i = 0; i < (files || []).length; i++) {
+    var path = String(files[i] || "");
+    if (!path) continue;
+    var parts = path.split("/");
+    if (BOT_GIT_TREE_SKIP_FILES[parts[parts.length - 1]]) continue;
+    var skip = false;
+    for (var d = 0; d < parts.length - 1; d++) {
+      if (BOT_GIT_TREE_SKIP_DIRS[parts[d]]) { skip = true; break; }
+    }
+    if (skip) continue;
+    var dir = parts.slice(0, -1).join("/");
+    if (!dirs[dir]) { dirs[dir] = []; order.push(dir); }
+    dirs[dir].push(path);
+    total++;
+  }
+  order.sort(function (a, b) {
+    var da = a ? a.split("/").length : 0;
+    var db = b ? b.split("/").length : 0;
+    return da - db || (a < b ? -1 : a > b ? 1 : 0);
+  });
+  for (var k = 0; k < order.length; k++) {
+    dirs[order[k]].sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+  }
+  var cap = Math.max(1, limit);
+  var shown = [];
+  for (var round = 0; shown.length < cap; round++) {
+    var added = 0;
+    for (var j = 0; j < order.length && shown.length < cap; j++) {
+      var list = dirs[order[j]];
+      if (round < list.length) { shown.push(list[round]); added++; }
+    }
+    if (!added) break;
+  }
+  shown.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+  return { files: shown, extra: Math.max(0, total - shown.length), dirs: order.length };
+}
 var BOT_GIT_REF_RE = /^[\w./-]{1,100}$/;
 var BOT_GIT_DEFAULT_HOSTS = { github: "github.com", gitlab: "gitlab.com", gitea: "codeberg.org" };
 
@@ -2202,6 +2284,7 @@ var GIT_PROVIDERS = {
 
   gitea: {
     prLabel: "pull request",
+    contentSearch: false,
     async meta(cfg) {
       var r = await gitFetch(cfg, "/repos/" + cfg.repo);
       return r.ok ? (gitJson(r) || {}).default_branch : null;
@@ -2229,7 +2312,7 @@ var GIT_PROVIDERS = {
       return r.ok ? r.text : "Error: HTTP " + r.status + " reading '" + path + "'";
     },
     async searchCode() {
-      return "Code search isn't available on this provider — navigate with list_files and read_file instead.";
+      return "No matches.";
     },
     async writeFile(cfg, branch, path, content, message) {
       var sha = null;
@@ -2290,6 +2373,7 @@ async function prepareGitRepo(cfg) {
   cfg.resolvedBranch = cfg.branch || defaultBranch;
   var files = [];
   try { files = await provider.tree(cfg, cfg.resolvedBranch); } catch (e) { }
+  cfg.treePaths = files;
   return files;
 }
 
@@ -2302,7 +2386,8 @@ async function buildGitContext(repos) {
   var trees = [];
   for (var i = 0; i < all.length; i++) {
     var files = await prepareGitRepo(all[i]);
-    trees.push({ cfg: all[i], files: files.slice(0, perRepo), extra: Math.max(0, files.length - perRepo) });
+    var shown = gitTreeForPrompt(files, perRepo);
+    trees.push({ cfg: all[i], files: shown.files, extra: shown.extra });
   }
   var writable = all.filter(function (c) { return c.allowWrites; });
   var lines = [
@@ -2355,7 +2440,11 @@ async function buildGitContext(repos) {
   for (var k = 0; k < trees.length; k++) {
     var tr = trees[k];
     lines.push("FILE TREE of " + (all.length > 1 ? tr.cfg.repo + " " : "") + "'" + tr.cfg.resolvedBranch + "'" +
-      (tr.extra ? " (first " + tr.files.length + " files, " + tr.extra + " more omitted)" : "") + ":");
+      (tr.extra
+        ? " (" + tr.files.length + " of " + (tr.files.length + tr.extra) + " files: every one of its " +
+          tr.dirs + " directories is named here, with the rest of each one's contents omitted " +
+          "along with dependencies and build output — list_files a directory you need in full)"
+        : "") + ":");
     lines.push(tr.files.join("\n") || "(no files listed — use list_files)");
   }
   return lines.join("\n");
@@ -2402,7 +2491,7 @@ function gitToolDefs(allowWrites, repos) {
       type: "function",
       function: {
         name: "search_code",
-        description: "Search the repo's code for a string, identifier, or phrase.",
+        description: "Search the repo for a string, identifier or phrase. Matches both file paths and the text inside files, so it finds a file by name as well as by content.",
         parameters: withRepo({ query: { type: "string" } }, ["query"])
       }
     }
@@ -2482,7 +2571,9 @@ async function execGitTool(cfg, name, args, record) {
   if (name === "search_code") {
     var q = String(args.query || "").slice(0, 200).trim();
     if (!q) return "Error: empty query";
-    return provider.searchCode(cfg, q);
+    var byPath = gitPathMatches(cfg, q);
+    var byContent = await provider.searchCode(cfg, q);
+    return gitSearchAnswer(cfg, q, byPath, byContent, provider.contentSearch !== false);
   }
 
   if (!cfg.allowWrites) {
@@ -2642,6 +2733,40 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       convo.push({ role: "tool", tool_call_id: tc && tc.id, content: String(result).slice(0, BOT_GIT_MAX_RESULT_CHARS) });
     }
   }
+}
+
+function gitPathMatches(cfg, query) {
+  var all = (cfg && cfg.treePaths) || [];
+  if (!all.length) return [];
+  var needle = String(query).toLowerCase();
+  var hits = [];
+  for (var i = 0; i < all.length && hits.length < 40; i++) {
+    if (String(all[i]).toLowerCase().indexOf(needle) !== -1) hits.push(all[i]);
+  }
+  return hits;
+}
+
+function gitSearchAnswer(cfg, query, byPath, byContent, contentSearched) {
+  var found = String(byContent == null ? "" : byContent);
+  var noContent = !found || /^No matches\.?$/.test(found.trim());
+  var parts = [];
+  if (byPath.length) {
+    parts.push("Files whose path matches '" + query + "':\n" + byPath.join("\n"));
+  }
+  if (!noContent) {
+    parts.push(byPath.length ? "Matches inside files:\n" + found : found);
+  }
+  if (parts.length) return parts.join("\n\n");
+  if (!contentSearched) {
+    return "No file path contains '" + query + "'. This provider has no content " +
+      "search, so nothing was looked for inside files — read_file a likely one instead.";
+  }
+  var onDefault = cfg.resolvedBranch === cfg.defaultBranch;
+  return "No matches — no path contains '" + query + "', and nothing inside a file does either." +
+    (onDefault ? "" : " Note that content search only covers the default branch '" +
+      cfg.defaultBranch + "', not '" + cfg.resolvedBranch + "'.") +
+    " Content search does not match file names or paths on its own, so a name you " +
+    "expected is genuinely absent from the tree rather than merely unindexed.";
 }
 
 // The one argument worth naming in a progress line: the path, the branch, the
@@ -3174,7 +3299,12 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       var ghMessages;
       if (runOpts.resume && Array.isArray(runOpts.resume.convo) && runOpts.resume.convo.length) {
         // Continuing: the parked conversation already carries the system
-        // prompt, the repo context and everything the model has read.
+        // prompt, the repo context and everything the model has read. It cannot
+        // carry the state buildGitContext leaves on each config, and every tool
+        // reads cfg.resolvedBranch as the ref it acts on.
+        for (var gp = 0; gp < ghConfig.length; gp++) {
+          await prepareGitRepo(ghConfig[gp]);
+        }
         ghMessages = runOpts.resume.convo.concat([
           { role: "user", content: BOT_GIT_CONTINUE_PROMPT }
         ]);
