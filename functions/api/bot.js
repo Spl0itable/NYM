@@ -1543,11 +1543,7 @@ function anthropicizeRequest(messages, maxTokens, tools) {
     out.push({ role: m.role, content: m.content });
   }
   var req = { messages: out, max_tokens: maxTokens };
-  if (system) {
-    req.system = proCacheBreakpoints
-      ? [{ type: "text", text: system, cache_control: { type: "ephemeral" } }]
-      : system;
-  }
+  if (system) req.system = system;
   if (tools && tools.length) {
     req.tools = tools.map(function (t) {
       var f = t.function || {};
@@ -1721,8 +1717,9 @@ var proNextCallAt = 0;
 var proCacheBreakpoints = true;
 
 function proCacheRejected(err) {
-  return !!(err && err.httpStatus === 400 &&
-    /cache_?control/i.test(String((err && err.message) || "")));
+  if (proRateLimited(err)) return false;
+  var status = err && err.httpStatus;
+  return typeof status !== "number" || status === 400 || status === 422;
 }
 
 function proPaceGapMs() {
