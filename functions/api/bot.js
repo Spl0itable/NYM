@@ -1400,6 +1400,17 @@ var BOT_GIT_RESERVE_IN_TOKENS = 40000;
 var BOT_RESERVE_OUT_TOKENS = 2000;
 var BOT_RESERVE_SAFETY = 1.5;
 
+function botMediaModelLabel(env, kind, tier) {
+  var id = kind === "speak"
+    ? (BOT_TTS_MODELS[tier] || BOT_TTS_MODELS.standard)
+    : (BOT_IMAGE_MODELS[tier] || BOT_IMAGE_MODELS.standard);
+  if (!id) return "";
+  var bare = String(id).split("/").pop();
+  return bare.replace(/-/g, " ").replace(/\b([a-z])/g, function (m0, c) {
+    return c.toUpperCase();
+  });
+}
+
 async function botStandardRates(env, modelId) {
   if (!modelId) return null;
   var live = null;
@@ -4812,11 +4823,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         event: mediaPair.event,
         selfEvent: mediaPair.selfEvent,
         balance: mediaRecord.balance,
+        balanceCredits: mediaRecord.balance,
         cost: mediaCost,
+        costCredits: mediaCost,
         taskType: media.kind,
         media: media.kind,
         pro: !!proModel,
         proModel: proModel ? proModelKey : undefined,
+        modelLabel: proVideo ? proVideo.label
+          : (proImage ? proImage.label : botMediaModelLabel(env, media.kind, mediaTier)),
         lowBalance: mediaRecord.balance <= 3
       };
       // Charged and delivered: record it so a resend collects this generation
@@ -4844,22 +4859,25 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       : (proModel ? (proModel.baseCredits || 1) : botCreditsForTask(taskType))
         + botPartSurcharge(askedIds.length);
     var stdRates = null;
-    var stdReserve = 0;
+    var stdRequired = cost;
     if (!proModel && !freeTurn) {
       stdRates = await botStandardRates(env, BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general);
       if (stdRates) {
-        stdReserve = botMeteredReserve(stdRates, 1, false, await botBtcPrice(), BOT_SATS_PER_CREDIT);
-        if (stdReserve != null) cost = stdReserve + botPartSurcharge(askedIds.length);
+        var stdReserve = botMeteredReserve(stdRates, 1, false,
+          await botBtcPrice(), BOT_SATS_PER_CREDIT);
+        if (stdReserve != null) {
+          stdRequired = Math.max(cost, stdReserve + botPartSurcharge(askedIds.length));
+        }
       }
     }
 
-    if (!proModel && !freeTurn && record.balance < cost) {
+    if (!proModel && !freeTurn && record.balance < stdRequired) {
       return await turnFail({
         noCredits: true,
         balance: record.balance,
-        required: cost,
+        required: stdRequired,
         taskType: taskType,
-        error: "This " + taskType + " query needs " + cost + " credits and you have " + record.balance + ". Type ?buy for more."
+        error: "This " + taskType + " query needs " + stdRequired + " credits and you have " + record.balance + ". Type ?buy for more."
       });
     }
     // Continuing a run that hit its tool-call cap. The token is single-use and
@@ -4938,7 +4956,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       if (stdMetered != null) {
         costMilli = Math.min(
           stdMetered + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT,
-          cost * BOT_MILLI_PER_CREDIT);
+          stdRequired * BOT_MILLI_PER_CREDIT);
         cost = 0;
       }
     }

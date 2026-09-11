@@ -2535,8 +2535,6 @@ Object.assign(NYM.prototype, {
         const n = Number(v);
         if (!Number.isFinite(n)) return '…';
         if (Number.isInteger(n)) return String(n);
-        if (n >= 10) return String(Math.round(n));
-        if (n >= 1) return n.toFixed(1).replace(/\.0$/, '');
         if (n > 0 && n < 0.01) return '<0.01';
         return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
     },
