@@ -124,6 +124,7 @@ export class NymLedger {
       case "replay": return this._replay(a.id, a.ttl);
       case "transfer-credits": return this._transferCredits(a.from, a.to);
       case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier, a.milli);
+      case "dust-peek": return this._dustPeek(a.pubkey);
       case "free-claim": return this._freeClaim(a.pubkey, a.limit, a.net, a.netLimit);
       case "free-peek": return this._freePeek(a.pubkey, a.limit, a.net, a.netLimit);
       case "claim-credits": return this._claimCredits(a);
@@ -581,6 +582,15 @@ export class NymLedger {
       .exec("SELECT milli FROM credit_dust WHERE pubkey = ? AND tier = ? LIMIT 1;", pubkey, tier)
       .toArray();
     return rows.length ? Math.max(0, Number(rows[0].milli) || 0) : 0;
+  }
+
+  _dustPeek(pubkey) {
+    if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
+    return {
+      ok: true,
+      standard: this._dustOf(pubkey, "standard"),
+      pro: this._dustOf(pubkey, "pro")
+    };
   }
 
   _setDust(pubkey, tier, milli) {

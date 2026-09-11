@@ -1354,6 +1354,11 @@ function botMeteredCharge(m, usage, btcUsd, satsPerCredit) {
   return Math.max(BOT_MIN_CHARGE_MILLI, milli);
 }
 
+function botCreditFigure(whole, milli) {
+  var credits = (Number(whole) || 0) + (Number(milli) || 0) / BOT_MILLI_PER_CREDIT;
+  return Math.round(credits * 1000) / 1000;
+}
+
 function botUsageZero() {
   return { fresh: 0, read: 0, wrote: 0, out: 0 };
 }
@@ -4100,9 +4105,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       op: "free-peek", pubkey: userPubkey, limit: BOT_FREE_DAILY,
       net: await botFreeNetId(context.request, env), netLimit: BOT_FREE_NET_DAILY
     });
+    var dust = await ledgerCall(env, { op: "dust-peek", pubkey: userPubkey });
+    var owed = dust && dust.ok ? dust : { standard: 0, pro: 0 };
     return json({
       balance: rec.balance, totalPurchased: rec.totalPurchased, totalUsed: rec.totalUsed,
       proBalance: prec.balance, proTotalPurchased: prec.totalPurchased, proTotalUsed: prec.totalUsed,
+      balanceCredits: botCreditFigure(rec.balance, -(owed.standard || 0)),
+      proBalanceCredits: botCreditFigure(prec.balance, -(owed.pro || 0)),
+      dustMilli: owed.standard || 0,
+      proDustMilli: owed.pro || 0,
       free: (peek && peek.ok) ? {
         used: peek.used, limit: peek.limit, left: peek.left, resetsAt: peek.resetsAt,
         // Set when it is the network that has run out rather than this key, so
@@ -5010,6 +5021,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       selfEvent: pair.selfEvent,
       balance: spendRecord.balance,
       cost: cost,
+      costCredits: costMilli > 0
+        ? Math.round(costMilli / BOT_MILLI_PER_CREDIT * 1000) / 1000
+        : cost,
+      balanceCredits: botCreditFigure(spendRecord.balance,
+        -(consumed && Number.isFinite(Number(consumed.dust)) ? Number(consumed.dust) : 0)),
+      dustMilli: consumed && Number.isFinite(Number(consumed.dust)) ? Number(consumed.dust) : 0,
       taskType: taskType,
       pro: !!proModel,
       proModel: proModel ? proModelKey : undefined,

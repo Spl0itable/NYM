@@ -501,18 +501,24 @@ Object.assign(NYM.prototype, {
 
     _botCreditPricingNote() {
         return [
-            '<strong>1 credit</strong> per general chat, creative writing, or translation reply.',
-            '<strong>2 credits</strong> per coding or reasoning/math reply (uses larger, more capable models).',
+            'Replies are metered on the tokens they use, charged in thousandths of a credit — a short question costs a fraction of one.',
+            'Coding and reasoning/math cost more per token than general chat, creative writing or translation, because those routes use larger models.',
+            'Repeated context is billed at a cached rate, so a long conversation does not re-pay for its own history.',
             'Bulk bonus: +10% at 500 sats, +15% at 1K, +20% at 5K.'
         ].join('<br>');
     },
 
     _botProCreditPricingNote() {
-        const models = (this._botProModels || []).map(m =>
-            `${this.escapeHtml(m.label)} (<strong>${m.max > m.credits ? 'from ' : ''}${m.credits} credit${m.credits === 1 ? '' : 's'}</strong>)`).join(' · ');
+        const metered = (this._botProModels || []).filter(m => Number(m.outUsdPerMTok) > 0);
+        const models = (metered.length ? metered : (this._botProModels || [])).slice(0, 6).map(m =>
+            Number(m.outUsdPerMTok) > 0
+                ? `${this.escapeHtml(m.label)} (<strong>$${m.inUsdPerMTok}/M in, $${m.outUsdPerMTok}/M out</strong>)`
+                : `${this.escapeHtml(m.label)} (<strong>${m.max > m.credits ? 'from ' : ''}${m.credits} credit${m.credits === 1 ? '' : 's'}</strong>)`
+        ).join(' · ');
         return [
             '<strong>Pro credits</strong> unlock replies from a frontier model you pick with <code>?model</code> in the Nymbot chat.',
-            'Per reply: ' + models + ' — long replies scale with length.',
+            'Metered on the tokens each reply uses: ' + models + '.',
+            'Repeated context is billed at the cached rate, a tenth of the fresh one.',
             'Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.'
         ].join('<br>');
     },
@@ -553,12 +559,12 @@ Object.assign(NYM.prototype, {
             return;
         }
         if (isPro) {
-            const maxReserve = Math.max(...(this._botProModels || []).map(m => m.max || m.credits || 1));
-            est.textContent = `${sats.toLocaleString()} sats = ${credits} Pro credit${credits === 1 ? '' : 's'} (replies from 1-2, scaling with length)` +
-                (credits < maxReserve ? ` — note: the largest model reserves up to ${maxReserve} per reply` : '');
+            est.textContent = `${sats.toLocaleString()} sats = ${credits} Pro credit${credits === 1 ? '' : 's'}`
+                + ' — charged on the tokens each reply uses, so an ordinary question costs a fraction of one';
             return;
         }
-        est.textContent = `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'} (1/msg, 2 for coding & reasoning)`;
+        est.textContent = `${sats.toLocaleString()} sats = ${credits} credit${credits === 1 ? '' : 's'}`
+            + ' — charged on the tokens each reply uses, so a short question costs a fraction of one';
     },
 
     // Open the zap modal in "buy Nymbot credits" mode. tier preselects the
