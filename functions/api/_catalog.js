@@ -106,6 +106,12 @@ var cache = { at: 0, data: null };
 
 // Frontier (third-party) text models, keyed the way ?model expects. Returns
 // null when the catalog isn't reachable — the caller falls back.
+function catalogRate(override, stored) {
+  var pick = override != null ? override : stored;
+  var n = Number(pick);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export async function catalogProModels(env, opts) {
   var now = Date.now();
   if (!(opts && opts.fresh) && cache.data && now - cache.at < CACHE_MS) return cache.data;
@@ -166,6 +172,10 @@ export async function catalogProModels(env, opts) {
       transport: transport,
       model: r.id,
       baseCredits: pc.base != null ? pc.base : (r.base_credits != null ? r.base_credits : 1),
+      inUsdPerMTok: catalogRate(pc.inUsdPerMTok, r.price_in_usd_mtok),
+      outUsdPerMTok: catalogRate(pc.outUsdPerMTok, r.price_out_usd_mtok),
+      cacheReadUsdPerMTok: catalogRate(pc.cacheReadUsdPerMTok, r.price_cache_read_usd_mtok),
+      cacheWriteUsdPerMTok: catalogRate(pc.cacheWriteUsdPerMTok, r.price_cache_write_usd_mtok),
       outTokensPerCredit: pc.outTokensPerCredit != null ? pc.outTokensPerCredit
         : (r.out_tokens_per_credit != null ? r.out_tokens_per_credit : 0),
       maxTokens: maxTokens > 0 ? maxTokens : 4096,

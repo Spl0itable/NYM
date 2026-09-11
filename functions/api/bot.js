@@ -1268,8 +1268,154 @@ function parseBotMediaIntent(message) {
   return null;
 }
 
+
+var BOT_PRICE_MARGIN = 1.5;
+// Unified billing adds 5% to every credit purchase — $100 of credit costs $105
+// — so the tokens themselves are passed through at the provider's list price
+// and the fee lands on the top-up. It is a real cost of serving a call and
+// belongs in the charge rather than quietly in the margin.
+var BOT_UNIFIED_BILLING_FEE = 1.05;
+var BOT_MIN_CHARGE_MILLI = 50;
+var BOT_BTC_FALLBACK_USD = 90000;
+var BOT_BTC_TTL_MS = 600000;
+var BOT_MILLI_PER_CREDIT = 1000;
+
+var botBtcUsd = 0;
+var botBtcAt = 0;
+
+async function botBtcPrice() {
+  var now = Date.now();
+  if (botBtcUsd > 0 && now - botBtcAt < BOT_BTC_TTL_MS) return botBtcUsd;
+  try {
+    var resp = await fetch("https://mempool.space/api/v1/prices", {
+      headers: { "User-Agent": "Nymbot/1.0" }
+    });
+    if (resp.ok) {
+      var data = await resp.json();
+      var usd = Number(data && data.USD);
+      if (Number.isFinite(usd) && usd > 1000) {
+        botBtcUsd = usd;
+        botBtcAt = now;
+        return usd;
+      }
+    }
+  } catch (e) { }
+  return botBtcUsd > 0 ? botBtcUsd : BOT_BTC_FALLBACK_USD;
+}
+
+function botMeteredModel(m) {
+  if (!m) return null;
+  var pin = Number(m.inUsdPerMTok);
+  var pout = Number(m.outUsdPerMTok);
+  if (!Number.isFinite(pin) || !Number.isFinite(pout) || pin <= 0 || pout <= 0) return null;
+  var read = Number(m.cacheReadUsdPerMTok);
+  var write = Number(m.cacheWriteUsdPerMTok);
+  return {
+    in: pin,
+    out: pout,
+    cacheRead: Number.isFinite(read) && read > 0 ? read : pin * 0.1,
+    cacheWrite: Number.isFinite(write) && write > 0 ? write : pin * 1.25
+  };
+}
+
+function botUsdForUsage(m, usage) {
+  var p = botMeteredModel(m);
+  if (!p || !usage) return 0;
+  var n = function (v) {
+    var x = Number(v);
+    return Number.isFinite(x) && x > 0 ? x : 0;
+  };
+  return (n(usage.fresh) * p.in
+    + n(usage.read) * p.cacheRead
+    + n(usage.wrote) * p.cacheWrite
+    + n(usage.out) * p.out) / 1e6;
+}
+
+function botMilliForUsd(usd, btcUsd, satsPerCredit) {
+  var price = Number(btcUsd) > 0 ? Number(btcUsd) : BOT_BTC_FALLBACK_USD;
+  var per = Number(satsPerCredit) > 0 ? Number(satsPerCredit) : BOT_PRO_SATS_PER_CREDIT;
+  var sats = (Number(usd) || 0) / price * 1e8;
+  return Math.ceil(sats / per * BOT_MILLI_PER_CREDIT);
+}
+
+function botChargeRate(m, which) {
+  var p = botMeteredModel(m);
+  if (!p) return null;
+  var rate = p[which];
+  if (!(rate > 0)) return null;
+  return Math.round(rate * BOT_PRICE_MARGIN * BOT_UNIFIED_BILLING_FEE * 1e6) / 1e6;
+}
+
+function botMeteredCharge(m, usage, btcUsd, satsPerCredit) {
+  var usd = botUsdForUsage(m, usage);
+  if (usd <= 0) return null;
+  var milli = botMilliForUsd(
+    usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN, btcUsd, satsPerCredit);
+  return Math.max(BOT_MIN_CHARGE_MILLI, milli);
+}
+
+function botUsageZero() {
+  return { fresh: 0, read: 0, wrote: 0, out: 0 };
+}
+
+function botUsageAdd(into, u) {
+  if (!into || !u) return into;
+  into.fresh += Number(u.fresh) || 0;
+  into.read += Number(u.read) || 0;
+  into.wrote += Number(u.wrote) || 0;
+  into.out += Number(u.out) || 0;
+  return into;
+}
+
+function botUsageBilled(u) {
+  if (!u) return false;
+  return (Number(u.fresh) || 0) > 0 || (Number(u.read) || 0) > 0
+    || (Number(u.wrote) || 0) > 0 || (Number(u.out) || 0) > 0;
+}
+
+function botUsageTotals(parts) {
+  var out = { fresh: 0, read: 0, wrote: 0, out: 0 };
+  for (var i = 0; i < (parts || []).length; i++) {
+    var p = parts[i];
+    if (!p) continue;
+    out.fresh += Number(p.fresh) || 0;
+    out.read += Number(p.read) || 0;
+    out.wrote += Number(p.wrote) || 0;
+    out.out += Number(p.out) || 0;
+  }
+  return out;
+}
+
 function botProPerCall(m, repoTask) {
   return (m.baseCredits || 1) * (repoTask ? BOT_GIT_CALL_MULTIPLIER : 1);
+}
+
+var BOT_RESERVE_IN_TOKENS = 12000;
+var BOT_GIT_RESERVE_IN_TOKENS = 40000;
+var BOT_RESERVE_OUT_TOKENS = 2000;
+var BOT_RESERVE_SAFETY = 1.5;
+
+async function botStandardRates(env, modelId) {
+  if (!modelId) return null;
+  var live = null;
+  try { live = await catalogProModels(env); } catch (e) { live = null; }
+  if (!live || !live.byModelId) return null;
+  var key = live.byModelId[modelId];
+  var entry = key && live.models ? live.models[key] : null;
+  return entry && botMeteredModel(entry) ? entry : null;
+}
+
+function botMeteredReserve(m, legs, repoTask, btcUsd, satsPerCredit) {
+  var p = botMeteredModel(m);
+  if (!p) return null;
+  var calls = Math.max(1, Math.floor(Number(legs) || 1));
+  var inTok = repoTask ? BOT_GIT_RESERVE_IN_TOKENS : BOT_RESERVE_IN_TOKENS;
+  var outTok = Math.min(BOT_RESERVE_OUT_TOKENS, m.maxTokens || BOT_RESERVE_OUT_TOKENS);
+  var usd = (inTok * p.in + calls * outTok * p.out) / 1e6;
+  var milli = botMilliForUsd(
+    usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN * BOT_RESERVE_SAFETY,
+    btcUsd, satsPerCredit);
+  return Math.max(1, Math.ceil(milli / BOT_MILLI_PER_CREDIT));
 }
 
 function botProMaxCost(m, repoTask) {
@@ -1862,7 +2008,8 @@ function proCheckedMessage(payload) {
   var msg = proNormalizeMessage(payload);
   if (msg && (proMessageText(msg).trim() || (msg.tool_calls && msg.tool_calls.length))) {
     proReportCacheUsage(payload);
-    return { msg: msg, outputTokens: proUsageOutputTokens(payload) };
+    return { msg: msg, outputTokens: proUsageOutputTokens(payload),
+      usage: proCallUsage(payload) };
   }
   var refusal = proRefusalDetail(payload);
   if (refusal) {
@@ -1913,6 +2060,18 @@ function proReportCacheUsage(payload) {
       "read or written. Anthropic prompt caching is not the gateway's own " +
       "response cache; if this never changes, cache_control is not reaching the " +
       "provider and the breakpoint can come out.");
+}
+
+function proCallUsage(payload) {
+  var u = proCacheUsage(payload);
+  var out = proUsageOutputTokens(payload);
+  if (!u && !out) return null;
+  return {
+    fresh: u ? u.fresh : 0,
+    read: u ? u.read : 0,
+    wrote: u ? u.wrote : 0,
+    out: out
+  };
 }
 
 function proUsageOutputTokens(resp) {
@@ -1985,6 +2144,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
   var of = effort + (opts && opts.extraCalls ? opts.extraCalls : 0);
   var calls = 0;
   var outputTokens = 0;
+  var usage = botUsageZero();
   var convo = messages.slice();
 
   if (effort >= 2) {
@@ -1995,6 +2155,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
       convo.concat([{ role: "user", content: BOT_EFFORT_PLAN_PROMPT }]),
       BOT_EFFORT_PLAN_TOKENS, null);
     outputTokens += planned.outputTokens || 0;
+    botUsageAdd(usage, planned.usage);
     var planText = proMessageText(planned.msg);
     if (planText) {
       progress({ kind: "thinking", text: truncateText(planText, 600) });
@@ -2006,6 +2167,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
   var core = await answer(convo, calls, of);
   calls += core.modelCalls || 1;
   outputTokens += core.outputTokens || 0;
+  botUsageAdd(usage, core.usage);
   var reply = core.reply;
 
   if (effort >= 3 && reply) {
@@ -2018,12 +2180,13 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
         { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
       ]), proModel.maxTokens, null);
     outputTokens += revised.outputTokens || 0;
+    botUsageAdd(usage, revised.usage);
     var better = proMessageWithThinking(revised.msg);
     // A revision that came back empty is a failed pass, not a better answer.
     if (better && better.trim()) reply = better;
   }
 
-  return { reply: reply, modelCalls: calls, outputTokens: outputTokens };
+  return { reply: reply, modelCalls: calls, outputTokens: outputTokens, usage: usage };
 }
 
 /// A Pro reply that may look back past its own window. One round of tool calls
@@ -2039,6 +2202,7 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
   var convo = messages.slice();
   var calls = 0;
   var outputTokens = 0;
+  var usage = botUsageZero();
   var budget = 1 + BOT_RECALL_ROUNDS;
   // Where this sits in the reply as a whole, so the progress lines count once
   // rather than restarting when the effort passes hand over.
@@ -2053,6 +2217,7 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
       lastTurn ? null : recallToolDefs());
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
+    botUsageAdd(usage, r.usage);
     var thought = proMessageReasoning(msg);
     if (thought) progress({ kind: "thinking", text: truncateText(thought, 600) });
     var toolCalls = msg && Array.isArray(msg.tool_calls) ? msg.tool_calls.slice(0, 2) : [];
@@ -2060,7 +2225,8 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
       return {
         reply: proMessageWithThinking(msg),
         modelCalls: calls,
-        outputTokens: outputTokens
+        outputTokens: outputTokens,
+        usage: usage
       };
     }
     convo.push({ role: "assistant", content: msg.content || null, tool_calls: toolCalls });
@@ -2084,7 +2250,8 @@ async function runProGatewayModel(env, proModel, messages, maxTokens, progress) 
   // turn has to say about what the model actually did — so it goes on the
   var thought = proMessageReasoning(r.msg);
   if (thought && progress) progress({ kind: "thinking", text: truncateText(thought, 600) });
-  return { text: proMessageWithThinking(r.msg), outputTokens: r.outputTokens };
+  return { text: proMessageWithThinking(r.msg), outputTokens: r.outputTokens,
+    usage: r.usage };
 }
 
 // Git repo mode: the user lends Nymbot a personal access token so Pro
@@ -2791,6 +2958,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
   var convo = messages.slice();
   var calls = 0;
   var outputTokens = 0;
+  var usage = botUsageZero();
   // Where each working branch stood before this run touched it.
   var records = {};
   for (var ri = 0; ri < all.length; ri++) {
@@ -2852,6 +3020,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
         reply: gitStalledReply(all),
         modelCalls: calls - 1,
         outputTokens: outputTokens,
+        usage: usage,
         checkpoint: checkpointOf(),
         truncated: true,
         convo: gitParkable(convo)
@@ -2859,6 +3028,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
     }
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
+    botUsageAdd(usage, r.usage);
     var thought = proMessageReasoning(msg);
     if (thought) progress({ kind: "thinking", text: truncateText(thought, 600) });
     var toolCalls = msg && Array.isArray(msg.tool_calls) ? msg.tool_calls.slice(0, BOT_GIT_MAX_TOOLS_PER_TURN) : [];
@@ -2867,6 +3037,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
         reply: proMessageWithThinking(msg),
         modelCalls: calls,
         outputTokens: outputTokens,
+        usage: usage,
         checkpoint: checkpointOf(),
         // The cap was forced tool-less, so an empty tool list on the last turn
         // says nothing. What the turn before it wanted is the honest signal.
@@ -3047,21 +3218,23 @@ function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp) {
   var tierSection = freeTurn ? [
     "=== FREE DAILY ALLOWANCE ===",
     "This user is out of credits and this reply is coming from the free tier: " + BOT_FREE_DAILY + " replies a day on a single small model, with a shorter memory of the conversation than a paid reply gets. Be as useful as you can inside that.",
+    "Free replies cost nothing at all — no credits are spent on this, so never quote a price for it.",
     "Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — say 'AI models' or 'large language models' instead. If asked which model you are, say Nymbot's free tier runs one small general model and that credits unlock multi-model routing and the frontier models.",
     "What credits buy, if it comes up and only then: sharper models routed per question (coding, reasoning, creative, translation), Nymbot Pro with a specific frontier model pinned by ?model, connected git repositories, image generation, voice clips, live web search, and a much longer memory of the conversation. ?buy opens the purchase flow.",
-    "Do not apologise for the free tier, do not mention the daily count — the app shows it — and do not push the upgrade. Answer the question."
+    "Do not apologise for the free tier, do not mention the daily count — the app shows it — and do not push the upgrade. Answer the question.",
+    "WHEN YOU CANNOT DO SOMETHING, SAY SO: you are a small model with a short memory of this conversation, and some things are genuinely out of reach — reading a git repository, generating a picture or a voice clip, searching the live web, holding a long document in mind, or a hard coding, maths or analysis problem that needs a frontier model. Do not bluff, do not guess at an answer you are not equipped to give, and do not silently produce a worse one. Name the limit in a sentence, say a Pro model can do it and how to get there (?model, or ?git for a repository), then help as far as you actually can. This is the one case where mentioning the upgrade is right, because it is the honest answer to what was asked — not a pitch. Say it once, only when you have actually hit the limit, and never as a preface to an answer you can give."
   ] : proModel ? [
     "=== PRO MODE (USER-SELECTED MODEL) ===",
     "This user has Nymbot Pro and chose " + proModel.label + " — every reply in this chat is generated by that frontier model. You ARE " + proModel.label + " speaking as Nymbot; if the user asks which model they're talking to, tell them it's " + proModel.label + ". Don't name the gateway infrastructure used to reach it.",
     "MODEL IDENTITY IS NOT A GUESS: " + proModel.label + " is the model actually serving this reply — it was selected by the user and routed here. Never answer with a different model name, a different version number, or a name you infer from your training data. If you would have said anything other than \"" + proModel.label + "\", you are wrong: say " + proModel.label + ".",
-    "Pricing: " + proModel.label + " replies cost " + proModel.baseCredits + " Pro credit" + (proModel.baseCredits === 1 ? "" : "s") + (proModel.outTokensPerCredit ? " plus 1 more per ~" + proModel.outTokensPerCredit + " tokens of reply length (max " + botProMaxCost(proModel) + " for a maximum-length reply) — short answers cost the base, long ones scale" : " flat") + ". A repo task (?git) is priced per model call at " + BOT_GIT_CALL_MULTIPLIER + "x that base, up to " + BOT_GIT_MAX_TURNS + " calls a message, because each of its calls carries the repository file trees and every file read so far as input" + ". Pro credits are a separate balance from standard credits (1 Pro credit = " + BOT_PRO_SATS_PER_CREDIT + " sats vs " + BOT_SATS_PER_CREDIT + " sats for a standard credit) because frontier models cost more to run. ?buy opens the purchase flow with a Standard/Pro switch.",
+    "Pricing: " + proModel.label + " is metered on the tokens a reply actually uses, at " + (botChargeRate(proModel, "in") != null ? "$" + botChargeRate(proModel, "in") + " per million input tokens and $" + botChargeRate(proModel, "out") + " per million output tokens" : proModel.baseCredits + " Pro credit" + (proModel.baseCredits === 1 ? "" : "s") + " a reply") + ", charged in thousandths of a credit so a short question costs a fraction of one. Repeated context is billed at the cached rate, which is a tenth of the fresh one, so a long chat does not re-pay for its own history. A repo task (?git) costs more only because it uses more: every one of its up-to-" + BOT_GIT_MAX_TURNS + " model calls carries the repository file trees and every file read so far as input. Pro credits are a separate balance from standard credits (1 Pro credit = " + BOT_PRO_SATS_PER_CREDIT + " sats vs " + BOT_SATS_PER_CREDIT + " sats for a standard credit) because frontier models cost more to run. ?buy opens the purchase flow with a Standard/Pro switch.",
     "The user can switch models anytime with ?model <name> (e.g. ?model claude-opus), or type ?model off to drop back to standard multi-model routing which spends standard credits.",
     "GIT REPOS: Pro users can connect a repository with ?git — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg and self-hosted) — so you can read the codebase and, when writes are enabled, commit, branch, and open pull/merge requests. When a repo is connected, a GIT REPO MODE section appears below with your tools; without it you have NO repo access — point curious users at ?git."
   ] : [
     "=== PREMIUM MULTI-MODEL ROUTING ===",
     "Each message is auto-classified (coding, reasoning/math, creative writing, translation, or general chat) and routed to the best AI model for that task. The free public-channel bot uses one general model; this private chat is sharper because of routing. Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — say 'AI models' or 'large language models' instead.",
     "NO PINNED MODEL HERE: this reply is coming from standard routing, so there is no user-selected frontier model. If the user asks which model they're talking to, say Nymbot routes each message to the model that suits it and that ?model pins a specific one on Pro — never claim to be Claude, GPT, Gemini, Grok, or any other named model, and never say a model is 'selected' when none is.",
-    "Pricing: coding and reasoning queries cost 2 credits each (they use larger, more expensive models). General chat, creative writing, and translation cost 1 credit each. If a user asks why some queries cost more, explain it's because those routes use bigger models.",
+    "Pricing: replies are metered on the tokens they actually use, charged in thousandths of a credit, so a short question costs a fraction of one and a long answer costs more than a short one. Coding and reasoning cost more per token than general chat, creative writing or translation because those routes use bigger models. Repeated context is billed at a cached rate rather than the full one, so a long conversation does not re-pay for its own history. If a user asks why one reply cost more than another, it is length and route, not a flat per-message price. Nothing is charged if a reply fails.",
     "NYMBOT PRO: An even higher tier exists — ?model lets the user pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.6 Sol, GPT-5.4 mini, Gemini 3.1 Pro, Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5, MiniMax M3) for every reply, paid with separate Pro credits (?buy has a Pro switch). Pro can also connect a git repo (?git — GitHub, GitLab, or Gitea/Codeberg) so replies read the user's actual code and can even commit, branch, and open PRs. If a user wants a specific named model, stronger answers, or repo-aware coding help, point them at ?model and ?git."
   ];
   var web = webOn ? NYMBOT_PM_WEB_ON : NYMBOT_PM_WEB_OFF;
@@ -3510,6 +3683,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         sources: pmCitations,
         modelCalls: ghResult.modelCalls,
         outputTokens: ghResult.outputTokens,
+        usage: ghResult.usage || null,
         checkpoint: ghResult.checkpoint || null,
         truncated: !!ghResult.truncated,
         resumeState: ghResult.truncated && ghResult.convo
@@ -3535,14 +3709,16 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       }
       var one = await runProGatewayModel(context.env, proModel, convo, proModel.maxTokens,
         runOpts.progress);
-      return { reply: one.text, modelCalls: 1, outputTokens: one.outputTokens };
+      return { reply: one.text, modelCalls: 1, outputTokens: one.outputTokens,
+        usage: one.usage };
     });
     return {
       reply: sanitizeBotResponse(wrapped.reply, true),
       taskType: taskType,
       sources: pmCitations,
       modelCalls: wrapped.modelCalls,
-      outputTokens: wrapped.outputTokens
+      outputTokens: wrapped.outputTokens,
+      usage: wrapped.usage || null
     };
   }
   // The free tier is one model, the same one the public channels already run
@@ -3560,8 +3736,11 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     runOpts.progress({ kind: "route", task: taskType, seeing: !!visionReroute });
   }
   var reply = "";
+  var usage = botUsageZero();
+  var billedModel = pmModel;
   try {
     var primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
+    botUsageAdd(usage, proCallUsage(primary));
     reply = primary && primary.response ? sanitizeBotResponse(primary.response, true) : "";
   } catch (e) { }
   // Fall back down the ladder rather than to a single model: the route model
@@ -3588,10 +3767,13 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         messages: seesToo[fallbacks[f]] ? messages : textOnly,
         max_tokens: BOT_PM_MAX_TOKENS.general
       });
+      botUsageAdd(usage, proCallUsage(fb));
       reply = fb && fb.response ? sanitizeBotResponse(fb.response, true) : "";
+      if (reply.trim()) billedModel = fallbacks[f];
     } catch (e) { }
   }
-  return { reply: reply, taskType: taskType, sources: pmCitations };
+  return { reply: reply, taskType: taskType, sources: pmCitations,
+    usage: usage, billedModel: billedModel };
 }
 async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   var env = context.env;
@@ -3641,6 +3823,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         max: m.max != null ? m.max : (m.outTokensPerCredit
           ? m.baseCredits + Math.ceil((m.maxTokens || 8192) / m.outTokensPerCredit)
           : m.baseCredits),
+        inUsdPerMTok: botChargeRate(m, "in"),
+        outUsdPerMTok: botChargeRate(m, "out"),
+        cacheReadUsdPerMTok: botChargeRate(m, "cacheRead"),
         repoCredits: m.baseCredits * BOT_GIT_CALL_MULTIPLIER,
         repoMax: (m.max != null ? m.max - m.baseCredits : (m.outTokensPerCredit
           ? Math.ceil((m.maxTokens || 8192) / m.outTokensPerCredit)
@@ -3671,9 +3856,29 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       else groups.push({ author: m.author || m.authorSlug || "Other", authorSlug: m.authorSlug, kind: m.kind, keys: [m.key] });
     });
     var unpriced = list.filter(function (m) { return !m.priced; }).length;
+    var btcUsd = await botBtcPrice();
+    var routes = [];
+    var taskNames = Object.keys(BOT_PM_MODELS);
+    for (var ti = 0; ti < taskNames.length; ti++) {
+      var rates = await botStandardRates(env, BOT_PM_MODELS[taskNames[ti]]);
+      if (!rates) continue;
+      routes.push({
+        task: taskNames[ti],
+        inUsdPerMTok: botChargeRate(rates, "in"),
+        outUsdPerMTok: botChargeRate(rates, "out"),
+        cacheReadUsdPerMTok: botChargeRate(rates, "cacheRead"),
+        maxTokens: BOT_PM_MAX_TOKENS[taskNames[ti]] || BOT_PM_MAX_TOKENS.general
+      });
+    }
     return json({
       source: cat.source, models: list, groups: groups, aliases: cat.aliases,
-      unpriced: unpriced, satsPerCredit: BOT_PRO_SATS_PER_CREDIT
+      unpriced: unpriced, satsPerCredit: BOT_PRO_SATS_PER_CREDIT,
+      standardRoutes: routes,
+      usdPerCredit: Math.round(BOT_PRO_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6,
+      standardUsdPerCredit: Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6,
+      btcUsd: Math.round(btcUsd),
+      minChargeCredits: BOT_MIN_CHARGE_MILLI / BOT_MILLI_PER_CREDIT,
+      metered: true
     });
   }
 
@@ -4151,8 +4356,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // A repo task loops; otherwise the effort level says how many passes the
       // user asked and agreed to pay for.
       var effortWanted = ghConfig ? 1 : botEffortLevel(body.effort);
-      var proRequired = proBase * (ghConfig ? BOT_GIT_MAX_TURNS : effortWanted)
+      var proLegs = ghConfig ? BOT_GIT_MAX_TURNS : effortWanted;
+      var proMetered = botMeteredReserve(proModel, proLegs, !!ghConfig,
+        await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT);
+      var proRequired = (proMetered != null ? proMetered : proBase * proLegs)
         + botPartSurcharge(botPartsCount(body));
+      if (proMetered != null) proBase = Math.max(1, Math.ceil(proMetered / proLegs));
       // Looking back past the window is one more model call on top. Room for it
       // is held only when the balance can spare it, so a chat that was never
       // going to look anything up is not refused for room it would not use.
@@ -4166,8 +4375,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           balance: proRecord.balance || 0,
           required: proRequired,
           error: ghConfig
-            ? "Repo tasks with " + proModel.label + " reserve up to " + proRequired + " Pro credits (charged by actual model calls and reply length, from " + botProPerCall(proModel, true) + " per call \u2014 " + BOT_GIT_CALL_MULTIPLIER + "x a plain reply, because every call carries the repository trees and everything read so far) and you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up."
-            : proModel.label + " replies reserve " + proRequired + " Pro credits and charge by reply length (from " + proModel.baseCredits + ") — you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up, or ?model off for standard replies."
+            ? "Repo tasks with " + proModel.label + " reserve up to " + proRequired + " Pro credits but are charged on the tokens actually used, which is usually far less \u2014 the reserve is high because every one of up to " + BOT_GIT_MAX_TURNS + " model calls carries the repository trees and everything read so far. You have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up."
+            : proModel.label + " replies reserve " + proRequired + " Pro credits but are charged on the tokens actually used, in thousandths of a credit \u2014 you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up, or ?model off for standard replies."
         });
       }
     }
@@ -4623,6 +4832,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var cost = freeTurn ? 0
       : (proModel ? (proModel.baseCredits || 1) : botCreditsForTask(taskType))
         + botPartSurcharge(askedIds.length);
+    var stdRates = null;
+    var stdReserve = 0;
+    if (!proModel && !freeTurn) {
+      stdRates = await botStandardRates(env, BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general);
+      if (stdRates) {
+        stdReserve = botMeteredReserve(stdRates, 1, false, await botBtcPrice(), BOT_SATS_PER_CREDIT);
+        if (stdReserve != null) cost = stdReserve + botPartSurcharge(askedIds.length);
+      }
+    }
 
     if (!proModel && !freeTurn && record.balance < cost) {
       return await turnFail({
@@ -4698,14 +4916,38 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var reply = chatResult && chatResult.reply;
     if (!reply) return await turnFailResumable({ error: "Nymbot returned an empty response" }, 500);
+    var costMilli = 0;
+    if (!proModel && !freeTurn && stdRates && botUsageBilled(chatResult.usage)) {
+      var stdBilled = chatResult.billedModel
+        && chatResult.billedModel !== (BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general)
+        ? (await botStandardRates(env, chatResult.billedModel)) || stdRates
+        : stdRates;
+      var stdMetered = botMeteredCharge(stdBilled, chatResult.usage,
+        await botBtcPrice(), BOT_SATS_PER_CREDIT);
+      if (stdMetered != null) {
+        costMilli = Math.min(
+          stdMetered + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT,
+          cost * BOT_MILLI_PER_CREDIT);
+        cost = 0;
+      }
+    }
     if (proModel) {
-      // Charge by what was actually generated; estimate from reply size when a
-      // transport returns no usage. Never exceed the reserved amount.
       var landed = chatResult.modelCalls == null ? 1 : chatResult.modelCalls;
       var outTok = chatResult.outputTokens || Math.ceil(String(reply).length / 4);
-      cost = landed <= 0 ? 0 : Math.min(
-        botProCost(proModel, landed, outTok, !!ghConfig) + botPartSurcharge(askedIds.length),
-        proRequired);
+      var capMilli = proRequired * BOT_MILLI_PER_CREDIT;
+      var metered = landed > 0 && botUsageBilled(chatResult.usage)
+        ? botMeteredCharge(proModel, chatResult.usage, await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT)
+        : null;
+      if (metered != null) {
+        costMilli = Math.min(
+          metered + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT,
+          capMilli);
+        cost = 0;
+      } else {
+        cost = landed <= 0 ? 0 : Math.min(
+          botProCost(proModel, landed, outTok, !!ghConfig) + botPartSurcharge(askedIds.length),
+          proRequired);
+      }
     }
     // Atomic spend (re-checks balance under the ledger lock so concurrent
     // messages can't overspend). Falls back to a direct write only if the
@@ -4716,8 +4958,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // allowance, before any of this ran. There is nothing to charge.
     var consumed = freeTurn
       ? { ok: true, balance: 0 }
-      : await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier });
+      : await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier, milli: costMilli });
     if (consumed && consumed._noLedger) {
+      if (costMilli > 0) cost = Math.max(cost, Math.round(costMilli / BOT_MILLI_PER_CREDIT));
       spendRecord.balance -= cost;
       spendRecord.totalUsed = (spendRecord.totalUsed || 0) + cost;
       spendRecord.rl = (spendRecord.rl || []);
@@ -4729,6 +4972,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         error: "Not enough " + (proModel ? "Pro " : "") + "credits — your balance changed. Type ?buy for more." }, 402);
     } else {
       spendRecord.balance = consumed.balance;
+      if (Number.isFinite(Number(consumed.charged))) cost = Number(consumed.charged);
     }
     // The run stopped at its tool-call cap with work left. Park the
     // conversation so continuing it costs another turn rather than starting
@@ -5674,8 +5918,9 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== PRIVATE MESSAGING WITH NYMBOT (PAID PREMIUM) ===",
   "Users can have a private, end-to-end encrypted 1:1 conversation with you (Nymbot) using NIP-17 gift wraps. To start one: click Nymbot's nym or avatar and choose 'Private Message', or open the Nyms sidebar and select Nymbot. It only works as a 1:1 chat — Nymbot can't be added to group chats.",
+  "WHEN YOU CANNOT DO SOMETHING, SAY SO: you are the free bot on a single small model with no memory of past messages beyond the context you are given. Reading a git repository, generating pictures or voice clips, working through a long document, and hard coding, maths or analysis problems that need a frontier model are out of reach here. Do not bluff and do not hand back a worse answer as though it were the answer: name the limit in a sentence, say the paid private Nymbot — and Nymbot Pro, where a specific frontier model is pinned — can do it, then help as far as you actually can. Say it once, only when you have genuinely hit the limit, never as a preface to an answer you can give, and never as a sales pitch.",
   "PREMIUM IS A SMARTER NYMBOT: The free public-channel bot (?ask / @Nymbot) runs a single general-purpose AI model. The paid private Nymbot runs a MULTI-MODEL setup — it reads each message, interprets the type of task (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best-suited AI model for that task. That makes premium answers noticeably sharper and more capable than the free public bot. Both versions otherwise share the same knowledge, live web search, and changelog access. Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — just say 'AI models' or 'large language models'.",
-  "Private Nymbot conversations are a paid feature with tiered pricing: general chat, creative writing, and translation replies cost 1 credit each; coding and reasoning/math replies cost 2 credits each (they use larger, more capable models). Credits are bought with Bitcoin Lightning zaps; 1 credit costs roughly 10 sats with a small bulk bonus at higher zap amounts (+10% at 500 sats, +15% at 1K, +20% at 5K). Quote exact figures only if asked.",
+  "Private Nymbot conversations are a paid feature, metered on the tokens each reply actually uses and charged in thousandths of a credit — a short question costs a fraction of a credit, a long answer costs more, and coding and reasoning routes cost more per token because they use bigger models. Credits are bought with Bitcoin Lightning zaps; 1 credit costs roughly 10 sats with a small bulk bonus at higher zap amounts (+10% at 500 sats, +15% at 1K, +20% at 5K). Quote exact figures only if asked.",
   "To buy credits: type ?buy inside the Nymbot private chat, or zap Nymbot's profile (zapping the profile opens the credit purchase flow). Note: zapping one of Nymbot's messages in a public channel is just an appreciation tip and does NOT add credits — only the ?buy / profile-zap purchase flow does. To check the remaining balance: type ?balance inside the Nymbot private chat — the balance is also shown in the chat header.",
   "Users can gift credits to someone else: click a user's nym and choose 'Gift Nymbot Credits', or type ?gift @nym#xxxx inside the Nymbot private chat. The payer covers the zap; the credits land on the recipient's nym.",
   "PREMIUM PRIVATE-CHAT COMMANDS & FEATURES (these only apply inside the 1:1 Nymbot private chat, not public channels):",
@@ -5691,7 +5936,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "The private conversation is encrypted so other users and relays can't read it, and the whole private thread is used as conversation context. Public channels remain free — only the private 1:1 conversations cost credits.",
   "",
   "Q: Can I message Nymbot privately?",
-  "A: Yes. Click Nymbot's nym or avatar and choose 'Private Message' (or pick Nymbot from the Nyms sidebar). It's a private, end-to-end encrypted 1:1 chat and a paid premium feature. Pricing is tiered: general chat, creative writing, and translation replies cost 1 credit each; coding and reasoning/math replies cost 2 credits each (they use larger models). Premium Nymbot is smarter than the free public bot because it routes each message to the best AI model for the task. Inside the private chat you can use ?clear to start fresh, start a message with '!' for a one-off answer that ignores history, ?balance to check credits, ?buy to top up, ?gift @nym to gift credits, and ?transfer @nym confirm to move your whole balance to another pubkey. Credits are tied to your nym's key, so save your nsec to keep them."
+  "A: Yes. Click Nymbot's nym or avatar and choose 'Private Message' (or pick Nymbot from the Nyms sidebar). It's a private, end-to-end encrypted 1:1 chat and a paid premium feature. Replies are metered on the tokens they use and charged in thousandths of a credit, so a short question costs a fraction of one; coding and reasoning routes cost more per token because they use bigger models. Premium Nymbot is smarter than the free public bot because it routes each message to the best AI model for the task. Inside the private chat you can use ?clear to start fresh, start a message with '!' for a one-off answer that ignores history, ?balance to check credits, ?buy to top up, ?gift @nym to gift credits, and ?transfer @nym confirm to move your whole balance to another pubkey. Credits are tied to your nym's key, so save your nsec to keep them."
 ].join("\n");
 
 function isLikelyNonEnglish(text) {

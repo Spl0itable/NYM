@@ -32,7 +32,12 @@ const BOT_RESUME_MAX_BYTES = 512 * 1024;
 const BOT_PROGRESS_TTL_S = 900;
 const BOT_PROGRESS_MAX_STEPS = 120;
 const BOT_PROGRESS_MAX_BYTES = 128 * 1024;
-const GATE_PACE_MS = 900;
+// Cloudflare documents 300 requests a minute for Workers AI text generation,
+// but only 50 a minute — 20 without prepaid gateway credits — for the frontier
+// models (kimi-k2.6, kimi-k2.7-code, glm-5.2). 900ms was 67 a minute, over that
+// ceiling, so the gate itself was issuing more than the tightest limit allows.
+// 1300ms is 46 a minute, under it with room for clock skew between isolates.
+const GATE_PACE_MS = 1300;
 const GATE_PACE_LIMITED_MS = 4500;
 const GATE_LIMIT_MEMORY_MS = 90000;
 const GATE_MAX_WAIT_MS = 12000;
@@ -85,6 +90,9 @@ export class NymLedger {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS gate (id TEXT PRIMARY KEY, next_at INTEGER NOT NULL, limited_at INTEGER NOT NULL);"
     );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS credit_dust (pubkey TEXT NOT NULL, tier TEXT NOT NULL, milli INTEGER NOT NULL, PRIMARY KEY (pubkey, tier));"
+    );
   }
 
   // Serialize op handlers so a D1 read-modify-write can't interleave with
@@ -115,7 +123,7 @@ export class NymLedger {
     switch (op) {
       case "replay": return this._replay(a.id, a.ttl);
       case "transfer-credits": return this._transferCredits(a.from, a.to);
-      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier);
+      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier, a.milli);
       case "free-claim": return this._freeClaim(a.pubkey, a.limit, a.net, a.netLimit);
       case "free-peek": return this._freePeek(a.pubkey, a.limit, a.net, a.netLimit);
       case "claim-credits": return this._claimCredits(a);
@@ -568,13 +576,39 @@ export class NymLedger {
 
   // Atomic spend for the paid-PM flow: re-checks balance under the lock so two
   // concurrent messages can't overspend.
-  async _consumeCredits(pubkey, cost, ts, tier) {
+  _dustOf(pubkey, tier) {
+    const rows = this.sql
+      .exec("SELECT milli FROM credit_dust WHERE pubkey = ? AND tier = ? LIMIT 1;", pubkey, tier)
+      .toArray();
+    return rows.length ? Math.max(0, Number(rows[0].milli) || 0) : 0;
+  }
+
+  _setDust(pubkey, tier, milli) {
+    this.sql.exec(
+      "INSERT INTO credit_dust (pubkey, tier, milli) VALUES (?, ?, ?) " +
+      "ON CONFLICT(pubkey, tier) DO UPDATE SET milli = excluded.milli;",
+      pubkey, tier, Math.max(0, Math.floor(milli))
+    );
+  }
+
+  async _consumeCredits(pubkey, cost, ts, tier, milli) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     cost = Math.max(0, Math.floor(Number(cost) || 0));
+    const tierKey = tier === "pro" ? "pro" : "standard";
+    const owed = Math.max(0, Math.floor(Number(milli) || 0));
+    let dust = 0;
+    let nextDust = 0;
+    if (owed > 0) {
+      dust = this._dustOf(pubkey, tierKey);
+      const total = dust + owed;
+      cost += Math.floor(total / 1000);
+      nextDust = total % 1000;
+    }
     const rec = await this._getCredits(pubkey, tier);
     if ((rec.balance || 0) < cost) {
       return { ok: false, balance: rec.balance || 0, required: cost };
     }
+    if (owed > 0) this._setDust(pubkey, tierKey, nextDust);
     rec.balance -= cost;
     rec.totalUsed = (rec.totalUsed || 0) + cost;
     if (Number.isFinite(Number(ts))) {
@@ -585,7 +619,7 @@ export class NymLedger {
       rec.rl.push(Number(ts));
     }
     await this._putCredits(pubkey, rec, tier);
-    return { ok: true, balance: rec.balance };
+    return { ok: true, balance: rec.balance, charged: cost, dust: nextDust };
   }
 
   // free tier's daily allowance
