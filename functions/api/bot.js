@@ -1711,8 +1711,12 @@ var PRO_PACE_LIMITED_MS = 4500;
 var PRO_LIMIT_MEMORY_MS = 90000;
 var PRO_PACE_QUEUE_MAX_MS = 9000;
 
+var PRO_GATE_ID = "ai-gateway";
+var PRO_GATE_MAX_WAIT_MS = 12000;
+
 var proLastLimitedAt = 0;
 var proNextCallAt = 0;
+var proGateUsable = true;
 
 var proCacheBreakpoints = true;
 var proCacheSeen = null;
@@ -1730,7 +1734,41 @@ function proPaceGapMs() {
   return Math.round(PRO_PACE_MS + (PRO_PACE_LIMITED_MS - PRO_PACE_MS) * share);
 }
 
-async function proPace() {
+async function proGateTake(env) {
+  if (!proGateUsable || !env || !env.NYM_LEDGER) return null;
+  try {
+    var r = await ledgerCall(env, {
+      op: "gate-take",
+      id: PRO_GATE_ID,
+      pace: PRO_PACE_MS,
+      limitedPace: PRO_PACE_LIMITED_MS,
+      memory: PRO_LIMIT_MEMORY_MS,
+      maxWait: PRO_GATE_MAX_WAIT_MS
+    });
+    if (!r || r.ok !== true || typeof r.waitMs !== "number") {
+      proGateUsable = false;
+      return null;
+    }
+    return r;
+  } catch (e) {
+    proGateUsable = false;
+    return null;
+  }
+}
+
+async function proGateLimited(env) {
+  if (!proGateUsable || !env || !env.NYM_LEDGER) return;
+  try {
+    await ledgerCall(env, { op: "gate-limited", id: PRO_GATE_ID, penalty: PRO_PACE_LIMITED_MS });
+  } catch (e) { }
+}
+
+async function proPace(env) {
+  var gate = await proGateTake(env);
+  if (gate) {
+    if (gate.waitMs > 0) await proWait(gate.waitMs);
+    return;
+  }
   var now = Date.now();
   var at = proNextCallAt > now ? proNextCallAt : now;
   var ceiling = now + PRO_PACE_QUEUE_MAX_MS;
@@ -1768,7 +1806,7 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
     throw new Error("Nymbot Pro is not configured.");
   }
   var errors = [];
-  await proPace();
+  await proPace(env);
   for (var i = 0; i < plan.length; i++) {
     var held = 0;
     while (true) {
@@ -1778,7 +1816,10 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
       } catch (e) {
         failure = e;
       }
-      if (proRateLimited(failure)) proLastLimitedAt = Date.now();
+      if (proRateLimited(failure)) {
+        proLastLimitedAt = Date.now();
+        await proGateLimited(env);
+      }
       if (proRateLimited(failure) && held < PRO_BUSY_WAITS_MS.length) {
         await proWait(PRO_BUSY_WAITS_MS[held++]);
         continue;
@@ -2054,7 +2095,7 @@ var BOT_GIT_CONTINUE_PROMPT =
   "Continue the task from exactly where you stopped. You have a fresh budget of "
   + "tool calls. Do not repeat work already done above — build on it. When you "
   + "run out of budget again, stop with a short note saying what is left.";
-var BOT_GIT_MAX_TOOLS_PER_TURN = 8;
+var BOT_GIT_MAX_TOOLS_PER_TURN = 12;
 var BOT_GIT_MAX_RESULT_CHARS = 20000;
 var BOT_GIT_MAX_FILE_CHARS = 48000;
 var BOT_GIT_MAX_TREE_ENTRIES = 600;
@@ -2797,7 +2838,20 @@ async function runProGitChat(env, proModel, repos, messages, options) {
     var lastTurn = calls >= budget;
     progress({ kind: "model", call: priorCalls + calls, of: priorCalls + budget,
       model: proModel.label || proModel.model || "" });
-    var r = await proGatewayChat(env, proModel, convo, proModel.maxTokens, lastTurn ? null : tools);
+    var r;
+    try {
+      r = await proGatewayChat(env, proModel, convo, proModel.maxTokens, lastTurn ? null : tools);
+    } catch (e) {
+      if (!proRateLimited(e) || calls < 2) throw e;
+      return {
+        reply: gitStalledReply(all),
+        modelCalls: calls - 1,
+        outputTokens: outputTokens,
+        checkpoint: checkpointOf(),
+        truncated: true,
+        convo: convo
+      };
+    }
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
     var thought = proMessageReasoning(msg);
@@ -2840,6 +2894,18 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       convo.push({ role: "tool", tool_call_id: tc && tc.id, content: String(result).slice(0, BOT_GIT_MAX_RESULT_CHARS) });
     }
   }
+}
+
+function gitStalledReply(all) {
+  var what = (all || []).length > 1 ? "the repositories" : "the repository";
+  return "I had to stop part-way through this one. The AI gateway is at its " +
+    "request limit right now, so my next step could not go out — nothing is " +
+    "wrong with " + what + " or with the task.\n\n" +
+    "Everything I read is saved rather than thrown away, so this does not have " +
+    "to start over. Set **When a repo task runs out of room** in Settings to " +
+    "carry on and the next attempt resumes from exactly where I stopped; " +
+    "otherwise ask me again in a minute. You were only charged for the steps " +
+    "that actually ran.";
 }
 
 function gitPathMatches(cfg, query) {

@@ -32,6 +32,10 @@ const BOT_RESUME_MAX_BYTES = 512 * 1024;
 const BOT_PROGRESS_TTL_S = 900;
 const BOT_PROGRESS_MAX_STEPS = 120;
 const BOT_PROGRESS_MAX_BYTES = 128 * 1024;
+const GATE_PACE_MS = 900;
+const GATE_PACE_LIMITED_MS = 4500;
+const GATE_LIMIT_MEMORY_MS = 90000;
+const GATE_MAX_WAIT_MS = 12000;
 
 export class NymLedger {
   constructor(state, env) {
@@ -77,6 +81,9 @@ export class NymLedger {
     // losing it costs a progress line, never an answer.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS bot_progress (id TEXT PRIMARY KEY, steps TEXT NOT NULL, exp INTEGER NOT NULL);"
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS gate (id TEXT PRIMARY KEY, next_at INTEGER NOT NULL, limited_at INTEGER NOT NULL);"
     );
   }
 
@@ -126,6 +133,8 @@ export class NymLedger {
       case "resume-take": return this._resumeTake(a.id, a.owner);
       case "progress-push": return this._progressPush(a.key, a.step);
       case "progress-read": return this._progressRead(a.key, a.after);
+      case "gate-take": return this._gateTake(a);
+      case "gate-limited": return this._gateLimited(a);
       default: return { error: "unknown op" };
     }
   }
@@ -361,6 +370,65 @@ export class NymLedger {
     }
     const from = Number(after) || 0;
     return { steps: steps.filter((s) => (s && s.n ? s.n : 0) > from) };
+  }
+
+  _gateNum(v, fallback, cap) {
+    const n = Number(v);
+    if (!isFinite(n) || n < 0) return fallback;
+    return Math.min(Math.round(n), cap);
+  }
+
+  _gateId(v) {
+    const id = typeof v === "string" ? v.replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 64) : "";
+    return id || "gateway";
+  }
+
+  _gateRow(id) {
+    const rows = this.sql
+      .exec("SELECT next_at, limited_at FROM gate WHERE id = ? LIMIT 1;", id)
+      .toArray();
+    return rows.length ? rows[0] : null;
+  }
+
+  _gateSave(id, nextAt, limitedAt) {
+    this.sql.exec(
+      "INSERT INTO gate (id, next_at, limited_at) VALUES (?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET next_at = excluded.next_at, limited_at = excluded.limited_at;",
+      id,
+      Math.round(nextAt),
+      Math.round(limitedAt)
+    );
+  }
+
+  _gateTake(a) {
+    const id = this._gateId(a && a.id);
+    const pace = this._gateNum(a && a.pace, GATE_PACE_MS, 20000);
+    const limitedPace = Math.max(pace, this._gateNum(a && a.limitedPace, GATE_PACE_LIMITED_MS, 60000));
+    const memory = this._gateNum(a && a.memory, GATE_LIMIT_MEMORY_MS, 600000);
+    const maxWait = this._gateNum(a && a.maxWait, GATE_MAX_WAIT_MS, 60000);
+    const now = Date.now();
+    const row = this._gateRow(id);
+    const limitedAt = row ? Number(row.limited_at) || 0 : 0;
+    const since = now - limitedAt;
+    const recent = limitedAt > 0 && since < memory;
+    const gap = recent
+      ? Math.round(pace + (limitedPace - pace) * (1 - since / memory))
+      : pace;
+    let at = row && Number(row.next_at) > now ? Number(row.next_at) : now;
+    if (at > now + maxWait) at = now + maxWait;
+    this._gateSave(id, at + gap, limitedAt);
+    return { ok: true, waitMs: at - now, gap, limited: recent };
+  }
+
+  _gateLimited(a) {
+    const id = this._gateId(a && a.id);
+    const penalty = this._gateNum(a && a.penalty, GATE_PACE_LIMITED_MS, 60000);
+    const now = Date.now();
+    const row = this._gateRow(id);
+    const base = row && Number(row.next_at) > now ? Number(row.next_at) : now;
+    const next = base + penalty;
+    this._gateSave(id, next, now);
+    return { ok: true, waitMs: next - now };
   }
 
   // Limited-edition supply (numbered drops)
