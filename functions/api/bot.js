@@ -370,10 +370,10 @@ var BOT_PM_MAX_TOKENS = {
 };
 
 // The free tier.
-var BOT_FREE_DAILY = 20;
+var BOT_FREE_DAILY = 10;
 var BOT_FREE_HISTORY_BUDGET = 5000;
-// And what one network gets, however many keys it makes.
-var BOT_FREE_NET_DAILY = 5 * BOT_FREE_DAILY;
+// And what one address gets, however many keys it makes.
+var BOT_FREE_NET_DAILY = BOT_FREE_DAILY;
 
 function botFreeNetSalt(env) {
   var explicit = (env && env.FREE_NET_SALT) || "";
@@ -383,8 +383,8 @@ function botFreeNetSalt(env) {
   return bytesToHex(sha256(utf8ToBytes("nymbot-free-net-v1|" + seed)));
 }
 
-/// A stable id for the network a request came from, for today only: the address
-/// hashed with a server secret and the day, bucketed by /64 on IPv6.
+/// A stable id for the address a request came from, for today only: the
+/// address hashed with a server secret and the day, bucketed by /64 on IPv6.
 async function botFreeNetId(request, env) {
   try {
     var ip = (request && request.headers && request.headers.get("CF-Connecting-IP")) || "";
@@ -3230,15 +3230,18 @@ var NYMBOT_PM_ELSEWHERE = [
   "Mention it when it is the actual answer to what someone asked — they want to keep chats apart, work on a document, save a persona, compare two models, have something run daily — and when you do, say the one thing that solves their problem rather than reciting the list. Say it once. Never open a reply with it, never add it to an answer it has nothing to do with, and never imply this chat is the lesser one: a PM is the whole product for plenty of people."
 ];
 
-function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp) {
+function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp, webDenied) {
   var tierSection = freeTurn ? [
     "=== FREE DAILY ALLOWANCE ===",
     "This user is out of credits and this reply is coming from the free tier: " + BOT_FREE_DAILY + " replies a day on a single small model, with a shorter memory of the conversation than a paid reply gets. Be as useful as you can inside that.",
     "Free replies cost nothing at all — no credits are spent on this, so never quote a price for it.",
     "Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — say 'AI models' or 'large language models' instead. If asked which model you are, say Nymbot's free tier runs one small general model and that credits unlock multi-model routing and the frontier models.",
     "What credits buy, if it comes up and only then: sharper models routed per question (coding, reasoning, creative, translation), Nymbot Pro with a specific frontier model pinned by ?model, connected git repositories, image generation, voice clips, live web search, and a much longer memory of the conversation. ?buy opens the purchase flow.",
-    "Do not apologise for the free tier, do not mention the daily count — the app shows it — and do not push the upgrade. Answer the question.",
-    "WHEN YOU CANNOT DO SOMETHING, SAY SO: you are a small model with a short memory of this conversation, and some things are genuinely out of reach — reading a git repository, generating a picture or a voice clip, searching the live web, holding a long document in mind, or a hard coding, maths or analysis problem that needs a frontier model. Do not bluff, do not guess at an answer you are not equipped to give, and do not silently produce a worse one. Name the limit in a sentence, say a Pro model can do it and how to get there (?model, or ?git for a repository), then help as far as you actually can. This is the one case where mentioning the upgrade is right, because it is the honest answer to what was asked — not a pitch. Say it once, only when you have actually hit the limit, and never as a preface to an answer you can give."
+    "Do not apologize for the free tier, do not mention the daily count — the app shows it — and do not push the upgrade. Answer the question.",
+    webDenied
+      ? "THE USER HAS WEB SEARCH SWITCHED ON AND IT IS NOT RUNNING: live search is not part of the free allowance, so nothing was looked up for this reply. Say that in your first sentence, say credits turn search on, then answer from what you already know and be plain about where that may be out of date. Never imply you searched, and never cite a page you have not read."
+      : "",
+    "WHEN YOU CANNOT DO SOMETHING, SAY SO: you are a small model with a short memory of this conversation, and some things are genuinely out of reach — reading a git repository, generating a picture or a voice clip, searching the live web, holding a long document in mind, or a hard coding, math or analysis problem that needs a frontier model. Do not bluff, do not guess at an answer you are not equipped to give, and do not silently produce a worse one. Name the limit in a sentence, say a Pro model can do it and how to get there (?model, or ?git for a repository), then help as far as you actually can. This is the one case where mentioning the upgrade is right, because it is the honest answer to what was asked — not a pitch. Say it once, only when you have actually hit the limit, and never as a preface to an answer you can give."
   ] : proModel ? [
     "=== PRO MODE (USER-SELECTED MODEL) ===",
     "This user has Nymbot Pro and chose " + proModel.label + " — every reply in this chat is generated by that frontier model. You ARE " + proModel.label + " speaking as Nymbot; if the user asks which model they're talking to, tell them it's " + proModel.label + ". Don't name the gateway infrastructure used to reach it.",
@@ -3256,7 +3259,8 @@ function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp) {
   var web = webOn ? NYMBOT_PM_WEB_ON : NYMBOT_PM_WEB_OFF;
   // The app does not need telling about itself.
   var elsewhere = inApp ? [] : NYMBOT_PM_ELSEWHERE;
-  return NYMBOT_PM_PROMPT_HEAD.concat(tierSection, web, elsewhere, NYMBOT_PM_PROMPT_TAIL).join("\n");
+  return NYMBOT_PM_PROMPT_HEAD.concat(tierSection, web, elsewhere, NYMBOT_PM_PROMPT_TAIL)
+    .filter(function (line) { return line !== ""; }).join("\n");
 }
 
 var NYMBOT_PM_PROMPT_HEAD = [
@@ -3327,23 +3331,28 @@ var NYMBOT_PM_PROMPT_TAIL = [
   "Public channels (geohash-based, ephemeral) are free. The free public bot is invoked with ?ask or @Nymbot in any channel. This private 1:1 Nymbot chat is the paid premium tier."
 ];
 
-function botCreditsForSats(sats) {
-  sats = Math.max(0, Math.floor(Number(sats) || 0));
-  var mult = 1;
-  if (sats >= 5000) mult = 1.20;
-  else if (sats >= 1000) mult = 1.15;
-  else if (sats >= 500) mult = 1.10;
-  return Math.floor((sats / BOT_SATS_PER_CREDIT) * mult);
+var BOT_BULK_BONUS = [
+  { sats: 5000, bonus: 0.20 },
+  { sats: 1000, bonus: 0.15 },
+  { sats: 500, bonus: 0.10 }
+];
+
+function botBulkMultiplier(sats, tier) {
+  var scale = tier === "pro" ? BOT_PRO_SATS_PER_CREDIT / BOT_SATS_PER_CREDIT : 1;
+  for (var i = 0; i < BOT_BULK_BONUS.length; i++) {
+    if (sats >= BOT_BULK_BONUS[i].sats * scale) return 1 + BOT_BULK_BONUS[i].bonus;
+  }
+  return 1;
 }
 
-// Pro credits carry the same bulk bonuses at 10x the sats thresholds.
+function botCreditsForSats(sats) {
+  sats = Math.max(0, Math.floor(Number(sats) || 0));
+  return Math.floor((sats / BOT_SATS_PER_CREDIT) * botBulkMultiplier(sats, "standard"));
+}
+
 function botProCreditsForSats(sats) {
   sats = Math.max(0, Math.floor(Number(sats) || 0));
-  var mult = 1;
-  if (sats >= 50000) mult = 1.20;
-  else if (sats >= 10000) mult = 1.15;
-  else if (sats >= 5000) mult = 1.10;
-  return Math.floor((sats / BOT_PRO_SATS_PER_CREDIT) * mult);
+  return Math.floor((sats / BOT_PRO_SATS_PER_CREDIT) * botBulkMultiplier(sats, "pro"));
 }
 
 function botCreditsForSatsTier(sats, tier) {
@@ -3537,7 +3546,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var split = parsed.split;
   var question = parsed.question;
 
-  var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null, runOpts.web === true, runOpts.free === true, runOpts.inApp === true) }];
+  var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null, runOpts.web === true, runOpts.free === true, runOpts.inApp === true, runOpts.webDenied === true) }];
 
   var dropped = [];
   var keptTurns = [];
@@ -3894,7 +3903,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       standardUsdPerCredit: Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6,
       btcUsd: Math.round(btcUsd),
       minChargeCredits: BOT_MIN_CHARGE_MILLI / BOT_MILLI_PER_CREDIT,
-      metered: true
+      metered: true,
+      satsPerCreditTier: { standard: BOT_SATS_PER_CREDIT, pro: BOT_PRO_SATS_PER_CREDIT },
+      bulkBonus: BOT_BULK_BONUS.slice().reverse().map(function (b) {
+        return {
+          bonus: b.bonus,
+          standardSats: b.sats,
+          proSats: b.sats * (BOT_PRO_SATS_PER_CREDIT / BOT_SATS_PER_CREDIT)
+        };
+      })
     });
   }
 
@@ -4127,7 +4144,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       proDustMilli: owed.pro || 0,
       free: (peek && peek.ok) ? {
         used: peek.used, limit: peek.limit, left: peek.left, resetsAt: peek.resetsAt,
-        // Set when it is the network that has run out rather than this key, so
+        // Set when it is the address that has run out rather than this key, so
         // the app can say so instead of showing a count that will not move.
         netSpent: !!peek.netSpent
       } : undefined
@@ -4356,13 +4373,6 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (proModel && !proConfigured(env)) {
       return json({ error: "Nymbot Pro is not configured on this server." }, 503);
     }
-    // Every repository the chat has in scope, not just the first.
-    var ghConfig = null;
-    if (body.git || (Array.isArray(body.repos) && body.repos.length)) {
-      if (!proModel) return json({ error: "Repo mode needs a Pro model — pick one with ?model first." }, 400);
-      ghConfig = parseGitConfigs(body);
-      if (!ghConfig) return json({ error: "Invalid git configuration — re-run ?git in this chat." }, 400);
-    }
     var record = await botGetCredits(env, userPubkey);
     var proRecord = proModel ? await botGetProCredits(env, userPubkey) : null;
     var cutoff = Date.now() - BOT_PM_RATE_WINDOW_MS;
@@ -4370,6 +4380,20 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (proRecord) proRecord.rl = (proRecord.rl || []).filter(function (t) { return t > cutoff; });
     if (record.rl.length + (proRecord ? proRecord.rl.length : 0) >= BOT_PM_RATE_LIMIT) {
       return json({ error: "Slow down — too many messages. Try again in a minute." }, 429);
+    }
+    // Every repository the chat has in scope, not just the first.
+    var ghConfig = null;
+    if (body.git || (Array.isArray(body.repos) && body.repos.length)) {
+      if (!proModel) {
+        return json({
+          error: (record.balance > 0 || (await botGetProCredits(env, userPubkey)).balance > 0)
+            ? "Repo mode needs a Pro model — pick one with ?model first."
+            : "Reading a repository needs Pro credits: the task runs as an agent over several model calls, so it is not part of the free daily allowance. Type ?buy to top up, then ?model to pick the model that will read it.",
+          noCredits: record.balance <= 0
+        }, 400);
+      }
+      ghConfig = parseGitConfigs(body);
+      if (!ghConfig) return json({ error: "Invalid git configuration — re-run ?git in this chat." }, 400);
     }
     if (proModel) {
       // Reserve the per-message worst case (base + max-length output, times
@@ -4412,7 +4436,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (!proModel && record.balance <= 0) {
       var claim = await ledgerCall(env, {
         op: "free-claim", pubkey: userPubkey, limit: BOT_FREE_DAILY,
-        // Counted per network as well as per key.
+        // Counted per address as well as per key, at the same cap.
         net: await botFreeNetId(context.request, env), netLimit: BOT_FREE_NET_DAILY
       });
       if (claim && claim.ok) {
@@ -4424,7 +4448,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           balance: 0,
           // Say which allowance ran out.
           error: (claim && claim.netSpent)
-            ? "This network has used today's free replies. They come back tomorrow, or type ?buy for credits — which also unlock the sharper models, repositories, images and web search."
+            ? "Today's " + BOT_FREE_DAILY + " free replies have been used from this address — a new key does not get another set. They come back at midnight UTC, or type ?buy for credits, which also unlock the sharper models, repositories, images and web search."
             : undefined,
           // What ran out and when it comes back, so the answer is a time
           // rather than a wall.
@@ -4936,6 +4960,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         // every reply narrated a lookup nobody asked for. The chat's own
         // switch decides here.
         web: body.web === true && !freeTurn,
+        webDenied: body.web === true && freeTurn,
         // Which of the two products is asking. Only ever decides whether the
         // reply may mention the other one.
         inApp: isStandaloneNymbot(context.request, env)
@@ -5953,7 +5978,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== PRIVATE MESSAGING WITH NYMBOT (PAID PREMIUM) ===",
   "Users can have a private, end-to-end encrypted 1:1 conversation with you (Nymbot) using NIP-17 gift wraps. To start one: click Nymbot's nym or avatar and choose 'Private Message', or open the Nyms sidebar and select Nymbot. It only works as a 1:1 chat — Nymbot can't be added to group chats.",
-  "WHEN YOU CANNOT DO SOMETHING, SAY SO: you are the free bot on a single small model with no memory of past messages beyond the context you are given. Reading a git repository, generating pictures or voice clips, working through a long document, and hard coding, maths or analysis problems that need a frontier model are out of reach here. Do not bluff and do not hand back a worse answer as though it were the answer: name the limit in a sentence, say the paid private Nymbot — and Nymbot Pro, where a specific frontier model is pinned — can do it, then help as far as you actually can. Say it once, only when you have genuinely hit the limit, never as a preface to an answer you can give, and never as a sales pitch.",
+  "WHEN YOU CANNOT DO SOMETHING, SAY SO: you are the free bot on a single small model with no memory of past messages beyond the context you are given. Reading a git repository, generating pictures or voice clips, working through a long document, and hard coding, math or analysis problems that need a frontier model are out of reach here. Do not bluff and do not hand back a worse answer as though it were the answer: name the limit in a sentence, say the paid private Nymbot — and Nymbot Pro, where a specific frontier model is pinned — can do it, then help as far as you actually can. Say it once, only when you have genuinely hit the limit, never as a preface to an answer you can give, and never as a sales pitch.",
   "PREMIUM IS A SMARTER NYMBOT: The free public-channel bot (?ask / @Nymbot) runs a single general-purpose AI model. The paid private Nymbot runs a MULTI-MODEL setup — it reads each message, interprets the type of task (coding, reasoning/math, creative writing, translation, or general chat) and routes it to the best-suited AI model for that task. That makes premium answers noticeably sharper and more capable than the free public bot. Both versions otherwise share the same knowledge, live web search, and changelog access. Never name the underlying infrastructure or model vendor (no 'Cloudflare', 'Workers AI', 'OpenAI', 'Meta', 'Llama', 'Qwen', 'Mistral', etc.) — just say 'AI models' or 'large language models'.",
   "Private Nymbot conversations are a paid feature, metered on the tokens each reply actually uses and charged in thousandths of a credit — a short question costs a fraction of a credit, a long answer costs more, and coding and reasoning routes cost more per token because they use bigger models. Credits are bought with Bitcoin Lightning zaps; 1 credit costs roughly 10 sats with a small bulk bonus at higher zap amounts (+10% at 500 sats, +15% at 1K, +20% at 5K). Quote exact figures only if asked.",
   "To buy credits: type ?buy inside the Nymbot private chat, or zap Nymbot's profile (zapping the profile opens the credit purchase flow). Note: zapping one of Nymbot's messages in a public channel is just an appreciation tip and does NOT add credits — only the ?buy / profile-zap purchase flow does. To check the remaining balance: type ?balance inside the Nymbot private chat — the balance is also shown in the chat header.",

@@ -401,7 +401,7 @@ function pickTranslation(res) {
 /// the message comes back translated and half does not.
 function mixedLanguageClause(target) {
   return ' The message may contain more than one language, including text '
-    + 'already in a language you recognise, and possibly on separate lines. '
+    + 'already in a language you recognize, and possibly on separate lines. '
     + 'Translate EVERY part of it into ' + langName(target) + ', including any '
     + 'part that is already in another language. Never leave a line '
     + 'untranslated.';

@@ -66,7 +66,7 @@ export class NymLedger {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS free_usage (pubkey TEXT PRIMARY KEY, day TEXT NOT NULL, used INTEGER NOT NULL);"
     );
-    // And one row per network, so wiping the device does not reset it.
+    // And one row per address, so a new key does not reset it.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS free_net (id TEXT PRIMARY KEY, day TEXT NOT NULL, used INTEGER NOT NULL);"
     );
@@ -689,7 +689,7 @@ export class NymLedger {
     }
     return {
       ok: true, used: at.used, limit: cap, left: left,
-      // Set only when the network is the binding one, so the reader is told which
+      // Set only when the address is the binding one, so the reader is told which
       // wall they are against rather than a number that will not move.
       netSpent: netLeft === 0,
       resetsAt: this._freeResetsAt()
@@ -708,7 +708,7 @@ export class NymLedger {
     if (at.used >= cap) {
       return { ok: false, used: at.used, limit: cap, left: 0, resetsAt: resetsAt };
     }
-    // The network's own allowance, checked under the same lock.
+    // The address's own allowance, checked under the same lock.
     const nid = this._freeNetId(net);
     const netCap = this._freeLimit(netLimit);
     let netUsed = 0;

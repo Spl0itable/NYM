@@ -1137,7 +1137,7 @@ Object.assign(NYM.prototype, {
 
             this.p2pActiveTransfers.delete(transferId);
             this.p2pReceivedChunks.delete(transferId);
-            this.displaySystemMessage('Transfer cancelled');
+            this.displaySystemMessage('Transfer canceled');
             this.openP2PTransfersModal(); // Refresh modal
         }
     },

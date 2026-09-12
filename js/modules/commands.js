@@ -644,7 +644,7 @@ Object.assign(NYM.prototype, {
         if (this.isReservedNick(newNym)) {
             const result = await showDevNsecModal('nick');
             if (!result) {
-                this.displaySystemMessage('Nickname change cancelled.');
+                this.displaySystemMessage('Nickname change canceled.');
                 return null;
             }
             // Verified - apply developer identity

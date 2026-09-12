@@ -357,24 +357,50 @@ Object.assign(NYM.prototype, {
     },
 
     // Convert a sats amount to Nymbot message credits
+    _botBulkBonusFallback: [
+        { bonus: 0.10, standardSats: 500, proSats: 5000 },
+        { bonus: 0.15, standardSats: 1000, proSats: 10000 },
+        { bonus: 0.20, standardSats: 5000, proSats: 50000 }
+    ],
+
+    _botBulkRows() {
+        const served = this._botProCatalog && this._botProCatalog.bulkBonus;
+        return (Array.isArray(served) && served.length) ? served : this._botBulkBonusFallback;
+    },
+
+    _botBulkMultiplier(sats, tier) {
+        const key = tier === 'pro' ? 'proSats' : 'standardSats';
+        let best = 0;
+        for (const row of this._botBulkRows()) {
+            const at = Number(row && row[key]) || 0;
+            if (at > 0 && sats >= at) best = Math.max(best, Number(row.bonus) || 0);
+        }
+        return 1 + best;
+    },
+
+    _botBulkBonusLine(tier) {
+        const key = tier === 'pro' ? 'proSats' : 'standardSats';
+        const parts = this._botBulkRows()
+            .slice()
+            .sort((a, b) => (Number(a[key]) || 0) - (Number(b[key]) || 0))
+            .map(row => {
+                const at = Number(row[key]) || 0;
+                return '+' + Math.round((Number(row.bonus) || 0) * 100) + '% at '
+                    + (at >= 1000 ? (at / 1000) + 'K' : String(at));
+            });
+        return parts.length ? 'Bulk bonus: ' + parts.join(', ') + ' sats.' : '';
+    },
+
     _botCreditsForSats(sats) {
         sats = Math.max(0, Math.floor(Number(sats) || 0));
-        let mult = 1;
-        if (sats >= 5000) mult = 1.20;
-        else if (sats >= 1000) mult = 1.15;
-        else if (sats >= 500) mult = 1.10;
-        return Math.floor((sats / 10) * mult);
+        return Math.floor((sats / 10) * this._botBulkMultiplier(sats, 'standard'));
     },
 
     // Pro credits: 100 sats each, same bulk bonuses at 10x thresholds
     // (mirrors botProCreditsForSats in functions/api/bot.js)
     _botProCreditsForSats(sats) {
         sats = Math.max(0, Math.floor(Number(sats) || 0));
-        let mult = 1;
-        if (sats >= 50000) mult = 1.20;
-        else if (sats >= 10000) mult = 1.15;
-        else if (sats >= 5000) mult = 1.10;
-        return Math.floor((sats / 100) * mult);
+        return Math.floor((sats / 100) * this._botBulkMultiplier(sats, 'pro'));
     },
 
     _botCreditsForSatsTier(sats) {
@@ -504,8 +530,8 @@ Object.assign(NYM.prototype, {
             'Replies are metered on the tokens they use, charged in thousandths of a credit — a short question costs a fraction of one.',
             'Coding and reasoning/math cost more per token than general chat, creative writing or translation, because those routes use larger models.',
             'Repeated context is billed at a cached rate, so a long conversation does not re-pay for its own history.',
-            'Bulk bonus: +10% at 500 sats, +15% at 1K, +20% at 5K.'
-        ].join('<br>');
+            this._botBulkBonusLine('standard')
+        ].filter(Boolean).join('<br>');
     },
 
     _botProCreditPricingNote() {
@@ -519,8 +545,8 @@ Object.assign(NYM.prototype, {
             '<strong>Pro credits</strong> unlock replies from a frontier model you pick with <code>?model</code> in the Nymbot chat.',
             'Metered on the tokens each reply uses: ' + models + '.',
             'Repeated context is billed at the cached rate, a tenth of the fresh one.',
-            'Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.'
-        ].join('<br>');
+            this._botBulkBonusLine('pro')
+        ].filter(Boolean).join('<br>');
     },
 
     // Show/refresh a live "X sats = Y messages" estimate for the custom amount

@@ -209,7 +209,7 @@ Object.assign(NYM.prototype, {
       timeout: 60000,
       extensions: { prf: {} }
     }});
-    if (!cred) throw new Error('Passkey enrollment was cancelled.');
+    if (!cred) throw new Error('Passkey enrollment was canceled.');
     // Derive the actual key via a follow-up get() (PRF results are reliably
     // returned on get, not always on create). This also fails fast here if the
     // chosen authenticator doesn't support PRF, before we commit any state.
