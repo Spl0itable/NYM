@@ -2574,7 +2574,8 @@ Object.assign(NYM.prototype, {
     _botProPriceLabel(m) {
         const turn = this._botProTurnCredits(m);
         if (turn !== null) {
-            return `~${this._creditFigure(turn)} credits a turn · $${m.inUsdPerMTok}/M in, $${m.outUsdPerMTok}/M out`
+            const n = this._creditFigure(turn);
+            return `~${n} credit${n === '1' ? '' : 's'} a turn · $${m.inUsdPerMTok}/M in, $${m.outUsdPerMTok}/M out`
                 + (Number(m.cacheReadUsdPerMTok) > 0 ? `, $${m.cacheReadUsdPerMTok}/M cached` : '');
         }
         if (m && Number(m.inUsdPerMTok) > 0 && Number(m.outUsdPerMTok) > 0) {
