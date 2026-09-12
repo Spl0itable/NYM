@@ -1553,6 +1553,11 @@ body.chat-bubbles .read-more-btn {
     padding-top: 0;
 }
 
+.bot-model-group svg.brand-tile {
+    vertical-align: -0.28em;
+    margin-right: 0.45em;
+}
+
 .bot-model-empty {
     padding: 18px 4px;
     text-align: center;

@@ -1,5 +1,8 @@
 // pms.js - Private messages: send, open, conversation list, gift wrap DMs, new-PM modal, retry queue
 
+const NYMBOT_TURN_IN = 3000;
+const NYMBOT_TURN_OUT = 700;
+
 Object.assign(NYM.prototype, {
 
     _pmHeaderAvatarHtml(pubkey, avatarSrc, safePk) {
@@ -2531,6 +2534,18 @@ Object.assign(NYM.prototype, {
 
     // The per-million-token rates a reply is charged on, falling back to the flat
     // per-reply price for a model the catalog has no published rate for.
+    _replyBalance(data) {
+        if (!data) return null;
+        if (typeof data.balanceCredits === 'number') return data.balanceCredits;
+        return typeof data.balance === 'number' ? data.balance : null;
+    },
+
+    _replyCost(data) {
+        if (!data) return 0;
+        if (typeof data.costCredits === 'number') return data.costCredits;
+        return typeof data.cost === 'number' ? data.cost : 0;
+    },
+
     _creditFigure(v) {
         const n = Number(v);
         if (!Number.isFinite(n)) return '…';
@@ -2545,7 +2560,23 @@ Object.assign(NYM.prototype, {
         return `${this._creditFigure(v)} ${word}${one ? '' : 's'}`;
     },
 
+    _botProTurnCredits(m) {
+        const cat = this._botProCatalog;
+        const usd = Number(cat && cat.usdPerCredit) || 0;
+        const pin = Number(m && m.inUsdPerMTok);
+        const pout = Number(m && m.outUsdPerMTok);
+        if (!(usd > 0) || !(pin > 0) || !(pout > 0)) return null;
+        const spend = (NYMBOT_TURN_IN * pin + NYMBOT_TURN_OUT * pout) / 1e6 / usd;
+        const floor = Number(cat.minChargeCredits) || 0;
+        return spend < floor ? floor : spend;
+    },
+
     _botProPriceLabel(m) {
+        const turn = this._botProTurnCredits(m);
+        if (turn !== null) {
+            return `~${this._creditFigure(turn)} credits a turn · $${m.inUsdPerMTok}/M in, $${m.outUsdPerMTok}/M out`
+                + (Number(m.cacheReadUsdPerMTok) > 0 ? `, $${m.cacheReadUsdPerMTok}/M cached` : '');
+        }
         if (m && Number(m.inUsdPerMTok) > 0 && Number(m.outUsdPerMTok) > 0) {
             return `$${m.inUsdPerMTok}/M in, $${m.outUsdPerMTok}/M out`
                 + (Number(m.cacheReadUsdPerMTok) > 0 ? `, $${m.cacheReadUsdPerMTok}/M cached` : '');
@@ -2964,7 +2995,9 @@ Object.assign(NYM.prototype, {
             const models = g.keys.map(k => byKey.get(k)).filter(m => m && matches(m));
             if (!models.length) continue;
             if (g.author) {
-                rows.push(`<div class="bot-model-group" data-no-i18n>${this.escapeHtml(g.author)}</div>`);
+                const marks = window.NymbotBrands;
+                const tile = marks && g.authorSlug ? marks.markup(g.authorSlug, 16) : '';
+                rows.push(`<div class="bot-model-group" data-no-i18n>${tile}${this.escapeHtml(g.author)}</div>`);
             }
             for (const m of models) {
                 shown++;
@@ -3310,11 +3343,11 @@ Object.assign(NYM.prototype, {
                 const msg = data.error
                     || (data.pro
                         ? `You're out of Nymbot Pro credits (${this._creditFigure((data.balanceCredits != null ? data.balanceCredits : data.balance) || 0)} left). Type ?buy and switch to Pro, or ?model off for standard replies.`
-                        : `You're out of Nymbot credits (${data.balance || 0} left). Zap Nymbot or type ?buy to purchase more.`);
+                        : `You're out of Nymbot credits (${this._creditFigure(this._replyBalance(data) || 0)} left). Zap Nymbot or type ?buy to purchase more.`);
                 this.displaySystemMessage(msg);
-                if (typeof data.balance === 'number') {
-                    if (data.pro) this._setBotProCreditDisplay(data.balance);
-                    else this._setBotCreditDisplay(data.balance);
+                if (this._replyBalance(data) !== null) {
+                    if (data.pro) this._setBotProCreditDisplay(this._replyBalance(data));
+                    else this._setBotCreditDisplay(this._replyBalance(data));
                 }
                 if (typeof this.botAnonReady === 'function' && this.botAnonReady()) this.openBotAnonModal();
                 else this.showBotCreditsModal(null, data.pro ? 'pro' : 'standard');
@@ -3333,23 +3366,25 @@ Object.assign(NYM.prototype, {
             if (data.selfEvent && /^[0-9a-f]{64}$/i.test(data.selfEvent.id || '')) {
                 this.sendDMToRelays(['EVENT', data.selfEvent]);
             }
-            if (typeof data.balance === 'number') {
-                if (data.pro) this._setBotProCreditDisplay(data.balance);
-                else this._setBotCreditDisplay(data.balance);
-                if (data.git && data.cost) {
-                    this.displaySystemMessage(`Repo task used ${data.cost} Pro credit${data.cost === 1 ? '' : 's'}${data.modelCalls > 1 ? ` (${data.modelCalls} model calls)` : ''}. Pro balance: ${data.balance}.`);
-                } else if (data.pro && data.cost) {
+            const replyBalance = this._replyBalance(data);
+            if (replyBalance !== null) {
+                const replyCost = this._replyCost(data);
+                if (data.pro) this._setBotProCreditDisplay(replyBalance);
+                else this._setBotCreditDisplay(replyBalance);
+                if (data.git && replyCost) {
+                    this.displaySystemMessage(`Repo task used ${this._creditFigure(replyCost)} Pro credit${replyCost === 1 ? '' : 's'}${data.modelCalls > 1 ? ` (${data.modelCalls} model calls)` : ''}. Pro balance: ${this._creditFigure(replyBalance)}.`);
+                } else if (data.pro && replyCost) {
                     const sel = this._getBotProModel();
-                    if (sel && data.cost > sel.credits) {
-                        this.displaySystemMessage(`Long reply used ${data.cost} Pro credits (scales with length). Pro balance: ${data.balance}.`);
+                    if (sel && replyCost > (sel.credits || 1)) {
+                        this.displaySystemMessage(`Long reply used ${this._creditFigure(replyCost)} Pro credits. Pro balance: ${this._creditFigure(replyBalance)}.`);
                     }
-                } else if (!data.pro && data.cost && data.cost > 1) {
-                    this.displaySystemMessage(`${data.taskType || 'Heavy'} reply used ${data.cost} credits. Balance: ${data.balance}.`);
+                } else if (!data.pro && replyCost > 1) {
+                    this.displaySystemMessage(`${data.taskType || 'Heavy'} reply used ${this._creditFigure(replyCost)} credits. Balance: ${this._creditFigure(replyBalance)}.`);
                 }
                 if (data.lowBalance) {
                     this.displaySystemMessage(data.pro
-                        ? `Nymbot Pro credits running low: ${data.balance} left. Type ?buy and switch to Pro to top up.`
-                        : `Nymbot credits running low: ${data.balance} credit${data.balance === 1 ? '' : 's'} left. Type ?buy to top up.`);
+                        ? `Nymbot Pro credits running low: ${this._creditFigure(replyBalance)} left. Type ?buy and switch to Pro to top up.`
+                        : `Nymbot credits running low: ${this._creditFigure(replyBalance)} credit${replyBalance === 1 ? '' : 's'} left. Type ?buy to top up.`);
                 }
             }
         } catch (e) {
@@ -3381,7 +3416,7 @@ Object.assign(NYM.prototype, {
                     (anon ? ' Type <code>?anon</code> to move more credits across from your nym.' : '') +
                     (b <= 0 && p <= 0 ? ' Type <code>?buy</code> to purchase more.' : ''));
             }
-            return data.balance;
+            return data.balanceCredits != null ? data.balanceCredits : data.balance;
         } catch (e) {
             if (display) this.displaySystemMessage('Could not reach Nymbot to check your balance.');
             return null;

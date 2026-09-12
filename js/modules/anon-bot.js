@@ -725,9 +725,12 @@
                 throw new Error((data && data.error) || 'Could not redeem vouchers');
             }
             this._botAnonDropTokens(batch);
-            if (typeof data.balance === 'number') {
-                if (tier === 'pro') this._setBotProCreditDisplay(data.balance);
-                else this._setBotCreditDisplay(data.balance);
+            const redeemed = typeof data.balanceCredits === 'number'
+                ? data.balanceCredits
+                : (typeof data.balance === 'number' ? data.balance : null);
+            if (redeemed !== null) {
+                if (tier === 'pro') this._setBotProCreditDisplay(redeemed);
+                else this._setBotCreditDisplay(redeemed);
             }
             return data.credited || 0;
         },
