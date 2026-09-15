@@ -7995,7 +7995,7 @@ function normalizeFilterPacks(raw) {
 }
 
 function normalizeAppVerifiedFilter(raw) {
-    return (raw === 'verified' || raw === 'any') ? raw : 'off';
+    return (raw === 'on' || raw === 'verified' || raw === 'any') ? 'on' : 'off';
 }
 
 function updateSetupInviteBanner() {

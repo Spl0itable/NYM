@@ -135,21 +135,13 @@
             return tier;
         },
 
-        // The filter itself. `off` lets everything through; `verified` takes
-        // only platform-attested senders; `any` also takes the web tier.
         passesAppVerifiedFilter(pubkey) {
             const mode = this.appVerifiedFilter || 'off';
             if (mode === 'off') return true;
             if (pubkey === this.pubkey) return true;
             if (typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey)) return true;
             if (typeof this.isFriend === 'function' && this.isFriend(pubkey)) return true;
-            const tier = this.attestedTier(pubkey);
-            // 'verified' is the hardware bar and only the native apps clear it.
-            // 'any' is the one worth using day to day: with the web challenge
-            // on, every badge below `attested` cost a real browser solve, so a
-            // script gets no badge at all and is filtered at either setting.
-            if (mode === 'verified') return tier === 'attested';
-            return tier === 'attested' || tier === 'challenged' || tier === 'origin';
+            return TIER_RANK[this.attestedTier(pubkey)] !== undefined;
         },
 
         // ---- enrollment ----------------------------------------------------
