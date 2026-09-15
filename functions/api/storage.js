@@ -1100,6 +1100,36 @@ async function handleChannelAction(context, body) {
   };
   if (!hasD1(env.DB_CHANNELS)) return json({ error: "Channel storage is not configured (missing DB_CHANNELS binding)." }, 503);
 
+  if (body.action === "event-get") {
+    var wantIds = [];
+    var seenId = {};
+    var rawIds = Array.isArray(body.ids) ? body.ids : [body.id];
+    for (var ii = 0; ii < rawIds.length && wantIds.length < 20; ii++) {
+      var wid = rawIds[ii];
+      if (typeof wid === "string" && /^[0-9a-f]{64}$/.test(wid) && !seenId[wid]) {
+        seenId[wid] = 1;
+        wantIds.push(wid);
+      }
+    }
+    if (!wantIds.length) return json({ error: "Invalid id." }, 400);
+    var idHoles = wantIds.map(function () { return "?"; }).join(",");
+    var idRows = await env.DB_CHANNELS
+      .prepare("SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE id IN (" + idHoles + ")")
+      .bind.apply(null, wantIds).all().catch(function () { return null; });
+    var outEvents = [];
+    var idList = (idRows && idRows.results) || [];
+    for (var ri = 0; ri < idList.length; ri++) {
+      var row = idList[ri];
+      var parsed = null;
+      try { parsed = JSON.parse(row.json); } catch (e) { parsed = null; }
+      if (!parsed || parsed.id !== row.id) continue;
+      parsed.stored_at = Number(row.stored_at) || 0;
+      parsed.archived_channel = row.channel;
+      outEvents.push(parsed);
+    }
+    return json({ events: outEvents });
+  }
+
   // Public read: hydrate a channel's recent history. No auth (channels are
   // public); the worker's origin gate already limits this to Nymchat clients.
   if (body.action === "channel-get") {

@@ -648,11 +648,10 @@ async function verifyCertSignature(child, issuerSpkiDer) {
 }
 
 function pemToDer(pem) {
-  const body = String(pem || "").replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "");
-  // atob is lenient about length in some runtimes, so a non-base64 string can
-  // come back as bytes rather than throwing. Reject the shape up front, or a
-  // pasted-wrong root reads as a parse failure three checks later instead of
-  // naming itself.
+  const body = String(pem || "")
+    .replace(/\\[rn]/g, "\n")
+    .replace(/-----[A-Z ]+-----/g, "")
+    .replace(/\s+/g, "");
   if (!body || body.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) return null;
   try { return botBase64Decode(body); } catch (_) { return null; }
 }
@@ -826,10 +825,18 @@ async function googleAccessToken(env) {
   return body && typeof body.access_token === "string" ? body.access_token : null;
 }
 
+function normalizeCertDigest(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const hex = s.replace(/:/g, "").toLowerCase();
+  if (/^[0-9a-f]{64}$/.test(hex)) return base64UrlEncode(hexToBytes(hex));
+  return s.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
 async function verifyPlayIntegrity(env, { token, challenge }) {
   const packageName = env && env.ANDROID_PACKAGE_NAME;
   const certDigests = String((env && env.ANDROID_CERT_SHA256) || "")
-    .split(",").map((s) => s.trim()).filter(Boolean);
+    .split(",").map(normalizeCertDigest).filter(Boolean);
   if (!packageName || certDigests.length === 0) return { ok: false, reason: "android-not-configured" };
   if (typeof token !== "string" || !token) return { ok: false, reason: "malformed" };
 
@@ -864,7 +871,8 @@ async function verifyPlayIntegrity(env, { token, challenge }) {
   const app = payload.appIntegrity || {};
   if (app.appRecognitionVerdict !== "PLAY_RECOGNIZED") return { ok: false, reason: "app-not-recognized" };
   if (app.packageName !== packageName) return { ok: false, reason: "package-mismatch" };
-  const digests = Array.isArray(app.certificateSha256Digest) ? app.certificateSha256Digest : [];
+  const digests = (Array.isArray(app.certificateSha256Digest) ? app.certificateSha256Digest : [])
+    .map(normalizeCertDigest).filter(Boolean);
   if (!digests.some((d) => certDigests.includes(d))) return { ok: false, reason: "signature-mismatch" };
 
   const device = payload.deviceIntegrity || {};
@@ -964,6 +972,7 @@ export {
   PLATFORMS,
   ATTESTED_PLATFORMS,
   MAX_PUBKEYS_PER_DEVICE,
+  normalizeCertDigest,
   authoritySecret,
   authorityPubkey,
   normalizeAuthorityPubkey,

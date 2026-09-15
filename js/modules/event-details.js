@@ -82,7 +82,9 @@
             const body = document.getElementById('eventDetailsBody');
             if (!modal || !body) return;
             body.textContent = '';
+            body.dataset.eventId = eventId;
             body.appendChild(this._buildEventDetails(eventId));
+            if (!this.eventProvenance(eventId)) this._fetchArchivedEvent(eventId);
 
             // Copy lives in the modal's own footer, like every other modal in
             // the app, so the payload is handed to that button rather than to
@@ -113,6 +115,86 @@
             if (modal) modal.classList.remove('active');
         },
 
+        _fetchArchivedEvent(eventId) {
+            if (typeof this._storageApiRequest !== 'function') return;
+            if (this._archivedEventMisses && this._archivedEventMisses.has(eventId)) return;
+            this._storageApiRequest('event-get', { ids: [eventId] }, false)
+                .then((res) => {
+                    const ev = res && Array.isArray(res.events) ? res.events[0] : null;
+                    if (!ev || ev.id !== eventId) {
+                        if (!this._archivedEventMisses) this._archivedEventMisses = new Set();
+                        this._archivedEventMisses.add(eventId);
+                        return;
+                    }
+                    this.recordEventProvenanceSource(ev, 'NYMCHAT ARCHIVE');
+                    const modal = document.getElementById('eventDetailsModal');
+                    const body = document.getElementById('eventDetailsBody');
+                    if (!modal || !modal.classList.contains('active') || !body) return;
+                    if (body.dataset.eventId !== eventId) return;
+                    body.textContent = '';
+                    body.appendChild(this._buildEventDetails(eventId));
+                    const copyBtn = document.getElementById('eventDetailsCopyBtn');
+                    if (copyBtn) {
+                        copyBtn.dataset.nostrCopy = JSON.stringify(ev, null, 2);
+                        copyBtn.classList.remove('nm-hidden');
+                    }
+                })
+                .catch(() => { });
+        },
+
+        _buildPartialEventDetails(eventId, frag) {
+            const found = typeof this._findMessageById === 'function'
+                ? this._findMessageById(eventId) : null;
+            const msg = found && found.msg;
+
+            const h1 = document.createElement('div');
+            h1.className = 'event-detail-section';
+            h1.textContent = 'Event';
+            frag.appendChild(h1);
+            frag.appendChild(this._edRow('ID', eventId, { mono: true }));
+
+            if (msg) {
+                if (msg.pubkey) frag.appendChild(this._edRow('Public key', msg.pubkey, { mono: true }));
+                if (typeof this.neventForMessage === 'function' && msg.pubkey) {
+                    const hints = typeof this._nostrRefRelayHints === 'function'
+                        ? this._nostrRefRelayHints() : [];
+                    const nevent = this.neventForMessage(eventId, msg.pubkey, hints);
+                    if (nevent) frag.appendChild(this._edRow('nevent', nevent, { mono: true }));
+                }
+                if (msg.author) frag.appendChild(this._edRow('Nym', msg.author));
+                const ch = msg.geohash || msg.channel;
+                if (ch) frag.appendChild(this._edRow('Channel', ch));
+                const created = Number(msg.created_at) || 0;
+                if (created) {
+                    frag.appendChild(this._edRow('Created at',
+                        `${created} (${new Date(created * 1000).toISOString()})`));
+                }
+                if (typeof this.powBitsForId === 'function') {
+                    const actual = this.powBitsForId(eventId);
+                    const target = Number(msg.powTarget);
+                    frag.appendChild(this._edRow('Proof of work',
+                        Number.isFinite(target) && target > 0
+                            ? `${actual} bits, committed ${target}`
+                            : `${actual} bits, no commitment`));
+                }
+            }
+
+            const h2 = document.createElement('div');
+            h2.className = 'event-detail-section';
+            h2.textContent = 'Raw event';
+            frag.appendChild(h2);
+            const p = document.createElement('div');
+            p.className = 'event-detail-empty';
+            p.textContent = msg
+                ? 'Looking for the signed event in the archive. Only what this '
+                + 'client stored for display is shown above: the signature and '
+                + 'tags live in the event itself, which is not kept once a '
+                + 'message has been rendered.'
+                : 'Nothing is held for this event id.';
+            frag.appendChild(p);
+            return frag;
+        },
+
         _edRow(label, value, opts) {
             const row = document.createElement('div');
             row.className = 'event-detail-row';
@@ -131,19 +213,7 @@
             const frag = document.createDocumentFragment();
             const rec = this.eventProvenance(eventId);
 
-            if (!rec) {
-                const p = document.createElement('div');
-                p.className = 'event-detail-empty';
-                // Honest about why, because "no details" with no reason reads
-                // as a bug.
-                p.textContent = 'The raw event for this message is no longer held. '
-                    + 'Events are kept for the most recent ' + MAX_EVENTS
-                    + ' received this session; ones restored from the archive on '
-                    + 'a later launch, and messages carried over the mesh, are not '
-                    + 'in that set.';
-                frag.appendChild(p);
-                return frag;
-            }
+            if (!rec) return this._buildPartialEventDetails(eventId, frag);
 
             const ev = rec.event;
             const json = JSON.stringify(ev, null, 2);

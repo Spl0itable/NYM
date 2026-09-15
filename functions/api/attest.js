@@ -72,32 +72,34 @@ async function handleEnroll(context, body) {
   let tier = "origin";
   let deviceId = null;
 
-  if (ATTESTED_PLATFORMS.has(platform)) {
-    const result = platform === "ios"
+  const platformResult = ATTESTED_PLATFORMS.has(platform)
+    ? (platform === "ios"
       ? await verifyAppAttest(env, { keyId: body.keyId, attestation: body.attestation, challenge })
-      : await verifyPlayIntegrity(env, { token: body.token, challenge });
-    if (!result.ok) return json({ error: "Attestation failed", reason: result.reason }, 403);
+      : await verifyPlayIntegrity(env, { token: body.token, challenge }))
+    : null;
+
+  const sideloaded = platformResult && !platformResult.ok
+    && (platformResult.reason === "app-not-recognized"
+      || platformResult.reason === "signature-mismatch");
+
+  if (platformResult && platformResult.ok) {
     tier = "attested";
-    deviceId = result.deviceId || null;
+    deviceId = platformResult.deviceId || null;
     if (await deviceAtCap(db, deviceId, pubkey)) return json({ error: "Device enrollment cap" }, 429);
+  } else if (platformResult && !sideloaded) {
+    return json({ error: "Attestation failed", reason: platformResult.reason }, 403);
+  } else if (sideloaded) {
+    if (!enrollPowOk(env, body.auth)) {
+      return json({ error: "Enrollment work insufficient", need: enrollPowBits(env) }, 403);
+    }
+    tier = "challenged";
   } else {
     if (!isNymchatClient(request, env)) return json({ error: "Forbidden" }, 403);
-    // A browser cannot attest itself, so this stays below `attested` however
-    // well it does here — see the note on verifyBuildProof. What the probe
-    // buys is that the web tier costs a per-enrollment read of the running
-    // bundle rather than one unauthenticated POST.
-    // Work first: it is the cheaper check of the two, and it is the one that
-    // makes a farm of identities expensive rather than merely inconvenient.
     if (!enrollPowOk(env, body.auth)) {
       return json({ error: "Enrollment work insufficient", need: enrollPowBits(env) }, 403);
     }
     const proof = await verifyBuildProof(new URL(request.url).origin, challenge, body.build);
-    // No badge, and nothing more. The probe also fails on a stale cache or a
-    // deploy that lands mid-enrollment, and those people retry on the normal
-    // cycle rather than being treated as attackers.
     if (!proof.ok) return json({ error: "Build proof failed", reason: proof.reason }, 403);
-    // Not `attested` — no browser earns that — but not bare `origin` either,
-    // which is what an unauthenticated POST used to get.
     tier = "challenged";
   }
 
