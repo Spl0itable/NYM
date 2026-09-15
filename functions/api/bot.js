@@ -1117,7 +1117,7 @@ async function botBlossomUpload(bytes, contentType, privkey, pubkey) {
 
 // Workers AI returns generated binaries in several shapes depending on the
 // model: a base64 string on a named field, a raw ReadableStream, or an
-// ArrayBuffer. Normalise all of them to bytes.
+// ArrayBuffer. Normalize all of them to bytes.
 async function botMediaBytes(result, field) {
   if (!result) return null;
   if (result instanceof ReadableStream) {
@@ -2998,7 +2998,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       branches: rec.branches.slice(0, 10),
       pulls: rec.pulls.slice(0, 10),
       // Without a base commit there is nothing to read the old files back
-      // from, so the client must not offer an undo it cannot honour.
+      // from, so the client must not offer an undo it cannot honor.
       undoable: !!rec.baseSha && rec.paths.length > 0
     };
   };
@@ -3145,7 +3145,7 @@ function gitSearchAnswer(cfg, query, byPath, byContent, contentSearched) {
 }
 
 // The one argument worth naming in a progress line: the path, the branch, the
-// query — whatever the reader would recognise. Never the whole argument blob,
+// query — whatever the reader would recognize. Never the whole argument blob,
 // which can carry file contents.
 function gitToolTarget(name, args, sayRepo) {
   if (!args || typeof args !== "object") return "";
@@ -3396,7 +3396,7 @@ async function botPutProCredits(env, pubkey, data) {
 // lease has lapsed (the owner stopped heartbeating, so its worker is gone);
 // while the lease holds it answers `pending` and the client comes back.
 //
-// Degrades to today's behaviour when the ledger binding is absent: no
+// Degrades to today's behavior when the ledger binding is absent: no
 // de-duplication, but nothing breaks.
 var BOT_TURN_POLL_MS = 1500;
 // Under the ~100s an edge request gets, so a waiting retry always lands its
@@ -3436,7 +3436,7 @@ async function botTurnFinish(env, key, body, status) {
 }
 
 // Release a claim whose attempt failed before it charged for an answer, so the
-// next try runs now instead of waiting out a lease nobody is honouring.
+// next try runs now instead of waiting out a lease nobody is honoring.
 async function botTurnAbort(env, key) {
   try { await ledgerCall(env, { op: "turn-abort", key: key }); } catch (e) { }
 }
@@ -3538,7 +3538,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var ai = context.env.AI || null;
   if (!ai && !proModel) throw new Error("AI is not configured.");
   // Progress reporting and resumed state, both optional: a caller that passes
-  // neither gets exactly the behaviour this function always had.
+  // neither gets exactly the behavior this function always had.
   var runOpts = run || {};
 
   var parsed = parseBotPMRequest(rawMessage);
@@ -4615,7 +4615,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""));
     }
     if (!message) return await turnFail({ error: "Empty message" }, 400);
-    // Every event the question travelled in, so the next turn replays the
+    // Every event the question traveled in, so the next turn replays the
     // whole of it and not just the piece that happened to arrive last.
     var askedIds = partIds.length > 1 ? partIds.slice() : [currentId];
     // Now that the rumor is open, claim the MESSAGE as well as the wrap that
@@ -7075,11 +7075,11 @@ async function webSearch(query, geohash, env) {
     console.warn("nymbot web search: " + (reachable ? "nothing on topic" : "every source came back empty") +
       " for " + JSON.stringify(truncateText(terms, 80)) + (narrow ? " (narrow: " + narrow + ")" : ""));
     if (!reachable && !(env && env.BRAVE_SEARCH_API_KEY)) {
-      // The scraped engines block datacentre egress as a matter of course, so
+      // The scraped engines block datacenter egress as a matter of course, so
       // a worker with no search API key has no working source at all. Named
       // here because "every source came back empty" reads like a bad query.
       console.warn("nymbot web search: no BRAVE_SEARCH_API_KEY is set, and the " +
-        "scraped engines routinely refuse datacentre IPs — there is no reliable " +
+        "scraped engines routinely refuse datacenter IPs — there is no reliable " +
         "source configured for this worker.");
     }
   }
@@ -7178,7 +7178,7 @@ function resultUrl(line) {
   return m ? m[1] : "";
 }
 
-// Body text, favouring the blocks a spec sheet or article actually lives in.
+// Body text, favoring the blocks a spec sheet or article actually lives in.
 function extractReadableText(html, limit) {
   var body = String(html || "")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -7396,7 +7396,7 @@ function searchQueryTerms(query) {
 }
 
 // The one term most likely to be the thing being asked about: a proper noun if
-// the question capitalised one mid-sentence, otherwise the longest subject
+// the question capitalized one mid-sentence, otherwise the longest subject
 // word. Searched on its own alongside the full phrase, because a name nobody
 // has heard of finds nothing when it is buried in a sentence.
 function narrowSearchTerm(text) {
@@ -7405,7 +7405,7 @@ function narrowSearchTerm(text) {
   var best = "";
   for (var i = 0; i < terms.length; i++) {
     var term = terms[i];
-    // The first word of a question is capitalised by habit, not by meaning.
+    // The first word of a question is capitalized by habit, not by meaning.
     var distinctive = /[A-Za-z]/.test(term) && term.length >= 3 &&
       ((i > 0 && /^[A-Z]/.test(term)) || /[0-9]/.test(term));
     if (distinctive && term.length > best.length) best = term;

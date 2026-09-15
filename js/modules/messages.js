@@ -103,12 +103,23 @@ Object.assign(NYM.prototype, {
         return lo;
     },
 
-    hasBlockedKeyword(text, nickname) {
-        const lowerText = text.toLowerCase();
+    hasBlockedKeyword(text, nickname, pubkey) {
+        const lowerText = typeof text === 'string' ? text.toLowerCase() : '';
         const lowerNick = nickname ? this.parseNymFromDisplay(nickname).toLowerCase() : '';
-        return Array.from(this.blockedKeywords).some(keyword =>
+        const ownKeyword = Array.from(this.blockedKeywords).some(keyword =>
             lowerText.includes(keyword) || (lowerNick && lowerNick.includes(keyword))
         );
+        if (ownKeyword) return true;
+        // Filter packs join the user's own keywords here so every place that
+        // already asks "is this filtered?" picks them up — the alternative is
+        // ten call sites that each have to remember a second question.
+        if (typeof this.hasFilterPackMatch !== 'function') return false;
+        if (pubkey) {
+            if (pubkey === this.pubkey) return false;
+            if (typeof this.isFriend === 'function' && this.isFriend(pubkey)) return false;
+            if (typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey)) return false;
+        }
+        return this.hasFilterPackMatch(text, nickname);
     },
 
     // Extract conversation context from a quote chain for bot replies
@@ -335,6 +346,73 @@ Object.assign(NYM.prototype, {
         if (Date.now() < entry.blockedUntil) return true;
         entry.blockedUntil = 0;
         return false;
+    },
+
+    /// Capacity and refill are a burst allowance, not a quota: three copies
+    /// land immediately and one more every two seconds after that. A phrase
+    /// going round a channel stays well inside it; a botnet firing the same
+    /// payload does not.
+    CROSS_CONTENT_CAPACITY: 3,
+    CROSS_CONTENT_REFILL_PER_SEC: 0.5,
+    /// Short messages are exempt. Fifty people saying "gm" in the morning is
+    /// the whole point of a channel, and no spam campaign fits in 24
+    /// characters.
+    CROSS_CONTENT_MIN_LENGTH: 24,
+    CROSS_CONTENT_MAX_BUCKETS: 2000,
+    CROSS_CONTENT_IDLE_MS: 600000,
+
+    /// Normalized key for the content bucket, or '' when the text is exempt.
+    /// Query strings and fragments are stripped from URLs so one campaign with
+    /// a per-victim tracking parameter is still one payload.
+    _crossContentKey(content) {
+        if (typeof content !== 'string') return '';
+        const s = content
+            .toLowerCase()
+            .replace(/(https?:\/\/[^\s?#]+)(?:[?#]\S*)?/g, '$1')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (s.length < this.CROSS_CONTENT_MIN_LENGTH) return '';
+        return this._hashContent(s.slice(0, 160));
+    },
+
+    /// True when this exact payload has already used up its allowance,
+    /// whoever sent the earlier copies.
+    isDuplicateContentFlooding(content, now) {
+        const key = this._crossContentKey(content);
+        if (key === '') return false;
+        const t = typeof now === 'number' ? now : Date.now();
+        if (!this._crossContentBuckets) this._crossContentBuckets = new Map();
+        const buckets = this._crossContentBuckets;
+
+        let bucket = buckets.get(key);
+        if (!bucket) {
+            if (buckets.size >= this.CROSS_CONTENT_MAX_BUCKETS) {
+                for (const [k, b] of buckets) {
+                    if (t - b.last >= this.CROSS_CONTENT_IDLE_MS) buckets.delete(k);
+                }
+                if (buckets.size >= this.CROSS_CONTENT_MAX_BUCKETS) {
+                    let oldestKey = null, oldest = Infinity;
+                    for (const [k, b] of buckets) {
+                        if (b.last < oldest) { oldest = b.last; oldestKey = k; }
+                    }
+                    if (oldestKey !== null) buckets.delete(oldestKey);
+                }
+            }
+            bucket = { tokens: this.CROSS_CONTENT_CAPACITY, last: t };
+            buckets.set(key, bucket);
+        }
+
+        const elapsed = Math.max(0, t - bucket.last) / 1000;
+        bucket.tokens = Math.min(
+            this.CROSS_CONTENT_CAPACITY,
+            bucket.tokens + elapsed * this.CROSS_CONTENT_REFILL_PER_SEC
+        );
+        bucket.last = t;
+        if (bucket.tokens >= 1) {
+            bucket.tokens -= 1;
+            return false;
+        }
+        return true;
     },
 
     isFlooding(pubkey, channel) {
@@ -712,7 +790,7 @@ Object.assign(NYM.prototype, {
         // Check if nym is blocked or message contains blocked keywords or is spam.
         // For our own outgoing messages, surface a system message so the sender
         // knows why their message disappeared (it was still sent to relays).
-        const keywordHit = this.hasBlockedKeyword(message.content, message.author);
+        const keywordHit = this.hasBlockedKeyword(message.content, message.author, message.pubkey);
         const spamHit = this.isSpamMessage(message.content);
         if (message.isOwn) {
             if (keywordHit || this.blockedUsers.has(message.pubkey)) {
@@ -3305,7 +3383,7 @@ Object.assign(NYM.prototype, {
                 return false;
             }
             if (!msg.isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
-            if (!msg.isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;
+            if (!msg.isOwn && this.hasBlockedKeyword(msg.content, msg.author, msg.pubkey)) return false;
             if (!msg.isOwn && this.isSpamMessage(msg.content)) return false;
             if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
             return true;
@@ -3737,7 +3815,7 @@ Object.assign(NYM.prototype, {
 
         const rect = anchorEl.getBoundingClientRect();
         const right = Math.max(4, window.innerWidth - rect.right);
-        const approxHeight = (powHtml ? 130 : 90) + (copyHtml ? 40 : 0);
+        const approxHeight = (powHtml ? 130 : 90) + (copyHtml ? 76 : 0);
         const verticalDecl = (rect.top > approxHeight + 20)
             ? `bottom:${window.innerHeight - rect.top + 6}px;`
             : `top:${rect.bottom + 6}px;`;
@@ -3765,6 +3843,12 @@ Object.assign(NYM.prototype, {
         return '<div class="timestamp-popup-copy">' +
             `<button type="button" class="timestamp-copy-btn" data-action="copyNostrEventRef" data-nostr-copy="${this.escapeHtml(nevent)}">Copy nevent</button>` +
             `<button type="button" class="timestamp-copy-btn" data-action="copyNostrEventRef" data-nostr-copy="${this.escapeHtml(id)}">Copy event ID</button>` +
+            '</div>' +
+            // Its own row beneath the two copy buttons, not a third column in
+            // their flex line: it is a different kind of action, and squeezed
+            // into that row all three labels shrink to fit the popup's width.
+            '<div class="timestamp-popup-details">' +
+            `<button type="button" class="timestamp-copy-btn timestamp-details-btn" data-action="openEventDetails" data-event-id="${this.escapeHtml(id)}">Show all event details</button>` +
             '</div>';
     },
 

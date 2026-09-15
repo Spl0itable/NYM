@@ -1384,7 +1384,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     /// 5 state, 8 county, 10 city). Asking a CITY-level question about a cell
     /// 1250 km across is a category error: a 2-character geohash covers whole
     /// countries, so the useful answer is the country, not whichever hamlet
-    /// happens to sit under the centre pixel.
+    /// happens to sit under the center pixel.
     _geoPlaceZoomFor(geohash) {
         const n = (geohash || '').length;
         if (n <= 2) return 5;   // ~1250km — state/country
@@ -1394,16 +1394,16 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     /// Points to ask about, in order, for one geohash.
     ///
-    /// The centre first, then the four quarter-points of the cell. This is what
-    /// makes short geohashes resolvable at all: a cell's centre very often
+    /// The center first, then the four quarter-points of the cell. This is what
+    /// makes short geohashes resolvable at all: a cell's center very often
     /// falls in WATER even when the cell is mostly land — `gc` spans Ireland
-    /// and part of Britain but centres on the Irish Sea, `dh` centres in the
+    /// and part of Britain but centers on the Irish Sea, `dh` centers in the
     /// Gulf of Mexico, `9e` in the Pacific. Reverse geocoding open water
     /// returns no city and no country, which the caller reads as a miss, so
     /// those channels sat on raw coordinates no matter how many times the
     /// backoff retried — every retry asked the same unanswerable point.
     ///
-    /// Only walked until something answers, so a normal land-centred geohash
+    /// Only walked until something answers, so a normal land-centerd geohash
     /// still costs exactly one request.
     _geoPlaceProbePoints(geohash) {
         const zoom = this._geoPlaceZoomFor(geohash);
@@ -1550,7 +1550,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // edge-cached for a day, so a handful of lookups can be in flight at once
     // — that is what lets a sidebar of geohashes resolve in a round trip or
     // two instead of one per second. On the direct fallback this browser *is*
-    // the API client, so requests stay strictly serialised with the documented
+    // the API client, so requests stay strictly serialized with the documented
     // ≥1s gap between them.
     async _geoPlaceRun(fn) {
         const viaProxy = typeof this._getProxyBaseUrl === 'function' && !!this._getProxyBaseUrl();
@@ -1663,6 +1663,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
             for (const ev of batch) {
                 if (await this._verifyRelayEventAsync(ev)) {
+                    if (typeof this.recordEventProvenanceSource === 'function') {
+                        this.recordEventProvenanceSource(ev, 'NYMCHAT ARCHIVE');
+                    }
                     try { await this.handleEvent(ev); applied = true; } catch (_) { }
                 }
             }

@@ -354,7 +354,7 @@ Object.assign(NYM.prototype, {
         return { start, end };
     },
 
-    // Toggle `before…after` around the selection. Recognises an existing wrap
+    // Toggle `before…after` around the selection. Recognizes an existing wrap
     // both inside the selection ("**bold**" selected) and just outside it
     // ("bold" selected between the asterisks), so a second click always undoes.
     _wrapInputSelection(el, before, after) {

@@ -1,0 +1,181 @@
+// Enrollment endpoint for app attestation.
+
+import { CLIENT_CORS_HEADERS, verifyClientAuth } from "./_shared.js";
+import { isNymchatClient } from "./_client.js";
+import {
+  BADGE_TTL_DAYS,
+  ATTESTED_PLATFORMS,
+  PLATFORMS,
+  authorityPubkey,
+  authoritySecret,
+  issueBadge,
+  issueChallenge,
+  verifyChallenge,
+  verifyAppAttest,
+  verifyPlayIntegrity,
+  enrollPowBits,
+  enrollPowOk,
+  buildManifestFiles,
+  buildProbePaths,
+  verifyBuildProof,
+  attestDb,
+  ensureAttestSchema,
+  deviceAtCap,
+  recordAttestation,
+  lookupAttestations,
+  listRevoked,
+  isRevoked
+} from "./_attest.js";
+
+const JSON_HEADERS = { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS };
+const DAY_MS = 86400000;
+
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+}
+
+function isHex64(s) {
+  return typeof s === "string" && /^[0-9a-f]{64}$/.test(s);
+}
+
+function authTag(auth, name) {
+  const tags = auth && Array.isArray(auth.tags) ? auth.tags : [];
+  for (const t of tags) if (Array.isArray(t) && t[0] === name) return t[1];
+  return null;
+}
+
+async function handleEnroll(context, body) {
+  const { request, env } = context;
+  const db = attestDb(env);
+  if (!db) return json({ error: "Ledger unavailable" }, 503);
+  if (!authoritySecret(env)) return json({ error: "Attestation not configured" }, 503);
+
+  const pubkey = typeof body.pubkey === "string" ? body.pubkey.toLowerCase() : "";
+  const platform = typeof body.platform === "string" ? body.platform.toLowerCase() : "";
+  const challenge = typeof body.challenge === "string" ? body.challenge : "";
+  if (!isHex64(pubkey)) return json({ error: "Bad pubkey" }, 400);
+  if (!PLATFORMS.has(platform)) return json({ error: "Bad platform" }, 400);
+
+  // The auth event proves the pubkey asked for this, and carrying the challenge
+  // in a tag means a captured auth cannot be paired with a fresh challenge.
+  if (!verifyClientAuth(body.auth, pubkey, { action: "attest-enroll", url: request.url })) {
+    return json({ error: "Bad auth" }, 401);
+  }
+  if (authTag(body.auth, "challenge") !== challenge) return json({ error: "Auth/challenge mismatch" }, 401);
+  if (!verifyChallenge(env, pubkey, challenge)) return json({ error: "Bad challenge" }, 401);
+
+  await ensureAttestSchema(db);
+  // A revoked key stays revoked until an operator clears the row; letting it
+  // re-enroll would make revocation a speed bump rather than a decision.
+  if (await isRevoked(db, pubkey)) return json({ error: "Revoked" }, 403);
+
+  let tier = "origin";
+  let deviceId = null;
+
+  if (ATTESTED_PLATFORMS.has(platform)) {
+    const result = platform === "ios"
+      ? await verifyAppAttest(env, { keyId: body.keyId, attestation: body.attestation, challenge })
+      : await verifyPlayIntegrity(env, { token: body.token, challenge });
+    if (!result.ok) return json({ error: "Attestation failed", reason: result.reason }, 403);
+    tier = "attested";
+    deviceId = result.deviceId || null;
+    if (await deviceAtCap(db, deviceId, pubkey)) return json({ error: "Device enrollment cap" }, 429);
+  } else {
+    if (!isNymchatClient(request, env)) return json({ error: "Forbidden" }, 403);
+    // A browser cannot attest itself, so this stays below `attested` however
+    // well it does here — see the note on verifyBuildProof. What the probe
+    // buys is that the web tier costs a per-enrollment read of the running
+    // bundle rather than one unauthenticated POST.
+    // Work first: it is the cheaper check of the two, and it is the one that
+    // makes a farm of identities expensive rather than merely inconvenient.
+    if (!enrollPowOk(env, body.auth)) {
+      return json({ error: "Enrollment work insufficient", need: enrollPowBits(env) }, 403);
+    }
+    const proof = await verifyBuildProof(new URL(request.url).origin, challenge, body.build);
+    // No badge, and nothing more. The probe also fails on a stale cache or a
+    // deploy that lands mid-enrollment, and those people retry on the normal
+    // cycle rather than being treated as attackers.
+    if (!proof.ok) return json({ error: "Build proof failed", reason: proof.reason }, 403);
+    // Not `attested` — no browser earns that — but not bare `origin` either,
+    // which is what an unauthenticated POST used to get.
+    tier = "challenged";
+  }
+
+  const expiresAt = Date.now() + BADGE_TTL_DAYS * DAY_MS;
+  await recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt });
+  const badge = issueBadge(env, pubkey, tier);
+  if (!badge) return json({ error: "Attestation not configured" }, 503);
+
+  return json({ badge, tier, platform, expiresAt, authority: authorityPubkey(env) });
+}
+
+async function routeAttestAction(context, body) {
+  const { env } = context;
+  const action = body && typeof body.action === "string" ? body.action : "";
+
+  if (action === "pubkey") {
+    const pk = authorityPubkey(env);
+    return pk ? json({ authority: pk }) : json({ error: "Attestation not configured" }, 503);
+  }
+
+  if (action === "challenge") {
+    const pubkey = typeof body.pubkey === "string" ? body.pubkey.toLowerCase() : "";
+    if (!isHex64(pubkey)) return json({ error: "Bad pubkey" }, 400);
+    const issued = issueChallenge(env, pubkey);
+    if (!issued) return json({ error: "Attestation not configured" }, 503);
+    // The paths this enrollment must account for. Derived from the challenge,
+    // so nothing is stored between here and the enroll call, and the caller
+    // cannot pick which files it is asked about.
+    const files = await buildManifestFiles(new URL(context.request.url).origin);
+    if (files) issued.buildProbe = buildProbePaths(files, issued.challenge, 4);
+    // Web clients mine their auth event to this before signing it. Native
+    // clients ignore it: hardware attestation is a stronger proof than any
+    // amount of hashing, and the per-device cap already bounds them.
+    issued.powBits = enrollPowBits(env);
+    return json(issued);
+  }
+
+  if (action === "enroll") return handleEnroll(context, body);
+
+  if (action === "lookup") {
+    const db = attestDb(env);
+    if (!db) return json({ error: "Ledger unavailable" }, 503);
+    await ensureAttestSchema(db);
+    return json({ attested: await lookupAttestations(db, body.pubkeys) });
+  }
+
+  if (action === "revoked") {
+    const db = attestDb(env);
+    if (!db) return json({ error: "Ledger unavailable" }, 503);
+    await ensureAttestSchema(db);
+    const since = Number(body.since);
+    const rows = await listRevoked(db, Number.isFinite(since) ? since : 0);
+    return json({
+      revoked: rows.map((r) => r.pubkey),
+      until: rows.length ? Number(rows[rows.length - 1].revoked_at) : (Number.isFinite(since) ? since : 0)
+    });
+  }
+
+  return json({ error: "Unknown action" }, 400);
+}
+
+async function onRequest(context) {
+  const { request } = context;
+
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CLIENT_CORS_HEADERS });
+  }
+  if (request.method !== "POST") return json({ error: "POST required" }, 405);
+  if (!isNymchatClient(request, context.env)) return json({ error: "Forbidden" }, 403);
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON" }, 400);
+  }
+
+  return routeAttestAction(context, body);
+}
+
+export { onRequest, routeAttestAction };

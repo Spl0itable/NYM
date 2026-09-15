@@ -2,6 +2,17 @@
 
 // Relayed media/encoded blobs leaking into public channels: a known prefix
 // followed by a contiguous base64-style token (not plain text like "enc: note")
+// Domains removed from message text rather than used to drop the message.
+// A hostile link inside an otherwise ordinary message is the whole payload —
+// dropping the message would also hide the conversation around it, and the
+// people being targeted are the ones who would notice the gap.
+const _MALICIOUS_DOMAINS = ['glub.chat'];
+// Scheme and subdomains optional, trailing path swallowed with it, so
+// `https://www.glub.chat/x?y` and a bare `glub.chat` both go.
+const _RX_MALICIOUS_DOMAIN = new RegExp(
+    '(?:https?:\\/\\/)?(?:[\\w-]+\\.)*(?:'
+    + _MALICIOUS_DOMAINS.map(d => d.replace(/\./g, '\\.')).join('|')
+    + ')\\b(?:\\/[^\\s]*)?', 'gi');
 const _RX_BLOCKED_CONTENT_BLOB = /^(?:(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}|test_\d+_\d+)$/;
 const _RX_REGEX_ESCAPE_NC = /[.*+?^${}()|[\]\\]/g;
 const _quoteMentionCache = new Map();
@@ -57,15 +68,34 @@ Object.assign(NYM.prototype, {
     },
 
     // NIP-13: Validate proof of work
+    /// NIP-13 difficulty an event has actually EARNED.
+    ///
+    /// The committed target in the nonce tag is what counts, not the leading
+    /// zeros alone. Work beyond the commitment earns no credit, which is the
+    /// point: a spammer mining a cheap 8-bit target produces a 16-bit id every
+    /// 256 events by luck, and counting zeros alone hands each of those a free
+    /// pass through a 16-bit floor. An event with no well-formed commitment
+    /// scores 0, and one whose id does not reach its own commitment scores 0
+    /// because the claim is void.
+    validatedPowBits(event) {
+        const tags = Array.isArray(event && event.tags) ? event.tags : [];
+        let committed = 0;
+        // Last wins, matching the miner: re-mining rewrites the tag in place.
+        for (const t of tags) {
+            if (Array.isArray(t) && t[0] === 'nonce' && t.length >= 3) {
+                const n = parseInt(t[2], 10);
+                if (Number.isFinite(n)) committed = n;
+            }
+        }
+        if (!(committed > 0) || committed > 256) return 0;
+        let actual;
+        try { actual = NostrTools.nip13.getPow(event.id); } catch (_) { return 0; }
+        return actual >= committed ? committed : 0;
+    },
+
     validatePow(event, minimumDifficulty = 0) {
         if (minimumDifficulty === 0) return true;
-
-        const pow = NostrTools.nip13.getPow(event.id);
-
-        // Check if event has a nonce tag (optional but recommended)
-        const nonceTag = event.tags?.find(t => t[0] === 'nonce');
-
-        return pow >= minimumDifficulty;
+        return this.validatedPowBits(event) >= minimumDifficulty;
     },
 
     // NIP-13 miner: offloaded to the crypto worker; cooperative main-thread fallback.
@@ -320,6 +350,10 @@ Object.assign(NYM.prototype, {
         }
 
         if (this.hasBlockedContentPrefix(event.content)) return;
+        if (this.isGlubClientEvent(event)) return;
+        if (typeof event.content === 'string') {
+            event.content = this.stripMaliciousDomains(event.content);
+        }
 
         // Early deduplication for channel messages to prevent re-processing on reconnect
         if (event.kind === 20000 || event.kind === 23333) {
@@ -447,11 +481,18 @@ Object.assign(NYM.prototype, {
             }
 
             // Check if user is blocked or message/nickname contains blocked keywords
-            if (this.blockedUsers.has(event.pubkey) || this.hasBlockedKeyword(event.content, nym)) {
+            if (this.blockedUsers.has(event.pubkey) || this.hasBlockedKeyword(event.content, nym, event.pubkey)) {
                 return;
             }
 
             if (this.isSpamMessage(event.content)) {
+                return;
+            }
+
+            if (typeof this.ingestAttestBadge === 'function') this.ingestAttestBadge(event);
+
+            if (typeof this.passesAppVerifiedFilter === 'function'
+                && !this.passesAppVerifiedFilter(event.pubkey)) {
                 return;
             }
 
@@ -469,6 +510,20 @@ Object.assign(NYM.prototype, {
 
             // Check flooding FOR THIS CHANNEL (only for non-historical messages)
             if (!isHistorical && this.isFlooding(event.pubkey, geohash)) {
+                return;
+            }
+
+            // Cross-sender flood control. The per-pubkey tracker above catches
+            // one account repeating itself and does nothing about the actual
+            // shape of a campaign: one payload, five hundred fresh keys. This
+            // bucket is keyed on the CONTENT, so rotating the key does not
+            // rotate the limit. Historical replay is exempt — a D1 backfill
+            // legitimately delivers the same text many times over.
+            if (!isHistorical
+                && event.pubkey !== this.pubkey
+                && !this.isFriend?.(event.pubkey)
+                && !this.isVerifiedBot(event.pubkey)
+                && this.isDuplicateContentFlooding(event.content)) {
                 return;
             }
 
@@ -1045,13 +1100,42 @@ Object.assign(NYM.prototype, {
         return _RX_BLOCKED_CONTENT_BLOB.test(content.trimStart());
     },
 
+    /// Removes known-malicious domains from message text, leaving the rest of
+    /// the message intact.
+    stripMaliciousDomains(content) {
+        if (typeof content !== 'string' || !content) return content;
+        _RX_MALICIOUS_DOMAIN.lastIndex = 0;
+        if (!_RX_MALICIOUS_DOMAIN.test(content)) return content;
+        _RX_MALICIOUS_DOMAIN.lastIndex = 0;
+        // Collapse the gap the link leaves behind so the sentence still reads.
+        return content.replace(_RX_MALICIOUS_DOMAIN, '')
+            .replace(/[ \t]{2,}/g, ' ')
+            .replace(/[ \t]+([.,!?;:])/g, '$1')
+            .trim();
+    },
+
+    /// Whether an event was published by the glub.chat client, which exists to
+    /// spam these channels. Matched on the tags rather than the content: the
+    /// client stamps itself on every event it sends, and a tag survives any
+    /// rewording of the payload. The version is deliberately not matched —
+    /// pinning `339ddb0` would last exactly until their next build.
+    isGlubClientEvent(event) {
+        if (!event || !Array.isArray(event.tags)) return false;
+        for (const t of event.tags) {
+            if (!Array.isArray(t) || typeof t[0] !== 'string') continue;
+            if (t[0] === 'glub') return true;
+            if (t[0] === 'client' && typeof t[1] === 'string'
+                && t[1].toLowerCase() === 'glub.chat') return true;
+        }
+        return false;
+    },
+
     isSpamMessage(content) {
         if (this.spamFilterEnabled === false) return false;
         if (typeof content !== 'string') return false;
 
         const trimmed = content.trim();
 
-        if (trimmed.includes('joined the channel via bitchat.land')) return true;
         if (trimmed.includes('["client","chorus"]')) return true;
 
         if (this.spamFilterAggressive === false) return false;
@@ -2818,6 +2902,8 @@ Object.assign(NYM.prototype, {
             const wire = this.channelWire(channelKey);
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);
+
+            if (typeof this.attestTagsForEvent === 'function') tags.push(...this.attestTagsForEvent());
 
             // Thread reply: NIP-10 marked root reference. Other clients see a
             // normal channel message; Nymchat groups it under its root.

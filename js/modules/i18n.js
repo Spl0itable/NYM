@@ -84,7 +84,7 @@ Object.assign(NYM.prototype, {
             try {
                 const res = await fetch(`/i18n/${encodeURIComponent(lang)}.json`, { cache: 'force-cache' });
                 // A build published without a cache simply has no pack. That is
-                // not an error — it is the old behaviour. It is also not worth
+                // not an error — it is the old behavior. It is also not worth
                 // asking for again this session.
                 if (!res.ok) return;
                 const pack = await res.json();

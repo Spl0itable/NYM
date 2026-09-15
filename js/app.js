@@ -681,6 +681,8 @@ class NYM {
         this.dismissedTransferEvents = new Set(JSON.parse(localStorage.getItem('nym_dismissed_transfers') || '[]'));
         this.powDifficulty = 16;
         this.enablePow = false;
+        this.appVerifiedFilter = normalizeAppVerifiedFilter(localStorage.getItem('nym_app_verified_filter'));
+        this.filterPacks = normalizeFilterPacks(localStorage.getItem('nym_filter_packs'));
         this.nymchatPowFloor = 16;
         this.nymchatVouches = new Set();
         this._lastVouchPublishAt = 0;
@@ -788,6 +790,8 @@ class NYM {
         this.channelSubscriptions = new Map();
         this.channelLoadedFromRelays = new Set();
         this.appRelay = 'wss://relay.nymchat.app';
+        this.APP_RELAY_ONLY_CHANNEL = 'nymchat';
+        this.APP_RELAY_ONLY_KINDS = new Set([23333, 7, 30078, 24420, 24421]);
         this.settings = this.loadSettings();
         if (this.settings.textSize && this.settings.textSize !== 15) {
             document.documentElement.style.setProperty('--user-text-size', this.settings.textSize + 'px');
@@ -2886,7 +2890,7 @@ async function changeNick() {
                 nymSecretSet('nym_dev_nsec', nym.nsecFromPrivkeyInput(cmdResult.nsec) || cmdResult.nsec);
             }
         }
-        // If cmdNick was cancelled (e.g. reserved nick) but bio/lightning changed,
+        // If cmdNick was canceled (e.g. reserved nick) but bio/lightning changed,
         // still publish those changes to relays
         if (!cmdResult && profileDirty) {
             await nym.saveToNostrProfile();
@@ -3950,6 +3954,16 @@ async function showSettings() {
         powDifficultySelect.value = String(normalizePowDifficulty(localStorage.getItem('nym_pow_difficulty')));
     }
 
+    const appVerifiedSelect = document.getElementById('appVerifiedSelect');
+    if (appVerifiedSelect) {
+        appVerifiedSelect.value = normalizeAppVerifiedFilter(localStorage.getItem('nym_app_verified_filter'));
+    }
+
+    const active = new Set(Array.isArray(nym.filterPacks) ? nym.filterPacks : []);
+    document.querySelectorAll('[data-filter-pack]').forEach((box) => {
+        box.checked = active.has(box.dataset.filterPack);
+    });
+
     // Render pending settings transfers
     nym.renderPendingSettingsTransfers();
 
@@ -4856,7 +4870,7 @@ async function checkSavedConnection() {
             if (!pubkey) throw new Error('No stored pubkey');
 
             // Set login method early so UI features (e.g. long-press nym send)
-            // recognise the user as logged in even if later async steps fail
+            // recognize the user as logged in even if later async steps fail
             nym.nostrLoginMethod = method;
 
             let secretKey = null;
@@ -5699,7 +5713,7 @@ async function _nip46HandleEvent(event) {
         }
 
         if (response.method === 'connect') {
-            // This is the signer's connect acknowledgement
+            // This is the signer's connect acknowledgment
             state.remotePubkey = event.pubkey;
             state.connected = true;
             await _nip46CompleteLogin(event.pubkey);
@@ -7012,6 +7026,16 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_pow_difficulty', String(s.powDifficulty));
     }
 
+    if (typeof s.appVerifiedFilter === 'string') {
+        nym.appVerifiedFilter = normalizeAppVerifiedFilter(s.appVerifiedFilter);
+        localStorage.setItem('nym_app_verified_filter', nym.appVerifiedFilter);
+    }
+
+    if (Array.isArray(s.filterPacks)) {
+        if (typeof nym.setFilterPacks === 'function') nym.setFilterPacks(s.filterPacks);
+        else nym.filterPacks = normalizeFilterPacks(s.filterPacks);
+    }
+
     // Hide non-pinned
     if (typeof s.hideNonPinned === 'boolean') {
         nym.hideNonPinned = s.hideNonPinned;
@@ -7958,6 +7982,20 @@ function normalizePowDifficulty(raw) {
     if (n <= 16) return 16;                        // 8 / 12 -> the real floor
     if (n <= 20) return 20;
     return 24;
+}
+
+function normalizeFilterPacks(raw) {
+    let list = raw;
+    if (typeof list === 'string') {
+        try { list = JSON.parse(list); } catch (_) { list = []; }
+    }
+    if (!Array.isArray(list)) return [];
+    const known = ['profanity', 'scams', 'crypto', 'politics'];
+    return list.filter((id) => known.includes(id));
+}
+
+function normalizeAppVerifiedFilter(raw) {
+    return (raw === 'verified' || raw === 'any') ? raw : 'off';
 }
 
 function updateSetupInviteBanner() {

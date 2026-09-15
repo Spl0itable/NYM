@@ -151,7 +151,7 @@ Object.assign(NYM.prototype, {
     },
 
     // What a speaker of the language calls it, falling back to the English
-    // name. A picker labelled only in English is unusable to the very people
+    // name. A picker labeled only in English is unusable to the very people
     // looking for their own language in it.
     _languageNative(code) {
         if (!code) return '';

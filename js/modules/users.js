@@ -290,7 +290,7 @@ Object.assign(NYM.prototype, {
     },
 
     // npub / hex public keys 
-    // Either a 64-char hex pubkey or an npub/nprofile, normalised to lowercase
+    // Either a 64-char hex pubkey or an npub/nprofile, normalized to lowercase
     // hex. Returns null when the input is neither.
     normalizePubkeyInput(value) {
         const raw = String(value == null ? '' : value)
@@ -366,7 +366,7 @@ Object.assign(NYM.prototype, {
         try { return nip19.nsecEncode(bytes); } catch (_) { return ''; }
     },
 
-    // Either an nsec or a 64-char hex private key, normalised to lowercase hex.
+    // Either an nsec or a 64-char hex private key, normalized to lowercase hex.
     // Returns null when the input is neither.
     normalizePrivkeyInput(value) {
         const raw = String(value == null ? '' : value).trim().replace(/^nostr:/i, '');
@@ -890,7 +890,7 @@ Object.assign(NYM.prototype, {
             const pk = img.getAttribute('data-avatar-pubkey');
             const entry = queue.get(pk);
             if (!entry) return;
-            // Skip if already showing the desired URL — avoids cancelling an
+            // Skip if already showing the desired URL — avoids canceling an
             // in-flight load and triggering a spurious error → SVG swap.
             if (img.getAttribute('src') === entry.url) return;
             const fallback = fallbackFor(pk);
@@ -1183,7 +1183,7 @@ Object.assign(NYM.prototype, {
             this._registerMediaFallbacks(url, hashHex, server);
         } catch (error) {
             if (error && error.name === 'AbortError') {
-                // Cancelled, not failed: the tile goes away with the batch.
+                // Canceled, not failed: the tile goes away with the batch.
                 if (typeof this.removeComposerAttachment === 'function') {
                     this.removeComposerAttachment(rec.id);
                 }
@@ -2266,7 +2266,7 @@ Object.assign(NYM.prototype, {
 
     async findUserPubkey(input) {
         // A public key in either form resolves as itself — no caller can
-        // regress by forgetting to normalise before the nym search.
+        // regress by forgetting to normalize before the nym search.
         const asPubkey = this.normalizePubkeyInput(input);
         if (asPubkey) return asPubkey;
 

@@ -196,7 +196,7 @@ export async function catalogProModels(env, opts) {
       apiPath: r.api_path || catalogApiPath(transport),
       params: parseJson(r.params, null),
       // A model Cloudflare only prices in its dashboard is charged at the
-      // conservative default; the apps grey these rather than hide them.
+      // conservative default; the apps gray these rather than hide them.
       priced: (pc.basis || r.credit_basis) !== "default"
     };
     entry.max = catalogMaxCredits(entry);

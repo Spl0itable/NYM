@@ -614,6 +614,8 @@
                     else this.maybeRepublishPqAnnouncement();
                     this._pqMarkUpgradeIfNeeded();
                     this.maybeShowPqUpgradeNotice();
+                    if (typeof this.ensureAttestBadge === 'function') this.ensureAttestBadge();
+                    if (typeof this.ensureFilterPacksLoaded === 'function') this.ensureFilterPacksLoaded();
                 } catch (_) { }
             }, PQ_ANNOUNCE_DELAY_MS);
         },
@@ -776,7 +778,7 @@
                 const nowSec = Math.floor(Date.now() / 1000);
                 // An explicit retraction withdraws the whole claim, Nymchat and
                 // all. Nothing emits one today, but a peer that does must be
-                // honoured.
+                // honored.
                 if (payload.retracted) {
                     if (this.pqKeys) this.pqKeys.delete(event.pubkey);
                     if (event.pubkey === this.pubkey) this._pqSelfAnnouncement = null;

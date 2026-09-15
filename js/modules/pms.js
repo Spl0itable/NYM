@@ -1589,7 +1589,7 @@ Object.assign(NYM.prototype, {
             // The bell/sound path, shared by the not-viewing branch and by a
             // thread reply the open conversation keeps collapsed.
             const notifyForPM = () => {
-                if (this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author)) return;
+                if (this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author, peerPubkey)) return;
                 // `threadNotifyMentionsOnly`: a thread hanging off a PM is still
                 // a thread, so a reply in one that neither @mentions nor
                 // quote-replies the user is held back like a group's would be.
@@ -4655,7 +4655,7 @@ Object.assign(NYM.prototype, {
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
             const isOwn = msg.pubkey === this.pubkey;
             if (!isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
-            if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author)) return false;
+            if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author, msg.pubkey)) return false;
             if (!isOwn && this.isSpamMessage(msg.content)) return false;
             if (msg.conversationKey !== conversationKey) return false;
             // For 1:1 PMs, restrict to the two participants. Derive the peer from

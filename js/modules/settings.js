@@ -13,7 +13,8 @@ const NYM_SETTINGS_SECTION_KEYS = {
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
-        'acceptCalls', 'showStatus', 'powDifficulty', 'encryptAtRestPreferred'],
+        'acceptCalls', 'showStatus', 'powDifficulty', 'appVerifiedFilter', 'filterPacks',
+        'encryptAtRestPreferred'],
     messaging: ['groupChatPMOnlyMode', 'threadsEnabled', 'translateLanguage', 'translateFavoriteLanguages',
         'autoTranslate', 'autoTranslateChannels', 'autoTranslatePMs', 'autoTranslateGroups',
         'emojiPackFavorites', 'emojiCategoryFavorites', 'favoriteGifs', 'recentEmojis',
@@ -138,6 +139,10 @@ Object.assign(NYM.prototype, {
             powDifficulty: (typeof normalizePowDifficulty === 'function')
                 ? normalizePowDifficulty(localStorage.getItem('nym_pow_difficulty'))
                 : parseInt(localStorage.getItem('nym_pow_difficulty') || '0', 10),
+            appVerifiedFilter: (typeof normalizeAppVerifiedFilter === 'function')
+                ? normalizeAppVerifiedFilter(localStorage.getItem('nym_app_verified_filter'))
+                : (localStorage.getItem('nym_app_verified_filter') || 'off'),
+            filterPacks: Array.isArray(this.filterPacks) ? this.filterPacks : [],
             hideNonPinned: localStorage.getItem('nym_hide_non_pinned') === 'true',
             textSize: this.settings.textSize || parseInt(localStorage.getItem('nym_text_size') || '15', 10),
             transparencyEnabled: this.settings.transparencyEnabled === true && localStorage.getItem('nym_transparency_enabled') === 'true',
@@ -796,7 +801,7 @@ Object.assign(NYM.prototype, {
             );
         } catch (_) {
             // Best-effort: a failed ping just means the other device waits for
-            // its next D1 read, which is the behaviour we had before.
+            // its next D1 read, which is the behavior we had before.
         }
     },
 
@@ -1891,6 +1896,19 @@ Object.assign(NYM.prototype, {
         this.powDifficulty = powDifficulty;
         this.enablePow = powDifficulty > 0;
         localStorage.setItem('nym_pow_difficulty', powDifficulty.toString());
+        const packBoxes = document.querySelectorAll('[data-filter-pack]');
+        if (packBoxes.length && typeof this.setFilterPacks === 'function') {
+            this.setFilterPacks(Array.from(packBoxes)
+                .filter((b) => b.checked)
+                .map((b) => b.dataset.filterPack));
+        }
+        const appVerifiedEl = document.getElementById('appVerifiedSelect');
+        if (appVerifiedEl) {
+            const mode = (typeof normalizeAppVerifiedFilter === 'function')
+                ? normalizeAppVerifiedFilter(appVerifiedEl.value) : 'off';
+            this.appVerifiedFilter = mode;
+            localStorage.setItem('nym_app_verified_filter', mode);
+        }
     },
 
 });

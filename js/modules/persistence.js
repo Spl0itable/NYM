@@ -162,7 +162,7 @@
             } catch (_) { }
         },
 
-        // Strip non-serialisable / volatile fields before writing
+        // Strip non-serializable / volatile fields before writing
         _serialiseMessage(m) {
             const c = m.__serCache;
             if (c
@@ -274,7 +274,7 @@
         },
 
         _hydrateMessage(m) {
-            // Convert serialised timestamp back to Date if needed
+            // Convert serialized timestamp back to Date if needed
             if (m.timestamp && !(m.timestamp instanceof Date)) {
                 try { m.timestamp = new Date(m.timestamp); } catch (_) { }
             }
@@ -974,7 +974,7 @@
             }
             // Timer-driven flushes are TIME-SLICED (same discipline as the
             // relay-queue drain): during a catch-up dozens of conversations
-            // are dirty at once, and serialising them all in one synchronous
+            // are dirty at once, and serializing them all in one synchronous
             // burst was a single long main-thread task every debounce period.
             const start = Date.now();
             let i = 0;
@@ -1069,7 +1069,7 @@
 
         persistPMMessages(key) {
             if (!key || this._cacheDisabled) return;
-            // Honour the opt-out setting: don't write decrypted PM/group
+            // Honor the opt-out setting: don't write decrypted PM/group
             // content to disk if the user disabled it.
             if (this.settings && this.settings.cachePMs === false) return;
             this._scheduleMsgPersist('pm', key, () => {

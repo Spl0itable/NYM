@@ -667,7 +667,7 @@ Object.assign(NYM.prototype, {
         if (!reactors || reactors.size === 0) return;
 
         // Build user list, capping the rendered rows so a large reactor list
-        // doesn't blow out the modal — overflow is summarised as "+N more".
+        // doesn't blow out the modal — overflow is summarized as "+N more".
         const MAX_ROWS = 50;
         const entries = Array.from(reactors.entries());
         const shown = entries.slice(0, MAX_ROWS);

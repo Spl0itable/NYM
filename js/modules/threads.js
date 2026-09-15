@@ -229,7 +229,7 @@ Object.assign(NYM.prototype, {
     // message just published (it is sent separately as the question).
     _threadBotConversation(rootId, storageKey, opts = {}) {
         const limit = opts.limit || 20;
-        // Normalised like the entries: the caller hands it over as published.
+        // Normalized like the entries: the caller hands it over as published.
         const exclude = opts.exclude ? this._threadEntryText({ content: opts.exclude }) : '';
         const entries = this._threadChannelChain(rootId, storageKey)
             .filter(m => !m._spamGated)
@@ -524,7 +524,7 @@ Object.assign(NYM.prototype, {
     // reply behind whichever "N replies" row it collapsed into.
     //
     // Returns false when the entry names no thread (or threads are off), so the
-    // caller keeps its plain open-the-conversation behaviour.
+    // caller keeps its plain open-the-conversation behavior.
     openThreadFromNotification(info) {
         if (!info || !info.threadRoot || !this.threadsEnabled()) return false;
         let ctx = null;

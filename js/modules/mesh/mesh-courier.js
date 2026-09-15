@@ -120,7 +120,7 @@
 
     /// The tags to test when asking "is this envelope for this peer?".
     /// Spans the adjacent days so an envelope sealed near midnight — or under
-    /// clock skew between two phones that never synchronised with anything —
+    /// clock skew between two phones that never synchronized with anything —
     /// still matches while being carried.
     async function candidateTagsFor(noiseStaticKey, nowMs) {
         const day = epochDayFor(nowMs);

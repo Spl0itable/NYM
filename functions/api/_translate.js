@@ -86,7 +86,7 @@ const INDIC_LANGS = new Map(Object.entries({
   ur: 'urd_Arab',
 }));
 
-/// Codes that must NOT go to the MT model even though a near-neighbour is in
+/// Codes that must NOT go to the MT model even though a near-neighbor is in
 /// the table above, because it would answer in the wrong variant rather than
 /// fail — a silent wrong answer being worse than a slow right one.
 const LLM_ONLY = new Set(['zh-TW']);
@@ -176,7 +176,7 @@ export function detectSourceLang(text) {
   }
   // Genuinely mixed text is the instruct model's job — it is the only engine
   // that translates every part of a two-language message rather than passing
-  // the half it already recognises through untouched.
+  // the half it already recognizes through untouched.
   if (!best || bestN / total < SCRIPT_DOMINANCE) return null;
 
   const resolver = SCRIPT_LANGS.get(best);
@@ -397,7 +397,7 @@ function pickTranslation(res) {
 /// Mixed-language input is the normal case in a chat, not an edge case: a
 /// channel greeting is routinely posted in two languages at once. Asked only
 /// to "translate into X", a model reads the half already in a language it
-/// recognises as needing nothing done to it and returns it untouched — so half
+/// recognizes as needing nothing done to it and returns it untouched — so half
 /// the message comes back translated and half does not.
 function mixedLanguageClause(target) {
   return ' The message may contain more than one language, including text '
@@ -478,7 +478,7 @@ export async function translateText(ai, { text, source, target }) {
     // Mixed-language input is the normal case in a chat, not an edge case: a
     // channel greeting is routinely posted in two languages at once. Asked
     // only to "translate into X", a model reads the half already in a language
-    // it recognises as needing nothing done to it and returns it untouched —
+    // it recognizes as needing nothing done to it and returns it untouched —
     // so half the message comes back translated and half does not.
     // ...but only where it can happen. A known source is a caller that already
     // knows what language it is handing over — interface strings, the

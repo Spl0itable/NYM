@@ -374,6 +374,62 @@ Object.assign(NYM.prototype, {
 
         // Always ensure default relays (first 5 broadcast relays) are connected
         this.ensureDefaultRelaysConnected();
+        // And the neighbourhoods of the other geohash channels in view, which
+        // the geo-origin gate now needs a source for.
+        this.ensureGeoRelayCoverage();
+    },
+
+    /// How many geo relays direct mode will hold open for coverage. The pool
+    /// carries the whole ~415-entry directory because a Worker holds those
+    /// sockets; a browser cannot, so direct mode covers what the user can
+    /// actually see and stops there.
+    GEO_COVERAGE_MAX: 40,
+
+    /// Connects the nearest relays for every geohash channel in view, not just
+    /// the one on screen.
+    async ensureGeoRelayCoverage() {
+        if (this.useRelayProxy) return;   // the pool already carries all of them
+        if (this.settings && this.settings.groupChatPMOnlyMode) return;
+        if (this._geoRelaysReady) await this._geoRelaysReady;
+
+        const wanted = [];
+        const seen = new Set();
+        const add = (name) => {
+            if (wanted.length >= this.GEO_COVERAGE_MAX) return;
+            const gh = typeof name === 'string' ? name.toLowerCase() : '';
+            if (!gh || !this.isValidGeohash(gh)) return;
+            for (const r of this.getClosestRelaysForGeohash(gh)) {
+                if (wanted.length >= this.GEO_COVERAGE_MAX) return;
+                if (seen.has(r.url)) continue;
+                seen.add(r.url);
+                wanted.push(r.url);
+            }
+        };
+        // On screen first, so the cap can never cut the channel being read.
+        add(this.currentGeohash);
+        for (const c of (this.userJoinedChannels || [])) add(c);
+        for (const c of (this.pinnedChannels || [])) add(c);
+        for (const k of (this.channels ? this.channels.keys() : [])) add(k);
+
+        for (const relayUrl of wanted) {
+            const existing = this.relayPool.get(relayUrl);
+            if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+                this.currentGeoRelays.add(relayUrl);
+                this._ensureGeoRelayLiveSub(existing, relayUrl);
+                continue;
+            }
+            if (this.blacklistedRelays.has(relayUrl) && !this.isBlacklistExpired(relayUrl)) continue;
+            if (!this.shouldRetryRelay(relayUrl)) continue;
+            try {
+                await this.connectToRelayWithTimeout(relayUrl, 'relay', 3000);
+                const relay = this.relayPool.get(relayUrl);
+                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                    this.currentGeoRelays.add(relayUrl);
+                    this._ensureGeoRelayLiveSub(relay, relayUrl);
+                }
+            } catch (_) { /* one unreachable relay is not a failure */ }
+        }
+        this.updateRelayStatus();
     },
 
     // Give a geo relay the kind-20000 subscription once
@@ -829,6 +885,7 @@ Object.assign(NYM.prototype, {
 
             // Always ensure default relays (first 5 broadcast) are connected
             this.ensureDefaultRelaysConnected();
+            this.ensureGeoRelayCoverage();
         }
     },
 
@@ -1728,6 +1785,10 @@ Object.assign(NYM.prototype, {
 
         // Connect directly to relays
         this.reconnectToBroadcastRelays();
+        // A fallback session is still a session: without the neighbourhoods of
+        // the geohash channels in view, the geo-origin gate has no admissible
+        // source for any of them.
+        this.ensureGeoRelayCoverage();
         if (this.currentGeohash) {
             this.connectToGeoRelays(this.currentGeohash);
         }
@@ -2623,6 +2684,11 @@ Object.assign(NYM.prototype, {
             filters.push({ kinds: [1059], "#p": [this.pubkey], limit: d1Available ? 1 : 500 });
         }
         if (channelMode) {
+            // Deliberately unscoped. Channels are not subscribed to
+            // individually: every user is in every channel, and the sidebar
+            // learns what exists by watching this stream, so a #g/#d filter
+            // built from what is already known could only ever re-find what is
+            // already known.
             filters.push({ kinds: [20000], since: chSince });
             filters.push({ kinds: [23333], since: chSince });
         }
@@ -3900,6 +3966,73 @@ Object.assign(NYM.prototype, {
         s.bytes += bytes || 0;
     },
 
+    /// Whether any relay in `urls` is one we currently hold a socket to.
+    _anyRelayConnected(urls) {
+        if (this.useRelayProxy) {
+            for (const u of (this.poolConnectedRelays || [])) if (urls.has(u)) return true;
+            return false;
+        }
+        for (const u of urls) {
+            const r = this.relayPool.get(u);
+            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) return true;
+        }
+        return false;
+    },
+
+    /// A geohash channel message is admissible only from that geohash's own
+    /// neighbourhood of relays.
+    ///
+    /// The subscriptions stay open on purpose — the sidebar, the explorer and
+    /// the D1 archive are all built from seeing every channel on every relay.
+    /// What changes is what counts as a real message in a PLACE: bitchat
+    /// publishes a geohash message to the five relays nearest that geohash and
+    /// reads it back from the same five, so anything tagged `g=<geohash>` that
+    /// did not come from there was not sent by a participant in that place. It
+    /// was sprayed at the tag.
+    ///
+    /// The allowlist is the union of what iOS bitchat and Android bitchat would
+    /// each pick, because their two rankings differ and a flat nearest-five
+    /// would hide whichever half we did not copy.
+    ///
+    /// Kind 20000 only. `ensureGeoRelayDelivery` sends nothing else to geo
+    /// relays — reactions and polls on a geohash channel go to the default
+    /// relays like every other kind — so applying this to them would delete
+    /// every reaction in every geohash channel, ours included.
+    _geoOriginAllows(event, relayUrl) {
+        if (!event || event.kind !== 20000) return true;
+        if (typeof relayUrl !== 'string' || !relayUrl) return true;
+        const tags = Array.isArray(event.tags) ? event.tags : [];
+        const tag = tags.find(t => Array.isArray(t) && t[0] === 'g');
+        const geohash = tag && typeof tag[1] === 'string' ? tag[1].toLowerCase() : '';
+        if (!geohash || !this.isValidGeohash(geohash)) return true;
+
+        const closest = this.getClosestRelaysForGeohash(geohash);
+        // Directory not loaded, or a geohash that will not decode. Refusing
+        // here would empty every geohash channel on a cold start or a failed
+        // CSV fetch, which is a worse failure than the one being prevented.
+        if (!closest.length) return true;
+
+        const allow = new Set(closest.map(r => r.url));
+        if (allow.has(relayUrl)) return true;
+        // We hold none of this neighbourhood, so there is no admissible source
+        // to wait for and rejecting would hide the channel rather than filter
+        // it. Direct mode and low-data mode land here for channels they do not
+        // cover; ensureGeoRelayCoverage narrows how often.
+        if (!this._anyRelayConnected(allow)) return true;
+        return false;
+    },
+
+    _isAppRelayOnlyEvent(event) {
+        if (!event || !Array.isArray(event.tags)) return false;
+        if (!this.APP_RELAY_ONLY_KINDS.has(event.kind)) return false;
+        const tagVal = (name) => {
+            const t = event.tags.find(x => Array.isArray(x) && x[0] === name);
+            return t && typeof t[1] === 'string' ? t[1].toLowerCase() : '';
+        };
+        const channel = event.kind === 23333 ? tagVal('d') : (tagVal('g') || tagVal('d'));
+        return channel === this.APP_RELAY_ONLY_CHANNEL;
+    },
+
     // FIFO gate: EVENTs verify in the worker; everything dispatches in arrival
     // order so EOSE/OK never overtake the events that preceded them
     handleRelayMessage(msg, relayUrl) {
@@ -3908,6 +4041,10 @@ Object.assign(NYM.prototype, {
         const entry = { msg, relayUrl, ready: true, ok: true };
         if (msg[0] === 'EVENT') {
             const ev = msg[2];
+            const source = (typeof msg[3] === 'string' && msg[3].startsWith('wss://'))
+                ? msg[3]
+                : ((typeof relayUrl === 'string' && relayUrl.startsWith('wss://')) ? relayUrl : null);
+            if (this._isAppRelayOnlyEvent(ev) && source !== this.appRelay) return;
             const cached = this._verifiedIdCheck(ev);
             if (cached !== undefined) {
                 entry.ok = cached;
@@ -3970,6 +4107,15 @@ Object.assign(NYM.prototype, {
                 const [subscriptionId, event, sourceRelay] = data;
 
                 if (event && event.id) {
+                    const attributed = (typeof sourceRelay === 'string' && sourceRelay.startsWith('wss://'))
+                        ? sourceRelay
+                        : (relayUrl && relayUrl !== 'relay-pool' ? relayUrl : null);
+                    // Before the dedup return, not after: every layer below
+                    // exists to discard the second and later copies, and those
+                    // copies ARE the list of relays this event came from.
+                    if (typeof this.recordEventProvenance === 'function') {
+                        this.recordEventProvenance(event, attributed);
+                    }
                     if (this.eventDeduplication.has(event.id)) {
                         return;
                     }
@@ -3978,9 +4124,7 @@ Object.assign(NYM.prototype, {
                     this.relayStats.totalEvents++;
                     this.relayStats.eventsThisSecond++;
 
-                    const attributedRelay = (typeof sourceRelay === 'string' && sourceRelay.startsWith('wss://'))
-                        ? sourceRelay
-                        : (relayUrl && relayUrl !== 'relay-pool' ? relayUrl : null);
+                    const attributedRelay = attributed;
                     if (attributedRelay) {
                         const cur = this.relayStats.eventsPerRelay.get(attributedRelay) || 0;
                         this.relayStats.eventsPerRelay.set(attributedRelay, cur + 1);
@@ -4004,6 +4148,14 @@ Object.assign(NYM.prototype, {
 
                 this.handleEvent(event);
                 break;
+            case 'POOL:SEEN': {
+                // A relay the proxy deduped away. The event itself already
+                // arrived; this only adds the source.
+                if (typeof this.noteEventRelay === 'function') {
+                    this.noteEventRelay(data[0], data[1]);
+                }
+                break;
+            }
             case 'OK': {
                 const okEventId = data[0];
                 const accepted = data[1];

@@ -1040,7 +1040,7 @@ Object.assign(NYM.prototype, {
 
         client.add(safeMagnetURI, { announce: [] }, (torrent) => {
             const transfer = this.p2pActiveTransfers.get(transferId);
-            if (!transfer) return; // Was cancelled
+            if (!transfer) return; // Was canceled
 
             if (torrent.length > this.P2P_MAX_FILE_SIZE ||
                 (typeof offer.size === 'number' && torrent.length > offer.size)) {

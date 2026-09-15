@@ -1654,7 +1654,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.hasBlockedKeyword(msg.content, msg.author);
+        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.hasBlockedKeyword(msg.content, msg.author, senderPubkey);
         // A reply collapsed inside a thread is off screen even while the group is
         // open, so it must not advance the read watermark, and an @mention /
         // quote-reply inside it still has to reach the bell.

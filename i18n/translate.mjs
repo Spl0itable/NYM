@@ -58,7 +58,7 @@ export async function saveCache(lang, map) {
 }
 
 /// One string. Used when a batch comes back short, so a single bad string
-/// costs itself rather than its nineteen neighbours.
+/// costs itself rather than its nineteen neighbors.
 async function viaProxy(text, target) {
   const res = await fetch(`${PROXY}?action=translate`, {
     method: 'POST',

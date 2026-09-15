@@ -96,4 +96,24 @@
         if (!pending) pending = run().catch((e) => { pending = null; throw e; });
         return pending;
     };
+
+    // Hashes a named subset of the running bundle, in the manifest's own
+    // format. Attestation enrollment probes a handful of paths the server
+    // picks per challenge rather than the whole set, so this exists next to
+    // run() instead of inside it: the About dialog wants all 87 assets, an
+    // enrollment wants four and should not pay for the rest.
+    window.hashRunningAssets = async function (paths) {
+        const out = {};
+        if (!Array.isArray(paths)) return out;
+        for (const path of paths.slice(0, 12)) {
+            if (typeof path !== 'string' || path[0] !== '/') continue;
+            try {
+                const cache = path !== '/sw.js' && /\.(js|css)$/.test(path) ? 'force-cache' : 'no-store';
+                const r = await fetch(path, { cache });
+                if (!r.ok) continue;
+                out[path] = await sha256b64(await r.arrayBuffer());
+            } catch (_) { /* a path we cannot read is simply absent */ }
+        }
+        return out;
+    };
 })();

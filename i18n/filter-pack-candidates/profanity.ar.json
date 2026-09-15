@@ -1,0 +1,9 @@
+{
+ "pack": "profanity",
+ "lang": "ar",
+ "language": "Arabic",
+ "generated": "2026-09-15",
+ "review": "Set \"keep\": true on each term a speaker of this language confirms is profanity AND is not an ordinary word. Then run with --promote. Anything left false is discarded.",
+ "droppedAutomatically": {},
+ "candidates": []
+}

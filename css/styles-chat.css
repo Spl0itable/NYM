@@ -658,8 +658,13 @@
 .timestamp-popup-copy {
     display: flex;
     gap: 6px;
-    padding: 8px 14px 10px;
+    padding: 8px 14px 6px;
     border-top: 1px solid var(--glass-border);
+}
+
+.timestamp-popup-details {
+    display: flex;
+    padding: 0 14px 10px;
 }
 
 .timestamp-copy-btn {
@@ -673,6 +678,10 @@
     border-radius: var(--radius-sm, 6px);
     cursor: pointer;
     white-space: nowrap;
+}
+
+.timestamp-details-btn {
+    width: 100%;
 }
 
 .timestamp-copy-btn:hover {

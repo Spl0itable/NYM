@@ -348,7 +348,7 @@
                     : this.publicMaxAgeMs;
             const age = this.now() - packet.timestamp;
             // A packet stamped in the future is clock skew, not a time
-            // traveller: keep it rather than discard a good message.
+            // traveler: keep it rather than discard a good message.
             if (age < 0) return true;
             return age <= maxAge;
         }

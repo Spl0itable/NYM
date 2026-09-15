@@ -1497,6 +1497,21 @@
         </div>
     </div>
 
+    <!-- Event Details Modal -->
+    <div class="modal" id="eventDetailsModal">
+        <div class="modal-content event-details-content">
+            <button class="modal-close" data-action="closeEventDetails">✕</button>
+            <div class="modal-header">Event Details</div>
+            <div class="modal-body">
+                <div id="eventDetailsBody" class="event-details-body"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" id="eventDetailsCopyBtn" data-action="copyNostrEventRef">Copy Raw JSON</button>
+                <button class="icon-btn" data-action="closeEventDetails">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div class="modal" id="settingsModal">
         <div class="modal-content">
@@ -1726,6 +1741,16 @@
                     </div>
 
                     <div class="form-group">
+                        <label class="form-label">Verified Nymchat Users Only</label>
+                        <select class="form-select" id="appVerifiedSelect">
+                            <option value="off" selected>Disabled</option>
+                            <option value="any">Any verified Nymchat client (apps and web)</option>
+                            <option value="verified">Nymchat iOS &amp; Android apps only</option>
+                        </select>
+                        <div class="form-hint">Filters <strong>incoming</strong> channel messages to senders who proved they are running Nymchat. <strong>Any verified client</strong> covers the web app as well as the phone apps, and is enough to drop scripted senders, which cannot get a badge at all. <strong>Apps only</strong> is the strictest setting: phone apps prove themselves with hardware the browser has no equivalent of, so it excludes every web user. Your own messages, friends, and Nymbot are always shown.</div>
+                    </div>
+
+                    <div class="form-group">
                         <label class="form-label">Accept Private Messages &amp; Group Chat Requests</label>
                         <select class="form-select" id="acceptPMsSelect">
                             <option value="enabled">Enabled</option>
@@ -1752,7 +1777,7 @@
                         <details class="form-hint" id="pqDiagnostics">
                             <summary class="nm-clickable" data-action="refreshPqDiagnostics">Post-quantum diagnostics</summary>
                             <pre id="pqDiagnosticsBody" class="pq-diag"></pre>
-                            <button type="button" class="btn-secondary" data-action="copyPqDiagnostics">Copy</button>
+                            <button type="button" class="icon-btn" data-action="copyPqDiagnostics">Copy</button>
                         </details>
                         <div class="form-hint">
                             Private messages and group chats with other Nymchat users add ML-KEM-768 (a post-quantum
@@ -1867,6 +1892,17 @@
                         <div class="blocked-list" id="blockedList">
                             <div class="nm-dim12">No blocked users</div>
                         </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Filter Packs</label>
+                        <div class="filter-pack-list" id="filterPackList">
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="profanity"><span class="filter-pack-name">Profanity</span><span class="filter-pack-desc">Swearing and slurs, in 28 languages. Matched as whole words, so Scunthorpe, classic, cocktail and analysis are not caught.</span></label>
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="scams"><span class="filter-pack-name">Scams &amp; spam</span><span class="filter-pack-desc">Seed-phrase requests, non-Bitcoin chain addresses, doubling offers, Telegram handoffs, lookalike links. Recognizes shapes, so it works in every language.</span></label>
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="crypto"><span class="filter-pack-name">Crypto shilling</span><span class="filter-pack-desc">Price hype, launch promotion and altcoin tickers &mdash; not crypto talk. Bitcoin, sats, zaps, nodes and wallets are explicitly allowed.</span></label>
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="politics"><span class="filter-pack-name">Politics</span><span class="filter-pack-desc">Party labels, political figures and charged coinages. Ordinary words like state, party, vote, left and right are allowed.</span></label>
+                        </div>
+                        <div class="form-hint">Ready-made keyword lists, applied like your own blocked keywords: a matching message is hidden, and so is one from a matching nym. Your friends and your own messages are never filtered. Each pack loads only when you turn it on.</div>
                     </div>
                     </div>
                 </div>
@@ -2209,7 +2245,8 @@
                         </div>
                     </div>
 
-                    <div class="form-group nm-h-67">
+                    <div class="settings-destructive">
+                    <div class="form-group">
                         <div id="appCacheSizeDisplay" class="nm-h-72">
                             Calculating&hellip;
                         </div>
@@ -2227,10 +2264,11 @@
                     </div>
 
                     <div class="form-group nm-h-74">
-                        <button class="icon-btn nm-danger-btn" id="wipeDeviceBtn" data-action="wipeThisDevice">
+                        <button class="icon-btn nm-h-73" id="wipeDeviceBtn" data-action="wipeThisDevice">
                             Wipe This Device
                         </button>
                         <div class="form-hint">Everything, permanently: your key, your settings, your message history and your post-quantum recovery code, on this device and on our servers. The same emergency wipe as holding your Nym for two seconds. Credits on your key are not touched. This cannot be undone.</div>
+                    </div>
                     </div>
                     </div>
                 </div>
@@ -2578,6 +2616,9 @@
     <script defer src="js/modules/persistence.js"></script>
     <script defer src="js/modules/key-vault.js"></script>
     <script defer src="js/modules/panic.js"></script>
+    <script defer src="js/modules/attest.js"></script>
+    <script defer src="js/modules/filter-packs.js"></script>
+    <script defer src="js/modules/event-details.js"></script>
     <script defer src="js/modules/relays.js"></script>
     <script defer src="js/modules/nostr-core.js"></script>
     <script defer src="js/modules/users.js"></script>

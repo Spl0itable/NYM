@@ -361,7 +361,7 @@ Object.assign(NYM.prototype, {
         verifiedOne = true;
       }
     } catch (e) {
-      throw new Error('Wrong password/PIN or unrecognised passkey.');
+      throw new Error('Wrong password/PIN or unrecognized passkey.');
     }
     for (const name of this._VAULT_KEYS) {
       let blob = null;
@@ -630,7 +630,7 @@ Object.assign(NYM.prototype, {
         try {
           if (!this._vaultKey) { o.close(); this._vaultAlert('Unlock the app first, then turn off encryption.'); return; }
           const auth = await this._vaultReauth();
-          if (auth === null) return; // cancelled
+          if (auth === null) return; // canceled
           if (auth !== true) { this._vaultAlert('Re-authentication failed. Encryption was not turned off.'); return; }
           await this.disableVault();
           o.close();

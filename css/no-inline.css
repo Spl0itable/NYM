@@ -82,11 +82,11 @@ html .nm-hidden { display: none; }
 .nm-h-64 { position: absolute; top: 100%; left: 0; right: 0; max-height: 300px; overflow-y: auto; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; margin-top: 4px; z-index: 1000; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
 .nm-h-65 { margin-top: 10px; width: 100%; }
 .nm-h-66 { margin-top: 10px; }
-.nm-h-67 { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border); }
 .nm-h-68 { display: flex; gap: 8px; }
 .nm-h-69 { white-space: nowrap; }
 .nm-h-70 { color: var(--danger); font-size: 12px; margin-top: 6px; }
 .nm-h-71 { max-height: 200px; overflow-y: auto; border: 1px solid var(--glass-border, var(--border)); border-radius: 12px; padding: 10px; background: rgba(255,255,255,0.03); }
+.nm-h-67 { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border); }
 .nm-h-72 { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
 .nm-h-73 { width: 100%; color: var(--danger); border-color: var(--danger); }
 .nm-h-74 { margin-top: 12px; }

@@ -79,7 +79,7 @@ export function parseDartCatalog(source) {
   const body = source.slice(start, end);
 
   const out = [];
-  // A single-quoted Dart literal, honouring \' escapes. Comment lines have no
+  // A single-quoted Dart literal, honoring \' escapes. Comment lines have no
   // quoted literal on them, so they fall out for free.
   const rx = /'((?:[^'\\]|\\.)*)'/g;
   let m;
@@ -250,7 +250,7 @@ export function makeKey(core) {
 
 /// One cache entry as the pack ships it: `[key, template]`, both in the form the
 /// runtime looks up and fills in. Returns null when the translation cannot be
-/// templated — a translator that localised a numeral or dropped a {placeholder}
+/// templated — a translator that localized a numeral or dropped a {placeholder}
 /// leaves nothing to substitute back, and a template that renders a sentinel or
 /// a stale number on screen is worse than the live translation the client falls
 /// back to.
@@ -281,7 +281,7 @@ export function packEntry(source, translated) {
       from = found + 1;
     }
     // Nowhere to substitute back into: the translator dropped the placeholder
-    // ("Added {nym} as a friend" -> "Agregado como un amigo") or localised it
+    // ("Added {nym} as a friend" -> "Agregado como un amigo") or localized it
     // ("{options}" -> "{opciones}"). Shipping that would put a name-less or
     // sentinel-carrying string on screen, so the client translates it live —
     // where the sentinel form is what gets sent, and survives.

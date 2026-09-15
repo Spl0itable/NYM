@@ -2440,7 +2440,7 @@ Object.assign(NYM.prototype, {
             set(v) {
                 const text = v == null ? '' : String(v);
                 self._renderRichInput(el, text);
-                // Mirror textarea behaviour: assigning value drops the caret at the end.
+                // Mirror textarea behavior: assigning value drops the caret at the end.
                 el._savedSelStart = el._savedSelEnd = text.length;
                 self._setRichCaret(el, text.length, text.length);
             }

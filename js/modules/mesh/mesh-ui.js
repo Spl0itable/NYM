@@ -6,7 +6,7 @@
 // the window object, so `window.NYM` is always undefined and a guard on it
 // silently skipped this whole file — leaving the mesh entry point hidden and
 // every method here uninstalled. app.js is loaded ahead of this script, so the
-// binding is initialised by the time this runs.
+// binding is initialized by the time this runs.
 (function () {
     const MESH_CHANNEL = 'mesh';
     const MESH_GOSSIP_KEY = 'nym_mesh_gossip_archive';

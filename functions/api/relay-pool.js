@@ -25,6 +25,7 @@
 
 import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
+import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 
 
 // Reject relay hostnames that resolve to private/loopback/link-local space so
@@ -544,6 +545,32 @@ export async function onRequest(context) {
     return getTag('g') || getTag('d');
   }
 
+  // How many extra relays one event reports before the notes stop. Past a
+  // handful the list tells a reader nothing new, and the cap is what keeps a
+  // widely-relayed event from costing one frame per relay.
+  const SEEN_REPORT_CAP = 8;
+  // Only the kinds a person can open the details panel on.
+  const isSeenReportKind = (k) => k === 20000 || k === 23333 || k === 7;
+
+  const APP_RELAY_ONLY_CHANNEL = 'nymchat';
+  // Every kind that names a channel and shows up in it: the message itself, and
+  // the reactions, polls, typing strips and read receipts that hang off it.
+  // Gating only the messages would leave four other ways to put a nym and a
+  // payload in front of everyone in #nymchat.
+  const APP_RELAY_ONLY_KINDS = new Set([23333, 7, 30078, 24420, 24421]);
+
+  function isForeignAppChannelEvent(raw, relayUrl) {
+    if (relayUrl === APP_RELAY) return false;
+    const kind = extractEventKind(raw);
+    if (!APP_RELAY_ONLY_KINDS.has(kind)) return false;
+    // Same derivation as channelFromTags: 'd' names a named channel, and the
+    // hangers-on may carry either tag.
+    const name = kind === 23333
+      ? extractTagValue(raw, 'd')
+      : (extractTagValue(raw, 'g') || extractTagValue(raw, 'd'));
+    return !!name && name.toLowerCase() === APP_RELAY_ONLY_CHANNEL;
+  }
+
   function runArchive(work) {
     if (context && context.waitUntil) { try { context.waitUntil(work); } catch { /* noop */ } }
   }
@@ -555,25 +582,31 @@ export async function onRequest(context) {
     if (archiveBuf.size >= ARCHIVE_FLUSH_MAX) runArchive(flushArchive());
   }
 
+  // The relay directory, loaded once per isolate. Held in a plain variable so
+  // the archive path can stay synchronous; null until the first load lands,
+  // and null means admit everything.
+  let geoDirectory = null;
+  runArchive((async () => { geoDirectory = await loadGeoDirectory(); })());
+
+  // Fails open on an unloaded directory or an undecodable geohash. In proxy
+  // mode the pool holds the whole directory, so the neighbourhood is always
+  // connected and there is no third case to fail open on.
+  function geoOriginAllowsFrame(raw, kind, relayUrl) {
+    if (kind !== 20000) return true;
+    if (!geoDirectory || typeof relayUrl !== 'string' || !relayUrl) return true;
+    const geohash = extractTagValue(raw, 'g');
+    if (!geohash) return true;
+    const allow = closestRelayUrls(geohash.toLowerCase(), geoDirectory);
+    if (!allow.length) return true;
+    return allow.includes(relayUrl);
+  }
+
   // Inbound event from a relay (string frame).
   function archiveInboundEvent(raw, kind, eventId) {
     if (!archiveEnabled || !eventId) return;
     // kind 30078 is shared by presence/settings/etc; only archive polls/votes
     // (channel-scoped via g/d), vouch lists (d = nym-vouches) and post-quantum
     // key announcements (d = nym-pq).
-    //
-    // The announcements are archived so a client can ask ONE authoritative
-    // question instead of racing several relays for the answer. Discovery used
-    // to fan a request out to five and take the first "nothing here", which the
-    // relays without the announcement always win because they have nothing to
-    // look up — so two users who had both published their keys went on
-    // messaging each other classically. D1 has no such race.
-    //
-    // Archiving does not make D1 trusted: the client verifies the signature on
-    // whatever comes back, exactly as it does for a relay event and for the
-    // vouch lists already stored here. That signature is what binds the ML-KEM
-    // key to the Nostr identity, so a substituted key would have to be forged
-    // rather than merely served.
     if (kind === 30078) {
       const t = extractTagValue(raw, 't');
       if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches'
@@ -737,7 +770,7 @@ export async function onRequest(context) {
   }
 
   // Mirror of the client-side _looksLikeRandomToken heuristic.
-  // Recognises nanoid-style spam strings like "IBLm9lyTuP", "AJvgLLPASR".
+  // Recognizes nanoid-style spam strings like "IBLm9lyTuP", "AJvgLLPASR".
   function looksLikeRandomToken(token) {
     if (!token || token.length < 8) return false;
     if (!/^[A-Za-z0-9]+$/.test(token)) return false;
@@ -873,7 +906,6 @@ export async function onRequest(context) {
   function isSpamContent(content) {
     if (typeof content !== 'string') return false;
     const trimmed = content.trim();
-    if (trimmed.includes('joined the channel via bitchat.land')) return true;
     if (trimmed.includes('["client","chorus"]')) return true;
     if (trimmed.length < 6) return false;
     if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
@@ -959,6 +991,17 @@ export async function onRequest(context) {
   }
 
   let droppedSpamCount = 0;
+  let droppedGeoOriginCount = 0;
+  const RX_GLUB_CLIENT = /\[\s*"client"\s*,\s*"glub\.chat"/i;
+  const RX_GLUB_TAG = /\[\s*"glub"\s*,/i;
+
+  function isGlubClientFrame(raw) {
+    const tagsIdx = raw.indexOf('"tags":');
+    if (tagsIdx === -1) return false;
+    const tags = raw.slice(tagsIdx);
+    return RX_GLUB_CLIENT.test(tags) || RX_GLUB_TAG.test(tags);
+  }
+
   function isSpamEventFrame(raw) {
     const kind = extractEventKind(raw);
     if (kind !== 20000) return false;
@@ -1184,13 +1227,30 @@ export async function onRequest(context) {
         // Detect message type from raw string prefix (avoids JSON.parse)
         // EVENT: ["EVENT","subId",{...}]
         if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
+          if (isForeignAppChannelEvent(raw, relayUrl)) return;
+          if (!geoOriginAllowsFrame(raw, extractEventKind(raw), relayUrl)) {
+            droppedGeoOriginCount++;
+            return;
+          }
           const eventId = extractEventId(raw);
           if (eventId) {
-            if (seenEvents.has(eventId)) return;
+            const prior = seenEvents.get(eventId);
+            if (prior !== undefined) {
+              // The whole event is a duplicate and is not forwarded again, but
+              // WHICH relays carried it is information the first copy could not
+              // contain — the client's event-details panel has no other way to
+              // learn it, because this dedup is exactly what hides it. A 40-byte
+              // note costs far less than the event and answers the question.
+              if (prior < SEEN_REPORT_CAP && isSeenReportKind(extractEventKind(raw))) {
+                seenEvents.set(eventId, prior + 1);
+                sendToClient(JSON.stringify(['POOL:SEEN', eventId, relayUrl]));
+              }
+              return;
+            }
             seenEvents.set(eventId, 1);
             trimDedup();
           }
-          if (hasBlockedContentPrefix(raw) || isSpamEventFrame(raw)) {
+          if (hasBlockedContentPrefix(raw) || isGlubClientFrame(raw) || isSpamEventFrame(raw)) {
             droppedSpamCount++;
             return;
           }

@@ -82,7 +82,7 @@
             await this.onRotate();
         }
 
-        // Jittered so a rotation cannot be recognised by its period.
+        // Jittered so a rotation cannot be recognized by its period.
         _arm() {
             if (this.timer) clearTimeout(this.timer);
             const jitter = Math.floor(Math.random() * (GHOST_ROTATE_MS / 4));
@@ -119,7 +119,7 @@
             this.realIdentity = null;
             this.noise = null;
             this.seen = new (P().SeenPackets)();
-            // Recent public history, reconciled with neighbours so a peer that
+            // Recent public history, reconciled with neighbors so a peer that
             // was out of range — or in another mesh partition — still gets it.
             this.gossip = new (S().GossipSync)();
             this._gossipDirty = false;
@@ -499,7 +499,7 @@
             }
             const bytes = X().encodeEnvelope({
                 // The TAG is always derived from the identity key, prekey or
-                // not: it is how the recipient recognises their own mail, and
+                // not: it is how the recipient recognizes their own mail, and
                 // they cannot look up an envelope by a prekey they may already
                 // have retired.
                 recipientTag: await X().recipientTagFor(recipientStaticKey, X().epochDayFor(now)),
@@ -648,7 +648,7 @@
         ///
         /// Directed rather than broadcast, and TTL 0 so it is never relayed: a
         /// sync request is a question for the peer that can hear it, and
-        /// flooding it would ask the whole mesh something only neighbours can
+        /// flooding it would ask the whole mesh something only neighbors can
         /// answer.
         async _gossipTick() {
             if (!this.running) return;

@@ -153,7 +153,7 @@ window.nymHapticTap = function (ms) {
         var t = e.target;
         if (!t || t.tagName !== 'IMG') return;
         if (t.dataset && t.dataset.avatarPubkey && window.nym && typeof window.nym.generateAvatarSvg === 'function') {
-            // If the image actually decoded (e.g. error fired on a cancelled
+            // If the image actually decoded (e.g. error fired on a canceled
             // load while the new src is already painting), don't replace it.
             if (t.complete && t.naturalHeight > 0) return;
             var fallback = window.nym.generateAvatarSvg(t.dataset.avatarPubkey);
@@ -493,6 +493,14 @@ window.nymHapticTap = function (ms) {
             if (e && e.stopPropagation) e.stopPropagation();
             nym().copyNostrEventRef(t && t.dataset ? t.dataset.nostrCopy : '', t);
         },
+        'openEventDetails':           function (e, t) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().openEventDetails(t && t.dataset ? t.dataset.eventId : '');
+        },
+        'closeEventDetails':          function (e, t) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            nym().closeEventDetails();
+        },
         'showFullTimestamp':          function (e, t) {
             if (e && e.stopPropagation) e.stopPropagation();
             var n = nym();
@@ -700,7 +708,7 @@ window.nymHapticTap = function (ms) {
             if (!items || !items.length) return;
             var r = t.getBoundingClientRect();
             // Anchor to the button so the menu opens where the user tapped,
-            // matching the long-press behaviour.
+            // matching the long-press behavior.
             n._showSidebarActionMenu(items, r.left + r.width / 2, r.bottom);
         },
 
