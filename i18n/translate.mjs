@@ -39,22 +39,22 @@ const notice = (text) => notifier?.(text);
 const BATCH_STRINGS = 20;
 const BATCH_CHARS = 16000;
 
-export const cachePath = (lang) => path.join(CACHE_DIR, `${lang}.json`);
+export const cachePath = (lang, dir = CACHE_DIR) => path.join(dir, `${lang}.json`);
 
-export async function loadCache(lang) {
+export async function loadCache(lang, dir = CACHE_DIR) {
   try {
-    return JSON.parse(await readFile(cachePath(lang), 'utf8'));
+    return JSON.parse(await readFile(cachePath(lang, dir), 'utf8'));
   } catch {
     return {};
   }
 }
 
-export async function saveCache(lang, map) {
-  await mkdir(CACHE_DIR, { recursive: true });
+export async function saveCache(lang, map, dir = CACHE_DIR) {
+  await mkdir(dir, { recursive: true });
   // Sorted keys so a re-run produces no spurious diff.
   const sorted = {};
   for (const key of Object.keys(map).sort()) sorted[key] = map[key];
-  await writeFile(cachePath(lang), JSON.stringify(sorted, null, 2) + '\n');
+  await writeFile(cachePath(lang, dir), JSON.stringify(sorted, null, 2) + '\n');
 }
 
 /// One string. Used when a batch comes back short, so a single bad string
@@ -253,13 +253,19 @@ function prune(cache, sources) {
   return out;
 }
 
-export async function translateMissing(lang, sources, { onProgress } = {}) {
-  const cache = await loadCache(lang);
+/// `cacheDir` picks which cache this run owns. It is a required decision for
+/// any caller that is not translating the app's own interface strings: the
+/// prune below deletes every key outside `sources`, so pointing a second,
+/// unrelated source set at the interface cache empties it.
+export async function translateMissing(lang, sources, { onProgress, cacheDir = CACHE_DIR } = {}) {
+  const cache = await loadCache(lang, cacheDir);
   const missing = sources.filter((s) => typeof cache[s] !== 'string');
   if (missing.length === 0) {
     // Still prune: copy may have been removed since the last run.
     const kept = prune(cache, sources);
-    if (Object.keys(kept).length !== Object.keys(cache).length) await saveCache(lang, kept);
+    if (Object.keys(kept).length !== Object.keys(cache).length) {
+      await saveCache(lang, kept, cacheDir);
+    }
     return { cache: kept, translated: 0 };
   }
 
@@ -306,7 +312,7 @@ export async function translateMissing(lang, sources, { onProgress } = {}) {
   // falls back to translating at runtime for anything the pack is missing, so
   // shipping 1200 of 1300 strings is 1200 strings the user does not wait for.
   // Saving progress is therefore always right.
-  await saveCache(lang, prune(cache, sources));
+  await saveCache(lang, prune(cache, sources), cacheDir);
 
   if (failures.length > 0) {
     const sample = failures.slice(0, 3).map((f) => `${JSON.stringify(f.source.slice(0, 40))}: ${f.error}`);

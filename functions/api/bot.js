@@ -53,12 +53,18 @@ import {
   buildPqGiftWrappedDMPair
 } from "./_pq.js";
 export { NymLedger } from "./_ledger.js";
+export { suppliedWraps, wrapsFor, wrapsToCache, scopeLabelInThread,
+  botCachedWraps, fetchGiftWrapsByIds };
 import {
   creditsGet,
   creditsPut,
   botThreadGet,
   botThreadPut,
   botThreadDelete,
+  botWrapsGet,
+  botWrapsPut,
+  botWrapsDelete,
+  botWrapsSweep,
   invoiceGet,
   invoiceHas,
   invoicePut,
@@ -267,9 +273,15 @@ function sameBytes(a, b) {
 
 // Fetch gift-wrap events by id from relays, retrying so a just-published wrap
 // has time to propagate. requiredId is the current message and must be found.
-async function fetchGiftWrapsByIds(ids, requiredId, timeoutMs) {
+// The retries are for propagation: a wrap published a moment ago may not have
+// reached the relay being asked. Nothing else is worth waiting a second for, so
+// a caller already holding the current message asks once — an old wrap a relay
+// does not have now is one it will not have in three seconds either, and
+// sleeping through four passes for it cost every turn in the thread.
+async function fetchGiftWrapsByIds(ids, requiredId, timeoutMs, maxAttempts) {
   var found = {};
-  for (var attempt = 0; attempt < 4; attempt++) {
+  var tries = maxAttempts > 0 ? maxAttempts : 4;
+  for (var attempt = 0; attempt < tries; attempt++) {
     var missing = ids.filter(function (id) { return !found[id]; });
     if (missing.length === 0) break;
     var events = await fetchRecentEvents({ ids: missing, kinds: [1059] }, timeoutMs || 3000);
@@ -278,7 +290,9 @@ async function fetchGiftWrapsByIds(ids, requiredId, timeoutMs) {
     }
     var stillMissing = ids.filter(function (id) { return !found[id]; });
     if (stillMissing.length === 0) break;
-    // Once the current message is in hand, one more pass for history is enough
+    // Nothing waits after the last pass, and once the current message is in
+    // hand one more pass for history is enough.
+    if (attempt + 1 >= tries) break;
     if (requiredId && found[requiredId] && attempt >= 1) break;
     await new Promise(function (r) { setTimeout(r, 1000); });
   }
@@ -3502,6 +3516,112 @@ async function botPutThread(env, pubkey, ids) {
   var trimmed = ids.filter(isHex64);
   if (trimmed.length > BOT_THREAD_MAX) trimmed = trimmed.slice(-BOT_THREAD_MAX);
   await botThreadPut(env.DB_BOT, pubkey, trimmed);
+  return trimmed;
+}
+
+function suppliedWraps(body) {
+  var out = {};
+  var take = function (evt) {
+    if (!evt || typeof evt !== "object") return;
+    if (evt.kind !== 1059 || !isHex64(evt.id)) return;
+    if (typeof evt.content !== "string" || typeof evt.pubkey !== "string") return;
+    try { if (getEventHash(evt) !== evt.id) return; } catch (e) { return; }
+    out[evt.id] = evt;
+  };
+  if (body && body.wrap) take(body.wrap);
+  if (body && Array.isArray(body.wraps)) {
+    for (var i = 0; i < body.wraps.length && i <= BOT_MESSAGE_PARTS_MAX; i++) take(body.wraps[i]);
+  }
+  return out;
+}
+
+// The primary, not a read replica. The write lands in waitUntil, after the
+// response, and `replica()` is D1's "first-unconstrained" session — no
+// consistency guarantee at all — so the next turn read a replica that had not
+// seen it yet, found nothing, and went to the relays every single time. The
+// thread ids beside it have always been read from the primary for the same
+// reason.
+async function botCachedWraps(env, pubkey, ids) {
+  if (!ids.length) return {};
+  return botWrapsGet(env.DB_BOT, pubkey, ids.slice(0, BOT_THREAD_MAX + 8));
+}
+
+// The same question rumorInThreadScope answers, from the two tag values the
+// cache recorded rather than from an opened rumor.
+function scopeLabelInThread(row, threadRoot) {
+  if (threadRoot) return row.root === threadRoot || row.msg === threadRoot;
+  return !row.root;
+}
+
+// Each wrap with the conversation it belongs to, read off the rumor the bot
+// can already open. What is not openable is still cached, unlabelled, and
+// simply never filtered on.
+function wrapsFor(fetched, ids, botPrivkey, botPq, known) {
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i];
+    var evt = fetched[id];
+    if (!evt) continue;
+    var held = known && known[id];
+    if (held && held.labelled) {
+      out.push({ event: evt, root: held.root, msg: held.msg });
+      continue;
+    }
+    var root = "";
+    var msg = "";
+    try {
+      var open = unwrapBotGiftWrap(evt, botPrivkey, botPq);
+      if (open && open.rumor) {
+        root = rumorTagValue(open.rumor, "nymthread") || "";
+        msg = rumorTagValue(open.rumor, "x") || "";
+      }
+    } catch (e) {}
+    out.push({ event: evt, root: root, msg: msg });
+  }
+  return out;
+}
+
+// Everything this turn has in hand, the reply it just sealed included, each
+// labelled with the conversation it belongs to.
+function wrapsToCache(fetched, extra, botPrivkey, botPq, known) {
+  var all = Object.assign({}, fetched);
+  for (var i = 0; i < extra.length; i++) {
+    if (extra[i] && extra[i].id) all[extra[i].id] = extra[i];
+  }
+  return wrapsFor(all, Object.keys(all), botPrivkey, botPq, known);
+}
+
+var BOT_WRAP_KEEP_MS = 90 * 86400 * 1000;
+var BOT_WRAP_SWEEP_EVERY_MS = 6 * 3600 * 1000;
+var BOT_WRAP_SWEEP_MAX = 500;
+var botWrapSweepLastMs = 0;
+
+function maybeSweepBotWraps(context, env) {
+  if (!env || !hasD1(env.DB_BOT)) return;
+  var now = Date.now();
+  if (now - botWrapSweepLastMs < BOT_WRAP_SWEEP_EVERY_MS) return;
+  botWrapSweepLastMs = now;
+  var work = botWrapsSweep(env.DB_BOT, now - BOT_WRAP_KEEP_MS, BOT_WRAP_SWEEP_MAX)
+    .catch(function () { return 0; });
+  try {
+    if (context && typeof context.waitUntil === "function") context.waitUntil(work);
+  } catch (e) { }
+}
+
+// Awaited rather than deferred. Written in waitUntil it landed after the
+// response, so a reply followed quickly enough read a cache the write had not
+// reached yet. One D1 batch beside the thread write it already does, against
+// seconds of relay round trip, is the trade.
+async function botCacheWraps(env, pubkey, entries, keepIds) {
+  var live = [];
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i];
+    if (entry && entry.event && isHex64(entry.event.id)) live.push(entry);
+  }
+  if (!live.length) return;
+  try {
+    await botWrapsPut(env.DB_BOT, pubkey, live, keepIds);
+  } catch (e) { }
 }
 // Split a PM message into its leading quote-reply block
 function splitQuotedReply(raw) {
@@ -3957,6 +4077,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   // announced a key of their own — all fail-open to classical.
   var botPq = botPqSelfFromEnv(env);
   maybeEnsureBotPqAnnouncement(context, botPrivkey, botPubkey, botPq);
+  maybeSweepBotWraps(context, env);
   // Deterministic post-quantum replies: the client hands us its own signed
   // `nym-pq` announcement with the request (every peer that can PM the bot is
   // a Nymchat client, post-quantum by default), so sealing back to it never
@@ -4568,16 +4689,28 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       if (partIds.indexOf(currentId) === -1) partIds.push(currentId);
     }
 
-    var fetchIds = historyIds.slice();
-    for (var fi = 0; fi < partIds.length; fi++) {
-      if (fetchIds.indexOf(partIds[fi]) === -1) fetchIds.push(partIds[fi]);
-    }
-    if (fetchIds.indexOf(currentId) === -1) fetchIds.push(currentId);
+    // The message first, and only the message. Which conversation it belongs to
+    // is inside its own rumor, so nothing about history can be decided — or
+    // fetched — before this is open.
+    var askIds = partIds.length ? partIds.slice() : [currentId];
+    if (askIds.indexOf(currentId) === -1) askIds.push(currentId);
 
-    if (fetchIds.length > 1) {
-      pushProgress({ kind: "stage", stage: "reading", turns: fetchIds.length - 1 });
+    var fetched = suppliedWraps(body);
+    var scopeOf = {};
+    var askMissing = askIds.filter(function (id) { return !fetched[id]; });
+    if (askMissing.length) {
+      var askCached = await botCachedWraps(env, userPubkey, askMissing);
+      for (var ak in askCached) {
+        fetched[ak] = askCached[ak].event;
+        scopeOf[ak] = askCached[ak];
+      }
+      askMissing = askIds.filter(function (id) { return !fetched[id]; });
     }
-    var fetched = await fetchGiftWrapsByIds(fetchIds, currentId, 3000);
+    if (askMissing.length) {
+      pushProgress({ kind: "stage", stage: "reading", turns: askMissing.length });
+      var askPulled = await fetchGiftWrapsByIds(askMissing, currentId, 3000, 4);
+      for (var apk in askPulled) { if (!fetched[apk]) fetched[apk] = askPulled[apk]; }
+    }
     var currentWrap = fetched[currentId];
     if (!currentWrap) {
       return await turnFail({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
@@ -4640,6 +4773,39 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // and the flat conversation in turn excludes thread replies.
     var threadRoot = rumorTagValue(currentUnwrapped.rumor, "nymthread");
 
+    // Now history, and only this conversation's. The thread list is per key,
+    // not per chat, so a new chat used to fetch and decrypt forty wraps from
+    // other conversations to end up with nothing. The cache records which
+    // conversation each wrap belongs to, so the ones that plainly belong to
+    // another are dropped here — never read, never decrypted. A row cached
+    // before those columns existed says nothing, so it is kept and the filter
+    // below decides, which is what labels it for next time.
+    if (historyIds.length) {
+      var wantHistory = historyIds.filter(function (id) { return !fetched[id]; });
+      var heldHistory = await botCachedWraps(env, userPubkey, wantHistory);
+      var keepHistory = [];
+      for (var hi = 0; hi < historyIds.length; hi++) {
+        var hid = historyIds[hi];
+        if (fetched[hid]) { keepHistory.push(hid); continue; }
+        var row = heldHistory[hid];
+        if (row) {
+          if (row.labelled && !scopeLabelInThread(row, threadRoot)) continue;
+          fetched[hid] = row.event;
+          scopeOf[hid] = row;
+          keepHistory.push(hid);
+          continue;
+        }
+        keepHistory.push(hid);
+      }
+      historyIds = keepHistory;
+      var histMissing = historyIds.filter(function (id) { return !fetched[id]; });
+      if (histMissing.length) {
+        pushProgress({ kind: "stage", stage: "reading", turns: histMissing.length });
+        var histPulled = await fetchGiftWrapsByIds(histMissing, null, 3000, 1);
+        for (var hpk in histPulled) { if (!fetched[hpk]) fetched[hpk] = histPulled[hpk]; }
+      }
+    }
+
     // Reconstruct prior turns (in order) from the remaining fetched wraps.
     var history = [];
     for (var hk = 0; hk < historyIds.length; hk++) {
@@ -4695,7 +4861,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var noMediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
       noMediaThread.push.apply(noMediaThread, askedIds);
       noMediaThread.push(noMedia.selfEvent.id);
-      try { await botPutThread(env, userPubkey, noMediaThread); } catch (e) { }
+      var noMediaKeep = noMediaThread;
+      try { noMediaKeep = await botPutThread(env, userPubkey, noMediaThread); } catch (e) { }
+      await botCacheWraps(env, userPubkey,
+        wrapsToCache(fetched, [noMedia.selfEvent], botPrivkey, botPq, scopeOf), noMediaKeep);
       return await turnDone({
         event: noMedia.event, selfEvent: noMedia.selfEvent,
         balance: 0, cost: 0, taskType: "general", pro: false,
@@ -4726,7 +4895,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         var listThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
         listThread.push.apply(listThread, askedIds);
         listThread.push(listPair.selfEvent.id);
-        try { await botPutThread(env, userPubkey, listThread); } catch (e) { }
+        var listKeep = listThread;
+        try { listKeep = await botPutThread(env, userPubkey, listThread); } catch (e) { }
+        await botCacheWraps(env, userPubkey,
+          wrapsToCache(fetched, [listPair.selfEvent], botPrivkey, botPq, scopeOf), listKeep);
         var listBody = {
           event: listPair.event,
           selfEvent: listPair.selfEvent,
@@ -4842,7 +5014,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var mediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
       mediaThread.push.apply(mediaThread, askedIds);
       mediaThread.push(mediaPair.selfEvent.id);
-      try { await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
+      var mediaKeep = mediaThread;
+      try { mediaKeep = await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
+      await botCacheWraps(env, userPubkey,
+        wrapsToCache(fetched, [mediaPair.selfEvent], botPrivkey, botPq, scopeOf), mediaKeep);
       var mediaBody = {
         event: mediaPair.event,
         selfEvent: mediaPair.selfEvent,
@@ -5058,7 +5233,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       updatedThread.push.apply(updatedThread, askedIds);
       updatedThread.push(pair.selfEvent.id);
     }
-    try { await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
+    var updatedKeep = updatedThread;
+    try { updatedKeep = await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
+    await botCacheWraps(env, userPubkey,
+      wrapsToCache(fetched, [pair.selfEvent], botPrivkey, botPq, scopeOf), updatedKeep);
     var chatBody = {
       event: pair.event,
       selfEvent: pair.selfEvent,
@@ -5100,6 +5278,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "clear-history") {
     try { await botThreadDelete(env.DB_BOT, userPubkey); } catch (e) { }
+    try { await botWrapsDelete(env.DB_BOT, userPubkey); } catch (e) { }
     return json({ cleared: true });
   }
 
