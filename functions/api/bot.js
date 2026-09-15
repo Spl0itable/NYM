@@ -66,6 +66,7 @@ import {
   botWrapsDelete,
   botWrapsSweep,
   botWrapsStatus,
+  botWrapsMiss,
   invoiceGet,
   invoiceHas,
   invoicePut,
@@ -3543,8 +3544,29 @@ function suppliedWraps(body) {
 // thread ids beside it have always been read from the primary for the same
 // reason.
 async function botCachedWraps(env, pubkey, ids) {
-  if (!ids.length) return {};
+  if (!ids.length) return { ok: true, rows: {} };
   return botWrapsGet(env.DB_BOT, pubkey, ids.slice(0, BOT_THREAD_MAX + 8));
+}
+
+// History the store did not have, fetched after the reply has gone out so the
+// next turn finds it there. Never on the path to an answer: the store is the
+// store, and a relay is where to look only when it cannot be asked.
+function botBackfillHistory(context, env, pubkey, ids, botPrivkey, botPq) {
+  if (!ids || !ids.length) return;
+  var work = (async function () {
+    try {
+      var pulled = await fetchGiftWrapsByIds(ids, null, 3000, 1);
+      var got = Object.keys(pulled);
+      if (got.length) {
+        await botWrapsPut(env.DB_BOT, pubkey, wrapsFor(pulled, got, botPrivkey, botPq), null);
+      }
+      var missed = ids.filter(function (id) { return !pulled[id]; });
+      if (missed.length) await botWrapsMiss(env.DB_BOT, pubkey, missed);
+    } catch (e) { }
+  })();
+  try {
+    if (context && typeof context.waitUntil === "function") context.waitUntil(work);
+  } catch (e) { }
 }
 
 // The same question rumorInThreadScope answers, from the two tag values the
@@ -3592,6 +3614,10 @@ function wrapsToCache(fetched, extra, botPrivkey, botPq, known) {
   return wrapsFor(all, Object.keys(all), botPrivkey, botPq, known);
 }
 
+// Two goes at a wrap the thread names. Past that it is not anywhere, and
+// asking the relays for it again on every turn for the rest of the thread's
+// life is the whole of what the reading step was still doing.
+var BOT_WRAP_GIVE_UP = 2;
 var BOT_WRAP_KEEP_MS = 90 * 86400 * 1000;
 var BOT_WRAP_SWEEP_EVERY_MS = 6 * 3600 * 1000;
 var BOT_WRAP_SWEEP_MAX = 500;
@@ -4700,8 +4726,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var scopeOf = {};
     var askMissing = askIds.filter(function (id) { return !fetched[id]; });
     if (askMissing.length) {
-      var askCached = await botCachedWraps(env, userPubkey, askMissing);
+      var askCached = (await botCachedWraps(env, userPubkey, askMissing)).rows;
       for (var ak in askCached) {
+        if (!askCached[ak].event) continue;
         fetched[ak] = askCached[ak].event;
         scopeOf[ak] = askCached[ak];
       }
@@ -4781,16 +4808,28 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // another are dropped here — never read, never decrypted. A row cached
     // before those columns existed says nothing, so it is kept and the filter
     // below decides, which is what labels it for next time.
-    var cacheWant = 0, cacheHit = 0, cacheMiss = 0;
+    var cacheWant = 0, cacheHit = 0, cacheMiss = 0, cacheGone = 0, cacheDown = false;
     if (historyIds.length) {
       var wantHistory = historyIds.filter(function (id) { return !fetched[id]; });
       cacheWant = wantHistory.length;
       var heldHistory = await botCachedWraps(env, userPubkey, wantHistory);
+      // The store answered, or it did not. Only the second sends this turn
+      // anywhere near a relay; the first is simply what the store holds.
+      var storeDown = !heldHistory.ok;
+      cacheDown = storeDown;
       var keepHistory = [];
+      var notInStore = [];
       for (var hi = 0; hi < historyIds.length; hi++) {
         var hid = historyIds[hi];
         if (fetched[hid]) { keepHistory.push(hid); continue; }
-        var row = heldHistory[hid];
+        var row = heldHistory.rows[hid];
+        if (row && row.gone) {
+          if (row.misses >= BOT_WRAP_GIVE_UP) { cacheGone++; continue; }
+          cacheMiss++;
+          notInStore.push(hid);
+          if (storeDown) keepHistory.push(hid);
+          continue;
+        }
         if (row) {
           cacheHit++;
           if (row.labelled && !scopeLabelInThread(row, threadRoot)) continue;
@@ -4800,14 +4839,19 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           continue;
         }
         cacheMiss++;
-        keepHistory.push(hid);
+        notInStore.push(hid);
+        if (storeDown) keepHistory.push(hid);
       }
       historyIds = keepHistory;
-      var histMissing = historyIds.filter(function (id) { return !fetched[id]; });
-      if (histMissing.length) {
-        pushProgress({ kind: "stage", stage: "reading", turns: histMissing.length });
-        var histPulled = await fetchGiftWrapsByIds(histMissing, null, 3000, 1);
-        for (var hpk in histPulled) { if (!fetched[hpk]) fetched[hpk] = histPulled[hpk]; }
+      if (storeDown) {
+        var histMissing = historyIds.filter(function (id) { return !fetched[id]; });
+        if (histMissing.length) {
+          pushProgress({ kind: "stage", stage: "reading", turns: histMissing.length });
+          var histPulled = await fetchGiftWrapsByIds(histMissing, null, 3000, 1);
+          for (var hpk in histPulled) { if (!fetched[hpk]) fetched[hpk] = histPulled[hpk]; }
+        }
+      } else if (notInStore.length) {
+        botBackfillHistory(context, env, userPubkey, notInStore, botPrivkey, botPq);
       }
     }
 
@@ -5245,7 +5289,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var wrapStatus = botWrapsStatus();
     var chatBody = {
       cache: {
-        want: cacheWant, hit: cacheHit, miss: cacheMiss,
+        want: cacheWant, hit: cacheHit, miss: cacheMiss, gone: cacheGone,
+        down: cacheDown || undefined,
         ok: wrapStatus.ok, repaired: wrapStatus.repaired,
         err: wrapStatus.err || undefined
       },

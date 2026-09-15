@@ -184,11 +184,12 @@ async function repairBotWraps(db) {
   var ddl = [
     "CREATE TABLE IF NOT EXISTS botpm_wraps (" +
     "pubkey TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, " +
-    "root TEXT, msg TEXT, " +
+    "root TEXT, msg TEXT, misses INTEGER NOT NULL DEFAULT 0, " +
     "created_at INTEGER NOT NULL DEFAULT 0, stored_at INTEGER NOT NULL DEFAULT 0, " +
     "PRIMARY KEY (pubkey, id))",
     "ALTER TABLE botpm_wraps ADD COLUMN root TEXT",
     "ALTER TABLE botpm_wraps ADD COLUMN msg TEXT",
+    "ALTER TABLE botpm_wraps ADD COLUMN misses INTEGER NOT NULL DEFAULT 0",
     "CREATE INDEX IF NOT EXISTS botpm_wraps_pubkey ON botpm_wraps (pubkey)",
     "CREATE INDEX IF NOT EXISTS botpm_wraps_root ON botpm_wraps (pubkey, root)"
   ];
@@ -197,11 +198,15 @@ async function repairBotWraps(db) {
   }
 }
 
+// Returns `ok` as well as the rows, because "the store does not have it" and
+// "the store could not be asked" are different answers and only the second is
+// a reason to go near a relay.
 export async function botWrapsGet(db, pk, ids) {
   var out = {};
-  if (!hasD1(db) || !ids || ids.length === 0) return out;
+  if (!hasD1(db)) return { ok: false, rows: out };
+  if (!ids || ids.length === 0) return { ok: true, rows: out };
   var ph = ids.map(function () { return "?"; }).join(",");
-  var sql = "SELECT id, json, root, msg FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ")";
+  var sql = "SELECT id, json, root, msg, misses FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ")";
   var rs = null;
   try {
     rs = await db.prepare(sql).bind(pk, ...ids).all();
@@ -210,21 +215,34 @@ export async function botWrapsGet(db, pk, ids) {
     // are repairable, and neither is a reason to stop having a cache.
     noteWrapErr(e);
     await repairBotWraps(db);
-    try { rs = await db.prepare(sql).bind(pk, ...ids).all(); } catch (e2) { noteWrapErr(e2); return out; }
+    try {
+      rs = await db.prepare(sql).bind(pk, ...ids).all();
+    } catch (e2) {
+      noteWrapErr(e2);
+      return { ok: false, rows: out };
+    }
   }
   for (var i = 0; i < ((rs && rs.results) || []).length; i++) {
     var row = rs.results[i];
+    // A row with no event is the memory of having looked: the wrap was not
+    // cached and no relay had it. Kept so it is not asked for forever.
+    if (!row.json) {
+      out[row.id] = { event: null, gone: true, misses: row.misses || 0, labelled: false };
+      continue;
+    }
     var evt = parseJson(row.json, null);
     if (!evt || evt.id !== row.id) continue;
     out[row.id] = {
       event: evt,
+      gone: false,
+      misses: 0,
       root: row.root || "",
       msg: row.msg || "",
       labelled: row.root !== null || row.msg !== null
     };
   }
   botWrapsDiag.ok++;
-  return out;
+  return { ok: true, rows: out };
 }
 
 export async function botWrapsPut(db, pk, entries, keepIds) {
@@ -239,10 +257,10 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
     var json = JSON.stringify(evt);
     if (json.length > 262144) continue;
     stmts.push(db.prepare(
-      "INSERT INTO botpm_wraps (pubkey, id, json, root, msg, created_at, stored_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?) " +
+      "INSERT INTO botpm_wraps (pubkey, id, json, root, msg, misses, created_at, stored_at) " +
+      "VALUES (?, ?, ?, ?, ?, 0, ?, ?) " +
       "ON CONFLICT(pubkey, id) DO UPDATE SET stored_at = excluded.stored_at, " +
-      "root = excluded.root, msg = excluded.msg"
+      "json = excluded.json, root = excluded.root, msg = excluded.msg, misses = 0"
     ).bind(pk, evt.id, json, entry.root || "", entry.msg || "",
       evt.created_at || 0, now));
   }
@@ -267,6 +285,29 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
   } catch (e2) {
     noteWrapErr(e2);
   }
+}
+
+// A wrap that is in the thread, is not cached, and that no relay will hand
+// over. Counted rather than dropped outright, so one bad fetch does not lose a
+// turn of context that was really there.
+export async function botWrapsMiss(db, pk, ids) {
+  if (!hasD1(db) || !ids || !ids.length) return;
+  var now = Date.now();
+  var stmts = [];
+  for (var i = 0; i < ids.length; i++) {
+    stmts.push(db.prepare(
+      "INSERT INTO botpm_wraps (pubkey, id, json, root, msg, misses, created_at, stored_at) " +
+      "VALUES (?, ?, '', NULL, NULL, 1, 0, ?) " +
+      "ON CONFLICT(pubkey, id) DO UPDATE SET misses = botpm_wraps.misses + 1, " +
+      "stored_at = excluded.stored_at"
+    ).bind(pk, ids[i], now));
+  }
+  try {
+    await db.batch(stmts);
+    return;
+  } catch (e) { noteWrapErr(e); }
+  await repairBotWraps(db);
+  try { await db.batch(stmts); } catch (e2) { noteWrapErr(e2); }
 }
 
 export async function botWrapsDelete(db, pk) {
