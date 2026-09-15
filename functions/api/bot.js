@@ -65,6 +65,7 @@ import {
   botWrapsPut,
   botWrapsDelete,
   botWrapsSweep,
+  botWrapsStatus,
   invoiceGet,
   invoiceHas,
   invoicePut,
@@ -4780,8 +4781,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // another are dropped here — never read, never decrypted. A row cached
     // before those columns existed says nothing, so it is kept and the filter
     // below decides, which is what labels it for next time.
+    var cacheWant = 0, cacheHit = 0, cacheMiss = 0;
     if (historyIds.length) {
       var wantHistory = historyIds.filter(function (id) { return !fetched[id]; });
+      cacheWant = wantHistory.length;
       var heldHistory = await botCachedWraps(env, userPubkey, wantHistory);
       var keepHistory = [];
       for (var hi = 0; hi < historyIds.length; hi++) {
@@ -4789,12 +4792,14 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (fetched[hid]) { keepHistory.push(hid); continue; }
         var row = heldHistory[hid];
         if (row) {
+          cacheHit++;
           if (row.labelled && !scopeLabelInThread(row, threadRoot)) continue;
           fetched[hid] = row.event;
           scopeOf[hid] = row;
           keepHistory.push(hid);
           continue;
         }
+        cacheMiss++;
         keepHistory.push(hid);
       }
       historyIds = keepHistory;
@@ -5237,7 +5242,13 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     try { updatedKeep = await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
     await botCacheWraps(env, userPubkey,
       wrapsToCache(fetched, [pair.selfEvent], botPrivkey, botPq, scopeOf), updatedKeep);
+    var wrapStatus = botWrapsStatus();
     var chatBody = {
+      cache: {
+        want: cacheWant, hit: cacheHit, miss: cacheMiss,
+        ok: wrapStatus.ok, repaired: wrapStatus.repaired,
+        err: wrapStatus.err || undefined
+      },
       event: pair.event,
       selfEvent: pair.selfEvent,
       balance: spendRecord.balance,
