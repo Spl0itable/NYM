@@ -16,6 +16,8 @@ import { validateZapReceipt, nwcInvoicePaid } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
 import { translateText, MAX_CHARS } from './_translate.js';
 
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+
 const ALLOWED_MEDIA_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
   'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
@@ -136,7 +138,7 @@ async function handleGeoRelays(context) {
     return new Response(cached.body, { status: cached.status, headers });
   }
 
-  const headersFor = { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'text/csv, text/plain' };
+  const headersFor = { 'User-Agent': BROWSER_USER_AGENT, 'Accept': 'text/csv, text/plain' };
   const [upstream, vetted] = await Promise.all([
     fetch(GEO_RELAYS_URL, { headers: headersFor }),
     // Best-effort: a failure here must not take down the primary list.
@@ -213,7 +215,7 @@ async function handleJsonProxy(targetUrl, request) {
 
   const method = request.method === 'POST' ? 'POST' : 'GET';
   const upstreamHeaders = new Headers({
-    'User-Agent': 'NymchatProxy/1.0',
+    'User-Agent': BROWSER_USER_AGENT,
     'Accept': 'application/json, text/plain, */*',
   });
 
@@ -338,7 +340,7 @@ async function handleBlossomUpload(request, serverParam) {
   const upstreamHeaders = new Headers({
     'Authorization': auth,
     'Content-Type': contentType,
-    'User-Agent': 'NymchatProxy/1.0',
+    'User-Agent': BROWSER_USER_AGENT,
     'Accept': 'application/json',
   });
   const contentLength = request.headers.get('Content-Length');
@@ -390,7 +392,7 @@ async function handleBlossomMirror(request, serverParam) {
     headers: {
       'Authorization': auth,
       'Content-Type': 'application/json',
-      'User-Agent': 'NymchatProxy/1.0',
+      'User-Agent': BROWSER_USER_AGENT,
       'Accept': 'application/json',
     },
     body: JSON.stringify({ url: body.url }),
@@ -421,7 +423,7 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
 
   // Forward Range header to upstream if present (for video/audio streaming)
   const upstreamHeaders = {
-    'User-Agent': 'NymchatProxy/1.0',
+    'User-Agent': BROWSER_USER_AGENT,
     'Accept': 'image/*, video/*, audio/*',
   };
   const rangeHeader = request.headers.get('Range');
@@ -766,7 +768,7 @@ async function handleGiphy(searchParams, context) {
     : `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(q)}&limit=20&rating=g`;
 
   const upstream = await fetch(upstreamUrl, {
-    headers: { 'User-Agent': 'NymchatProxy/1.0', 'Accept': 'application/json' },
+    headers: { 'User-Agent': BROWSER_USER_AGENT, 'Accept': 'application/json' },
   });
   if (!upstream.ok) {
     return jsonResponse({ error: `Upstream returned ${upstream.status}` }, 502);

@@ -305,7 +305,7 @@ export async function catalogMediaParams(env, opts) {
     var rs = await replica(db).prepare(
       "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 " +
       "AND task_slug IN (" + MEDIA_TASKS.map(function () { return "?"; }).join(", ") + ")"
-    ).bind.apply(null, MEDIA_TASKS).all();
+    ).bind(...MEDIA_TASKS).all();
     rows = rs.results || [];
   } catch (e) { return null; }
   if (!rows.length) return null;
@@ -324,5 +324,133 @@ export async function catalogMediaParams(env, opts) {
   if (!Object.keys(byModelId).length) return null;
   var out = { byModelId: byModelId, count: Object.keys(byModelId).length };
   mediaCache = { at: now, data: out };
+  return out;
+}
+
+var GENERATOR_TASKS = {
+  "text-to-image": "image",
+  "text-to-video": "video",
+  "image-to-video": "video"
+};
+
+var GENERATOR_FAMILIES = {
+  video: {
+    google: "veo", bytedance: "seedance", minimax: "hailuo", alibaba: "wan",
+    xai: "grok", pixverse: "pixverse", lightricks: "ltx", vidu: "vidu",
+    "black-forest-labs": "bfl", runwayml: "runway"
+  },
+  image: { google: "google", "black-forest-labs": "bfl" }
+};
+
+export function catalogGeneratorFamily(kind, modelId) {
+  var id = String(modelId || "").toLowerCase();
+  var vendor = id.split("/")[0];
+  var slug = id.split("/").pop();
+  if (kind === "video" && vendor === "alibaba" && /^hh/.test(slug)) return "hh";
+  var table = GENERATOR_FAMILIES[kind] || {};
+  if (table[vendor]) return table[vendor];
+  return kind === "image" ? "openai" : "";
+}
+
+function generatorKey(slug) {
+  return String(slug || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+var generatorCache = { at: 0, data: null };
+
+export async function catalogGenerators(env, opts) {
+  var now = Date.now();
+  if (!(opts && opts.fresh) && generatorCache.data && now - generatorCache.at < CACHE_MS) {
+    return generatorCache.data;
+  }
+  var db = await resolveCatalogDb(env);
+  if (!db) return null;
+  var tasks = Object.keys(GENERATOR_TASKS);
+  var rows, overrides = {};
+  try {
+    var rs = await replica(db).prepare(
+      "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
+      "AND hosting = 'third-party' AND task_slug IN (" +
+      tasks.map(function () { return "?"; }).join(", ") + ") ORDER BY author_slug, slug"
+    ).bind(...tasks).all();
+    rows = rs.results || [];
+  } catch (e) { return null; }
+  if (!rows.length) return null;
+  try {
+    var os = await replica(db).prepare("SELECT id, patch FROM ai_model_overrides").all();
+    (os.results || []).forEach(function (r) {
+      var p = parseJson(r.patch, null);
+      if (p && typeof p === "object") overrides[r.id] = p;
+    });
+  } catch (e) { }
+
+  var out = { image: {}, video: {} };
+  rows.forEach(function (r) {
+    var kind = GENERATOR_TASKS[r.task_slug];
+    if (!kind) return;
+    var patch = overrides[r.id] || {};
+    if (patch.hidden || patch.available === false) return;
+    var key = generatorKey(r.slug);
+    if (!key) return;
+    var vendor = String(r.id || "").split("/")[0].toLowerCase();
+    if (out[kind][key]) key = (r.author_slug || vendor || "x") + "-" + key;
+    if (out[kind][key]) key = key + "-" + Object.keys(out[kind]).length;
+    var pc = patch.credits || {};
+    var basis = pc.basis || r.credit_basis || "";
+    var priced = pc.media != null || (basis !== "" && basis !== "default" && basis !== "unknown");
+    var credits = pc.media != null ? Number(pc.media)
+      : (priced && r.media_credits > 0 ? Number(r.media_credits) : null);
+    out[kind][key] = {
+      label: patch.name || r.name || r.slug,
+      model: r.id,
+      family: patch.family || catalogGeneratorFamily(kind, r.id),
+      credits: Number.isFinite(credits) && credits > 0 ? Math.ceil(credits) : null,
+      priced: !!(priced && credits > 0),
+      needsImage: r.task_slug === "image-to-video",
+      taskSlug: r.task_slug || "",
+      author: patch.author || r.author || "",
+      authorSlug: r.author_slug || vendor,
+      description: catalogBlurb(patch.description || r.description),
+      source: "catalog"
+    };
+  });
+  if (!Object.keys(out.image).length && !Object.keys(out.video).length) return null;
+  generatorCache = { at: now, data: out };
+  return out;
+}
+
+export function catalogMergeGenerators(builtin, live, defaults) {
+  var out = {};
+  ["image", "video"].forEach(function (kind) {
+    var table = {};
+    var byModel = {};
+    var stat = (builtin && builtin[kind]) || {};
+    Object.keys(stat).forEach(function (k) {
+      table[k] = Object.assign({ priced: true, source: "builtin" }, stat[k]);
+      byModel[stat[k].model] = k;
+    });
+    var fallback = (defaults && defaults[kind]) || 1;
+    var add = (live && live[kind]) || {};
+    Object.keys(add).forEach(function (k) {
+      var m = add[k];
+      if (!m || !m.model) return;
+      var held = byModel[m.model] ? table[byModel[m.model]] : null;
+      if (held) {
+        if (!held.description && m.description) held.description = m.description;
+        if (held.needsImage == null && m.needsImage != null) held.needsImage = m.needsImage;
+        if (!held.author && m.author) held.author = m.author;
+        return;
+      }
+      var key = k;
+      if (table[key]) key = (m.authorSlug ? m.authorSlug + "-" : "x-") + k;
+      if (table[key]) key = key + "-" + Object.keys(table).length;
+      var priced = !!(m.priced && m.credits > 0);
+      table[key] = Object.assign({}, m, {
+        credits: priced ? Math.max(1, Math.ceil(m.credits)) : fallback,
+        priced: priced
+      });
+    });
+    out[kind] = table;
+  });
   return out;
 }

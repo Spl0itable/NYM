@@ -37,7 +37,8 @@
 import { ledgerCall } from "./_ledger.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
-import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams } from "./_catalog.js";
+import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams,
+  catalogGenerators, catalogMergeGenerators } from "./_catalog.js";
 import {
   PQ_D_TAG,
   pqAwareDecrypt,
@@ -535,7 +536,19 @@ function botProPick(catalog, key) {
   return null;
 }
 
-var BOT_MEDIA_BLOSSOM_HOST = "https://blossom.band";
+var BOT_MEDIA_BLOSSOM_HOSTS = [
+  "https://blossom.band",
+  "https://blossom.primal.net",
+  "https://nostr.download"
+];
+var BOT_BROWSER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
+function botBlossomHosts(env) {
+  var list = String((env && env.BLOSSOM_HOSTS) || "").split(",")
+    .map(function (h) { return h.trim().replace(/\/+$/, ""); })
+    .filter(function (h) { return /^https?:\/\//.test(h); });
+  return list.length ? list : BOT_MEDIA_BLOSSOM_HOSTS;
+}
 // Standard tier stays on Cloudflare-hosted FLUX — no gateway hop, no
 // third-party billing. Pro reaches the frontier generators below.
 var BOT_IMAGE_MODELS = {
@@ -591,9 +604,29 @@ var BOT_GEN_AUTHORS = {
   "runwayml": "Runway"
 };
 
+function botGeneratorCeiling(table) {
+  var top = 0;
+  Object.keys(table).forEach(function (k) {
+    if (table[k].credits > top) top = table[k].credits;
+  });
+  return top || 1;
+}
+var BOT_GENERATOR_DEFAULTS = {
+  image: botGeneratorCeiling(BOT_PRO_IMAGE_MODELS),
+  video: botGeneratorCeiling(BOT_PRO_VIDEO_MODELS)
+};
+
+async function botProGenerators(env) {
+  var live = null;
+  try { live = await catalogGenerators(env); } catch (e) { live = null; }
+  return catalogMergeGenerators(
+    { image: BOT_PRO_IMAGE_MODELS, video: BOT_PRO_VIDEO_MODELS },
+    live, BOT_GENERATOR_DEFAULTS);
+}
+
 /// The picture and video models as picker rows. Priced flat rather than per
 /// token, so `credits` and `max` are the same number.
-function botGeneratorCatalog() {
+function botGeneratorCatalog(gens) {
   var out = [];
   var add = function (kind, command, table) {
     Object.keys(table).forEach(function (k) {
@@ -608,16 +641,17 @@ function botGeneratorCatalog() {
         label: m.label,
         credits: m.credits,
         max: m.credits,
-        description: "",
-        author: BOT_GEN_AUTHORS[slug] || slug,
+        description: m.description || "",
+        author: m.author || BOT_GEN_AUTHORS[slug] || slug,
         authorSlug: slug,
         vision: false, reasoning: false, tools: false, context: null,
-        hosting: "third-party", priced: true, kind: kind
+        hosting: "third-party", priced: m.priced !== false, kind: kind,
+        needsImage: !!m.needsImage
       });
     });
   };
-  add("image", "?image", BOT_PRO_IMAGE_MODELS);
-  add("video", "?video", BOT_PRO_VIDEO_MODELS);
+  add("image", "?image", (gens && gens.image) || BOT_PRO_IMAGE_MODELS);
+  add("video", "?video", (gens && gens.video) || BOT_PRO_VIDEO_MODELS);
   out.sort(function (a, b) {
     if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
     if (a.author !== b.author) return a.author < b.author ? -1 : 1;
@@ -630,25 +664,29 @@ function botGeneratorCatalog() {
 // a ?video sent with a picture in the message uses the reference where the chosen
 var BOT_VIDEO_MAX_SECONDS = 8;
 
-function botProVideoModel(key) {
+function botProVideoModel(key, table) {
+  var models = table || BOT_PRO_VIDEO_MODELS;
   var k = String(key || "").trim().toLowerCase();
   if (!k) return BOT_PRO_VIDEO_MODELS[BOT_PRO_VIDEO_DEFAULT];
-  if (Object.prototype.hasOwnProperty.call(BOT_PRO_VIDEO_MODELS, k)) return BOT_PRO_VIDEO_MODELS[k];
-  for (var mk in BOT_PRO_VIDEO_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_VIDEO_MODELS, mk)) continue;
-    if (mk.indexOf(k) !== -1 || BOT_PRO_VIDEO_MODELS[mk].label.toLowerCase().indexOf(k) !== -1) {
-      return BOT_PRO_VIDEO_MODELS[mk];
+  if (Object.prototype.hasOwnProperty.call(models, k)) return models[k];
+  for (var mk in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, mk)) continue;
+    if (mk.indexOf(k) !== -1 || models[mk].label.toLowerCase().indexOf(k) !== -1) {
+      return models[mk];
     }
   }
   return null;
 }
 
-function botProVideoList() {
+function botProVideoList(table) {
+  var models = table || BOT_PRO_VIDEO_MODELS;
   var out = [];
-  for (var k in BOT_PRO_VIDEO_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_VIDEO_MODELS, k)) continue;
-    var m = BOT_PRO_VIDEO_MODELS[k];
-    out.push(k + " \u2014 " + m.label + " (" + m.credits + " Pro credits)");
+  for (var k in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
+    var m = models[k];
+    out.push(k + " \u2014 " + m.label + " (" + m.credits + " Pro credits"
+      + (m.priced === false ? ", estimated" : "") + ")"
+      + (m.needsImage ? " \u2014 animates a picture you send" : ""));
   }
   return out;
 }
@@ -905,6 +943,7 @@ async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubk
     throw new Error(videoModel.label + " failed: " + String((e && e.message) || e).slice(0, 200));
   }
   var bytes = null;
+  var sourceUrl = "";
   var direct = await botMediaBytes(result, "video");
   if (direct && direct.length > 4096) bytes = direct;
   if (!bytes) {
@@ -925,33 +964,37 @@ async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubk
       var res = await fetch(found.url);
       if (!res.ok) throw new Error(videoModel.label + " video fetch failed: HTTP " + res.status);
       bytes = new Uint8Array(await res.arrayBuffer());
+      sourceUrl = found.url;
     }
   }
   if (!bytes || !bytes.length) throw new Error("The video model returned no video.");
-  return await botBlossomUpload(bytes, botSniffVideoMime(bytes), privkey, pubkey);
+  return await botBlossomUpload(env, bytes, botSniffVideoMime(bytes), privkey, pubkey, sourceUrl);
 }
 
-function botProImageModel(key) {
+function botProImageModel(key, table) {
+  var models = table || BOT_PRO_IMAGE_MODELS;
   var k = String(key || "").trim().toLowerCase();
   if (!k) return BOT_PRO_IMAGE_MODELS[BOT_PRO_IMAGE_DEFAULT];
-  if (Object.prototype.hasOwnProperty.call(BOT_PRO_IMAGE_MODELS, k)) return BOT_PRO_IMAGE_MODELS[k];
+  if (Object.prototype.hasOwnProperty.call(models, k)) return models[k];
   // Loose match so "flux 2 max" / "gpt" resolve the way ?model does.
-  for (var mk in BOT_PRO_IMAGE_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_IMAGE_MODELS, mk)) continue;
-    if (mk.indexOf(k) !== -1 || BOT_PRO_IMAGE_MODELS[mk].label.toLowerCase().indexOf(k) !== -1) {
-      return BOT_PRO_IMAGE_MODELS[mk];
+  for (var mk in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, mk)) continue;
+    if (mk.indexOf(k) !== -1 || models[mk].label.toLowerCase().indexOf(k) !== -1) {
+      return models[mk];
     }
   }
   return null;
 }
 
-function botProImageList() {
+function botProImageList(table) {
+  var models = table || BOT_PRO_IMAGE_MODELS;
   var out = [];
-  for (var k in BOT_PRO_IMAGE_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_IMAGE_MODELS, k)) continue;
-    var m = BOT_PRO_IMAGE_MODELS[k];
+  for (var k in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
+    var m = models[k];
     var c = m.credits || BOT_MEDIA_COSTS.image.pro;
-    out.push(k + " — " + m.label + " (" + c + " Pro credit" + (c === 1 ? "" : "s") + ")");
+    out.push(k + " — " + m.label + " (" + c + " Pro credit" + (c === 1 ? "" : "s")
+      + (m.priced === false ? ", estimated" : "") + ")");
   }
   return out;
 }
@@ -1108,27 +1151,44 @@ function botBlossomAuth(sha256Hex, privkey, pubkey) {
 // Uploads generated bytes to Blossom and returns the public URL. Blossom is
 // content-addressed, so the returned descriptor's url is keyed by the payload
 // hash we just signed over.
-async function botBlossomUpload(bytes, contentType, privkey, pubkey) {
-  var hash = bytesToHex(sha256(bytes));
-  var res = await fetch(BOT_MEDIA_BLOSSOM_HOST + "/upload", {
+async function botBlossomPut(host, bytes, contentType, auth) {
+  var res = await fetch(host + "/upload", {
     method: "PUT",
     headers: {
-      "Authorization": botBlossomAuth(hash, privkey, pubkey),
+      "Authorization": auth,
       "Content-Type": contentType,
-      "User-Agent": "Nymbot/1.0"
+      "User-Agent": BOT_BROWSER_AGENT,
+      "Accept": "application/json"
     },
     body: bytes
   });
   var raw = await res.text();
   if (!res.ok) {
-    throw new Error("Media upload failed: HTTP " + res.status +
-      (raw ? " — " + raw.replace(/\s+/g, " ").slice(0, 160) : ""));
+    throw new Error("HTTP " + res.status +
+      (raw ? " — " + raw.replace(/\s+/g, " ").slice(0, 100) : ""));
   }
   var desc = null;
   try { desc = JSON.parse(raw); } catch (e) { }
   var url = desc && (desc.url || desc.nip94 && desc.nip94.url);
-  if (!url) throw new Error("Media upload returned no URL.");
+  if (!url) throw new Error("no URL in the response");
   return String(url);
+}
+
+async function botBlossomUpload(env, bytes, contentType, privkey, pubkey, sourceUrl) {
+  var hash = bytesToHex(sha256(bytes));
+  var auth = botBlossomAuth(hash, privkey, pubkey);
+  var hosts = botBlossomHosts(env);
+  var failures = [];
+  for (var i = 0; i < hosts.length; i++) {
+    try {
+      return await botBlossomPut(hosts[i], bytes, contentType, auth);
+    } catch (e) {
+      failures.push(hosts[i].replace(/^https?:\/\//, "") + ": " +
+        String((e && e.message) || e).slice(0, 120));
+    }
+  }
+  if (sourceUrl && /^https?:\/\//.test(String(sourceUrl))) return String(sourceUrl);
+  throw new Error("Media upload failed — " + failures.join("; "));
 }
 
 // Workers AI returns generated binaries in several shapes depending on the
@@ -1163,33 +1223,36 @@ async function botProImageGenerate(env, imageModel, prompt) {
   }
   // A binary body needs no parsing; anything else gets walked for base64/URL.
   var direct = await botMediaBytes(result, "image");
-  if (direct && direct.length) return direct;
+  if (direct && direct.length) return { bytes: direct, sourceUrl: "" };
   var found = botExtractGeneratedImage(result, 0);
   if (!found) {
     var snippet = "";
     try { snippet = JSON.stringify(result); } catch (e) { snippet = String(result); }
     throw new Error(imageModel.label + " returned an unrecognized response: " + String(snippet || "").slice(0, 300));
   }
-  if (found.b64) return botBase64Decode(found.b64);
+  if (found.b64) return { bytes: botBase64Decode(found.b64), sourceUrl: "" };
   // Provider-hosted URLs expire, so pull the bytes and re-host on Blossom.
   var res = await fetch(found.url);
   if (!res.ok) throw new Error(imageModel.label + " image fetch failed: HTTP " + res.status);
-  return new Uint8Array(await res.arrayBuffer());
+  return { bytes: new Uint8Array(await res.arrayBuffer()), sourceUrl: found.url };
 }
 
 async function botGenerateImage(env, prompt, tier, privkey, pubkey, imageModel) {
   var ai = env.AI;
   if (!ai) throw new Error("Image generation is not configured on this server.");
   var bytes;
+  var sourceUrl = "";
   if (tier === "pro" && imageModel) {
-    bytes = await botProImageGenerate(env, imageModel, prompt);
+    var made = await botProImageGenerate(env, imageModel, prompt);
+    bytes = made.bytes;
+    sourceUrl = made.sourceUrl;
   } else {
     var model = BOT_IMAGE_MODELS[tier] || BOT_IMAGE_MODELS.standard;
     var result = await aiRun(ai, model, { prompt: truncateText(String(prompt), 2000) });
     bytes = await botMediaBytes(result, "image");
   }
   if (!bytes || !bytes.length) throw new Error("The image model returned no image.");
-  return await botBlossomUpload(bytes, botSniffImageMime(bytes), privkey, pubkey);
+  return await botBlossomUpload(env, bytes, botSniffImageMime(bytes), privkey, pubkey, sourceUrl);
 }
 
 async function botGenerateSpeech(env, text, tier, privkey, pubkey) {
@@ -1202,7 +1265,7 @@ async function botGenerateSpeech(env, text, tier, privkey, pubkey) {
   var result = await aiRun(ai, model, { prompt: clipped, text: clipped });
   var bytes = await botMediaBytes(result, "audio");
   if (!bytes || !bytes.length) throw new Error("The speech model returned no audio.");
-  return await botBlossomUpload(bytes, "audio/mpeg", privkey, pubkey);
+  return await botBlossomUpload(env, bytes, "audio/mpeg", privkey, pubkey, "");
 }
 
 // ?image / ?speak inside the private chat. Returns null when the message isn't
@@ -1304,7 +1367,7 @@ async function botBtcPrice() {
   if (botBtcUsd > 0 && now - botBtcAt < BOT_BTC_TTL_MS) return botBtcUsd;
   try {
     var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": "Nymbot/1.0" }
+      headers: { "User-Agent": BOT_BROWSER_AGENT }
     });
     if (resp.ok) {
       var data = await resp.json();
@@ -4020,7 +4083,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // The picture and video generators, so the picker can price them too. They
     // are not chat models — picking one writes the command rather than pinning
     // it — which is why they carry a kind and a command.
-    list = list.concat(botGeneratorCatalog());
+    list = list.concat(botGeneratorCatalog(await botProGenerators(env)));
     var groups = [];
     list.forEach(function (m) {
       var last = groups[groups.length - 1];
@@ -4922,20 +4985,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     if (media) {
       var mediaTier = proModel ? "pro" : "standard";
+      var gens = await botProGenerators(env);
       // ?image models — a free listing, so it returns before any charge.
       if (media.list) {
         var listText;
         if (media.kind === "video") {
           listText = mediaTier === "pro"
             ? "Video models — use ?video --model <name> <description>:\n\u2022 "
-              + botProVideoList().join("\n\u2022 ")
+              + botProVideoList(gens.video).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_VIDEO_MODELS[BOT_PRO_VIDEO_DEFAULT].label
               + ". Send a picture in the same message to animate it instead of starting from nothing."
             : "?video needs Nymbot Pro — every video model is provider-hosted, so there is no standard-tier generator. Select one with ?model first.";
         } else {
           listText = mediaTier === "pro"
             ? "Frontier image models \u2014 use ?image --model <name> <description>:\n\u2022 "
-              + botProImageList().join("\n\u2022 ")
+              + botProImageList(gens.image).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_IMAGE_MODELS[BOT_PRO_IMAGE_DEFAULT].label + "."
             : "Frontier image models need a Pro model selected (?model <name>). Standard ?image uses the built-in generator for "
               + BOT_MEDIA_COSTS.image.standard + " credits.";
@@ -4989,12 +5053,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (mediaTier !== "pro") {
           return await turnFail({ error: "?video needs Nymbot Pro \u2014 every video model is provider-hosted, so there is no standard-tier generator. Select a Pro model with ?model first, then ?video models to see the generators and their prices." }, 400);
         }
-        proVideo = botProVideoModel(media.modelKey);
+        proVideo = botProVideoModel(media.modelKey, gens.video);
         if (!proVideo) {
           return await turnFail({ error: "Unknown video model '" + media.modelKey + "'. Type ?video models to see them." }, 400);
         }
+        if (proVideo.needsImage && !botExtractImageUrls(message).length) {
+          return await turnFail({ error: proVideo.label + " animates a picture rather than starting from nothing \u2014 send one in the same message, or pick a text-to-video model (?video models)." }, 400);
+        }
       } else if (media.kind === "image" && mediaTier === "pro") {
-        proImage = botProImageModel(media.modelKey);
+        proImage = botProImageModel(media.modelKey, gens.image);
         if (!proImage) {
           return await turnFail({ error: "Unknown image model '" + media.modelKey + "'. Type ?image models to see them." }, 400);
         }
@@ -6854,7 +6921,7 @@ async function searchDDGInstant(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://api.duckduckgo.com/?q=" + encodeURIComponent(query) + "&format=json&no_html=1&skip_disambig=1", {
-    headers: { "User-Agent": "NymchatBot/1.0", "Accept": "application/json" },
+    headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "application/json" },
     signal: controller.signal
   });
   clearTimeout(timer);
@@ -6883,7 +6950,7 @@ async function searchDDGHtml(query) {
   var resp = await fetch("https://html.duckduckgo.com/html/", {
     method: "POST",
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "User-Agent": BOT_BROWSER_AGENT,
       "Accept": "text/html",
       "Content-Type": "application/x-www-form-urlencoded"
     },
@@ -6958,7 +7025,7 @@ async function searchGoogle(query) {
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query) + "&hl=en&gl=us", {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+      "User-Agent": BOT_BROWSER_AGENT,
       "Accept": "text/html,application/xhtml+xml",
       "Accept-Language": "en-US,en;q=0.9"
     },
@@ -7079,7 +7146,7 @@ async function searchNewsRss(query) {
   try {
     var resp = await fetch(
       "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q=" + encodeURIComponent(query), {
-        headers: { "User-Agent": "Nymbot/1.0", "Accept": "application/rss+xml, application/xml" },
+        headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "application/rss+xml, application/xml" },
         signal: controller.signal
       });
     clearTimeout(timer);
@@ -7123,7 +7190,7 @@ async function searchMojeek(query) {
   var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
   try {
     var resp = await fetch("https://www.mojeek.com/search?q=" + encodeURIComponent(query), {
-      headers: { "User-Agent": "Nymbot/1.0 (+https://nymchat.app)", "Accept": "text/html" },
+      headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "text/html" },
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -7451,7 +7518,7 @@ async function fetchPageDocument(url, limit) {
   var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
   try {
     var resp = await fetch(url, {
-      headers: { "User-Agent": "Nymbot/1.0 (+https://nymchat.app)", "Accept": "text/html,text/plain;q=0.9" },
+      headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "text/html,text/plain;q=0.9" },
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -8478,7 +8545,7 @@ function handleUnits(args) {
 async function handleBtc() {
   try {
     var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": "Nymbot/1.0" }
+      headers: { "User-Agent": BOT_BROWSER_AGENT }
     });
     if (!resp.ok) throw new Error("API error");
     var data = await resp.json();
@@ -8487,7 +8554,7 @@ async function handleBtc() {
     var formatted = usd.toLocaleString("en-US", { maximumFractionDigits: 0 });
     // Also fetch block height for extra context
     var blockResp = await fetch("https://mempool.space/api/blocks/tip/height", {
-      headers: { "User-Agent": "Nymbot/1.0" }
+      headers: { "User-Agent": BOT_BROWSER_AGENT }
     }).catch(function() { return null; });
     var blockHeight = blockResp && blockResp.ok ? await blockResp.text() : null;
     var lines = ["\u20BF Bitcoin: $" + formatted + " USD"];
@@ -8530,7 +8597,7 @@ var NEWS_FEEDS = [
 async function handleNews() {
   var headlines = [];
   var feedPromises = NEWS_FEEDS.map(function(feed) {
-    return fetch(feed.url, { headers: { "User-Agent": "Nymbot/1.0" } })
+    return fetch(feed.url, { headers: { "User-Agent": BOT_BROWSER_AGENT } })
       .then(function(res) { return res.ok ? res.text() : ""; })
       .then(function(xml) {
         return parseRssItems(xml, 3).map(function (item) {
