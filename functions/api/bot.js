@@ -358,7 +358,7 @@ function aiRun(ai, model, input, options) {
   return options ? ai.run(model, aiSafeValue(input), options) : ai.run(model, aiSafeValue(input));
 }
 
-var NYMCHAT_VERSION = "3.75.543";
+var NYMCHAT_VERSION = "3.75.545";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this single best all-around model.
 // The premium private Nymbot routes each message to a task-specialised model.
