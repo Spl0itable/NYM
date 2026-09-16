@@ -257,6 +257,7 @@
 
             this._attestEnrolling = (async () => {
                 try {
+                    if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
                     const issued = await this._attestApi({ action: 'challenge', pubkey: this.pubkey });
                     const challenge = issued && issued.challenge;
                     if (!challenge) throw new Error('no challenge');
@@ -300,9 +301,66 @@
                     return this._loadAttestBadge();
                 } finally {
                     this._attestEnrolling = null;
+                    if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
                 }
             })();
             return this._attestEnrolling;
+        },
+
+        composerVerifying() {
+            return !!this._attestEnrolling && !this.attestBadge && !this.inPMMode;
+        },
+
+        _syncComposerVerifying() {
+            if (typeof document === 'undefined') return;
+            const btn = document.getElementById('sendBtn');
+            const input = document.getElementById('messageInput');
+            if (!btn || !input) return;
+            const on = this.composerVerifying();
+            if (on === !!this._composerVerifying) return;
+            this._composerVerifying = on;
+            if (on) {
+                btn.dataset.attestPrevLabel = btn.textContent;
+                btn.textContent = 'VERIFYING…';
+                btn.disabled = true;
+                btn.classList.add('send-btn-verifying');
+                input.dataset.attestPrevPlaceholder = input.getAttribute('data-placeholder') || '';
+                input.setAttribute('data-placeholder', 'Verifying your session…');
+            } else {
+                if (btn.dataset.attestPrevLabel) btn.textContent = btn.dataset.attestPrevLabel;
+                btn.classList.remove('send-btn-verifying');
+                if (this.connected) btn.disabled = false;
+                if (input.dataset.attestPrevPlaceholder) {
+                    input.setAttribute('data-placeholder', input.dataset.attestPrevPlaceholder);
+                }
+            }
+            if (typeof this.i18nApplyNow === 'function') {
+                try { this.i18nApplyNow(btn); this.i18nApplyNow(input); } catch (_) { }
+            }
+        },
+
+        async awaitAttestBadge(maxMs) {
+            if (this.attestBadge) return this.attestBadge;
+            if (!this.pubkey) return null;
+            let pending = this._attestEnrolling;
+            if (!pending) {
+                try { pending = this.ensureAttestBadge(); } catch (_) { pending = null; }
+            }
+            if (!pending || typeof pending.then !== 'function') return this.attestBadge || null;
+            const limit = Number(maxMs) > 0 ? Number(maxMs) : 8000;
+            await Promise.race([
+                pending.catch(() => null),
+                new Promise(resolve => setTimeout(resolve, limit))
+            ]);
+            return this.attestBadge || null;
+        },
+
+        attachAttestTag(event) {
+            if (!event || !Array.isArray(event.tags) || !this.attestBadge) return event;
+            const tag = this.ATTEST_BADGE_TAG;
+            if (event.tags.some(t => Array.isArray(t) && t[0] === tag)) return event;
+            event.tags.push([tag, this.attestBadge]);
+            return event;
         },
 
         // Tags to attach to an outgoing channel message.

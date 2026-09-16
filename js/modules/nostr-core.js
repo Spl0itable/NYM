@@ -2903,8 +2903,6 @@ Object.assign(NYM.prototype, {
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);
 
-            if (typeof this.attestTagsForEvent === 'function') tags.push(...this.attestTagsForEvent());
-
             // Thread reply: NIP-10 marked root reference. Other clients see a
             // normal channel message; Nymchat groups it under its root.
             if (threadRoot && /^[0-9a-f]{64}$/i.test(threadRoot)) {
@@ -2978,6 +2976,7 @@ Object.assign(NYM.prototype, {
                 // No bubble, no relay, no cosmetics timer: the caller owns
                 // delivery from here. PoW still applies — a gateway publishing
                 // for us hands the relays an event that must pass their rules.
+                if (typeof this.attachAttestTag === 'function') this.attachAttestTag(event);
                 const difficulty = this._effectivePowDifficulty();
                 if (difficulty > 0) event = await this._minePow(event, difficulty);
                 return await this.signEvent(event);
@@ -2990,6 +2989,10 @@ Object.assign(NYM.prototype, {
 
             (async () => {
                 try {
+                    if (!replayId && typeof this.awaitAttestBadge === 'function') {
+                        try { await this.awaitAttestBadge(); } catch (_) { }
+                    }
+                    if (typeof this.attachAttestTag === 'function') this.attachAttestTag(event);
                     const difficulty = this._effectivePowDifficulty();
                     if (difficulty > 0) event = await this._minePow(event, difficulty);
                     const signedEvent = await this.signEvent(event);

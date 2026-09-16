@@ -2698,6 +2698,10 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Not connected to relay. Please wait...');
             return;
         }
+        if (typeof this.composerVerifying === 'function' && this.composerVerifying()) {
+            if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
+            return;
+        }
 
         // Handle edit mode: send edited message instead of new one
         if (this.pendingEdit) {

@@ -1589,7 +1589,7 @@ async function routeStorageAction(context, body) {
     }
   }
 
-  if (body && typeof body.action === "string" && body.action.indexOf("channel-") === 0) {
+  if (body && typeof body.action === "string" && (body.action.indexOf("channel-") === 0 || body.action === "event-get")) {
     try {
       return await handleChannelAction(context, body);
     } catch (e) {

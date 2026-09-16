@@ -1214,6 +1214,7 @@ Object.assign(NYM.prototype, {
                     this._startPoolShardHealthCheck();
                     document.getElementById('messageInput').disabled = false;
                     document.getElementById('sendBtn').disabled = false;
+                    if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
                     this.updateConnectionStatus();
 
                     // Subscribe to events via the pool
@@ -1225,6 +1226,7 @@ Object.assign(NYM.prototype, {
                     // publishes a key, and every peer silently falls back to
                     // classical.
                     try { this.schedulePqAnnouncement(); } catch (_) { }
+                    try { if (typeof this.ensureAttestBadge === 'function') this.ensureAttestBadge(); } catch (_) { }
 
                     // Set initial channel label
                     if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
@@ -1351,6 +1353,7 @@ Object.assign(NYM.prototype, {
             document.getElementById('messageInput').disabled = false;
             document.getElementById('sendBtn').disabled = false;
             this.connected = true;
+            if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
 
             // Process any queued messages that were waiting for connection
             if (this.messageQueue.length > 0) {
@@ -1375,6 +1378,7 @@ Object.assign(NYM.prototype, {
 
             // Announce our post-quantum capability (see the pool branch above).
             try { this.schedulePqAnnouncement(); } catch (_) { }
+            try { if (typeof this.ensureAttestBadge === 'function') this.ensureAttestBadge(); } catch (_) { }
 
             // Switch to the pinned landing channel or PM-only mode landing
             setTimeout(() => {
@@ -1460,6 +1464,7 @@ Object.assign(NYM.prototype, {
             // Re-enable input anyway in case user wants to retry
             document.getElementById('messageInput').disabled = false;
             document.getElementById('sendBtn').disabled = false;
+            if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
         } finally {
             this.initialConnectionInProgress = false;
         }

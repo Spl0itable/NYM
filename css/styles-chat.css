@@ -2813,6 +2813,18 @@ div.message-input .rich-md-quote {
     cursor: not-allowed;
 }
 
+.send-btn.send-btn-verifying {
+    opacity: 0.7;
+    letter-spacing: 0.5px;
+    padding: 10px 12px;
+    animation: send-btn-verifying 1.6s ease-in-out infinite;
+}
+
+@keyframes send-btn-verifying {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 0.85; }
+}
+
 .icon-btn.input-btn {
     height: 42px;
     padding: 0 12px;
