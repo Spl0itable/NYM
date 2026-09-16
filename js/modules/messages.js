@@ -2700,6 +2700,7 @@ Object.assign(NYM.prototype, {
         }
         if (typeof this.composerVerifying === 'function' && this.composerVerifying()) {
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
+            if (typeof this.queueSendAfterVerify === 'function') this.queueSendAfterVerify();
             return;
         }
 

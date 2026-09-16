@@ -322,13 +322,14 @@
             if (on) {
                 btn.dataset.attestPrevLabel = btn.textContent;
                 btn.textContent = 'VERIFYING…';
-                btn.disabled = true;
                 btn.classList.add('send-btn-verifying');
+                btn.setAttribute('aria-busy', 'true');
                 input.dataset.attestPrevPlaceholder = input.getAttribute('data-placeholder') || '';
                 input.setAttribute('data-placeholder', 'Verifying your session…');
             } else {
                 if (btn.dataset.attestPrevLabel) btn.textContent = btn.dataset.attestPrevLabel;
                 btn.classList.remove('send-btn-verifying');
+                btn.removeAttribute('aria-busy');
                 if (this.connected) btn.disabled = false;
                 if (input.dataset.attestPrevPlaceholder) {
                     input.setAttribute('data-placeholder', input.dataset.attestPrevPlaceholder);
@@ -337,6 +338,34 @@
             if (typeof this.i18nApplyNow === 'function') {
                 try { this.i18nApplyNow(btn); this.i18nApplyNow(input); } catch (_) { }
             }
+            if (!on) this._flushQueuedSend();
+        },
+
+        queueSendAfterVerify() {
+            this._composerSendQueued = {
+                channel: this.currentChannel,
+                geohash: this.currentGeohash,
+                pm: !!this.inPMMode
+            };
+            const btn = typeof document !== 'undefined' ? document.getElementById('sendBtn') : null;
+            if (btn) {
+                btn.textContent = 'SENDING…';
+                if (typeof this.i18nApplyNow === 'function') {
+                    try { this.i18nApplyNow(btn); } catch (_) { }
+                }
+            }
+        },
+
+        _flushQueuedSend() {
+            const queued = this._composerSendQueued;
+            if (!queued) return;
+            this._composerSendQueued = null;
+            const sameView = queued.pm === !!this.inPMMode
+                && queued.channel === this.currentChannel
+                && queued.geohash === this.currentGeohash;
+            if (!sameView || !this.connected || typeof this.sendMessage !== 'function') return;
+            const send = () => { try { this.sendMessage(); } catch (_) { } };
+            if (typeof setTimeout === 'function') setTimeout(send, 0); else send();
         },
 
         async awaitAttestBadge(maxMs) {
