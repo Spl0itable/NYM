@@ -497,7 +497,7 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    autoMute(pubkey, nym) {
+    autoMute(pubkey) {
         if (!pubkey || pubkey === this.pubkey) return false;
         if (this.isFriend?.(pubkey)) return false;
         if (typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey)) return false;
@@ -507,12 +507,6 @@ Object.assign(NYM.prototype, {
         if (!fresh) return false;
         if (typeof this.hideMessagesFromBlockedUser === 'function') this.hideMessagesFromBlockedUser(pubkey);
         if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
-        if (typeof this.displaySystemMessage === 'function') {
-            const who = typeof this.getNymHtmlFromPubkey === 'function'
-                ? this.getNymHtmlFromPubkey(pubkey)
-                : this.escapeHtml(nym || pubkey.slice(0, 8));
-            this.displaySystemMessage(`Auto-muted ${who} for 24h: kept posting the same message`, 'system', { html: true });
-        }
         return true;
     },
     isFlooding(pubkey, channel) {

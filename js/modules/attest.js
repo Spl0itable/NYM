@@ -17,7 +17,7 @@
     /// Re-enroll with this much of the badge's term left, so a device that is
     /// offline for a while still renews before anyone stops trusting it.
     const RENEW_BEFORE_MS = 7 * 24 * 3600 * 1000;
-    const ENROLL_RETRY_MS = 6 * 3600 * 1000;
+    const ENROLL_RETRY_MS = 10 * 60 * 1000;
     /// Verified badges are cached per (pubkey, badge) — a busy channel re-reads
     /// the same sender's badge on every message they post.
     const VERIFY_CACHE_MAX = 4000;
@@ -232,10 +232,11 @@
             };
             if (apiHost) event.tags.push(['u', `https://${apiHost}/api/attest`]);
             const bits = Number(powBits) || 0;
+            let mined = event;
             if (bits > 0 && typeof this._minePow === 'function') {
-                await this._minePow(event, bits);
+                mined = (await this._minePow(event, bits)) || event;
             }
-            return this.signEvent(event);
+            return this.signEvent(mined);
         },
 
         // Enrolls if there is no live badge, or renews one nearing its end.

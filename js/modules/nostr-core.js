@@ -523,7 +523,7 @@ Object.assign(NYM.prototype, {
                 && typeof this.checkCampaign === 'function') {
                 const verdict = this.checkCampaign(
                     event.content, event.pubkey, (Math.floor(event.created_at) || 0) * 1000);
-                if (verdict.mute) this.autoMute(event.pubkey, nym);
+                if (verdict.mute) this.autoMute(event.pubkey);
                 if (verdict.flood || verdict.mute) return;
             }
 
