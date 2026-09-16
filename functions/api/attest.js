@@ -44,6 +44,8 @@ function authTag(auth, name) {
   return null;
 }
 
+const ENROLL_AUTH_MAX_AGE_SEC = 600;
+
 async function handleEnroll(context, body) {
   const { request, env } = context;
   const db = attestDb(env);
@@ -58,7 +60,7 @@ async function handleEnroll(context, body) {
 
   // The auth event proves the pubkey asked for this, and carrying the challenge
   // in a tag means a captured auth cannot be paired with a fresh challenge.
-  if (!verifyClientAuth(body.auth, pubkey, { action: "attest-enroll", url: request.url })) {
+  if (!verifyClientAuth(body.auth, pubkey, { action: "attest-enroll", url: request.url, maxAgeSec: ENROLL_AUTH_MAX_AGE_SEC })) {
     return json({ error: "Bad auth" }, 401);
   }
   if (authTag(body.auth, "challenge") !== challenge) return json({ error: "Auth/challenge mismatch" }, 401);

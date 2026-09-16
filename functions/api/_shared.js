@@ -2688,7 +2688,8 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
     if (auth.kind !== 27235) return false;
     var nowSec = Math.floor(Date.now() / 1000);
     // Tightened window (was 300s) — auth events are short-lived request proofs.
-    if (!auth.created_at || Math.abs(nowSec - auth.created_at) > 120) return false;
+    var maxAgeSec = binding && binding.maxAgeSec > 0 ? binding.maxAgeSec : 120;
+    if (!auth.created_at || Math.abs(nowSec - auth.created_at) > maxAgeSec) return false;
     if (getEventHash(auth) !== auth.id) return false;
     if (!schnorr.verify(auth.sig, auth.id, auth.pubkey)) return false;
     // Optional request binding (NIP-98 style): tie the signature to the exact
