@@ -636,7 +636,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   /// `.about-build` panel (styles-components.css:363-415): white@.04 fill (no
   /// light override), 12px title/status row, 11px note + meta + links rows.
   /// The web bundle-attestation check (`build-verify.js`) has no native
-  /// analogue — see kBuildIntegrityNote for why — so the panel states that
+  /// analog — see kBuildIntegrityNote for why — so the panel states that
   /// plainly, styled like the PWA's w600 `.about-build-status`, and keeps the
   /// same source/provenance links for a reader to check off-device.
   Widget _buildPanel(NymColors c) {
@@ -667,7 +667,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               Text(tr(kBuildIntegrityLabel),
                   style: TextStyle(color: c.textDim, fontSize: 12)),
               // Unclassed `.about-build-status` inherits `var(--text)`, w600.
-              // Only a real check earns a colour; the states that couldn't
+              // Only a real check earns a color; the states that couldn't
               // compare anything stay neutral rather than reading as failures.
               Flexible(
                 child: Text(

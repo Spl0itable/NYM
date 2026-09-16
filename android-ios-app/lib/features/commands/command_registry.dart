@@ -302,7 +302,7 @@ const List<CommandSpec> kCommandSpecs = [
   CommandSpec(
     id: 'ban',
     name: '/ban',
-    desc: 'Ban member (owner/mod)',
+    desc: 'Ban member (owner/admin/mod)',
     category: CommandCategory.groups,
     context: CommandContext.groupOnly,
     takesArgs: true,
@@ -310,7 +310,7 @@ const List<CommandSpec> kCommandSpecs = [
   CommandSpec(
     id: 'unban',
     name: '/unban',
-    desc: 'Unban member (owner)',
+    desc: 'Unban member (owner/admin/mod)',
     category: CommandCategory.groups,
     context: CommandContext.groupOnly,
     takesArgs: true,
@@ -318,7 +318,23 @@ const List<CommandSpec> kCommandSpecs = [
   CommandSpec(
     id: 'addmod',
     name: '/addmod',
-    desc: 'Promote to moderator (owner)',
+    desc: 'Promote to moderator (owner/admin)',
+    category: CommandCategory.groups,
+    context: CommandContext.groupOnly,
+    takesArgs: true,
+  ),
+  CommandSpec(
+    id: 'addadmin',
+    name: '/addadmin',
+    desc: 'Promote to admin (owner)',
+    category: CommandCategory.groups,
+    context: CommandContext.groupOnly,
+    takesArgs: true,
+  ),
+  CommandSpec(
+    id: 'removeadmin',
+    name: '/removeadmin',
+    desc: 'Remove admin (owner)',
     category: CommandCategory.groups,
     context: CommandContext.groupOnly,
     takesArgs: true,
@@ -326,7 +342,7 @@ const List<CommandSpec> kCommandSpecs = [
   CommandSpec(
     id: 'removemod',
     name: '/removemod',
-    desc: 'Remove moderator (owner)',
+    desc: 'Remove moderator (owner/admin)',
     category: CommandCategory.groups,
     context: CommandContext.groupOnly,
     takesArgs: true,
@@ -366,10 +382,10 @@ const List<CommandSpec> kCommandSpecs = [
 // The `?`-prefixed bot command palette reuses the SAME `#commandPalette` surface
 // as `/`, but with the PUBLIC bot command set (`showBotCommandPalette`,
 // commands.js:436). Unlike `/`, the bot list is FLAT (no category headers) and
-// renders in catalogue order, the first row pre-selected, filtered by
+// renders in catalog order, the first row pre-selected, filtered by
 // `cmd.startsWith(input.toLowerCase())` where `cmd` includes its `?` prefix.
 //
-// We DERIVE the rows from the real bot-command catalogue (`kBotCommands` in
+// We DERIVE the rows from the real bot-command catalog (`kBotCommands` in
 // features/nymbot/bot_commands.dart) rather than duplicating the list. The
 // public channel palette excludes the "Credits (private Nymbot chat)" group
 // (`?balance/?buy/?model/?git/?gift/?transfer`) — those are PM-only and live in
@@ -377,19 +393,19 @@ const List<CommandSpec> kCommandSpecs = [
 
 /// One selectable row of the public `?` bot-command palette: the command token
 /// (including the leading `?`, e.g. `?flip`) and its one-line description. This
-/// is the bot-command analogue of [CommandSpec] for the shared palette surface.
+/// is the bot-command analog of [CommandSpec] for the shared palette surface.
 class BotPaletteCommand {
   const BotPaletteCommand({required this.command, required this.desc});
 
   /// The full command token shown as `.command-name`, including `?` (`?flip`).
   final String command;
 
-  /// `.command-desc` text (the catalogue's README description).
+  /// `.command-desc` text (the catalog's README description).
   final String desc;
 }
 
-/// The public `?` palette catalogue, derived from [kBotCommands] in
-/// catalogue order with the credit/PM-only commands filtered out. Built once.
+/// The public `?` palette catalog, derived from [kBotCommands] in
+/// catalog order with the credit/PM-only commands filtered out. Built once.
 final List<BotPaletteCommand> kBotPaletteCommands = [
   for (final c in kBotCommands)
     if (!c.creditCommand)
@@ -399,7 +415,7 @@ final List<BotPaletteCommand> kBotPaletteCommands = [
 /// Filters the public bot palette for [input] (the raw `?needle`). Mirrors
 /// `showBotCommandPalette` (commands.js:442-443): a command matches when its
 /// `?cmd` token starts with the lower-cased input. Returns the rows in
-/// catalogue order, or an empty list when nothing matches (hide the palette).
+/// catalog order, or an empty list when nothing matches (hide the palette).
 List<BotPaletteCommand> buildBotPaletteRows(String input) {
   final needle = input.toLowerCase();
   return [

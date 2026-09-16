@@ -1,4 +1,4 @@
-/// Nymbot public `?` command catalogue + parser.
+/// Nymbot public `?` command catalog + parser.
 ///
 /// 1:1 port of the client-visible command set enumerated in `README.md`
 /// ("### Bot Commands", lines 176-219) and the client surface in
@@ -68,7 +68,7 @@ class BotCommand {
   bool matches(String token) => token == name || aliases.contains(token);
 }
 
-/// The full, ordered catalogue. Order + wording mirror README lines 178-219.
+/// The full, ordered catalog. Order + wording mirror README lines 178-219.
 const List<BotCommand> kBotCommands = [
   // --- AI & Knowledge ---------------------------------------------------------
   BotCommand(
@@ -313,12 +313,12 @@ class ParsedBotCommand {
   /// Everything after the command token, trimmed. Empty string when none.
   final String args;
 
-  /// The matched [BotCommand] from the catalogue, or null when the keyword is
-  /// not a recognised Nymbot command (the worker may still answer, but the
+  /// The matched [BotCommand] from the catalog, or null when the keyword is
+  /// not a recognized Nymbot command (the worker may still answer, but the
   /// client treats unknown `?foo` conservatively).
   final BotCommand? command;
 
-  /// True when the keyword is a recognised README command.
+  /// True when the keyword is a recognized README command.
   bool get isKnown => command != null;
 }
 
@@ -351,5 +351,5 @@ ParsedBotCommand? parseBotCommand(String text) {
 BotCommand? lookupBotCommand(String keyword) =>
     _kByToken[keyword.toLowerCase().replaceFirst('?', '')];
 
-/// Whether [keyword] (with or without `?`) is a recognised README command.
+/// Whether [keyword] (with or without `?`) is a recognized README command.
 bool isKnownBotCommand(String keyword) => lookupBotCommand(keyword) != null;

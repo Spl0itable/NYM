@@ -186,7 +186,7 @@ void main() {
 
   group('code blocks', () {
     test('three backticks open a block before there is anything in it', () {
-      // Slack's behaviour: the block appears as you type the fence, not once
+      // Slack's behavior: the block appears as you type the fence, not once
       // you type the first character of code.
       final runs = parseRichFormat('```');
       expect(_types(runs), ['codeblock']);

@@ -826,7 +826,7 @@ class Nip46Service implements Nip46Signer {
     for (final p in _pendingRequests.values) {
       p.timer.cancel();
       if (!p.completer.isCompleted) {
-        p.completer.completeError(StateError('NIP-46 connect cancelled'));
+        p.completer.completeError(StateError('NIP-46 connect canceled'));
       }
     }
     _pendingRequests.clear();

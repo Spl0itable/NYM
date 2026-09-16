@@ -46,7 +46,7 @@ class ReactorEntry {
 ///
 /// Presented as an [OverlayEntry] by [showReactorsModal] so it can be anchored
 /// to the tapped badge and dismissed on outside-tap (matching the PWA's
-/// document-level close + scroll-dismiss behaviour).
+/// document-level close + scroll-dismiss behavior).
 class ReactorsModal extends ConsumerWidget {
   const ReactorsModal({
     super.key,

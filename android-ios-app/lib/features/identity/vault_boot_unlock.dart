@@ -40,7 +40,7 @@ class VaultBootUnlock extends ConsumerStatefulWidget {
   });
 
   /// Called once the vault is unlocked, with the decrypted secrets (kept in
-  /// memory by the caller — the native analogue of the PWA's `_vaultMem`).
+  /// memory by the caller — the native analog of the PWA's `_vaultMem`).
   final void Function(Map<String, String> secrets) onUnlocked;
 
   /// Called when the user chooses to forget the identity (vault reset). The
@@ -87,7 +87,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         // path) we gate on local_auth and derive from a per-device secret. This
         // is a platform-equivalence choice, not a 1:1 port of the PRF scheme.
         final ok = await _biometricAuth();
-        if (!ok) throw StateError(tr('Biometric unlock was cancelled.'));
+        if (!ok) throw StateError(tr('Biometric unlock was canceled.'));
         password = await _deviceBiometricSecret();
       } else {
         password = _pw.text;
@@ -99,7 +99,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
       }
       // `unlockVault` derives the key, verifies the check token (throws on a
       // wrong factor) and returns the decrypted secrets. We hand them to the
-      // caller IN MEMORY (the native analogue of the PWA's `_vaultMem`) — the
+      // caller IN MEMORY (the native analog of the PWA's `_vaultMem`) — the
       // encrypted `enc:v1:` blobs stay in secure storage and are never
       // re-plaintexted, so unlock is required on every launch.
       final secrets = await vault.unlock(password);

@@ -4,7 +4,7 @@
 // and the iOS release build failed. The mutating translate/scale helpers are
 // the opposite trap: deprecated on current SDKs.
 //
-// So: assert the transform by BEHAVIOUR, which is stable whichever spelling is
+// So: assert the transform by BEHAVIOr, which is stable whichever spelling is
 // used, and keep a guard on the APIs that break one end of the range.
 import 'dart:io';
 import 'dart:math' as math;
@@ -43,7 +43,7 @@ void main() {
     });
 
     test('it rotates by 32 degrees, in the direction the SVG does', () {
-      const p = Offset(18.2, 12); // due right of centre
+      const p = Offset(18.2, 12); // due right of center
       final out = apply(m, p) - center;
       // Screen coordinates: y grows downward, so a -32 degree rotateZ carries
       // a rightward point UPWARD.

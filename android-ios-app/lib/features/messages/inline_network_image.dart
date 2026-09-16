@@ -139,7 +139,7 @@ class InlineNetworkImage extends StatefulWidget {
   /// render through the in-memory `http` + `Image.memory` path instead. Set this
   /// for EMOJI: a gridful of custom-emoji cells (the picker) or an emoji-heavy
   /// conversation would otherwise fire dozens of concurrent writes at
-  /// flutter_cache_manager's sqflite DB, which serialises them behind a
+  /// flutter_cache_manager's sqflite DB, which serializes them behind a
   /// transaction and floods the log with "database has been locked for
   /// 0:00:10.000000" warnings (and can wedge the app). Emoji are small and
   /// repeat heavily, so the in-memory [_cache] + framework image cache covers
@@ -167,7 +167,7 @@ class InlineNetworkImage extends StatefulWidget {
   /// an undecodable/unreachable URL.
   ///
   /// The Bluetooth-mesh composer uses this to ship a locally-cached custom emoji
-  /// or favourite GIF as a file (there is no shared server for peers to fetch it
+  /// or favorite GIF as a file (there is no shared server for peers to fetch it
   /// from), reusing the exact cache the display path already populated.
   static Future<Uint8List?> resolveBytes(String url,
       {bool fetchIfMissing = true}) async {
@@ -538,7 +538,7 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
 /// `vertical-align: -Nem` on inline `img.custom-emoji` (styles-chat.css:843
 /// `-0.375em`, :857 `-0.25em`, :1707 `-0.3em`): the image bottom sits [drop]
 /// below the text baseline, contributing `height - drop` of ascent and [drop]
-/// of descent to the line box — exactly the CSS inline-block behaviour.
+/// of descent to the line box — exactly the CSS inline-block behavior.
 class EmojiBaselineDrop extends SingleChildRenderObjectWidget {
   const EmojiBaselineDrop({super.key, required this.drop, super.child});
 

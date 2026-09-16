@@ -180,9 +180,9 @@ class NostrRefResolver {
 
     final nymTag = event.tagValue('n');
     final stored = _ref.read(appStateProvider).users[event.pubkey];
-    final author = (nymTag != null && nymTag.isNotEmpty)
-        ? stripPubkeySuffix(nymTag)
-        : (stored?.nym ?? getNymFromPubkey('nym', event.pubkey));
+    final author = !isPlaceholderNym(nymTag)
+        ? stripPubkeySuffix(nymTag!)
+        : pickDisplayNym(stored?.nym, getNymFromPubkey('nym', event.pubkey));
     final channelTag = event.tagValue('g') ?? event.tagValue('d');
     return NostrRefCardData(
       kind: NostrRefKind.event,
@@ -346,9 +346,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
     // since. Both sides can already carry `#xxxx` — a stored nym, a
     // `getNymFromPubkey` fallback and a stored message's author all do — so
     // strip before re-adding or the suffix printed twice.
-    final knownNym = users[data.pubkey]?.nym ?? '';
-    final baseNym =
-        stripPubkeySuffix(knownNym.isNotEmpty ? knownNym : data.author);
+    final baseNym = pickDisplayNym(users[data.pubkey]?.nym, data.author);
     final openProfileCb = widget.onOpenProfile;
     final nymText = Text(
       data.pubkey.isEmpty ? baseNym : '$baseNym#${getPubkeySuffix(data.pubkey)}',

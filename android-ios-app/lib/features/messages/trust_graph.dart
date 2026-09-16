@@ -2,7 +2,7 @@
 ///
 /// The PWA gates channel spam behind a transitive trust graph rooted in the
 /// verified developer + Nymbot pubkeys (app.js:1100-1101). Two sets drive it,
-/// both held on [AppState] (the native analogue of the PWA app object):
+/// both held on [AppState] (the native analog of the PWA app object):
 ///
 ///  * `nymchatPubkeys` — the trust GRAPH: every pubkey we believe is running a
 ///    Nymchat client. Seeded with the dev + bot roots, then grown by observing

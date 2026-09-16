@@ -104,7 +104,7 @@ class MeshService {
   Timer? _syncTimer;
   bool _running = false;
 
-  /// Recent public history, reconciled with neighbours so a peer that was out
+  /// Recent public history, reconciled with neighbors so a peer that was out
   /// of range — or in another mesh partition — still receives it. See
   /// [GossipSync]; the radio work lives here, the policy lives there.
   final GossipSync gossip = GossipSync();
@@ -1445,7 +1445,7 @@ class MeshService {
     }
     final envelope = CourierEnvelope(
       // The TAG is always derived from the identity key, prekey or not: it is
-      // how the recipient recognises their own mail, and they cannot look up an
+      // how the recipient recognizes their own mail, and they cannot look up an
       // envelope by a prekey they may already have retired.
       recipientTag: await CourierEnvelope.recipientTagFor(
         noiseStaticKey: key,
@@ -1644,7 +1644,7 @@ class MeshService {
   ///
   /// Directed rather than broadcast, and TTL 0 so it is never relayed: a sync
   /// request is a question for the peer that can hear it, and flooding it would
-  /// ask the whole mesh a question only its neighbours can answer.
+  /// ask the whole mesh a question only its neighbors can answer.
   Future<void> _gossipTick() async {
     if (!_running) return;
     if (gossip.prune()) _gossipDirty = true;

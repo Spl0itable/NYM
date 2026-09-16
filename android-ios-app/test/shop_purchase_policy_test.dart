@@ -1,4 +1,4 @@
-// The iOS build doesn't sell flair — it shows the catalogue and states where a
+// The iOS build doesn't sell flair — it shows the catalog and states where a
 // purchase is made. These pin the two halves of that: the platform gate, and
 // the card dropping its BUY / GIFT actions when the gate is on.
 import 'package:flutter/material.dart';

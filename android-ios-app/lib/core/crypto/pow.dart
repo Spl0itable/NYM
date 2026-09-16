@@ -54,6 +54,25 @@ int _clz8(int b) {
   return n;
 }
 
+/// The work an event PROVES, which is not the same as the zeros on its id.
+///
+/// NIP-13 credits the target the sender committed to in the nonce tag, and only
+/// when the id actually meets it. Counting leading zeros alone waves through a
+/// spammer mining a cheap target every time luck hands them a high-zero id, and
+/// that is the whole cost difference between their traffic and ours.
+///
+/// No nonce tag means no commitment, which counts as nothing rather than as
+/// whatever the id happens to show.
+int validatedPowBits(List<List<String>> tags, String id) {
+  for (final t in tags) {
+    if (t.isEmpty || t[0] != 'nonce' || t.length < 3) continue;
+    final target = int.tryParse(t[2]);
+    if (target == null || target <= 0 || target > 256) return 0;
+    return getPow(id) >= target ? target : 0;
+  }
+  return 0;
+}
+
 /// Mines a `['nonce', n, difficulty]` tag onto [ev], incrementing the nonce
 /// until the event id has at least [difficulty] leading zero bits, then
 /// finalizes (signs) the event with [privkey].

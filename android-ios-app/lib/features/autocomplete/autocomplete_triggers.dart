@@ -10,7 +10,7 @@
 
 /// Which dropdown is active. [command] is the `/` slash-command palette;
 /// [botCommand] is the `?` Nymbot command palette (same `#commandPalette`
-/// surface, different catalogue) — kept distinct from the `@#:\` token triggers.
+/// surface, different catalog) — kept distinct from the `@#:\` token triggers.
 enum TriggerKind { none, mention, channel, emoji, kaomoji, command, botCommand }
 
 /// A detected trigger: its kind, the search needle (text after the trigger

@@ -8,8 +8,8 @@
 //   * gallery cell — fills the tile, max-height 220, object-fit cover, no border,
 //     radius 0 (the grid clips its own corners).
 //
-// Initial state is a poster/tap-to-play tile (metadata-only preload analogue):
-// the controller initialises lazily on first tap. If initialisation fails we
+// Initial state is a poster/tap-to-play tile (metadata-only preload analog):
+// the controller initializes lazily on first tap. If initialization fails we
 // fall back to a tap-to-open affordance that launches the URL externally
 // (`url_launcher`), so a broken/unsupported source is never a dead tile.
 
@@ -66,10 +66,10 @@ class _VideoMessageState extends State<VideoMessage> {
   /// enter/exit never fire on touch, so touch platforms never see it.
   bool _hovered = false;
 
-  /// Lazily initialising the controller after the first tap.
+  /// Lazily initializing the controller after the first tap.
   bool _initializing = false;
 
-  /// Initialisation failed (primary AND every imeta mirror) → tap-to-open.
+  /// Initialization failed (primary AND every imeta mirror) → tap-to-open.
   bool _failed = false;
 
   /// The source that actually initialized (or the last one tried), mirroring
@@ -220,7 +220,7 @@ class _VideoMessageState extends State<VideoMessage> {
         minHeight: 80,
       );
 
-  /// Initial poster / tap-to-play state (also shows a spinner while initialising).
+  /// Initial poster / tap-to-play state (also shows a spinner while initializing).
   Widget _posterTile(NymColors c) {
     return GestureDetector(
       onTap: _start,
@@ -348,7 +348,7 @@ class _VideoMessageState extends State<VideoMessage> {
     );
   }
 
-  /// The `@media (hover: none)` analogue: on touch-primary platforms the
+  /// The `@media (hover: none)` analog: on touch-primary platforms the
   /// expand button never gets a hover reveal, so it stays pinned visible.
   bool _touchPlatform(BuildContext context) {
     final p = Theme.of(context).platform;
@@ -400,7 +400,7 @@ class _ExpandButton extends StatelessWidget {
   }
 }
 
-/// A full-screen video overlay reusing an already-initialised [controller]
+/// A full-screen video overlay reusing an already-initialized [controller]
 /// (mirrors the PWA's image/video expand modal). Tapping the backdrop or the
 /// close button dismisses; tapping the video toggles play/pause.
 class _FullscreenVideo extends StatefulWidget {

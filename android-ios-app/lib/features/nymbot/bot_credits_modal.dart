@@ -137,30 +137,13 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   List<int> get _presets =>
       _tier == CreditTier.pro ? _proPresets : _standardPresets;
 
-  /// Credits for [sats] at the current tier, with the bulk bonus
-  /// (PWA `_botCreditsForSats` / `_botProCreditsForSats`, zaps.js:324-342).
-  int _creditsForSats(int sats) {
-    final s = sats < 0 ? 0 : sats;
-    double mult = 1;
-    if (_tier == CreditTier.pro) {
-      if (s >= 50000) {
-        mult = 1.20;
-      } else if (s >= 10000) {
-        mult = 1.15;
-      } else if (s >= 5000) {
-        mult = 1.10;
-      }
-      return ((s / 100) * mult).floor();
-    }
-    if (s >= 5000) {
-      mult = 1.20;
-    } else if (s >= 1000) {
-      mult = 1.15;
-    } else if (s >= 500) {
-      mult = 1.10;
-    }
-    return ((s / 10) * mult).floor();
+  ProModelCatalog get _catalog {
+    final c = ref.read(proModelCatalogProvider);
+    return c.isEmpty ? kProModelCatalogFallback : c;
   }
+
+  int _creditsForSats(int sats) =>
+      _catalog.creditsForSats(sats < 0 ? 0 : sats, _tier == CreditTier.pro);
 
   /// The effective amount in sats (custom field wins when non-empty).
   int? get _amountSats {
@@ -237,6 +220,8 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                 if (botCreditPurchasesDisabled)
                   _purchasesDisabledNote(c)
                 else if (_invoice == null) ...[
+                  _tierFraming(c),
+                  const SizedBox(height: 10),
                   _tierToggle(c),
                   const SizedBox(height: 12),
                   _amountGrid(c),
@@ -323,6 +308,15 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
 
   /// `.bot-credit-tier-toggle`: two equal pills; the active one uses the
   /// lightning accent for BOTH Standard and Pro (zaps.js:432-440).
+  Widget _tierFraming(NymColors c) {
+    return Text(
+      tr('Standard picks a model for you, per question. Pro answers with the '
+          'one frontier model you choose. Separate balances, and neither '
+          'converts into the other.'),
+      style: TextStyle(color: c.textDim, fontSize: 12, height: 1.35),
+    );
+  }
+
   Widget _tierToggle(NymColors c) {
     Widget seg(String label, CreditTier tier) {
       final active = _tier == tier;
@@ -491,14 +485,17 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   Widget _pricingNote(NymColors c) {
     final lines = _tier == CreditTier.pro
         ? [
-            tr('Pro replies start at 1–2 Pro credits and scale with reply length '
-                '(each model\'s range is in ?model).'),
-            tr('Bulk bonus: +10% at 5K sats, +15% at 10K, +20% at 50K.'),
+            tr('Pro replies are metered on the tokens they use, charged in '
+                'thousandths of a credit — the per-million-token rates are in ?model.'),
+            tr('Repeated context is billed at the cached rate, a tenth of the fresh one.'),
+            _catalog.bulkBonusLine(true),
           ]
         : [
-            tr('1 credit per general chat, creative writing, or translation reply.'),
-            tr('2 credits per coding or reasoning/math reply (larger models).'),
-            tr('Bulk bonus: +10% at 500 sats, +15% at 1K, +20% at 5K.'),
+            tr('Replies are metered on the tokens they use, charged in thousandths '
+                'of a credit — a short question costs a fraction of one.'),
+            tr('Coding and reasoning/math cost more per token, because those routes '
+                'use larger models.'),
+            _catalog.bulkBonusLine(false),
           ];
     return Padding(
       padding: const EdgeInsets.only(top: 8),

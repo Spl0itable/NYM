@@ -18,13 +18,13 @@ import '../../state/app_state.dart';
 ///
 /// [view] is the active [ChatView]; it disambiguates geohash vs named channels
 /// the same way the PWA reads `currentGeohash` / `currentChannel`. When the
-/// message itself carries a concrete [Message.eventKind] we honour it first.
+/// message itself carries a concrete [Message.eventKind] we honor it first.
 String inferOriginalKind(Message message, {ChatView? view}) {
   // A PM or group message is always private (gift-wrapped).
   if (message.isPM || message.isGroup || message.groupId != null) {
     return '1059';
   }
-  // Honour a concrete event kind on the message when it is one of ours.
+  // Honor a concrete event kind on the message when it is one of ours.
   switch (message.eventKind) {
     case 20000:
       return '20000';

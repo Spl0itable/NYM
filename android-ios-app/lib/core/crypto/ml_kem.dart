@@ -28,7 +28,7 @@ const int _eta2 = 2;
 const int _du = 10;
 const int _dv = 4;
 
-/// 128^-1 mod q — the inverse-NTT normalisation factor (FIPS 203 Alg. 10 line 14).
+/// 128^-1 mod q — the inverse-NTT normalization factor (FIPS 203 Alg. 10 line 14).
 /// Kyber uses 128, not 256, because its transform stops one layer early.
 const int _f = 3303;
 const int _rootOfUnity = 17;

@@ -190,7 +190,7 @@ class PqAnnouncement {
 
     // An explicit retraction withdraws the whole claim, Nymchat and all.
     // Nothing emits one today — turning post-quantum off republishes without a
-    // key instead — but a peer that does must be honoured.
+    // key instead — but a peer that does must be honored.
     if (decoded['retracted'] == true) {
       return PqAnnouncement(
           publicKey: null, expiresAt: exp, epoch: 0, retracted: true);

@@ -115,7 +115,7 @@ class StorageKeys {
   /// Unix seconds of the LAST local pick of [swipeReactEmoji]. Published
   /// alongside the emoji so a settings blob written before the pick (an older
   /// build's ❤️ default, or another device that never chose one) can be
-  /// recognised as stale and rejected instead of clobbering the choice.
+  /// recognized as stale and rejected instead of clobbering the choice.
   static const swipeReactEmojiTs = 'nym_swipe_react_emoji_ts';
   static const translateLanguage = 'nym_translate_language';
   static const translateFavorites = 'nym_translate_favorites';
@@ -136,6 +136,10 @@ class StorageKeys {
   /// if the user kept English), so onboarding shows it at most once per device.
   static const uiLanguageChosen = 'nym_ui_language_chosen';
   static const powDifficulty = 'nym_pow_difficulty';
+  static const appVerifiedFilter = 'nym_app_verified_filter';
+  static const filterPacks = 'nym_filter_packs';
+  static const attestBadge = 'nym_attest_badge';
+  static const attestAuthority = 'nym_attest_authority';
   static const hideNonPinned = 'nym_hide_non_pinned';
   static const imageBlur = 'nym_image_blur';
   static String imageBlurFor(String pubkey) => 'nym_image_blur_$pubkey';

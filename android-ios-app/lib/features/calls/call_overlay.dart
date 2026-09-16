@@ -52,9 +52,10 @@ void showCallUserMenu(BuildContext context, String pubkey, {String? nym}) {
   // `usersProvider` entry (the call chat-from line carries no nym), else fall
   // back to the pubkey (`_nymForPubkey`, calls.js).
   final container = ProviderScope.containerOf(context);
-  final resolved = (nym != null && nym.isNotEmpty)
-      ? nym
-      : (container.read(usersProvider)[pubkey]?.nym ?? pubkey);
+  final live = container.read(usersProvider)[pubkey]?.nym;
+  final resolved = !isPlaceholderNym(live)
+      ? live!
+      : ((nym != null && nym.isNotEmpty) ? nym : (live ?? pubkey));
   ContextMenuPanel.show(
     context,
     target: CtxTarget(
@@ -426,7 +427,7 @@ class _Grid extends StatelessWidget {
     final wide = width >= 700;
 
     // PWA mapping: narrow → 1/2:1col, 3/4:2col, 5-9:3col; wide → 2col base
-    // (1/2 centred max 1100). Tiles have min-height 160 (no forced aspect).
+    // (1/2 centerd max 1100). Tiles have min-height 160 (no forced aspect).
     // The `[data-count="5"…"9"]` selectors (specificity 0,2,0) BEAT the
     // wide-media `.call-grid` override (0,1,0, styles-features.css:4718), so
     // 5-9 tiles render 3 columns at ANY width. The `[data-count]` selectors
@@ -1114,9 +1115,9 @@ class _ChatRow extends ConsumerWidget {
 
   Widget _buildRow(BuildContext context, NymColors c, TextStyle base) {
     // `_setupCallChatInteractions` (calls.js:1598-1621): a 500ms hold
-    // (cancelled once the touch drifts more than 10px on either axis) buzzes
+    // (canceled once the touch drifts more than 10px on either axis) buzzes
     // (`nymHapticTap` = a 30ms vibrate) and opens the quick-react popup
-    // centred on the PRESS POINT — `_showCallChatQuickReact` places it
+    // centerd on the PRESS POINT — `_showCallChatQuickReact` places it
     // `left = cx - w/2, top = cy - h - 10` from the recorded touch x/y
     // (calls.js:1533-1537) — NOT on the row rect. A zero-size anchor at the
     // touch point reproduces that. The tight 10px pre-fire cancel slop needs
@@ -1191,7 +1192,7 @@ class _ChatRow extends ConsumerWidget {
 
 /// A [LongPressGestureRecognizer] with the PWA's tighter pre-fire cancel slop
 /// for the call-chat quick-react hold (`_setupCallChatInteractions`,
-/// calls.js:1595,1611-1616): the pending 500ms timer is cancelled once the
+/// calls.js:1595,1611-1616): the pending 500ms timer is canceled once the
 /// touch drifts more than `MOVE = 10` px on EITHER axis — tighter than the
 /// framework's default ~18px kTouchSlop drift, which would still pop the popup
 /// on a slow call-chat scroll. Movement AFTER the 500ms deadline no longer
@@ -1348,7 +1349,7 @@ class _Receipt extends ConsumerWidget {
   final bool isGroup;
 
   /// `_bindCallReaderLongPress` (calls.js:1370-1395): a 500ms hold on the
-  /// reader strip (contextmenu suppressed, cancelled on release/move) buzzes
+  /// reader strip (contextmenu suppressed, canceled on release/move) buzzes
   /// (`nymHapticTap`) and opens the "Seen by" readers modal
   /// (`_showReadersModalFromMap`, groups.js:2829-2880) lifted above the call
   /// overlay (`z-index: 10060` — the root overlay here).
@@ -1371,7 +1372,7 @@ class _Receipt extends ConsumerWidget {
         for (final e in msg.readers.entries)
           ReactorEntry(
             pubkey: e.key,
-            nym: stripPubkeySuffix(e.value),
+            nym: pickDisplayNym(users[e.key]?.nym, e.value),
             suffix: getPubkeySuffix(e.key),
             isYou: e.key == selfPk,
             imageUrl: users[e.key]?.profile?.picture,

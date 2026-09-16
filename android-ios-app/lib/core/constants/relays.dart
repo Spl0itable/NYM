@@ -1,3 +1,5 @@
+import 'event_kinds.dart';
+
 /// Relay configuration ported from the PWA (docs/specs/01 §4).
 class RelayConfig {
   RelayConfig._();
@@ -26,6 +28,29 @@ class RelayConfig {
     'wss://relay.fountain.fm',
     'wss://nostr.mom',
   ];
+
+  static const String appRelayOnlyChannel = 'nymchat';
+
+  /// Every kind that names a channel and surfaces inside it: the message
+  /// itself, plus the reactions, polls, typing strips and read receipts that
+  /// hang off it. Gating only the messages would leave four other ways to put
+  /// a nym and a payload in front of everyone in the default channel.
+  static const Set<int> appRelayOnlyKinds = {
+    EventKind.namedChannel,
+    EventKind.reaction,
+    EventKind.appData,
+    EventKind.channelTyping,
+    EventKind.channelReceipt,
+  };
+
+  /// Whether an event naming [gTag]/[dTag] is one only the app relay may
+  /// deliver. Channel derivation matches the worker's `channelFromTags`: a
+  /// named-channel message carries 'd', and the hangers-on may carry either.
+  static bool isAppRelayOnly(int kind, String? gTag, String? dTag) {
+    if (!appRelayOnlyKinds.contains(kind)) return false;
+    final name = kind == EventKind.namedChannel ? dTag : (gTag ?? dTag);
+    return name != null && name.toLowerCase() == appRelayOnlyChannel;
+  }
 
   /// Relays we only publish to (never REQ from).
   static const Set<String> writeOnlyRelays = {'wss://sendit.nosflare.com'};

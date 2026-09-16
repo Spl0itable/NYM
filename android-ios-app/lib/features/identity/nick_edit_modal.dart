@@ -1077,7 +1077,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       final verified = await DevNsecModal.open(context);
       if (!mounted) return;
       if (verified == null) {
-        // Cancelled the reserved-nick check: persist bio/lightning edits but
+        // Canceled the reserved-nick check: persist bio/lightning edits but
         // keep the current nick (app.js:2705-2709).
         await _persist(includeName: false);
         return;
@@ -1091,7 +1091,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   /// fields are sent from the prefilled controllers / current URLs — an
   /// untouched bio/lightning/avatar is re-published as-is (never blanked); a
   /// cleared field is intentionally blanked. [includeName] gates the rename so
-  /// a non-change (or a cancelled reserved-nick check) leaves the nick alone.
+  /// a non-change (or a canceled reserved-nick check) leaves the nick alone.
   Future<void> _persist({required bool includeName}) async {
     setState(() => _saving = true);
     final bio = _bio.text.trim();

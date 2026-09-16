@@ -8,6 +8,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/crypto/schnorr.dart' as schnorr;
+import '../../core/crypto/pow.dart';
 import '../../models/nostr_event.dart';
 import '../nostr/event_signer.dart';
 import '../relay/relay_stats.dart';
@@ -166,6 +167,8 @@ class Nip98Auth {
     required EventSigner signer,
     bool sensitive = false,
     int? createdAt,
+    List<List<String>> extraTags = const [],
+    int powBits = 0,
   }) async {
     final pubkey = signer.pubkey;
     final now = createdAt ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -186,14 +189,19 @@ class Nip98Auth {
       ['method', 'POST'],
       if (url.isNotEmpty) ['u', url],
       if (action.isNotEmpty) ['action', action],
+      ...extraTags,
     ];
-    final unsigned = UnsignedEvent(
+    var unsigned = UnsignedEvent(
       pubkey: pubkey,
       createdAt: now,
       kind: 27235,
       tags: tags,
       content: content,
     );
+    // Mined before signing: every signer recomputes the id from these fields,
+    // and the nonce tag is one of them. mineNonce grinds in an isolate and
+    // works for remote signers too.
+    if (powBits > 0) unsigned = await mineNonce(unsigned, powBits);
     try {
       final signed = await signer.sign(unsigned);
       final auth = signed.toJson();

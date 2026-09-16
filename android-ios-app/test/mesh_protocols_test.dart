@@ -8,7 +8,7 @@
 //    forward secret. Sealed to a one-time key that gets deleted, it is.
 //
 // All three are bitchat's formats, so these pin the encoding as much as the
-// behaviour: a packet the other client cannot parse is worse than no feature.
+// behavior: a packet the other client cannot parse is worse than no feature.
 import 'dart:convert';
 import 'dart:typed_data';
 

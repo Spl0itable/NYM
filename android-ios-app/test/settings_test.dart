@@ -189,7 +189,7 @@ void main() {
       ctrl.setSwipeReactEmoji('🔥');
       expect(reload().swipeReactEmoji, '🔥');
       // The pick is stamped, so a settings blob published before this moment
-      // is recognisable as stale on the way back in instead of reverting it.
+      // is recognizable as stale on the way back in instead of reverting it.
       expect(ctrl.swipeReactEmojiTs, greaterThan(0));
 
       // An inbound pick from another device keeps ITS stamp — stamping the

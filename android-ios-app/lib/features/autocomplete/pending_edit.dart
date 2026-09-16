@@ -34,7 +34,7 @@ class PendingEditNotifier extends StateNotifier<PendingEdit?> {
       state = PendingEdit(messageId: messageId, content: content);
 
   /// Clears the pending edit once the composer has applied it (or it was
-  /// cancelled). Mirrors `cancelEditMessage`.
+  /// canceled). Mirrors `cancelEditMessage`.
   void consume() => state = null;
 }
 

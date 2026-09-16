@@ -1243,7 +1243,7 @@ class CallService {
       _incoming = null;
       // The caller withdrew — stop ringing (calls.js:471 `_stopRingtone`).
       _stopRingtone();
-      // calls.js `_onCallCancel`: a cancelled ring is a missed call.
+      // calls.js `_onCallCancel`: a canceled ring is a missed call.
       _markCallSeen(inc.callId, 'missed'); // calls.js:473
       _system(tr('Missed call from {name}', {'name': inc.nym}));
       _recordMissedCall(

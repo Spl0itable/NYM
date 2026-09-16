@@ -20,7 +20,7 @@ void main() {
   group('localizeBotWelcome', () {
     test('routes both welcome messages through the UI-string cache', () {
       // English (no active language) is a pass-through, so the assertion here
-      // is that the welcome ids are the ones recognised — the transient
+      // is that the welcome ids are the ones recognized — the transient
       // in-chat welcome and the persisted first-contact PM.
       expect(localizeBotWelcome('nymbot-welcome', botWelcomeText),
           botWelcomeText);

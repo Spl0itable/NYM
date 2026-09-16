@@ -147,6 +147,13 @@
             android:exported="false"
             android:stopWithTask="true"
             android:foregroundServiceType="dataSync|connectedDevice"/>
+        <!-- Play Integrity: the Google Cloud project number verdicts are issued
+             under. A string resource, not a literal: the number overflows the
+             32-bit int aapt would otherwise parse it as, and PlayIntegrity.kt
+             reads it back with toLongOrNull(). -->
+        <meta-data
+            android:name="com.nym.bar.PLAY_INTEGRITY_PROJECT_NUMBER"
+            android:value="@string/play_integrity_project_number" />
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

@@ -6,6 +6,8 @@ import 'package:http/testing.dart';
 import 'package:http/http.dart' as http;
 import 'package:nym_bar/core/crypto/keys.dart';
 import 'package:nym_bar/models/nostr_event.dart';
+import 'package:nym_bar/features/groups/group_logic.dart'
+    show kMaxGroupMembers, kPmDepositQueueMax;
 import 'package:nym_bar/core/constants/storage_keys.dart';
 import 'package:nym_bar/models/settings.dart';
 import 'package:nym_bar/services/api/api_client.dart';
@@ -717,6 +719,70 @@ void main() {
       );
       final n = await sync.pmDeposit([wrapTo(_pub)]);
       expect(n, 0);
+      expect(bodies, isEmpty);
+    });
+
+    test('a group fan-out deposits every member and coalesces into few requests',
+        () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (200, jsonEncode({'ok': true, 'added': 1}), const {}),
+      );
+      for (var i = 0; i < kMaxGroupMembers; i++) {
+        sync.enqueueDeposit(wrapTo('${'c' * 63}$i'.substring(0, 64), id: 'w$i'));
+      }
+      await sync.flushDeposits();
+      expect(sync.depositDropped, 0);
+      final sent = <String>{};
+      for (final b in bodies) {
+        final events = b['events'] as List;
+        expect(events.length, lessThanOrEqualTo(100));
+        for (final e in events) {
+          sent.add((e as Map)['id'] as String);
+        }
+      }
+      expect(sent.length, kMaxGroupMembers);
+      expect(bodies.length, lessThan(kMaxGroupMembers),
+          reason: 'wraps coalesce instead of one request each');
+    });
+
+    test('the deposit queue holds a full fan-out at the member cap', () {
+      expect(kPmDepositQueueMax, greaterThanOrEqualTo(kMaxGroupMembers));
+    });
+
+    test('deposit overload is counted, and loss is spread not a fixed prefix',
+        () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (200, jsonEncode({'ok': true, 'added': 1}), const {}),
+      );
+      final total = kPmDepositQueueMax + 200;
+      for (var i = 0; i < total; i++) {
+        sync.enqueueDeposit(wrapTo('d' * 64, id: 'w$i'));
+      }
+      expect(sync.depositDropped, 200);
+      await sync.flushDeposits();
+      final survivors = <int>[];
+      for (final b in bodies) {
+        for (final e in b['events'] as List) {
+          survivors.add(int.parse(((e as Map)['id'] as String).substring(1)));
+        }
+      }
+      expect(survivors.length, kPmDepositQueueMax);
+      expect(survivors.any((i) => i < total - kPmDepositQueueMax), isTrue,
+          reason: 'a head-drop queue would leave exactly the last N enqueued');
+    });
+
+    test('a wrap addressed to ourselves is never enqueued', () async {
+      final bodies = <Map<String, dynamic>>[];
+      final sync = _syncWith(
+        bodies.add,
+        respond: (_) => (200, jsonEncode({'ok': true}), const {}),
+      );
+      sync.enqueueDeposit(wrapTo(_pub));
+      await sync.flushDeposits();
       expect(bodies, isEmpty);
     });
 

@@ -178,7 +178,7 @@ class MeshController extends StateNotifier<MeshUiState> {
 
   Future<void> restart() {
     if (!state.enabled) return Future.value();
-    // Serialised: _stop and _start both bail out while _busy, so two overlapping
+    // Serialized: _stop and _start both bail out while _busy, so two overlapping
     // restarts could tear the mesh down and then skip bringing it back up,
     // leaving the radio silently off until the next toggle.
     final prev = _restartChain ?? Future<void>.value();
@@ -500,7 +500,7 @@ class MeshController extends StateNotifier<MeshUiState> {
     try {
       await _teardown();
       // A round trip measured to a peer we can no longer reach is a stale
-      // number, not a reading. (_teardown cancelled the timers.)
+      // number, not a reading. (_teardown canceled the timers.)
       state = state.copyWith(
           running: false, linkCount: 0, peers: const [], pings: const {});
     } finally {

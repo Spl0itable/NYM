@@ -53,7 +53,7 @@ void kickCustomEmojiPrefetch(ProviderContainer container) {
 
 /// `_prefetchCustomEmojiImages` (emoji.js:52-61): no-op while a run is already
 /// pending or in low-data mode; otherwise defer the run by 3s (+ idle — the
-/// deferred [Timer] is the closest Flutter analogue of
+/// deferred [Timer] is the closest Flutter analog of
 /// `setTimeout(3000)` + `requestIdleCallback`).
 void scheduleCustomEmojiPrefetch(ProviderContainer container) {
   if (_prefetchTimer != null) return;

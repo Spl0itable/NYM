@@ -4,6 +4,36 @@
 /// client contract in `docs/specs/04-features.md` §11.2-11.5.
 library;
 
+import '../i18n/i18n.dart' show creditFigure;
+
+const int kNominalTurnIn = 3000;
+const int kNominalTurnOut = 700;
+
+class BulkBonus {
+  const BulkBonus({required this.bonus, required this.standardSats, required this.proSats});
+
+  factory BulkBonus.fromJson(Map<String, dynamic> j) => BulkBonus(
+        bonus: (j['bonus'] as num?)?.toDouble() ?? 0,
+        standardSats: (j['standardSats'] as num?)?.toInt() ?? 0,
+        proSats: (j['proSats'] as num?)?.toInt() ?? 0,
+      );
+
+  final double bonus;
+  final int standardSats;
+  final int proSats;
+
+  int satsFor(bool pro) => pro ? proSats : standardSats;
+
+  Map<String, dynamic> toJson() =>
+      {'bonus': bonus, 'standardSats': standardSats, 'proSats': proSats};
+}
+
+const List<BulkBonus> kBulkBonusFallback = [
+  BulkBonus(bonus: 0.10, standardSats: 500, proSats: 5000),
+  BulkBonus(bonus: 0.15, standardSats: 1000, proSats: 10000),
+  BulkBonus(bonus: 0.20, standardSats: 5000, proSats: 50000),
+];
+
 /// The Pro frontier models selectable with `?model <name>`.
 ///
 /// Exact list + ids verified against `functions/api/bot.js` `BOT_PRO_MODELS`
@@ -16,6 +46,9 @@ class ProModel {
     required this.label,
     required this.modelId,
     required this.baseCredits,
+    this.inUsdPerMTok,
+    this.outUsdPerMTok,
+    this.cacheReadUsdPerMTok,
     this.max,
     this.description = '',
     this.author = '',
@@ -24,6 +57,7 @@ class ProModel {
     this.reasoning = false,
     this.tools = false,
     this.context,
+    this.hosting = '',
     this.priced = true,
   });
 
@@ -38,6 +72,9 @@ class ProModel {
       // payloads may omit it.
       modelId: (j['model'] ?? j['modelId'] ?? '').toString(),
       baseCredits: asInt(j['credits']) ?? asInt(j['baseCredits']) ?? 1,
+      inUsdPerMTok: (j['inUsdPerMTok'] as num?)?.toDouble(),
+      outUsdPerMTok: (j['outUsdPerMTok'] as num?)?.toDouble(),
+      cacheReadUsdPerMTok: (j['cacheReadUsdPerMTok'] as num?)?.toDouble(),
       max: asInt(j['max']),
       description: (j['description'] ?? '').toString(),
       author: (j['author'] ?? '').toString(),
@@ -46,7 +83,8 @@ class ProModel {
       reasoning: j['reasoning'] == true,
       tools: j['tools'] == true,
       context: asInt(j['context']),
-      // Absent means "assume priced" so an older worker doesn't grey the list.
+      hosting: (j['hosting'] ?? '').toString(),
+      // Absent means "assume priced" so an older worker doesn't gray the list.
       priced: j['priced'] != false,
     );
   }
@@ -56,6 +94,9 @@ class ProModel {
         'label': label,
         'model': modelId,
         'credits': baseCredits,
+        if (inUsdPerMTok != null) 'inUsdPerMTok': inUsdPerMTok,
+        if (outUsdPerMTok != null) 'outUsdPerMTok': outUsdPerMTok,
+        if (cacheReadUsdPerMTok != null) 'cacheReadUsdPerMTok': cacheReadUsdPerMTok,
         if (max != null) 'max': max,
         if (description.isNotEmpty) 'description': description,
         if (author.isNotEmpty) 'author': author,
@@ -64,6 +105,7 @@ class ProModel {
         'reasoning': reasoning,
         'tools': tools,
         if (context != null) 'context': context,
+        if (hosting.isNotEmpty) 'hosting': hosting,
         'priced': priced,
       };
 
@@ -74,16 +116,22 @@ class ProModel {
   final String label;
 
   /// Internal model id, mirroring `BOT_PRO_MODELS[key].model` in
-  /// `functions/api/bot.js`. Every Pro model is third-party and carries its
-  /// provider slug: `anthropic/…` goes to Anthropic's native endpoint through
-  /// the AI Gateway, everything else to the gateway's unified-billing one.
-  /// None of them is Cloudflare-hosted, so none takes a `@cf/` prefix — that
-  /// namespace belongs to the standard tier's `BOT_PM_MODELS`. Documentation
-  /// only: the client sends [key].
+  /// `functions/api/bot.js`. A `provider/…` slug is third-party: `anthropic/…`
+  /// goes to Anthropic's native endpoint through the AI Gateway, everything
+  /// else to the gateway's unified-billing one. A `@cf/…` prefix is
+  /// Cloudflare-hosted and runs on the worker's AI binding directly — no
+  /// gateway hop and no upstream credential, which is why DeepSeek's working
+  /// entries are the `@cf/` ones. Documentation only: the client sends [key].
   final String modelId;
 
   /// Base Pro credits charged per model call (before length scaling).
   final int baseCredits;
+
+  final double? inUsdPerMTok;
+  final double? outUsdPerMTok;
+  final double? cacheReadUsdPerMTok;
+
+  bool get metered => (inUsdPerMTok ?? 0) > 0 && (outUsdPerMTok ?? 0) > 0;
 
   /// Max Pro credits a single (max-length) reply can scale to (PWA
   /// `_botProModels[].max`, pms.js:2085-2091). Null/<= [baseCredits] means the
@@ -107,24 +155,62 @@ class ProModel {
   /// Context window in tokens, when the catalog knows it.
   final int? context;
 
+  /// `cloudflare-hosted` or `third-party`, from the catalog. Empty when the
+  /// worker predates the field. Only used to badge the row.
+  final String hosting;
+
+  /// Whether Cloudflare runs the weights itself, so the call needs no gateway
+  /// and no upstream provider credential.
+  bool get cloudflareHosted =>
+      hosting == 'cloudflare-hosted' || modelId.startsWith('@cf/');
+
   /// False when Cloudflare publishes no price for the model, so the worker is
   /// charging its conservative default. Shown as a caveat rather than hidden.
   final bool priced;
 
-  /// The PWA's `_botProPriceLabel` (pms.js:2096-2098): `"<n> Pro credit(s)/reply"`
-  /// for flat models, else `"from <base>, up to <max> for max-length replies"`.
-  String get priceLabel {
+  double? turnCredits(double usdPerCredit, double minChargeCredits) {
+    if (!metered || usdPerCredit <= 0) return null;
+    final spend = (kNominalTurnIn * inUsdPerMTok! +
+            kNominalTurnOut * outUsdPerMTok!) /
+        1e6 /
+        usdPerCredit;
+    return spend < minChargeCredits ? minChargeCredits : spend;
+  }
+
+  String turnLabel(double usdPerCredit, double minChargeCredits) {
+    final turn = turnCredits(usdPerCredit, minChargeCredits);
+    if (turn != null) {
+      final n = creditFigure(turn);
+      return '~$n credit${n == '1' ? '' : 's'} a turn';
+    }
     final base = '$baseCredits Pro credit${baseCredits == 1 ? '' : 's'}';
     final m = max;
     return (m != null && m > baseCredits)
         ? 'from $base, up to $m for max-length replies'
         : '$base/reply';
   }
+
+  String? ratesLabel() {
+    if (!metered) return null;
+    final cached = (cacheReadUsdPerMTok ?? 0) > 0
+        ? ', \$$cacheReadUsdPerMTok/M cached'
+        : '';
+    return '\$$inUsdPerMTok/M in, \$$outUsdPerMTok/M out$cached';
+  }
+
+  String priceLine(double usdPerCredit, double minChargeCredits) {
+    final rates = ratesLabel();
+    final turn = turnLabel(usdPerCredit, minChargeCredits);
+    return rates == null ? turn : '$turn · $rates';
+  }
+
+  String get priceLabel => ratesLabel() ?? turnLabel(0.0, 0.0);
 }
 
-/// The 12 Pro models, in README order (line 172): Claude Fable 5, Claude Opus 5,
-/// Claude Sonnet 5, Claude Haiku 4.5, GPT-5.6 Sol, GPT-5.4 mini, Gemini 3.1 Pro,
-/// Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5, MiniMax M3.
+/// The built-in Pro models, in README order (line 172): Claude Fable 5, Claude
+/// Opus 5, Claude Sonnet 5, Claude Haiku 4.5, GPT-5.6 Sol, GPT-5.4 mini, Gemini
+/// 3.1 Pro, Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5, MiniMax M3, then the
+/// Cloudflare-hosted DeepSeek entries.
 const List<ProModel> kProModels = [
   ProModel(
     key: 'claude-fable',
@@ -210,6 +296,43 @@ const List<ProModel> kProModels = [
     baseCredits: 1,
     max: 3,
   ),
+  // Cloudflare-hosted. DeepSeek's third-party route is rejected by its
+  // upstream provider; these run on the worker's AI binding and answer.
+  ProModel(
+    key: 'deepseek-v4-pro',
+    label: 'DeepSeek V4 Pro',
+    modelId: '@cf/deepseek-ai/deepseek-v4-pro-0813',
+    baseCredits: 1,
+    max: 3,
+    author: 'DeepSeek',
+    authorSlug: 'deepseek',
+    hosting: 'cloudflare-hosted',
+    reasoning: true,
+    tools: true,
+  ),
+  ProModel(
+    key: 'deepseek-v4-flash',
+    label: 'DeepSeek V4 Flash',
+    modelId: '@cf/deepseek-ai/deepseek-v4-flash-0731',
+    baseCredits: 1,
+    max: 1,
+    author: 'DeepSeek',
+    authorSlug: 'deepseek',
+    hosting: 'cloudflare-hosted',
+    reasoning: true,
+    tools: true,
+  ),
+  ProModel(
+    key: 'deepseek-r1-distill-qwen-32b',
+    label: 'DeepSeek R1 Distill Qwen 32B',
+    modelId: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+    baseCredits: 1,
+    max: 3,
+    author: 'DeepSeek',
+    authorSlug: 'deepseek',
+    hosting: 'cloudflare-hosted',
+    reasoning: true,
+  ),
 ];
 
 /// Retired `?model` keys, mapped to their replacements. Mirrors
@@ -220,6 +343,8 @@ const Map<String, String> kProModelAliases = {
   'codex': 'gpt-5',
   'claude-opus-4.8': 'claude-opus',
   'claude-sonnet-4.6': 'claude-sonnet',
+  'deepseek': 'deepseek-v4-pro',
+  'deepseek-v4': 'deepseek-v4-pro',
 };
 
 /// One provider's models in the picker, in the order the worker returned them.
@@ -262,6 +387,9 @@ class ProModelCatalog {
     this.aliases = const {},
     this.source = 'builtin',
     this.fetchedAt = 0,
+    this.usdPerCredit = 0.0,
+    this.minChargeCredits = 0.0,
+    this.bulkBonus = kBulkBonusFallback,
   });
 
   factory ProModelCatalog.fromJson(Map<String, dynamic> j) {
@@ -289,6 +417,17 @@ class ProModelCatalog {
       fetchedAt: (j['fetchedAt'] is num)
           ? (j['fetchedAt'] as num).toInt()
           : DateTime.now().millisecondsSinceEpoch,
+      usdPerCredit: (j['usdPerCredit'] as num?)?.toDouble() ?? 0,
+      minChargeCredits: (j['minChargeCredits'] as num?)?.toDouble() ?? 0,
+      bulkBonus: () {
+        final raw = j['bulkBonus'];
+        if (raw is! List) return kBulkBonusFallback;
+        final rows = [
+          for (final r in raw)
+            if (r is Map) BulkBonus.fromJson(r.cast<String, dynamic>()),
+        ]..removeWhere((b) => b.bonus <= 0 || b.standardSats <= 0);
+        return rows.isEmpty ? kBulkBonusFallback : rows;
+      }(),
     );
   }
 
@@ -298,6 +437,9 @@ class ProModelCatalog {
         'aliases': aliases,
         'source': source,
         'fetchedAt': fetchedAt,
+        'usdPerCredit': usdPerCredit,
+        'minChargeCredits': minChargeCredits,
+        'bulkBonus': [for (final b in bulkBonus) b.toJson()],
       };
 
   final List<ProModel> models;
@@ -311,6 +453,38 @@ class ProModelCatalog {
   /// back to its own table.
   final String source;
   final int fetchedAt;
+
+  final double usdPerCredit;
+  final double minChargeCredits;
+
+  final List<BulkBonus> bulkBonus;
+
+  double bulkMultiplier(int sats, bool pro) {
+    var best = 0.0;
+    for (final row in bulkBonus) {
+      final at = row.satsFor(pro);
+      if (at > 0 && sats >= at && row.bonus > best) best = row.bonus;
+    }
+    return 1 + best;
+  }
+
+  int creditsForSats(int sats, bool pro) {
+    if (sats <= 0) return 0;
+    final each = pro ? 100 : 10;
+    return (sats / each * bulkMultiplier(sats, pro)).floor();
+  }
+
+  String bulkBonusLine(bool pro) {
+    final rows = bulkBonus.toList()
+      ..sort((a, b) => a.satsFor(pro).compareTo(b.satsFor(pro)));
+    if (rows.isEmpty) return '';
+    final parts = rows.map((r) {
+      final at = r.satsFor(pro);
+      final n = at >= 1000 ? '${at ~/ 1000}K' : '$at';
+      return '+${(r.bonus * 100).round()}% at $n';
+    }).join(', ');
+    return 'Bulk bonus: $parts sats.';
+  }
 
   bool get isEmpty => models.isEmpty;
 
@@ -575,10 +749,10 @@ class BotReply {
   final int? outputTokens;
 
   /// Credits charged for this reply.
-  final int? cost;
+  final double? cost;
 
   /// Remaining balance after the reply (tier depends on [pro]).
-  final int? balance;
+  final double? balance;
 
   /// True when answered by a pinned Pro model.
   final bool pro;
@@ -612,18 +786,18 @@ class BotBalance {
     required this.proTotalUsed,
   });
 
-  final int balance; // standard credits available
+  final double balance; // standard credits available, fractions included
   final int totalPurchased;
   final int totalUsed;
-  final int proBalance; // Pro credits available
+  final double proBalance; // Pro credits available, fractions included
   final int proTotalPurchased;
   final int proTotalUsed;
 
   factory BotBalance.fromJson(Map<String, dynamic> j) => BotBalance(
-        balance: _int(j['balance']),
+        balance: _credits(j['balanceCredits'] ?? j['balance']),
         totalPurchased: _int(j['totalPurchased']),
         totalUsed: _int(j['totalUsed']),
-        proBalance: _int(j['proBalance']),
+        proBalance: _credits(j['proBalanceCredits'] ?? j['proBalance']),
         proTotalPurchased: _int(j['proTotalPurchased']),
         proTotalUsed: _int(j['proTotalUsed']),
       );
@@ -825,6 +999,12 @@ class GitConfig {
   static const Object _sentinel = Object();
 }
 
+double _credits(Object? v) {
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v) ?? 0;
+  return 0;
+}
+
 int _int(Object? v) {
   if (v is int) return v;
   if (v is num) return v.toInt();
@@ -843,8 +1023,8 @@ BotReply splitReasoning(
   String? taskType,
   int? modelCalls,
   int? outputTokens,
-  int? cost,
-  int? balance,
+  double? cost,
+  double? balance,
   bool pro = false,
   String? proModel,
   bool git = false,

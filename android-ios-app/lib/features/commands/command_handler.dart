@@ -74,6 +74,8 @@ class CommandHooks {
     this.unban,
     this.addMod,
     this.removeMod,
+    this.addAdmin,
+    this.removeAdmin,
     this.transferOwner,
     this.openDevNsecChallenge,
   });
@@ -113,13 +115,15 @@ class CommandHooks {
   final void Function(String pubkey)? unban;
   final void Function(String pubkey)? addMod;
   final void Function(String pubkey)? removeMod;
+  final void Function(String pubkey)? addAdmin;
+  final void Function(String pubkey)? removeAdmin;
   final void Function(String pubkey)? transferOwner;
 
   /// `/nick <reserved>` → the developer-nsec challenge modal
   /// (`showDevNsecModal('nick')` → `applyDeveloperIdentity` on success,
   /// commands.js:614-626). The hook owns the whole outcome: verify → switch
   /// the running session to the developer identity + the "Identity verified…"
-  /// line, cancel → the PWA's 'Nickname change cancelled.' line. Unset
+  /// line, cancel → the PWA's 'Nickname change canceled.' line. Unset
   /// (headless/tests) → the engine's reserved gate aborts with the same
   /// cancellation message.
   final void Function()? openDevNsecChallenge;
@@ -222,6 +226,8 @@ class CommandDispatcher {
       case 'unban':
       case 'addmod':
       case 'removemod':
+      case 'addadmin':
+      case 'removeadmin':
       case 'transferowner':
         return tr('You must be in a group conversation to use this command.');
       default:
@@ -348,6 +354,12 @@ class CommandDispatcher {
       case 'removemod':
         _modTarget(args, hooks.removeMod,
             tr('Usage: /removemod @nym (or hex pubkey)'));
+      case 'addadmin':
+        _modTarget(
+            args, hooks.addAdmin, tr('Usage: /addadmin @nym (or hex pubkey)'));
+      case 'removeadmin':
+        _modTarget(args, hooks.removeAdmin,
+            tr('Usage: /removeadmin @nym (or hex pubkey)'));
       case 'transferowner':
         _modTarget(args, hooks.transferOwner,
             tr('Usage: /transferowner @nym (or hex pubkey)'),

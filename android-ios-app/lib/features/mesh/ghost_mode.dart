@@ -166,7 +166,7 @@ class GhostModeController extends StateNotifier<GhostState> {
     return b.toString();
   }
 
-  /// Jittered so a rotation cannot be recognised by its regular period.
+  /// Jittered so a rotation cannot be recognized by its regular period.
   void _arm() {
     _timer?.cancel();
     final jitterMs = _random.nextInt(rotateEvery.inMilliseconds ~/ 4);

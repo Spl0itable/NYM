@@ -14,6 +14,7 @@ import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
+import '../shop/shop_controller.dart';
 import 'lnurl.dart';
 import 'zap_logic.dart';
 
@@ -182,11 +183,12 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         _invoice = invoice;
         _phase = _Phase.invoice;
       });
+      _persistPendingZap(invoice);
       // LUD-21: poll the backend `zap-verify` proxy for up to 3 minutes
       // (zaps.js checkZapPayment → _serverVerifyZapPaid, 180 × 1s). The proxy
       // server-side fetches the LUD-21 verify URL (or validates a NIP-57
       // receipt), so the client only reads `data.paid`.
-      if (invoice.verify != null) _startVerifyPolling(invoice);
+      _startVerifyPolling(invoice);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -197,8 +199,11 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   void _startVerifyPolling(LnInvoice invoice) {
+    final lud21 = invoice.verify != null;
+    final step = Duration(seconds: lud21 ? 1 : 3);
+    final maxChecks = lud21 ? 180 : 60;
     var checks = 0;
-    _verifyTimer = Timer.periodic(const Duration(seconds: 1), (t) async {
+    _verifyTimer = Timer.periodic(step, (t) async {
       checks++;
       final paid = await _api.zapVerify(
         pr: invoice.pr,
@@ -209,8 +214,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       if (paid) {
         t.cancel();
         _markPaid(invoice);
-      } else if (checks >= 180) {
+      } else if (checks >= maxChecks) {
         t.cancel();
+        if (!lud21) return;
         setState(() {
           _phase = _Phase.error;
           _statusText = tr('Payment timeout - please check your wallet');
@@ -219,10 +225,45 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     });
   }
 
+  /// The invoice outlives this modal: the user leaves for their wallet and the
+  /// OS can evict the process before the payment settles, taking the modal and
+  /// its in-memory invoice with it. Persist it in the same store shop and
+  /// credit purchases use, so the next foreground re-verifies and records it.
+  static String pendingZapId(String pr) => 'zap:${pr.toLowerCase()}';
+
+  void _persistPendingZap(LnInvoice invoice) {
+    final messageId = widget.messageId;
+    if (messageId == null || messageId.isEmpty) return;
+    try {
+      ref.read(shopControllerProvider.notifier).addPendingPurchase({
+        'kind': 'zap',
+        'invoiceId': pendingZapId(invoice.pr),
+        'pr': invoice.pr,
+        'verify': invoice.verify,
+        'providerPubkey': invoice.providerPubkey,
+        'amount': invoice.amountSats,
+        'messageId': messageId,
+        'recipientPubkey': widget.recipientPubkey,
+        'originalKind': widget.originalKind,
+      });
+    } catch (_) {
+      // No store (tests/headless): the live poll still settles this zap.
+    }
+  }
+
+  void _clearPendingZap(LnInvoice invoice) {
+    try {
+      ref
+          .read(shopControllerProvider.notifier)
+          .removePendingPurchase(pendingZapId(invoice.pr));
+    } catch (_) {}
+  }
+
   /// Marks the invoice paid + plays the success affordance, deduped by lowercased
   /// bolt11 (zaps.js `handleZapPaymentSuccess`; dedup via `_selfCountedZapInvoices`).
   void _markPaid(LnInvoice invoice) {
     if (!_settledInvoices.add(invoice.dedupKey)) return; // already counted
+    _clearPendingZap(invoice);
     // PWA `window.nymHapticTap` — the same shared 30ms vibrate every other
     // haptic site fires (inline-bindings.js:112-114), mapped app-wide to
     // mediumImpact.

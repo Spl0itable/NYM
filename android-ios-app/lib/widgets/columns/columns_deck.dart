@@ -903,7 +903,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     }
   }
 
-  /// Live reflow (columns.js:706-713): as the ghost crosses a neighbour's
+  /// Live reflow (columns.js:706-713): as the ghost crosses a neighbor's
   /// midpoint the strip reorders immediately — the dimmed source column moves to
   /// the insertion point, exactly like the PWA's `insertBefore` loop.
   void _updateDragTarget(double pointerX) {
@@ -1842,7 +1842,7 @@ class _DeckColumn extends ConsumerStatefulWidget {
 class _DeckColumnState extends ConsumerState<_DeckColumn> {
   /// Scroll-to-index controller so a quoted-blockquote tap can jump THIS column
   /// to an off-screen source message (a plain ListView can't) — the columns
-  /// analogue of the single view's [messageListScrollerProvider] binding.
+  /// analog of the single view's [messageListScrollerProvider] binding.
   final ItemScrollController _itemScroll = ItemScrollController();
   final ItemPositionsListener _positions = ItemPositionsListener.create();
 
@@ -1887,7 +1887,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   }
 
   /// Recomputes at-bottom + scroll-button from the visible item positions — the
-  /// position-based analogue of the old offset gate (the single view's
+  /// position-based analog of the old offset gate (the single view's
   /// `_onPositionsChanged`). In the `reverse:true` list index 0 is the newest at
   /// the bottom; at rest its leading (bottom) edge sits `padding.bottom` (10px)
   /// inside the viewport, so the pixel distance scrolled from the bottom is
@@ -2037,7 +2037,10 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
           // light mode. Transparent only under the columns wallpaper.
           Expanded(
             child: threadOpen
-                ? ThreadView(key: ValueKey(activeThread), thread: activeThread)
+                ? ThreadView(
+                    key: ValueKey(activeThread),
+                    thread: activeThread,
+                    showTyping: false)
                 : ColoredBox(
               color: transparent
                   ? Colors.transparent
@@ -2277,7 +2280,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     final down = widget.onCloseDown;
     if (down != null) {
       // Deeper Listeners see the pointer first, so this fires before the
-      // desktop slot's click-to-focus Listener (`stopPropagation()` analogue).
+      // desktop slot's click-to-focus Listener (`stopPropagation()` analog).
       btn = Listener(onPointerDown: (_) => down(), child: btn);
     }
     return btn;

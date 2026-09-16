@@ -28,7 +28,7 @@ class Identity {
   bool get canSign => privkey != null;
 }
 
-/// Vault-aware secret writer — the native analogue of the PWA's `nymSecretSet`
+/// Vault-aware secret writer — the native analog of the PWA's `nymSecretSet`
 /// → key-vault.js `secretSet` (lines 38-48), which wraps the value in an
 /// `enc:v1:` blob whenever the identity vault is enabled AND unlocked, so
 /// secrets written AFTER the vault was enabled keep the encryption-at-rest
@@ -68,7 +68,7 @@ class IdentityService {
   }
 
   /// Reads a secret, preferring an in-memory [unlocked] value (from the vault
-  /// boot unlock, the native analogue of `_vaultMem`) over the at-rest store —
+  /// boot unlock, the native analog of `_vaultMem`) over the at-rest store —
   /// so the encrypted `enc:v1:` blob in secure storage is never read directly.
   Future<String?> _secretGet(String name, Map<String, String>? unlocked) async {
     final mem = unlocked?[name];
@@ -245,7 +245,7 @@ class IdentityService {
   /// `nym_session_nsec` secret), so a same-session reconnect restores the
   /// just-rotated identity rather than an older one — kept consistent with the
   /// `randomKeypairPerSession` flag (hardcore sets it, so we skip persistence to
-  /// match `bootEphemeral`'s "fresh each session" behaviour).
+  /// match `bootEphemeral`'s "fresh each session" behavior).
   Future<Identity> rotateEphemeral(Identity current) async {
     if (current.loginMethod != null) return current;
 

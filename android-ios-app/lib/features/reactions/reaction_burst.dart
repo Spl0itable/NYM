@@ -9,7 +9,7 @@ import '../messages/format/message_content.dart';
 /// `.reaction-spark`, keyframes `reactionBurst` (0.85s) / `reactionSpark`
 /// (0.7s)). The emoji pops up and floats while 10 radial sparks fan out.
 ///
-/// Call [ReactionBurst.play] with a global anchor point (the badge centre) to
+/// Call [ReactionBurst.play] with a global anchor point (the badge center) to
 /// spawn it into the root [Overlay]; it removes itself after ~900ms.
 class ReactionBurst {
   ReactionBurst._();
@@ -17,7 +17,7 @@ class ReactionBurst {
   static const _durationMs = 900;
   static const _sparkCount = 10;
 
-  /// Spawns a burst centred at [globalCenter] showing [emoji].
+  /// Spawns a burst centerd at [globalCenter] showing [emoji].
   static void play(BuildContext context, Offset globalCenter, String emoji) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
@@ -55,7 +55,7 @@ class ReactionBurst {
     if (identical(_badges[k], key)) _badges.remove(k);
   }
 
-  /// Global centre of the registered badge for [messageId]+[emoji], or null.
+  /// Global center of the registered badge for [messageId]+[emoji], or null.
   static Offset? badgeCenter(String messageId, String emoji) {
     final key = _badges[_badgeKeyOf(messageId, emoji)];
     final box = key?.currentContext?.findRenderObject() as RenderBox?;
@@ -166,7 +166,7 @@ class _BurstWidgetState extends State<_BurstWidget>
     // reactionBurst keyframes (styles-features.css:376-381):
     // scale 0 → 1.5 → 1.15 → 0.5, rotate -25° → 8° → -4° → 0,
     // translate y -50% → -50% → -70% → -130% (i.e. 0 → 0 → -20% → -80% of the
-    // glyph past the centred base), opacity 0 → 1 → 1 → 0.
+    // glyph past the centerd base), opacity 0 → 1 → 1 → 0.
     double scale;
     double yShift; // in multiples of the glyph height (~45px)
     double opacity;

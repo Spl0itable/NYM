@@ -204,7 +204,7 @@ class LocalizationService {
   /// pack already, or newer than it. Anything the pack lacks — a string added
   /// since the last export, or one the extractor could not see — still goes
   /// through the runtime queues exactly as before, so a missing or malformed
-  /// pack costs nothing but the old behaviour.
+  /// pack costs nothing but the old behavior.
   Future<void> _primeFromPack(String code) async {
     if (code.isEmpty || code == 'en' || !_packed.add(code)) return;
     try {
@@ -444,7 +444,7 @@ class LocalizationService {
 
   /// Re-queues parked [_failed] sources after an increasing delay (10s, 20s, …),
   /// up to [_maxRetryRounds] rounds, so a transient proxy/network outage doesn't
-  /// permanently leave strings in English. Cancelled/reset on a language switch.
+  /// permanently leave strings in English. Canceled/reset on a language switch.
   void _scheduleFailedRetry() {
     if (_failed.isEmpty || _retryTimer != null) return;
     if (_retryRounds >= _maxRetryRounds) return;

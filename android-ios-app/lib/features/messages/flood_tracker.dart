@@ -11,7 +11,7 @@
 //   * Rate flood   — >10 messages inside a fixed 2 s window from one pubkey →
 //                    block for 900000 ms (`trackMessage`). The window is anchored
 //                    at the first message and reset once `now - first > 2000`.
-//   * Content flood — the same normalised content (whitespace-collapsed, trimmed,
+//   * Content flood — the same normalized content (whitespace-collapsed, trimmed,
 //                    lower-cased, length >= 6) seen >= 3 times within a 120000 ms
 //                    sliding window → block for 900000 ms (`_trackContent` /
 //                    `isContentFlooding`). Content is hashed with FNV-1a 32-bit.
@@ -33,7 +33,7 @@ const int kFloodBlockMs = 900000;
 const int kRateFloodWindowMs = 2000;
 const int kRateFloodMax = 10;
 
-/// Content-flood: the same normalised content repeated this many times inside
+/// Content-flood: the same normalized content repeated this many times inside
 /// [kContentFloodWindowMs] (`info.count >= 3`, `WINDOW = 120000`,
 /// `messages.js:274,288`).
 const int kContentFloodWindowMs = 120000;
@@ -54,7 +54,7 @@ int fnv1a32(String s) {
   return h & 0xffffffff;
 }
 
-/// Normalises message content the way `_trackContent` does (`messages.js:265`):
+/// Normalizes message content the way `_trackContent` does (`messages.js:265`):
 /// collapse all whitespace runs to a single space, trim, and lower-case.
 String _normalizeContent(String content) =>
     content.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
@@ -87,10 +87,10 @@ class FloodTracker {
 
   /// Replays [messages] (any order; sorted here by arrival) through the PWA's
   /// rate- and content-flood state machines, using each message's millisecond
-  /// [Message.timestamp] as its arrival time (the analogue of the PWA's
+  /// [Message.timestamp] as its arrival time (the analog of the PWA's
   /// `Date.now()` at ingest). [selfPubkey] is exempt (own messages are never
   /// flooded). Historical messages are tracked the same as live ones here — the
-  /// PWA skips `isHistorical`, so we honour [Message.isHistorical] too.
+  /// PWA skips `isHistorical`, so we honor [Message.isHistorical] too.
   factory FloodTracker.fromMessages(
     List<Message> messages, {
     required String selfPubkey,

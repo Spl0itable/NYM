@@ -42,9 +42,9 @@ const int kGeohashPlaceConcurrency = 4;
 
 const String kGeohashPlaceKey = 'nym_geohash_places';
 
-/// How many points inside a cell one lookup ATTEMPT may ask about: the centre,
+/// How many points inside a cell one lookup ATTEMPT may ask about: the center,
 /// then the four quarter-points. See `_probePoints` for why more than one is
-/// needed. An attempt stops at the first point that answers, so a land-centred
+/// needed. An attempt stops at the first point that answers, so a land-centerd
 /// geohash still costs a single request; this is the ceiling, not the cost.
 const int kGeohashPlaceProbes = 5;
 
@@ -264,18 +264,18 @@ class GeohashPlaceCache {
     return 10; // ~5km and finer — city
   }
 
-  /// Points to ask about, in order: the centre, then the cell's four
+  /// Points to ask about, in order: the center, then the cell's four
   /// quarter-points.
   ///
-  /// This is what makes short geohashes resolvable at all. A cell's centre very
+  /// This is what makes short geohashes resolvable at all. A cell's center very
   /// often falls in WATER even when the cell is mostly land — `gc` spans
-  /// Ireland and part of Britain but centres on the Irish Sea, `dh` centres in
+  /// Ireland and part of Britain but centers on the Irish Sea, `dh` centers in
   /// the Gulf of Mexico, `9e` in the Pacific. Reverse geocoding open water
   /// returns no city and no country, which reads as a miss, so those rows sat
   /// on raw coordinates however many times the backoff retried — every retry
   /// asked the same unanswerable point.
   ///
-  /// Only walked until something answers, so a land-centred geohash still costs
+  /// Only walked until something answers, so a land-centerd geohash still costs
   /// exactly one request.
   static List<({double lat, double lng, int zoom})> _probePoints(
       String geohash) {

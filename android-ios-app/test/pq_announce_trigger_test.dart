@@ -55,7 +55,7 @@ void main() {
     });
 
     // A timer that outlives the controller republishes under a torn-down
-    // identity, so it has to be cancelled with the rest.
+    // identity, so it has to be canceled with the rest.
     test('the pending timer is cancelled on teardown', () {
       expect(controller.contains('_pqAnnounceTimer?.cancel();'), isTrue);
     });

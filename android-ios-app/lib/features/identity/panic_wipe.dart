@@ -126,7 +126,7 @@ class PanicWipe {
 
   /// True while a panic wipe is destroying the stores (and until
   /// `resetAfterPanic` finishes the teardown). The controller's persistence
-  /// paths check this and refuse to write — the native analogue of panic.js
+  /// paths check this and refuse to write — the native analog of panic.js
   /// setting `_cacheDisabled = true` and clearing every persist timer FIRST
   /// (panic.js:63-67) so nothing re-writes data mid-wipe.
   static bool inProgress = false;
@@ -141,8 +141,8 @@ class PanicWipe {
     // Stop persistence before destroying anything (panic.js `_cacheDisabled`).
     inProgress = true;
     // Order mirrors the PWA (`panic.js`): encrypt-with-discarded-key + junk +
-    // clear the key/value store (web-storage analogue) first, then shred the
-    // local database (IndexedDB analogue), then the secure keystore (the
+    // clear the key/value store (web-storage analog) first, then shred the
+    // local database (IndexedDB analog), then the secure keystore (the
     // vault's remaining at-rest bytes — the PWA's final purge stage).
     try {
       onStatus?.call('Encrypting local store with a random key…');

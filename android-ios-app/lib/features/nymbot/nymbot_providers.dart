@@ -588,7 +588,25 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// Show/clear the synthetic "Nymbot is thinking" indicator in the bot PM —
   /// `_setBotTyping` (pms.js:1980-1995): 30s auto-expiry, rendered by the
   /// shared typing-indicator strip (verb 'thinking' for the bot).
+  /// Keeps the 30s expiry refreshed while a reply is still in flight. The
+  /// expiry exists so a killed app doesn't leave the indicator stuck forever,
+  /// but a Nymbot turn can run to the 180s request timeout — a frontier model
+  /// thinking, or the transport walk trying a second route — so setting it
+  /// once made the indicator vanish mid-reply on anything slower than 30s.
+  Timer? _typingHeartbeat;
+
   void _setBotTyping(bool on) {
+    _typingHeartbeat?.cancel();
+    _typingHeartbeat = null;
+    _pushBotTyping(on);
+    if (!on) return;
+    _typingHeartbeat = Timer.periodic(const Duration(seconds: 20), (t) {
+      if (!mounted) { t.cancel(); return; }
+      _pushBotTyping(true);
+    });
+  }
+
+  void _pushBotTyping(bool on) {
     _app.setTyping(
       storageKey: conversationKey,
       pubkey: kNymbotPubkey,
@@ -661,6 +679,13 @@ class BotChatController extends StateNotifier<BotChatState> {
         continue;
       }
       if (!m.isOwn || m.kind != MessageKind.normal || m.isFileOffer) continue;
+      // Only a send made ON THIS DEVICE may buy a reply. `optimistic` marks a
+      // local composer echo (`sendLocal`); an own message that arrived over a
+      // relay or out of the archive is another device's send, already answered
+      // there. Answering it again bought a second reply to one question — on
+      // whatever tier THIS device happened to be set to, which is why the
+      // extras came back as standard routing next to a Pro answer.
+      if (!m.optimistic) continue;
       // Only LIVE sends trigger the bot — restored/backlogged history must
       // never re-bill (the PWA gates its reply flow on the live send path).
       if (m.isHistorical || nowMs - m.timestamp > 15000) continue;
@@ -1211,32 +1236,34 @@ class BotChatController extends StateNotifier<BotChatState> {
         _publishDmEvent(selfEvent.cast<String, dynamic>());
       }
 
-      final balance = (data['balance'] as num?)?.toInt();
+      final balance = (data['balanceCredits'] as num?)?.toDouble()
+          ?? (data['balance'] as num?)?.toDouble();
       if (balance != null) {
         final isPro = data['pro'] == true;
         _applyLedgerBalance(balance, pro: isPro);
         // Cost notices for heavy replies (pms.js:2499-2512).
-        final cost = (data['cost'] as num?)?.toInt() ?? 0;
+        final cost = (data['costCredits'] as num?)?.toDouble()
+            ?? (data['cost'] as num?)?.toDouble() ?? 0;
         if (data['git'] == true && cost > 0) {
           final calls = (data['modelCalls'] as num?)?.toInt() ?? 0;
-          _system('Repo task used $cost Pro credit${cost == 1 ? '' : 's'}'
+          _system('Repo task used ${creditFigure(cost)} Pro credit${cost == 1 ? '' : 's'}'
               '${calls > 1 ? ' ($calls model calls)' : ''}. '
-              'Pro balance: $balance.');
+              'Pro balance: ${creditFigure(balance)}.');
         } else if (isPro && cost > 0) {
           final sel = state.proModel;
           if (sel != null && cost > sel.baseCredits) {
-            _system('Long reply used $cost Pro credits (scales with length). '
-                'Pro balance: $balance.');
+            _system('Long reply used ${creditFigure(cost)} Pro credits. '
+                'Pro balance: ${creditFigure(balance)}.');
           }
         } else if (!isPro && cost > 1) {
-          _system('${data['taskType'] ?? 'Heavy'} reply used $cost credits. '
-              'Balance: $balance.');
+          _system('${data['taskType'] ?? 'Heavy'} reply used ${creditFigure(cost)} credits. '
+              'Balance: ${creditFigure(balance)}.');
         }
         if (data['lowBalance'] == true) {
           _system(isPro
-              ? 'Nymbot Pro credits running low: $balance left. '
+              ? 'Nymbot Pro credits running low: ${creditFigure(balance)} left. '
                   'Type ?buy and switch to Pro to top up.'
-              : 'Nymbot credits running low: $balance '
+              : 'Nymbot credits running low: ${creditFigure(balance)} '
                   'credit${balance == 1 ? '' : 's'} left. '
                   'Type ?buy to top up.');
         }
@@ -1251,15 +1278,21 @@ class BotChatController extends StateNotifier<BotChatState> {
       _system(custom
           ? e.message
           : (e.pro
-              ? "You're out of Nymbot Pro credits (${e.balance} left). "
+              ? "You're out of Nymbot Pro credits (${creditFigure(e.balance)} left). "
                   'Type ?buy and switch to Pro, or ?model off for standard '
                   'replies.'
-              : "You're out of Nymbot credits (${e.balance} left). "
+              : "You're out of Nymbot credits (${creditFigure(e.balance)} left). "
                   'Zap Nymbot or type ?buy to purchase more.'));
       _applyLedgerBalance(e.balance, pro: e.pro);
       _ref
           .read(botBuyRequestProvider.notifier)
           .request(e.pro ? CreditTier.pro : CreditTier.standard);
+    } on NymbotStillGenerating catch (e) {
+      _setBotTyping(false);
+      _markBotPMReceipts('read');
+      // Not an error: the worker refused to generate a second answer to a
+      // message it is already answering. A neutral line, never a red bubble.
+      _system(e.message);
     } on NymbotException catch (e) {
       _setBotTyping(false);
       // A response DID come back — the PWA advances read receipts before its
@@ -1292,7 +1325,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     return null;
   }
 
-  void _applyLedgerBalance(int balance, {required bool pro}) {
+  void _applyLedgerBalance(double balance, {required bool pro}) {
     final b = state.balance;
     state = state.copyWith(
       balanceKnown: true,
@@ -1415,7 +1448,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       final all = _catalog.models;
       final groups = _catalog.grouped();
       // The live catalog runs to dozens of models — too many for a chat
-      // bubble — so summarise per provider and send the rest to the picker.
+      // bubble — so summarize per provider and send the rest to the picker.
       final lines = groups.length > 1
           ? [
               for (final g in groups)
@@ -1426,11 +1459,11 @@ class BotChatController extends StateNotifier<BotChatState> {
             ]
           : [
               for (final m in all)
-                '• `${m.key}`${current?.key == m.key ? ' ✓' : ''} — ${m.label}, ${m.priceLabel}',
+                '• `${m.key}`${current?.key == m.key ? ' ✓' : ''} — ${m.label}, ${_price(m)}',
             ];
       _displayBotInfoMessage([
         if (current != null)
-          'Nymbot Pro model: **${current.label}** (${current.priceLabel}).'
+          'Nymbot Pro model: **${current.label}** (${_price(current)}).'
         else
           'Nymbot Pro is off — replies use standard multi-model routing and standard credits.',
         ...lines,
@@ -1454,7 +1487,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     setModelDirect(picked);
     _system('Nymbot Pro model set to ${picked.label} — every reply now uses '
-        'it (${picked.priceLabel}). Type ?model off to switch back.');
+        'it (${_price(picked)}). Type ?model off to switch back.');
   }
 
   // --- ?clear (pms.js `_clearBotPMHistory`, :1894-1917) -----------------------
@@ -1506,10 +1539,21 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   // --- ?help (pms.js `_displayBotPmHelp`, :1733-1770) -------------------------
 
+  @override
+  void dispose() {
+    _typingHeartbeat?.cancel();
+    super.dispose();
+  }
+
   /// The live Pro model catalog, or the built-in list when it hasn't loaded.
   ProModelCatalog get _catalog {
     final cat = _ref.read(proModelCatalogProvider);
     return cat.isEmpty ? kProModelCatalogFallback : cat;
+  }
+
+  String _price(ProModel m) {
+    final cat = _catalog;
+    return m.priceLine(cat.usdPerCredit, cat.minChargeCredits);
   }
 
   void _displayBotPmHelp() {
@@ -1520,7 +1564,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     final allModels = _catalog.models;
     final modelLines = [
       for (final m in allModels.take(8))
-        '  `${m.key}` — ${m.label}, ${m.priceLabel}',
+        '  `${m.key}` — ${m.label}, ${_price(m)}',
       if (allModels.length > 8)
         '  …and ${allModels.length - 8} more — type `?model` or tap the model button.',
     ];
@@ -1917,7 +1961,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           '`?git repo owner/name [branch]` · `?git branch [name]` · '
           '`?git writes on|off` · `?git off` · `?git disconnect`',
       'Pricing: repo tasks run as an agent with up to 6 model calls per '
-          'message${proModel != null ? ' (${proModel.label}: ${proModel.priceLabel} per call)' : ''} '
+          'message${proModel != null ? ' (${proModel.label}: ${_price(proModel)} per call)' : ''} '
           "— the worst case is reserved from your balance, but you're only "
           'charged for the calls and reply length actually used.',
       'Privacy: the token stays on this device (cleared by Panic Mode), is '
@@ -2065,7 +2109,7 @@ List<Message> mergeBotThreadWithInfo(List<Message> store, List<Message> info) {
   return [for (final e in merged) e.m];
 }
 
-/// Convenience: the catalogue of public `?` commands (for help/autocomplete UI).
+/// Convenience: the catalog of public `?` commands (for help/autocomplete UI).
 final botCommandsProvider = Provider<List<BotCommand>>((_) => kBotCommands);
 
 /// The live Pro model catalog, cached on disk and refreshed in the background.

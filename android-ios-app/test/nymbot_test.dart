@@ -93,7 +93,7 @@ void main() {
   group('command catalogue', () {
     // Every command the worker (`functions/api/bot.js`) actually dispatches.
     // Note: `?roll` is in the README but has NO worker handler, so it is
-    // intentionally absent from the catalogue. `?changelog` is a real worker
+    // intentionally absent from the catalog. `?changelog` is a real worker
     // command (aliases release(s)/version(s)) and must be present.
     const readmeCommands = [
       // AI & Knowledge
@@ -196,6 +196,9 @@ void main() {
         'Kimi K3',
         'Qwen 3.5',
         'MiniMax M3',
+        'DeepSeek V4 Pro',
+        'DeepSeek V4 Flash',
+        'DeepSeek R1 Distill Qwen 32B',
       ]);
     });
 
@@ -213,6 +216,9 @@ void main() {
         'kimi',
         'qwen',
         'minimax',
+        'deepseek-v4-pro',
+        'deepseek-v4-flash',
+        'deepseek-r1-distill-qwen-32b',
       ]);
       final fable = kProModels.firstWhere((m) => m.key == 'claude-fable');
       expect(fable.modelId, 'anthropic/claude-fable-5');
@@ -223,15 +229,19 @@ void main() {
       }
     });
 
-    // Every Pro model is third-party and reached by its provider slug. A
-    // "@cf/" prefix names a model Cloudflare hosts itself, and asking the
-    // gateway for one that isn't gets a 5018 "not allowed to access" — so the
-    // absence of that prefix is the thing worth pinning.
-    test('Pro models carry provider slugs, never a @cf/ prefix', () {
+    // A Pro model is reached one of two ways, and its id says which: a
+    // "provider/slug" goes out through the gateway, a "@cf/" prefix runs on
+    // the worker's AI binding. Asking the gateway for a @cf/ model gets a 5018
+    // "not allowed to access", so the two must never be confused — which is
+    // what [ProModel.cloudflareHosted] and the hosting field encode.
+    test('Pro model ids agree with how the model is hosted', () {
       for (final m in kProModels) {
-        expect(m.modelId, isNot(startsWith('@cf/')),
-            reason: '${m.key} is provider-hosted and must keep its slug');
         expect(m.modelId, contains('/'), reason: '${m.key} slug');
+        expect(m.cloudflareHosted, m.modelId.startsWith('@cf/'),
+            reason: '${m.key} hosting must match its id');
+        if (m.cloudflareHosted) {
+          expect(m.hosting, 'cloudflare-hosted', reason: m.key);
+        }
       }
       expect(kProModels.firstWhere((m) => m.key == 'kimi').modelId,
           'moonshotai/kimi-k3');
@@ -239,6 +249,11 @@ void main() {
       // endpoint, so its slugs stay under the anthropic/ namespace.
       for (final m in kProModels.where((m) => m.key.startsWith('claude-'))) {
         expect(m.modelId, startsWith('anthropic/'), reason: m.key);
+      }
+      // DeepSeek is only reachable on the Cloudflare-hosted side: its
+      // third-party route is rejected by the upstream provider.
+      for (final m in kProModels.where((m) => m.authorSlug == 'deepseek')) {
+        expect(m.modelId, startsWith('@cf/deepseek-ai/'), reason: m.key);
       }
     });
 
@@ -256,6 +271,9 @@ void main() {
       expect(lookupProModel('codex')!.key, 'gpt-5');
       expect(lookupProModel('claude-opus-4.8')!.key, 'claude-opus');
       expect(lookupProModel('claude-sonnet-4.6')!.key, 'claude-sonnet');
+      // The third-party DeepSeek keys land on the Cloudflare-hosted model.
+      expect(lookupProModel('deepseek')!.key, 'deepseek-v4-pro');
+      expect(lookupProModel('deepseek-v4')!.key, 'deepseek-v4-pro');
     });
 
     test('every alias target is a real model key', () {

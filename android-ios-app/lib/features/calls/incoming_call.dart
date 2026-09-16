@@ -130,7 +130,7 @@ class IncomingCallModal extends ConsumerWidget {
               Text(label, style: TextStyle(color: c.textDim, fontSize: 13.6)),
               const SizedBox(height: 22),
               // Buttons: 58px, fixed 36px gap, decline=danger (icon rotated
-              // 135°), accept=primary bg with bg-coloured icon (PWA, not green).
+              // 135°), accept=primary bg with bg-colored icon (PWA, not green).
               Row(
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,

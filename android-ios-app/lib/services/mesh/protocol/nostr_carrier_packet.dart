@@ -24,7 +24,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// Which way a carried event is travelling.
+/// Which way a carried event is traveling.
 enum NostrCarrierDirection {
   /// Mesh-only peer → gateway: publish this for me. Directed.
   toGateway(0x01),

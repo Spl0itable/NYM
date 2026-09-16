@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart' show Brightness;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +9,8 @@ import '../core/theme/nym_colors.dart';
 import '../core/theme/nym_theme.dart';
 import '../models/settings.dart';
 import '../services/storage/key_value_store.dart';
+import '../services/attest/attest_badge.dart';
+import '../services/filter/filter_packs.dart';
 import 'app_state.dart' show appThreadsEnabled;
 
 /// Provides the opened [KeyValueStore]. Overridden in `main()` with the
@@ -44,7 +48,7 @@ class SettingsController extends StateNotifier<Settings> {
   void notifySyncedChange() => _syncedChanged();
 
   /// Reloads settings from the (now-wiped) store back to first-run defaults —
-  /// the panic path's analogue of the PWA's page reload re-reading empty
+  /// the panic path's analog of the PWA's page reload re-reading empty
   /// localStorage. Called by [NostrController.resetAfterPanic] after the KV
   /// store has been cleared, so theme/layout/etc. return to defaults without a
   /// process restart.
@@ -218,6 +222,34 @@ class SettingsController extends StateNotifier<Settings> {
 
   int get powDifficulty =>
       _kv.getInt(StorageKeys.powDifficulty, defaultValue: 0);
+
+  /// Inbound verified-app filter: 'off', 'verified' or 'any'. See
+  /// [appVerifiedFilter] in app_state.dart for what each accepts.
+  void setAppVerifiedFilter(String mode) {
+    _kv.setString(StorageKeys.appVerifiedFilter, normalizeAppVerifiedFilter(mode));
+  }
+
+  String get appVerifiedFilter =>
+      normalizeAppVerifiedFilter(_kv.getString(StorageKeys.appVerifiedFilter));
+
+  /// Opt-in filter packs, by id. Stored as JSON so the list round-trips
+  /// through the same settings blob the PWA writes.
+  void setFilterPacks(List<String> ids) {
+    _kv.setString(StorageKeys.filterPacks,
+        jsonEncode(ids.where(kFilterPackIds.contains).toList()));
+  }
+
+  List<String> get filterPacks {
+    final raw = _kv.getString(StorageKeys.filterPacks);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw);
+      if (list is! List) return const [];
+      return list.map((e) => e.toString()).where(kFilterPackIds.contains).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
 
   /// Heuristic content spam filter master switch (PWA `spamFilterEnabled`,
   /// app.js:559 — default **true**). Device-local (the PWA never syncs it and
@@ -466,7 +498,7 @@ class SettingsController extends StateNotifier<Settings> {
   /// [StorageKeys.swipeReactEmojiTs] with "now", which is what makes the pick
   /// defensible: the stamp rides the cross-device publish, so a settings blob
   /// written BEFORE this moment (an older build's ❤️ default, or a device that
-  /// never picked one) is recognised as stale on the way back in and rejected
+  /// never picked one) is recognized as stale on the way back in and rejected
   /// instead of silently reverting the choice on the next launch.
   ///
   /// [remoteTs] carries the stamp of an INBOUND pick being applied from another

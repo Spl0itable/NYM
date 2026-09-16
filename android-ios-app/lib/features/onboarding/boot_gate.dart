@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/storage_keys.dart';
+import '../../core/crypto/bech32_codec.dart' as bech32;
 import '../../core/theme/nym_colors.dart';
 import '../../screens/home_shell.dart';
 import '../../state/nostr_controller.dart';
@@ -130,7 +131,7 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
     unawaited(_startOnboardingWhenHydrated());
   }
 
-  /// Delay timers (PWA's `setTimeout`s), cancelled on dispose so a torn-down
+  /// Delay timers (PWA's `setTimeout`s), canceled on dispose so a torn-down
   /// shell never leaves them pending.
   Timer? _tutorialDelay;
   Timer? _pqNoticeDelay;
@@ -361,6 +362,18 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
                 return TutorialOverlay(
                   onDismiss: _dismissTutorial,
                   sidebar: HomeShell.tutorialKey.currentState,
+                  nsec: () {
+                    final privkey =
+                        ref.read(nostrControllerProvider).identity?.privkey;
+                    if (privkey == null) return null;
+                    try {
+                      return bech32.encodeNsecBytes(privkey);
+                    } catch (_) {
+                      return null;
+                    }
+                  },
+                  recoveryCode: () =>
+                      ref.read(nostrControllerProvider).pqRootCode,
                 );
               },
             ),

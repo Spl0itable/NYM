@@ -878,7 +878,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   }
 
   /// `sanitizeGroupName` (groups.js) — collapse control chars/whitespace, trim,
-  /// cap at 40. Matches the PWA's invite-name sanitiser.
+  /// cap at 40. Matches the PWA's invite-name sanitizer.
   static String _sanitizeGroupName(String name) {
     final s = name
         .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), ' ')

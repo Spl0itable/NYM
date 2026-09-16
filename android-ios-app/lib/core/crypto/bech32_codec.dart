@@ -162,7 +162,7 @@ class NostrRef {
   /// naddr's `d` tag.
   final String identifier;
 
-  /// Relay hints the reference travelled with.
+  /// Relay hints the reference traveled with.
   final List<String> relays;
 
   /// The cache/lookup identity of this reference.

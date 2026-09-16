@@ -774,7 +774,7 @@ void main() {
   });
 
   group('Group message rumor', () {
-    test('carries p-per-member, g, x, ephemeral_pk, ms tags but NO type tag',
+    test('carries the roster digest, g, x, ephemeral_pk, ms but NO type tag',
         () {
       final g = Group(
         id: GroupLogic.generateGroupId(),
@@ -792,7 +792,9 @@ void main() {
         nowMs: 1700000000999,
       );
       expect(rumor.kind, EventKind.dmRumor);
-      expect(rumor.tags.where((t) => t[0] == 'p').length, 3);
+      expect(rumor.tags.where((t) => t[0] == 'p'), isEmpty);
+      expect(GroupLogic.tagValue(rumor.tags, 'rh'),
+          GroupLogic.rosterHash(g.id, g.members));
       expect(GroupLogic.tagValue(rumor.tags, 'g'), g.id);
       // F04-M4: a plain group message carries no `type` tag (matches
       // groups.js sendGroupMessage, which never pushes one).

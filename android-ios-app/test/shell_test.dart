@@ -123,14 +123,14 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    // Left edge, travelling right: out of the thread, and NOT into the drawer.
+    // Left edge, traveling right: out of the thread, and NOT into the drawer.
     await swipe(const Offset(10, 400), const Offset(140, 400));
     expect(container.read(activeThreadProvider), isNull,
         reason: 'the left-edge swipe should back out of the thread');
     expect(tester.getTopLeft(find.byType(Sidebar)).dx, lessThan(0),
         reason: 'and must leave the sidebar off-screen while a thread was open');
 
-    // Right edge, travelling left: back into the same thread.
+    // Right edge, traveling left: back into the same thread.
     await swipe(const Offset(380, 400), const Offset(250, 400));
     expect(container.read(activeThreadProvider)?.rootId,
         threadKeyForMessage(rootMsg),

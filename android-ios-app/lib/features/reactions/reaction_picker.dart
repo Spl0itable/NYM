@@ -11,7 +11,7 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import 'enhanced_emoji_modal.dart';
 import 'reaction_burst.dart';
 
-/// Breakpoint below which the picker centres (PWA `window.innerWidth <= 768`).
+/// Breakpoint below which the picker centers (PWA `window.innerWidth <= 768`).
 const double _kReactionPickerMobileMax = 768;
 
 /// Opens the enhanced emoji picker as a reaction picker for [message]
@@ -26,7 +26,7 @@ const double _kReactionPickerMobileMax = 768;
 /// Positioning (F10): on a wide window (> 768px) with an [anchorRect] (the
 /// add-reaction trigger's global bounds) the picker is anchored next to the
 /// trigger (below if there is room, else above; right-aligned past mid-screen),
-/// mirroring the PWA desktop branch. Otherwise it is centred (the PWA mobile
+/// mirroring the PWA desktop branch. Otherwise it is centerd (the PWA mobile
 /// branch).
 void showReactionPicker(
   BuildContext context,

@@ -10,6 +10,9 @@ import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../core/crypto/nym_sync_builder.dart';
 import '../../models/settings.dart';
+import '../../features/groups/group_logic.dart'
+    show kPmDepositQueueMax, kPmDepositFlushMs, kPmDepositFlushJitterMs,
+        kPmDepositBacklogMs, kPmDepositBatchMin, kPmDepositBatchMax;
 import '../../core/crypto/pq.dart' as pq;
 import '../../features/identity/pq_registry.dart' show pqSelfCandidates;
 import '../../features/identity/pq_root.dart';
@@ -627,7 +630,7 @@ class StorageSync {
       }, 'nymchat-sync-ping');
     } catch (_) {
       // Best-effort: a failed ping just means the other device waits for its
-      // next D1 read, which is the behaviour we had before.
+      // next D1 read, which is the behavior we had before.
     }
   }
 
@@ -663,7 +666,7 @@ class StorageSync {
   // The old bound allowed 30,769 and history shards were budgeted at 30,000, so
   // they fell squarely in the rejected zone and silently never synced.
   //
-  // Modelling the padding exactly puts the real cliff at 28,672 bytes, with
+  // Modeling the padding exactly puts the real cliff at 28,672 bytes, with
   // ~10KB of headroom below it (28,672 wraps to 55,034), so the bound tolerates
   // the overhead estimates being a little off.
   static const int _rumorOverhead = 256;
@@ -1462,6 +1465,26 @@ class StorageSync {
     }
   }
 
+  /// Deletes this account's rows on the server, on the way out of a wipe.
+  /// Signed while the key is still here; the worker verifies the signature, so
+  /// nobody can purge a pubkey they do not hold.
+  Future<bool> purgeAccount() async {
+    try {
+      if (_pubkey.isEmpty) return false;
+      final auth = await _auth('account-purge');
+      if (auth == null) return false;
+      final res = await _api.storageAction(<String, dynamic>{
+        'action': 'account-purge',
+        'app': 'nymchat',
+        'pubkey': _pubkey,
+        'auth': auth,
+      });
+      return res['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Loads encrypted settings categories from D1 and decodes them into a merged
   /// payload + the newest `updatedAt` (ms) across the applied core sections.
   ///
@@ -1828,35 +1851,39 @@ class StorageSync {
       }
       toFetch.add(pk);
     }
-    final batch = toFetch.take(100).toList();
     final out = <String, Map<String, dynamic>>{};
     // Report cache hits so the caller skips them; no event to return for those.
     for (final pk in foundFromCache) {
       out.putIfAbsent(pk, () => const {});
     }
-    if (batch.isEmpty) return out;
+    if (toFetch.isEmpty) return out;
 
-    StorageStream stream;
-    try {
-      // profile-get is a PUBLIC read (no auth, storage.js:589).
-      stream = await _api.storageStream({
-        'action': 'profile-get',
-        'pubkeys': batch,
-      });
-    } catch (_) {
-      return out;
-    }
-    for (final item in stream.items) {
-      // Each line is `[pubkey, rec]` where rec is `{event, updatedAt}` or null.
-      if (item is! List || item.length < 2) continue;
-      final pk = item[0];
-      final rec = item[1];
-      if (pk is! String) continue;
-      if (rec is! Map) continue;
-      final event = rec['event'];
-      if (event is! Map) continue;
-      out[pk.toLowerCase()] = Map<String, dynamic>.from(event);
-      _profileCacheAt[pk.toLowerCase()] = now;
+    for (var start = 0; start < toFetch.length; start += 100) {
+      final end = start + 100;
+      final batch =
+          toFetch.sublist(start, end > toFetch.length ? toFetch.length : end);
+      StorageStream stream;
+      try {
+        // profile-get is a PUBLIC read (no auth, storage.js:589).
+        stream = await _api.storageStream({
+          'action': 'profile-get',
+          'pubkeys': batch,
+        });
+      } catch (_) {
+        break;
+      }
+      for (final item in stream.items) {
+        // Each line is `[pubkey, rec]`: rec is `{event, updatedAt}` or null.
+        if (item is! List || item.length < 2) continue;
+        final pk = item[0];
+        final rec = item[1];
+        if (pk is! String) continue;
+        if (rec is! Map) continue;
+        final event = rec['event'];
+        if (event is! Map) continue;
+        out[pk.toLowerCase()] = Map<String, dynamic>.from(event);
+        _profileCacheAt[pk.toLowerCase()] = now;
+      }
     }
     return out;
   }
@@ -1895,6 +1922,11 @@ class StorageSync {
   /// (`_pmArchivedIds`, pms.js:1415). Capped like the PWA (6000 → trim to 4000).
   final Set<String> _archivedIds = {};
   final Set<String> _depositedIds = {};
+  final List<Map<String, dynamic>> _depositQueue = [];
+  final Random _depositRandom = Random();
+  Timer? _depositTimer;
+  int depositDropped = 0;
+  int depositFailed = 0;
 
   /// Uploads gift wraps addressed to us into our own D1 inbox (`pm-put`) so a
   /// new device can restore them. No-op for ephemeral identities. [wraps] are
@@ -1954,6 +1986,62 @@ class StorageSync {
       return batch.length;
     } catch (_) {
       return 0;
+    }
+  }
+
+  void enqueueDeposit(Map<String, dynamic> wrap) {
+    if (!_durable) return;
+    final id = wrap['id'];
+    if (id is! String || id.isEmpty) return;
+    final recipient = _recipientOf(wrap);
+    if (recipient == null || recipient == _pubkey) return;
+    if (_depositedIds.contains(id)) return;
+    _depositedIds.add(id);
+    _trim(_depositedIds);
+    _depositQueue.add(wrap);
+    while (_depositQueue.length > kPmDepositQueueMax) {
+      _depositQueue.removeAt(_depositRandom.nextInt(_depositQueue.length));
+      depositDropped++;
+    }
+    _depositTimer ??= Timer(_depositDelay(false), () => _flushDeposits());
+  }
+
+  Duration _depositDelay(bool backlog) => Duration(
+      milliseconds: (backlog ? kPmDepositBacklogMs : kPmDepositFlushMs) +
+          _depositRandom.nextInt(kPmDepositFlushJitterMs + 1));
+
+  int _depositBatchSize() =>
+      kPmDepositBatchMin +
+      _depositRandom.nextInt(kPmDepositBatchMax - kPmDepositBatchMin + 1);
+
+  Future<void> _flushDeposits({bool rearm = true}) async {
+    _depositTimer = null;
+    if (_depositQueue.isEmpty) return;
+    _depositQueue.shuffle(_depositRandom);
+    final size = _depositBatchSize();
+    final n = size < _depositQueue.length ? size : _depositQueue.length;
+    final batch = _depositQueue.sublist(0, n);
+    _depositQueue.removeRange(0, n);
+    try {
+      await _api.storageAction({
+        'action': 'pm-deposit',
+        'pubkey': _pubkey,
+        'events': batch,
+        'auth': await _auth('pm-deposit'),
+      });
+    } catch (_) {
+      depositFailed++;
+    }
+    if (rearm && _depositQueue.isNotEmpty) {
+      _depositTimer ??= Timer(_depositDelay(true), () => _flushDeposits());
+    }
+  }
+
+  Future<void> flushDeposits() async {
+    _depositTimer?.cancel();
+    _depositTimer = null;
+    while (_depositQueue.isNotEmpty) {
+      await _flushDeposits(rearm: false);
     }
   }
 
@@ -2589,7 +2677,7 @@ class StorageSync {
   }
 
   /// Reads the identity's root secret, once per instance. Null means the
-  /// nsec-derived candidates are the whole list, i.e. v1 behaviour.
+  /// nsec-derived candidates are the whole list, i.e. v1 behavior.
   Future<Uint8List?> Function()? _pqRootProvider;
   Future<Uint8List?>? _pqRootFuture;
 

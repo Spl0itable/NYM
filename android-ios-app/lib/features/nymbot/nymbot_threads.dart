@@ -122,7 +122,7 @@ List<Map<String, String>> threadBotConversation(
     if (text.length > _maxEntryChars) text = text.substring(0, _maxEntryChars);
     entries.add({'author': threadEntryAuthor(m), 'text': text});
   }
-  // Normalised like the entries: the caller hands it over as published.
+  // Normalized like the entries: the caller hands it over as published.
   final tail = exclude == null ? '' : threadEntryText(exclude);
   if (tail.isNotEmpty && entries.isNotEmpty && entries.last['text'] == tail) {
     entries.removeLast();

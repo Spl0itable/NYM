@@ -46,7 +46,7 @@ DeliveryStatus deliveryStatusFromString(String? s) {
 /// The PWA renders some system lines with an embedded `<button>` — e.g. the
 /// spam false-positive notice has `data-action="reportSpamFalsePositive"` with
 /// the flagged message stashed in a `data-spam-content` attribute
-/// (messages.js:645). Native rows can't embed HTML, so the button is modelled
+/// (messages.js:645). Native rows can't embed HTML, so the button is modeled
 /// here: a [label] plus a [kind] discriminator and the [payload] the handler
 /// needs (the flagged content for [SystemActionKind.reportSpamFalsePositive]).
 enum SystemActionKind { reportSpamFalsePositive }
@@ -68,7 +68,7 @@ class SystemAction {
 }
 
 /// Unified message model covering channel, PM and group messages, mirroring the
-/// IndexedDB-serialised record the PWA uses (docs/specs/01 §1.4, 03 §2.1/§3.4).
+/// IndexedDB-serialized record the PWA uses (docs/specs/01 §1.4, 03 §2.1/§3.4).
 class Message {
   Message({
     required this.id,
@@ -202,7 +202,7 @@ class Message {
 
   /// On-disk path of a locally-stored attachment (Bluetooth-mesh media/file
   /// transfer), rendered inline in place of the text body. Session-local — not
-  /// serialised. [localMediaMime] selects the presentation (an `image/*` mime
+  /// serialized. [localMediaMime] selects the presentation (an `image/*` mime
   /// renders the picture inline; anything else renders a file card).
   String? localMediaPath;
   String? localMediaMime;
@@ -214,7 +214,7 @@ class Message {
 
   /// True when this message was delivered over the Bluetooth mesh rather than
   /// the internet (Nostr relays). Drives the small Bluetooth glyph shown beside
-  /// the padlock on mesh PMs/group messages. Session-local — not serialised.
+  /// the padlock on mesh PMs/group messages. Session-local — not serialized.
   bool viaMesh;
 
   bool isBot;
@@ -227,7 +227,7 @@ class Message {
   /// show a sender did any work. Messages from other Nostr clients have no tag.
   /// The work actually PROVEN is recomputed from [id] on demand
   /// ([powBitsForId]) rather than trusted from the tag. Session-local — the
-  /// timestamp popup recomputes it, so it is not serialised.
+  /// timestamp popup recomputes it, so it is not serialized.
   int? powTarget;
 
   /// Nymbot reasoning block (collapsed "💭 Reasoning").
@@ -249,7 +249,7 @@ class Message {
 
   /// Optional inline action button for a [MessageKind.system] row (e.g. the
   /// spam false-positive "Report false positive" affordance). Null for ordinary
-  /// system lines. Not serialised — these notices are session-local.
+  /// system lines. Not serialized — these notices are session-local.
   SystemAction? systemAction;
 
   /// Read-receipt readers for own channel/group messages: `pubkey → nym`. Drives

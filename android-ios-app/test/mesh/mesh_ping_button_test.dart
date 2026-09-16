@@ -2,7 +2,7 @@
 ///
 /// Its glyph changed (a share icon read as "send this somewhere", which is not
 /// what it does), and a glyph swap is exactly the kind of edit that can quietly
-/// take a control's behaviour with it — a wrong icon size, a lost onPressed, a
+/// take a control's behavior with it — a wrong icon size, a lost onPressed, a
 /// tap target that no longer covers the drawn shape. This drives the shipped
 /// screen: it finds the button by its tooltip, taps it, and checks the
 /// controller was asked to ping that peer.

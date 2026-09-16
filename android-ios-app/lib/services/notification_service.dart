@@ -196,7 +196,7 @@ class NotificationService {
   /// channel). Passing one makes the notification REPLACE the previous one for
   /// that conversation instead of stacking a fresh copy per message, and groups
   /// the conversation's notifications together on both platforms — the
-  /// behaviour every messaging app has. Without one, each call stacks.
+  /// behavior every messaging app has. Without one, each call stacks.
   Future<void> showNotification({
     required String title,
     required String body,

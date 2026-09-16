@@ -17,7 +17,7 @@ import 'package:nym_bar/models/nostr_event.dart';
 /// calls into these functions, and on web / on isolate failure it runs the same
 /// `giftwrap.*` functions inline. The `CryptoWorker.wrapMany`/`unwrap` facade is
 /// also smoke-tested (on the test host it resolves via the inline/fallback
-/// path), proving the marshalling round-trips.
+/// path), proving the marshaling round-trips.
 void main() {
   /// Builds the unwrap-isolate job map for [wrap] + [candidates], matching the
   /// `compute` payload shape produced inside `crypto_worker.dart`.

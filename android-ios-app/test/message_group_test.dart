@@ -95,7 +95,7 @@ void main() {
     expect(find.byType(MessageRow), findsNWidgets(3));
     expect(find.byType(NymAvatar), findsOneWidget);
 
-    // Tear down the widget so the per-row relative-time timers are cancelled.
+    // Tear down the widget so the per-row relative-time timers are canceled.
     await tester.pumpWidget(const SizedBox());
   });
 

@@ -346,6 +346,9 @@ Identity _identity() =>
 
 /// A PoolTransport that records every updateGeoRelays payload.
 class _GeoRecordingTransport implements PoolTransport {
+  @override
+  set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) {}
+
   final List<List<String>> geoUpdates = [];
   @override
   void updateGeoRelays(List<String> geoRelayUrls) =>

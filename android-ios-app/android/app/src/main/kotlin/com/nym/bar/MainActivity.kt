@@ -64,6 +64,31 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // App attestation: a Play Integrity verdict over a server challenge,
+        // which the backend exchanges for the badge that marks this install's
+        // pubkey as a real Nymchat client. See PlayIntegrity and
+        // lib/services/attest/attest_service.dart.
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ATTEST_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "attest" -> {
+                    val challenge = call.argument<String>("challenge")
+                    if (challenge.isNullOrEmpty()) {
+                        result.success(null)
+                    } else {
+                        PlayIntegrity.requestToken(applicationContext, challenge) { token ->
+                            runOnUiThread {
+                                result.success(if (token == null) null else mapOf("token" to token))
+                            }
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     /**
@@ -99,5 +124,6 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val BACKGROUND_CHANNEL = "app.nymchat/background_connectivity"
         private const val BUILD_INTEGRITY_CHANNEL = "app.nymchat/build_integrity"
+        private const val ATTEST_CHANNEL = "app.nymchat/attest"
     }
 }

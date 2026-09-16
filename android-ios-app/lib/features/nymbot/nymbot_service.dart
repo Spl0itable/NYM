@@ -66,7 +66,7 @@ class NymbotService {
   /// request seam (see [_apiSocketRequest]). Identity switches need no special
   /// handling here: the socket lives on the controller's per-identity
   /// [ApiClient], which is disposed and rebuilt with the new identity's auth —
-  /// the native analogue of the PWA's page reload dropping `_apiSock`.
+  /// the native analog of the PWA's page reload dropping `_apiSock`.
   void setApiSocketRequest(
     Future<({int status, Map<String, dynamic> data})?> Function(
       String action,
@@ -208,31 +208,50 @@ class NymbotService {
     Map<String, dynamic>? pqAnnouncement,
     bool anon = false,
   }) async {
-    final res = await _botRequest(
-      'pm',
-      <String, dynamic>{
-        'eventId': eventId,
-        'fresh': fresh,
-        if (proModel != null) 'proModel': proModel,
-        if (git != null) 'git': git.toWire(),
-        // Lets the worker read a command the user typed in their own language.
-        if (cmdAlias != null) 'cmdAlias': cmdAlias,
-        // Our own signed nym-pq announcement, so the worker seals its reply
-        // post-quantum deterministically (it verifies the signature; no
-        // archive/relay lookup race can leave the reply classical).
-        if (pqAnnouncement != null) 'pqAnnouncement': pqAnnouncement,
-      },
-      pubkey: pubkey,
-      auth: auth,
-      timeout: _pmTimeout,
-      anon: anon,
-    );
+    final extra = <String, dynamic>{
+      'eventId': eventId,
+      'fresh': fresh,
+      if (proModel != null) 'proModel': proModel,
+      if (git != null) 'git': git.toWire(),
+      // Lets the worker read a command the user typed in their own language.
+      if (cmdAlias != null) 'cmdAlias': cmdAlias,
+      // Our own signed nym-pq announcement, so the worker seals its reply
+      // post-quantum deterministically (it verifies the signature; no
+      // archive/relay lookup race can leave the reply classical).
+      if (pqAnnouncement != null) 'pqAnnouncement': pqAnnouncement,
+    };
+
+    // A `pending` answer means an earlier attempt at THIS SAME message is
+    // still generating on the worker — our socket dropped and this is the
+    // HTTP retry. Ask again with the same event id to collect that reply when
+    // it lands: letting the worker generate a second one would charge twice
+    // and put two different answers to one question in the thread
+    // (`_handleBotPM`'s pending loop, pms.js).
+    late ({int status, Map<String, dynamic> data}) res;
+    for (var tries = 0;; tries++) {
+      res = await _botRequest(
+        'pm',
+        extra,
+        pubkey: pubkey,
+        auth: auth,
+        timeout: _pmTimeout,
+        anon: anon,
+      );
+      if (res.data['pending'] != true || tries >= 5) break;
+      await Future<void>.delayed(const Duration(seconds: 3));
+    }
     final json = res.data;
 
+    if (json['pending'] == true) {
+      throw NymbotStillGenerating(json['message']?.toString() ??
+          'Nymbot is still working on that message — its reply will arrive '
+              'shortly.');
+    }
     if (json['noCredits'] == true) {
       throw NymbotInsufficientCredits(
         pro: json['pro'] == true,
-        balance: _asInt(json['balance']),
+        balance: (json['balanceCredits'] as num?)?.toDouble()
+            ?? _asInt(json['balance']).toDouble(),
         required: _asInt(json['required']),
         message: json['error']?.toString() ?? 'Insufficient credits',
       );
@@ -707,6 +726,19 @@ class NymbotException implements Exception {
   String toString() => 'NymbotException: $message';
 }
 
+/// Thrown by [NymbotService.sendBotMessage] when the worker answers `pending`:
+/// an earlier attempt at the same message is still generating and holds the
+/// turn's claim, so this one deliberately did NOT generate a second reply.
+/// Not a failure — the answer exists, it just hasn't landed yet.
+class NymbotStillGenerating implements Exception {
+  const NymbotStillGenerating(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'NymbotStillGenerating($message)';
+}
+
 /// Thrown by [NymbotService.sendBotMessage] when the user lacks credits
 /// (worker `{noCredits, pro, balance, required, error}`).
 class NymbotInsufficientCredits implements Exception {
@@ -719,7 +751,7 @@ class NymbotInsufficientCredits implements Exception {
 
   /// True when the shortfall is on the Pro credit ledger.
   final bool pro;
-  final int balance;
+  final double balance;
   final int required;
   final String message;
 

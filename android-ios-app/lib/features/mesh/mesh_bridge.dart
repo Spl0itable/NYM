@@ -66,7 +66,7 @@ String _short(String s) => s.length <= 8 ? s : s.substring(0, 8);
 /// the handshake resolved a placeholder while the reply, after the session
 /// formed, resolved the real key — the "received but only in the notification"
 /// bug.) Hashing gives full 64-hex entropy, so the PM header shows a real
-/// `#abcd` suffix and a varied avatar colour instead of the `#0000` a
+/// `#abcd` suffix and a varied avatar color instead of the `#0000` a
 /// zero-padded peerID produced.
 String meshStablePubkeyForPeerId(String peerID) => _hex(NoiseCrypto.sha256(
     Uint8List.fromList(utf8.encode('mesh:${peerID.toLowerCase()}'))));
@@ -276,7 +276,7 @@ class MeshBridge {
     // Register the always-present Nearby channel so it appears immediately.
     _app.addChannel(kMeshNearbyChannel);
     // Send read receipts over the mesh whenever a mesh DM becomes the active
-    // conversation (the canonical read-on-open behaviour, restored for mesh).
+    // conversation (the canonical read-on-open behavior, restored for mesh).
     _viewSub = _ref.listen<ChatView>(
       appStateProvider.select((s) => s.view),
       (_, view) {

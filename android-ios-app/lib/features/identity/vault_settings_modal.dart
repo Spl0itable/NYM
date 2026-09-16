@@ -339,7 +339,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
         okLabel: tr('Confirm'),
         placeholder: tr('Password or PIN'),
       );
-      if (entered == null) return; // cancelled
+      if (entered == null) return; // canceled
       final ok = await vault.verifyPassword(entered);
       if (!mounted) return;
       if (!ok) {

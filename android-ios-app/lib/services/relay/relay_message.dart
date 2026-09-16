@@ -178,7 +178,7 @@ class EventMessage extends RelayMessage {
   final NostrEvent event;
 }
 
-/// `["OK", id, accepted, message]` — publish acknowledgement.
+/// `["OK", id, accepted, message]` — publish acknowledgment.
 class OkMessage extends RelayMessage {
   const OkMessage(this.id, this.accepted, this.message);
   final String id;

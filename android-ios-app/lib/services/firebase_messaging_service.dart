@@ -101,7 +101,7 @@ class FirebaseMessagingService {
 
   /// Routes a push data payload (a `{title, body, link|url}` map) the way the
   /// onMessage / onMessageOpenedApp handlers would. Exposed (and used in tests)
-  /// so the foreground/tap behaviour is verifiable without a live Firebase.
+  /// so the foreground/tap behavior is verifiable without a live Firebase.
   ///
   /// * On a foreground message: surface a local notification carrying the
   ///   deep-link URL as its payload (tapping it later re-enters [routeTap]).

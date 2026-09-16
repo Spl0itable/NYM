@@ -238,6 +238,10 @@ class AnonBotManager {
   final Map<String, MlKemKeyPair> _kemCache = {};
   Map<String, dynamic>? _announcement;
   int _announcementExp = 0;
+  /// Which identity [_announcement] belongs to. Without this the cache can
+  /// outlive the identity it announces and the worker seals its reply to a
+  /// KEM key we no longer hold.
+  String? _announcementPk;
   bool _flushing = false;
 
   Future<void> Function(String json)? persist;
@@ -271,6 +275,7 @@ class AnonBotManager {
       _kemCache.clear();
       _announcement = null;
       _announcementExp = 0;
+      _announcementPk = null;
     }
     _owner = owner;
     _loaded = false;
@@ -313,6 +318,10 @@ class AnonBotManager {
       _adoptPrev(parsed.current!);
       _mergeTokens(parsed.tokens);
       _save();
+      // prev gained an identity, so the unwrap candidate set changed — the
+      // other applySynced branches announce that, and this one has to as well
+      // or replies wrapped to the adopted key never decrypt.
+      onKeysChanged?.call();
       return;
     }
     if (cur != null) {
@@ -322,6 +331,7 @@ class AnonBotManager {
     _kemCache.clear();
     _announcement = null;
     _announcementExp = 0;
+    _announcementPk = null;
     _save();
     onKeysChanged?.call();
   }
@@ -350,6 +360,7 @@ class AnonBotManager {
     _kemCache.clear();
     _announcement = null;
     _announcementExp = 0;
+    _announcementPk = null;
     _save();
     onKeysChanged?.call();
     var moved = 0;
@@ -407,7 +418,11 @@ class AnonBotManager {
     if (kem == null) return null;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final cached = _announcement;
-    if (cached != null && _announcementExp > nowSec + 3600) return cached;
+    if (cached != null &&
+        _announcementPk == id.pk &&
+        _announcementExp > nowSec + 3600) {
+      return cached;
+    }
     final b64 = pq.b64uEncode(kem.publicKey);
     final exp = nowSec + kAnonAnnounceTtlSec;
     final payload = <String, dynamic>{
@@ -437,6 +452,7 @@ class AnonBotManager {
     ).toJson();
     _announcement = event;
     _announcementExp = exp;
+    _announcementPk = id.pk;
     return event;
   }
 

@@ -48,7 +48,7 @@ List<QuickContextItem> buildQuickContextItems(
   final hasMessageId = message.id.isNotEmpty;
   final content = message.content;
   final hasContent = content.isNotEmpty;
-  final baseNym = _baseNym(message.author);
+  final baseNym = pickDisplayNym(app.users[pubkey]?.nym, message.author);
   final fullNym = '$baseNym#${getPubkeySuffix(pubkey)}';
 
   final items = <QuickContextItem>[];
@@ -205,5 +205,3 @@ Future<void> _confirmDelete(
     await ref.read(nostrControllerProvider).deleteMessage(messageId);
   }
 }
-
-String _baseNym(String nym) => splitNymSuffix(nym).base;

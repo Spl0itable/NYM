@@ -2,7 +2,7 @@
 //
 // Blossom is content-addressed, and several of the servers Nymchat uploads to
 // return a bare `https://host/<sha256>` with no file extension. The strip's
-// regex can only recognise media by extension, so those uploads fell out of the
+// regex can only recognize media by extension, so those uploads fell out of the
 // match list the instant the "uploading" placeholder cleared — the preview
 // vanished and the user was left looking at a raw URL in the input.
 import 'package:flutter_test/flutter_test.dart';

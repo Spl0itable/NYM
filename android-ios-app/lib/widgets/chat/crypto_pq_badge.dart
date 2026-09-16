@@ -71,7 +71,7 @@ PqBadgeState pqBadgeStateFor({
 /// the single tilted orbit inside distinguishes it from the plain ✓
 /// `verified-badge` without using a letterform, which would not survive
 /// translation. Violet, so it can never be confused with the lock's green /
-/// red / grey.
+/// red / gray.
 class CryptoPqBadge extends StatelessWidget {
   const CryptoPqBadge({
     super.key,
@@ -87,7 +87,7 @@ class CryptoPqBadge extends StatelessWidget {
 
   final double size;
 
-  /// `#8B7CF6` for full coverage; the other two drop to a neutral grey — and
+  /// `#8B7CF6` for full coverage; the other two drop to a neutral gray — and
   /// deliberately not the lock's error red. Partial is a weaker guarantee and
   /// classical is the encryption everyone had until recently; neither is a
   /// failure. Classical is dimmed further so the three read as one scale.

@@ -423,7 +423,7 @@ void main() {
     final key = unhex(a['kemPublicKey'] as String);
 
     // A peer holding a key is a CURRENT peer: they announced pk2. A peer that
-    // announced only `pk` is modelled with layered:false, and is now sent no
+    // announced only `pk` is modeled with layered:false, and is now sent no
     // post-quantum wrap at all.
     // Bitchat evidence defaults to being the NEWER of the two: the plan weighs
     // when each was made, so a caller that only says "known bitchat" is asking
@@ -549,7 +549,7 @@ void main() {
     });
 
     test('with no key, routing is exactly the pre-existing behaviour', () {
-      // Post-quantum off is modelled as "no key" — PqRegistry.keyFor already
+      // Post-quantum off is modeled as "no key" — PqRegistry.keyFor already
       // returns null when disabled, so this is the disabled path too.
       for (final combo in [
         (false, false),

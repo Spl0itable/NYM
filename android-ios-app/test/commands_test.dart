@@ -115,12 +115,8 @@ void main() {
       expect(parseCommand('/shrug').isKnown, isFalse);
     });
 
-    test('registry matches the PWA: 33 commands + 7 aliases', () {
-      // The `this.commands` object in commands.js (setupCommands) defines 33
-      // canonical commands + 7 single-letter aliases. The §7 prose says "34"
-      // but its own enumerated list also contains 33 — the source is ground
-      // truth, so the port mirrors 33. See the registry coverage note.
-      expect(kCommandSpecs.length, 33);
+    test('registry matches the PWA: 35 commands + 7 aliases', () {
+      expect(kCommandSpecs.length, 35);
       final aliasCount =
           kCommandSpecs.fold<int>(0, (n, s) => n + s.aliases.length);
       expect(aliasCount, 7);

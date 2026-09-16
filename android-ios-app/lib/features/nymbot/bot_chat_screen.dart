@@ -45,6 +45,7 @@ import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import 'bot_credits_modal.dart';
 import 'nymbot_models.dart';
+import 'brand_tile.dart';
 import 'nymbot_providers.dart';
 
 /// The private 1:1 Nymbot chat screen.
@@ -2690,12 +2691,17 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
         m.description.toLowerCase().contains(q);
   }
 
-  /// "vision · reasoning · tools" — only the flags the catalog actually set.
+  /// "vision · reasoning · tools · cloudflare" — only the flags the catalog
+  /// actually set. Cloudflare-hosted weights run on the worker's AI binding,
+  /// with no gateway hop and no upstream provider to reject the call, which is
+  /// worth saying on the row.
   String _tagLine(ProModel m) {
     final tags = <String>[
       if (m.vision) tr('vision'),
       if (m.reasoning) tr('reasoning'),
       if (m.tools) tr('tools'),
+      // A brand name, so it is not run through tr().
+      if (m.cloudflareHosted) 'cloudflare',
     ];
     return tags.join(' · ');
   }
@@ -2738,8 +2744,11 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
       for (final m in models) {
         shown++;
         final tags = _tagLine(m);
+        final rates = m.ratesLabel();
         rows.add(ListTile(
-          leading: Icon(Icons.bolt, color: c.primary),
+          leading: m.authorSlug.isEmpty
+              ? Icon(Icons.bolt, color: c.primary)
+              : BrandTile(slug: m.authorSlug, size: 24),
           title: Text(m.label, style: TextStyle(color: c.text)),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2751,15 +2760,16 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         color: c.text.withValues(alpha: 0.75), fontSize: 11)),
-              // The human price-range phrase, not the id (PWA `?model` list).
-              Text(
-                  tags.isEmpty
-                      ? m.priceLabel
-                      : '${m.priceLabel} — $tags',
-                  style: TextStyle(color: c.textDim, fontSize: 11)),
+              Text(m.turnLabel(_catalog.usdPerCredit, _catalog.minChargeCredits),
+                  style: TextStyle(color: c.lightning, fontSize: 11)),
+              if (rates != null || tags.isNotEmpty)
+                Text(
+                    [if (rates != null) rates, if (tags.isNotEmpty) tags]
+                        .join(' — '),
+                    style: TextStyle(color: c.textDim, fontSize: 11)),
             ],
           ),
-          isThreeLine: m.description.isNotEmpty,
+          isThreeLine: true,
           trailing:
               current?.key == m.key ? Icon(Icons.check, color: c.primary) : null,
           onTap: () => widget.onSelected(m),
@@ -3016,9 +3026,9 @@ class _AnonModalState extends ConsumerState<_AnonModal> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Anonymous: ${state.balance.balance} standard · '
-                '${state.balance.proBalance} Pro'
-                '${acct == null ? '' : ' · your nym: ${acct.balance} standard · ${acct.proBalance} Pro'}',
+                'Anonymous: ${creditFigure(state.balance.balance)} standard · '
+                '${creditFigure(state.balance.proBalance)} Pro'
+                '${acct == null ? '' : ' · your nym: ${creditFigure(acct.balance)} standard · ${creditFigure(acct.proBalance)} Pro'}',
                 style: TextStyle(color: c.textDim, fontSize: 11),
               ),
               const SizedBox(height: 14),
@@ -3280,7 +3290,7 @@ class _GitConnectModalState extends State<_GitConnectModal> {
 }
 
 // =============================================================================
-// Fallback theme colours (used only when NymColors isn't registered, e.g. in a
+// Fallback theme colors (used only when NymColors isn't registered, e.g. in a
 // bare widget test). The real app supplies NymColors via the theme extension.
 // =============================================================================
 

@@ -81,7 +81,7 @@ const Map<String, String> kTranslateLanguageNative = {
 };
 
 /// What a speaker of the language calls it, falling back to the English name.
-/// A picker labelled only in English is unusable to the very people looking for
+/// A picker labeled only in English is unusable to the very people looking for
 /// their own language in it.
 String languageNative(String? code) {
   if (code == null || code.isEmpty) return '';

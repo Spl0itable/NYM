@@ -246,7 +246,7 @@ class P2PService extends ChangeNotifier {
         in _connections.keys.where((id) => id.endsWith(transferId)).toList()) {
       _cleanupConnection(id);
     }
-    if (transfer != null && !silent) _system('Transfer cancelled');
+    if (transfer != null && !silent) _system('Transfer canceled');
     notifyListeners();
   }
 

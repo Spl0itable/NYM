@@ -33,7 +33,7 @@ void main() {
       ]) {
         expect(safeExternalUri(u)?.toString(), u, reason: 'must keep $u');
       }
-      // Uri normalises the scheme and host, which is fine — it stays http(s).
+      // Uri normalizes the scheme and host, which is fine — it stays http(s).
       expect(safeExternalUri('HTTPS://OK.COM')?.scheme, 'https');
     });
 

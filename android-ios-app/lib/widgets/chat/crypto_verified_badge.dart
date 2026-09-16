@@ -12,12 +12,12 @@ import '../../features/i18n/i18n.dart';
 /// * [unverified] — a Bitchat-format seal signed with a throwaway per-message
 ///   key with no identity binding (red lock + ✗).
 /// * [unknown] — the seal isn't available on this device (e.g. restored from
-///   history), so verification can't be performed (grey lock + ?).
+///   history), so verification can't be performed (gray lock + ?).
 enum CryptoVerifyState { verified, unverified, unknown }
 
 /// The `.crypto-verified-badge` lock shown next to a PM/group message's
 /// timestamp (`messages.js:758` `mkLock`, `styles-components.css:1421`). A 12×12
-/// stroked padlock whose interior glyph + colour encode the [state]; tapping it
+/// stroked padlock whose interior glyph + color encode the [state]; tapping it
 /// opens the verification-info popup (`showVerificationPopup`,
 /// `messages.js:3405`).
 class CryptoVerifiedBadge extends StatelessWidget {
@@ -26,7 +26,7 @@ class CryptoVerifiedBadge extends StatelessWidget {
   final CryptoVerifyState state;
   final double size;
 
-  /// Lock colour per state (`.crypto-verified-badge` / `.unverified` /
+  /// Lock color per state (`.crypto-verified-badge` / `.unverified` /
   /// `.unknown`): verified `#2ecc71`, unverified `#e74c3c`, unknown `#9aa0a6`.
   Color get _color {
     switch (state) {
@@ -271,7 +271,7 @@ void showAnchoredInfoPopup(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // `.verification-popup-title`: 13px w700, state colour.
+                    // `.verification-popup-title`: 13px w700, state color.
                     Text(
                       title,
                       style: TextStyle(

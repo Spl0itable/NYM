@@ -20,6 +20,7 @@ import '../../core/theme/nym_theme.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/channel.dart';
 import '../../models/settings.dart';
+import '../identity/panic_overlay.dart';
 import '../notifications/notifications_service.dart';
 import '../../services/location/geolocation.dart';
 import '../../services/platform/background_connectivity.dart';
@@ -39,6 +40,7 @@ import '../messages/format/message_content.dart' show InlineEmojiText;
 import '../identity/modal_chrome.dart';
 import '../identity/vault_settings_modal.dart';
 import '../../widgets/wallpaper/wallpaper_cache.dart';
+import '../../services/filter/filter_packs.dart';
 import 'settings_helpers.dart';
 import 'settings_widgets.dart';
 
@@ -209,6 +211,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // (keypair app.js:3873-3877, PoW app.js:3616/save, blur app.js:3729-3754).
   late String _draftKeypair; // 'persistent' | 'random' | 'hardcore'
   late int _draftPow;
+  late String _draftVerified;
+  late Set<String> _draftFilterPacks;
   late String _draftBlur; // 'true' | 'friends' | 'false'
 
   @override
@@ -242,6 +246,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // Lift a value stored from the retired 8/12 options onto the offered set,
     // so the dropdown does not open with nothing selected.
     _draftPow = normalizePowDifficulty(ctrl0.powDifficulty);
+    _draftVerified = ctrl0.appVerifiedFilter;
+    _draftFilterPacks = ctrl0.filterPacks.toSet();
     // Blur seeds from the per-pubkey key first, then the global key, default
     // blur — `loadImageBlurSettings` precedence (settings.js:1139-1156; the
     // PWA's modal shows the resolved value, and the Save-time `setBlurImages`
@@ -783,6 +789,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
     }
     ctrl.setPowDifficulty(_draftPow);
+    ctrl.setAppVerifiedFilter(_draftVerified);
+    ctrl.setFilterPacks(_draftFilterPacks.toList());
+    unawaited(FilterPacks.setActive(_draftFilterPacks));
     ctrl.setBlurImages(_draftBlur,
         pubkey: ref.read(appStateProvider).selfPubkey);
 
@@ -829,7 +838,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// No-op on cancel.
   Future<void> _uploadCustomWallpaper(SettingsController ctrl) async {
     final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
-    if (picked == null) return; // user cancelled the picker
+    if (picked == null) return; // user canceled the picker
     if (mounted) setState(() => _wallpaperUploading = true);
     try {
       // Validate the minimum image size (users.js:831-850: reject anything
@@ -1529,6 +1538,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: 20, label: tr('20 bits — also hides Nymchat messages')),
       (value: 24, label: tr('24 bits — also hides Nymchat messages')),
     ];
+    final verifiedItems = <({String value, String label})>[
+      (value: 'off', label: tr('Disabled')),
+      (value: 'on', label: tr('Enabled')),
+    ];
     final acceptItems = <({String value, String label})>[
       (value: 'enabled', label: tr('Enabled')),
       (value: 'friends', label: tr('Friends only')),
@@ -1663,6 +1676,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
       _GroupSpec(
         text: tr(
+            'Verified Nymchat Users Only {options} Filters incoming channel '
+            'messages to senders who proved they are running Nymchat, on the '
+            'web app or the phone apps. Scripted senders cannot prove it and '
+            'are dropped. Your own messages, friends and Nymbot are always '
+            'shown.',
+            {'options': _optText(verifiedItems)}),
+        child: FormGroup(
+          label: tr('Verified Nymchat Users Only'),
+          hint: tr(
+              'Filters incoming channel messages to senders who proved they '
+              'are running Nymchat, on the web app or the phone apps. '
+              'Scripted senders cannot prove it and are dropped. Your own '
+              'messages, friends and Nymbot are always shown.'),
+          child: FormSelect<String>(
+            value: _draftVerified,
+            items: verifiedItems,
+            onChanged: (v) => setState(() => _draftVerified = v),
+          ),
+        ),
+      ),
+      _GroupSpec(
+        text: tr(
             'Accept Private Messages & Group Chat Requests {options} Control '
             'who can send you PMs and group chat invites. "Friends only" '
             'filters messages from non-friends.',
@@ -1716,7 +1751,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'setting. Bitchat users and other Nostr clients keep receiving '
               'standard NIP‑17 exactly as before.'),
           // Green only when it is genuinely on end to end. The send-only and
-          // unavailable states keep the ordinary colour, so the green means
+          // unavailable states keep the ordinary color, so the green means
           // one thing — the same rule the PWA's status line follows.
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1994,7 +2029,131 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
         ),
       ),
+      _GroupSpec(
+        text: tr('Filter Packs {packs} Ready-made keyword lists, applied like '
+            'your own blocked keywords: a matching message is hidden, and so is '
+            'one from a matching nym. Your friends and your own messages are '
+            'never filtered.', {
+          'packs': _filterPackSpecs.map((p) => '${p.label} ${p.desc}').join(' ')
+        }),
+        child: FormGroup(
+          label: tr('Filter Packs'),
+          hint: tr('Ready-made keyword lists, applied like your own blocked '
+              'keywords: a matching message is hidden, and so is one from a '
+              'matching nym. Your friends and your own messages are never '
+              'filtered.'),
+          child: _filterPackList(),
+        ),
+      ),
     ];
+  }
+
+  /// The four packs, each a checkbox above its own description. The
+  /// description is not a tooltip because what a pack does — and what it
+  /// deliberately does NOT catch — is the whole basis for choosing it.
+  static const List<({String id, String label, String desc})> _filterPackSpecs = [
+    (
+      id: 'profanity',
+      label: 'Profanity',
+      desc: 'Swearing and slurs, in 28 languages. Matched as whole words, so '
+          'Scunthorpe, classic, cocktail and analysis are not caught.'
+    ),
+    (
+      id: 'scams',
+      label: 'Scams & spam',
+      desc: 'Seed-phrase requests, non-Bitcoin chain addresses, doubling '
+          'offers, Telegram handoffs, lookalike links. Recognizes shapes, so '
+          'it works in every language.'
+    ),
+    (
+      id: 'crypto',
+      label: 'Crypto shilling',
+      desc: 'Price hype, launch promotion and altcoin tickers — not crypto '
+          'talk. Bitcoin, sats, zaps, nodes and wallets are explicitly allowed.'
+    ),
+    (
+      id: 'politics',
+      label: 'Politics',
+      desc: 'Party labels, political figures and charged coinages. Ordinary '
+          'words like state, party, vote, left and right are allowed.'
+    ),
+  ];
+
+  Widget _filterPackList() {
+    final c = context.nym;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: c.isLight ? c.bg : Colors.white.withValues(alpha: 0.03),
+        borderRadius: NymRadius.rsm,
+        border: Border.all(color: c.glassBorder),
+      ),
+      clipBehavior: Clip.antiAlias,
+      padding: const EdgeInsets.all(6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < _filterPackSpecs.length; i++)
+            _filterPackRow(_filterPackSpecs[i], first: i == 0),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterPackRow(({String id, String label, String desc}) pack,
+      {required bool first}) {
+    final c = context.nym;
+    final on = _draftFilterPacks.contains(pack.id);
+    return InkWell(
+      borderRadius: NymRadius.rxs,
+      onTap: () => setState(() {
+        if (on) {
+          _draftFilterPacks.remove(pack.id);
+        } else {
+          _draftFilterPacks.add(pack.id);
+        }
+      }),
+      child: Container(
+        decoration: first
+            ? null
+            : BoxDecoration(
+                border: Border(top: BorderSide(color: c.glassBorder))),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: Checkbox(
+                value: on,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: (v) => setState(() {
+                  if (v == true) {
+                    _draftFilterPacks.add(pack.id);
+                  } else {
+                    _draftFilterPacks.remove(pack.id);
+                  }
+                }),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(tr(pack.label), style: TextStyle(fontSize: 13, color: c.text)),
+                  const SizedBox(height: 2),
+                  Text(tr(pack.desc),
+                      style: TextStyle(fontSize: 11, height: 1.4, color: c.textDim)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// The rich `name` + dim `#suffix` span for a moderation-list row
@@ -2814,7 +2973,42 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
+      _GroupSpec(
+        text: tr('Wipe This Device Everything, permanently: your key, your '
+            'settings, your message history and your post-quantum recovery '
+            'code, on this device and on our servers.'),
+        child: FormGroup(
+          hint: tr('Everything, permanently: your key, your settings, your '
+              'message history and your post-quantum recovery code, on this '
+              'device and on our servers. The same emergency wipe as holding '
+              'your Nym for two seconds. Credits on your key are not touched. '
+              'This cannot be undone.'),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: NymOutlineButton(
+              label: tr('Wipe This Device'),
+              danger: true,
+              onPressed: _wipeThisDevice,
+            ),
+          ),
+        ),
+      ),
     ];
+  }
+
+  /// The settings-modal twin of the press-and-hold panic gesture: the same
+  /// wipe, reached deliberately rather than by accident.
+  Future<void> _wipeThisDevice() async {
+    final ok = await showAppConfirm(
+      context,
+      tr('Wipe this device? Your key, your settings, your message history and '
+          'your post-quantum recovery code go — here and on our servers. '
+          'Credits on your key are not touched. This cannot be undone.'),
+      okLabel: tr('Wipe'),
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    startPanicWipe(context, ref);
   }
 
   /// The list container chrome shared by the moderation lists and the

@@ -82,7 +82,7 @@ class NymColors extends ThemeExtension<NymColors> {
 
   bool get isLight => brightness == Brightness.light;
 
-  /// The colour of text the user TYPES into a field, and of the read-only
+  /// The color of text the user TYPES into a field, and of the read-only
   /// `.form-input`s that display a key back to them.
   ///
   /// NOT [text]. The PWA forces every `input`, `textarea`, `select` and

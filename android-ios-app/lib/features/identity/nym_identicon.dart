@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 ///
 /// Deterministic 5x5 horizontally-mirrored identicon derived from the seed
 /// (the nym / pubkey). Same hashing (FNV-1a 32-bit), same PRNG (Mulberry32),
-/// same colour rules and grid layout as the web version, so a given seed yields
+/// same color rules and grid layout as the web version, so a given seed yields
 /// an identical pattern on both platforms.
 ///
 /// The web renders an 80x80 SVG (5 cols x 16px cells). [NymIdenticon] paints the
@@ -21,10 +21,10 @@ class IdenticonSpec {
   /// The seed this spec was derived from.
   final String seed;
 
-  /// Foreground (rect) colour — `hsl(hue, sat%, light%)`.
+  /// Foreground (rect) color — `hsl(hue, sat%, light%)`.
   final Color fg;
 
-  /// Background colour — `hsl((hue+180)%360, 25%, 18%)`.
+  /// Background color — `hsl((hue+180)%360, 25%, 18%)`.
   final Color bg;
 
   /// 5x5 grid of filled cells, row-major (`cells[y*5 + x]`). Already mirrored.

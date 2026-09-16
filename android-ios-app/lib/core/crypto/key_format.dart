@@ -18,7 +18,7 @@ import 'keys.dart';
 /// break every one of them plus every mention already in history.
 ///
 /// Everything that ACCEPTS a public key accepts either form; everything that
-/// SHOWS one honours [pubkeyDisplayFormat].
+/// SHOWS one honors [pubkeyDisplayFormat].
 
 final RegExp _hex64 = RegExp(r'^[0-9a-fA-F]{64}$');
 
@@ -38,7 +38,7 @@ Future<void> writePubkeyFormat(
     prefs.setString(
         kPubkeyFormatKey, format == PubkeyFormat.hex ? 'hex' : 'npub');
 
-/// Either a 64-char hex pubkey or an `npub` / `nprofile`, normalised to
+/// Either a 64-char hex pubkey or an `npub` / `nprofile`, normalized to
 /// lowercase hex. Returns null when [value] is neither.
 String? normalizePubkeyInput(String? value) {
   var raw = (value ?? '').trim();
@@ -74,7 +74,7 @@ String npubOrHex(String hexPubkey) {
 String formatPubkeyForDisplay(String hexPubkey, PubkeyFormat format) =>
     format == PubkeyFormat.npub ? npubOrHex(hexPubkey) : hexPubkey;
 
-/// Either an `nsec` or a 64-char hex private key, normalised to the raw 32
+/// Either an `nsec` or a 64-char hex private key, normalized to the raw 32
 /// bytes the signer wants. Returns null when [value] is neither.
 Uint8List? normalizePrivkeyInput(String? value) {
   var raw = (value ?? '').trim();

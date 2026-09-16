@@ -533,7 +533,7 @@ class ShopCatalog {
   // Visual tables for cosmetic previews (from css/styles-features.css).
   // ---------------------------------------------------------------------------
 
-  /// Text colour + glow per message style (`.message.style-X .message-content`).
+  /// Text color + glow per message style (`.message.style-X .message-content`).
   static const Map<String, MessageStyleVisual> styleVisuals = {
     'style-satoshi': MessageStyleVisual(
       color: Color(0xFFF7931A),
@@ -740,7 +740,7 @@ class ShopCatalog {
   /// (`--style-pattern`, `styles-features.css:946-990`). The PWA tiles a
   /// per-style SVG behind the content; on native we approximate the highest-value
   /// ones with a tiled character (satoshi `₿`, matrix `10`, gold `✦`, …). Styles
-  /// without a glyph return null and render with colour + glow only. CRT/eclipse
+  /// without a glyph return null and render with color + glow only. CRT/eclipse
   /// use dedicated painters (scanlines / radial), not a glyph.
   static const Map<String, String> _stylePatternGlyphs = {
     'style-satoshi': '₿',

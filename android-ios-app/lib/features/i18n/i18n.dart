@@ -2,6 +2,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'localization_service.dart';
 
+String creditFigure(num? value) {
+  if (value == null) return '\u2026';
+  final n = value.toDouble();
+  if (n == n.roundToDouble()) return n.round().toString();
+  if (n > 0 && n < 0.01) return '<0.01';
+  var two = n.toStringAsFixed(2);
+  while (two.endsWith('0')) {
+    two = two.substring(0, two.length - 1);
+  }
+  if (two.endsWith('.')) two = two.substring(0, two.length - 1);
+  return two;
+}
+
 /// The one call every widget uses to localize static UI text.
 ///
 /// Returns [source] localized into the active UI language, or [source] itself

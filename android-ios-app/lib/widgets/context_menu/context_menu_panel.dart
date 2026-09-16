@@ -120,14 +120,16 @@ class ContextMenuPanel extends ConsumerWidget {
     final inGroup = s.view.kind == ViewKind.group;
     final group = inGroup ? _groupById(s, s.view.id) : null;
     final iAmOwner = group != null && group.createdBy == self;
+    final iAmAdmin = group != null && group.admins.contains(self);
     final iAmMod = group != null && group.mods.contains(self);
     final targetIsMember =
         group != null && group.members.contains(target.pubkey);
     final targetIsOwner = group != null && group.createdBy == target.pubkey;
+    final targetIsAdmin = group != null && group.admins.contains(target.pubkey);
     final targetIsMod = group != null && group.mods.contains(target.pubkey);
     return CtxTarget(
       pubkey: target.pubkey,
-      nym: target.nym,
+      nym: pickDisplayNym(s.users[target.pubkey]?.nym, target.nym),
       isSelf: target.isSelf,
       content: target.content,
       messageId: target.messageId,
@@ -137,9 +139,11 @@ class ContextMenuPanel extends ConsumerWidget {
       isBot: target.isBot,
       inGroup: inGroup,
       iAmOwner: iAmOwner,
+      iAmAdmin: iAmAdmin,
       iAmMod: iAmMod,
       targetIsMember: targetIsMember,
       targetIsOwner: targetIsOwner,
+      targetIsAdmin: targetIsAdmin,
       targetIsMod: targetIsMod,
       backToGroupId: target.backToGroupId,
     );
@@ -729,6 +733,14 @@ class ContextMenuPanel extends ConsumerWidget {
         onClose();
         await controller.revokeModerator(_groupId(ref), t.pubkey);
         break;
+      case CtxAction.makeAdmin:
+        onClose();
+        await controller.promoteAdmin(_groupId(ref), t.pubkey);
+        break;
+      case CtxAction.revokeAdmin:
+        onClose();
+        await controller.revokeAdmin(_groupId(ref), t.pubkey);
+        break;
       case CtxAction.transferOwner:
         await _confirmThen(
           context,
@@ -745,7 +757,7 @@ class ContextMenuPanel extends ConsumerWidget {
       case CtxAction.ban:
         await _confirmThen(
           context,
-          tr('Ban this user from the group? They cannot be re-invited unless the owner unbans them.'),
+          tr('Ban this user from the group? They cannot be re-invited unless an owner or moderator unbans them.'),
           okLabel: tr('Ban'),
           danger: true,
           action: () => controller.banFromGroup(_groupId(ref), t.pubkey),

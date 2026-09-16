@@ -129,7 +129,7 @@ class NoiseHandshakeState {
   Uint8List? get remoteStaticPublicKey => _rs;
   bool get isComplete => _msgIndex >= _xxPatterns.length;
 
-  /// Initialises an XX handshake. [staticPrivate] is the 32-byte X25519 static
+  /// Initializes an XX handshake. [staticPrivate] is the 32-byte X25519 static
   /// private seed; [staticPublic] its public key.
   factory NoiseHandshakeState.xx({
     required bool initiator,

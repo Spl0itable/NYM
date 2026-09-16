@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/constants/relays.dart';
+import '../../features/messages/spam_filter.dart';
+import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import '../api/api_config.dart';
 import 'relay_connection.dart'
@@ -1124,6 +1126,13 @@ class RelayPoolProxy implements PoolTransport {
     return i > 0 ? subId.substring(0, i) : subId;
   }
 
+
+  /// See [PoolTransport.geoOriginAllows].
+  bool Function(NostrEvent event, String? relayUrl)? _geoOriginAllows;
+  @override
+  set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) =>
+      _geoOriginAllows = fn;
+
   void _onShardMessage(_ShardSocket sock, PoolMessage msg) {
     // Reaching here means a parseable pool frame arrived, so the proxy endpoint
     // is reachable. Latch it so a later mid-session disconnect is NOT treated as
@@ -1136,6 +1145,21 @@ class RelayPoolProxy implements PoolTransport {
     }
     switch (msg) {
       case PoolEvent(:final subId, :final event, :final sourceRelay):
+        // Dropped before verification: the glub.chat client tags
+        // every event it sends, so this costs one tag scan and
+        // saves a signature check on every one of them.
+        if (SpamFilter.isGlubClient(event.tags)) return;
+        if (RelayConfig.isAppRelayOnly(
+                event.kind, event.tagValue('g'), event.tagValue('d')) &&
+            sourceRelay != RelayConfig.appRelay) {
+          return;
+        }
+        // Ahead of the cross-shard dedup below, for the same reason.
+        final geoGate = _geoOriginAllows;
+        if (geoGate != null && !geoGate(event, sourceRelay)) return;
+        // Before the dedup below, because the copies it discards are the
+        // relay list.
+        eventProvenance.record(event, sourceRelay);
         // Cross-shard dedup: the first shard to deliver an id wins.
         if (!_deduper.add(event.id)) return;
         // Normalize a split-child sub id back to its parent (see [_parentSubId]).

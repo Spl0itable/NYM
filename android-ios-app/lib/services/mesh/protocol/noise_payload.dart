@@ -28,7 +28,7 @@ class NoisePayload {
     return NoisePayload(type, data);
   }
 
-  /// A delivery acknowledgement for [messageID] — over the mesh the payload is
+  /// A delivery acknowledgment for [messageID] — over the mesh the payload is
   /// simply the UTF-8 message id (bitchat `.delivered`).
   static NoisePayload delivered(String messageID) => NoisePayload(
       NoisePayloadType.delivered, Uint8List.fromList(utf8.encode(messageID)));

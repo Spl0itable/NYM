@@ -131,7 +131,7 @@ class MeshReactionEvent {
   final bool isDirect;
 }
 
-/// A delivery/read acknowledgement received for one of our sent messages.
+/// A delivery/read acknowledgment received for one of our sent messages.
 class MeshReceipt {
   MeshReceipt({
     required this.fromPeerID,

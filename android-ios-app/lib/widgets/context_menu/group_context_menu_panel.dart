@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +13,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_share.dart' show kNymchatShareHost;
+import '../../features/groups/group_logic.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/pms/new_pm_modal.dart' show resolveRecipientPubkey;
 import '../../models/group.dart';
@@ -158,6 +161,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   Widget _content(NymColors c, AppState s, Group group) {
     final self = s.selfPubkey;
     final iAmOwner = group.createdBy == self;
+    final iCanAdminister = GroupLogic.canAdminister(group, self);
+    final iCanModerate = GroupLogic.canModerate(group, self);
 
     // Sort members: owner → mods → members (PWA `_memberRoleRank`).
     final sorted = [...group.members]
@@ -197,7 +202,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: _actionRows(c, group, iAmOwner),
+              children: _actionRows(c, group, iAmOwner, iCanAdminister),
             ),
           ),
           // `.group-ctx-members-title`: 12px uppercase, 0.04em tracking,
@@ -225,6 +230,25 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           for (final pk in sorted)
             // In transfer mode the owner can't pick themselves.
             if (!_transferMode || pk != self) _memberRow(c, group, pk, self),
+          if (!_transferMode && iCanModerate && group.banned.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: c.hairline)),
+              ),
+              child: Text(
+                tr('Banned · {count}', {'count': group.banned.length})
+                    .toUpperCase(),
+                style: TextStyle(
+                  color: c.textDim,
+                  fontSize: 12,
+                  letterSpacing: 0.48,
+                ),
+              ),
+            ),
+            for (final pk in group.banned) _bannedRow(c, group, pk),
+          ],
           const SizedBox(height: 8),
         ],
       ),
@@ -344,7 +368,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     );
   }
 
-  /// The banner-avatar ring/disc colour (`.has-banner .group-ctx-icon`):
+  /// The banner-avatar ring/disc color (`.has-banner .group-ctx-icon`):
   /// `rgba(20,20,35,0.95)` dark; `rgba(255,255,255,0.95)` light.
   Color _bannerRing(NymColors c) =>
       c.isLight ? const Color(0xF2FFFFFF) : const Color(0xF2141423);
@@ -442,13 +466,13 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   // Action rows (role-gated owner/member controls)
   // ---------------------------------------------------------------------------
 
-  List<Widget> _actionRows(NymColors c, Group group, bool iAmOwner) {
+  List<Widget> _actionRows(
+      NymColors c, Group group, bool iAmOwner, bool iCanAdminister) {
     final self = ref.read(appStateProvider).selfPubkey;
     final canAdd = group.canAddMembers(self);
     final rows = <Widget>[];
 
-    // Owner metadata controls (groups.js:3046-3083). Role-gated to the owner.
-    if (iAmOwner) {
+    if (iCanAdminister) {
       rows.add(_ActionRow(
         svg: NymIcons.ctxEdit,
         label: tr('Edit Group Name'),
@@ -503,9 +527,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ));
     }
 
-    // Allow joining via invite link (owner-only checkbox row,
     // groups.js `groupCtxToggleInviteJoin`).
-    if (iAmOwner) {
+    if (iCanAdminister) {
       rows.add(_ActionRow(
         svg: group.inviteEnabled
             ? NymIcons.checkboxChecked
@@ -526,9 +549,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       }
     }
 
-    // Allow members to add others (owner-only checkbox row,
     // groups.js `groupCtxToggleInvites`).
-    if (iAmOwner) {
+    if (iCanAdminister) {
       rows.add(_ActionRow(
         svg: group.allowMemberInvites
             ? NymIcons.checkboxChecked
@@ -722,10 +744,32 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   // Member rows
   // ---------------------------------------------------------------------------
 
-  int _roleRank(Group group, String pubkey) {
-    if (group.createdBy == pubkey) return 0;
-    if (group.mods.contains(pubkey)) return 1;
-    return 2;
+  int _roleRank(Group group, String pubkey) =>
+      GroupLogic.roleRank(group, pubkey);
+
+  Widget _bannedRow(NymColors c, Group group, String pubkey) {
+    final user = ref.watch(usersProvider)[pubkey];
+    final base = stripPubkeySuffix(user?.nym ?? '');
+    return _MemberTile(
+      colors: c,
+      avatar: NymAvatar(
+        seed: pubkey,
+        size: 30,
+        imageUrl: user?.profile?.picture,
+        label: base.isNotEmpty ? base[0] : null,
+      ),
+      base: base.isEmpty ? tr('(unknown)') : base,
+      suffix: '#${getPubkeySuffix(pubkey)}',
+      isSelf: false,
+      dimmed: true,
+      trailing: _UnbanButton(
+        colors: c,
+        onTap: () => unawaited(ref
+            .read(nostrControllerProvider)
+            .unbanFromGroup(group.id, pubkey)),
+      ),
+      onTap: null,
+    );
   }
 
   Widget _memberRow(NymColors c, Group group, String pubkey, String self) {
@@ -734,7 +778,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final suffix = getPubkeySuffix(pubkey);
     final isSelf = pubkey == self;
     final isOwner = group.createdBy == pubkey;
-    final isMod = !isOwner && group.mods.contains(pubkey);
+    final isAdmin = !isOwner && group.admins.contains(pubkey);
+    final isMod = !isOwner && !isAdmin && group.mods.contains(pubkey);
 
     // PWA `.group-ctx-member-avatar` is a bare 30×30 `<img>` — no status dot
     // (the live member row is avatar + name + role badge only).
@@ -749,7 +794,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       base: base.isEmpty ? tr('(unknown)') : base,
       suffix: '#$suffix',
       isSelf: isSelf,
-      roleBadge: isOwner ? 'Owner' : (isMod ? 'Mod' : null),
+      roleBadge:
+          isOwner ? 'Owner' : (isAdmin ? 'Admin' : (isMod ? 'Mod' : null)),
       onTap: () => _onMemberTap(group, pubkey, base, isSelf),
     );
   }
@@ -921,6 +967,37 @@ class _CopyInviteRowState extends State<_CopyInviteRow> {
 
 /// A `.group-ctx-member` row: avatar, base nym + suffix (+ "you"), and a role
 /// badge (Owner/Mod). Tapping opens the member's menu.
+class _UnbanButton extends StatelessWidget {
+  const _UnbanButton({required this.colors, required this.onTap});
+
+  final NymColors colors;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+        decoration: BoxDecoration(
+          border: Border.all(color: c.border),
+          borderRadius: const BorderRadius.all(Radius.circular(10)),
+        ),
+        child: Text(
+          tr('Unban'),
+          style: TextStyle(
+            color: c.primary,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MemberTile extends StatefulWidget {
   const _MemberTile({
     required this.colors,
@@ -928,7 +1005,9 @@ class _MemberTile extends StatefulWidget {
     required this.base,
     required this.suffix,
     required this.isSelf,
-    required this.roleBadge,
+    this.roleBadge,
+    this.trailing,
+    this.dimmed = false,
     required this.onTap,
   });
 
@@ -938,7 +1017,9 @@ class _MemberTile extends StatefulWidget {
   final String suffix;
   final bool isSelf;
   final String? roleBadge;
-  final VoidCallback onTap;
+  final Widget? trailing;
+  final bool dimmed;
+  final VoidCallback? onTap;
 
   @override
   State<_MemberTile> createState() => _MemberTileState();
@@ -969,7 +1050,8 @@ class _MemberTileState extends State<_MemberTile> {
                   overflow: TextOverflow.ellipsis,
                   // `.group-ctx-member-name`: 14px, color `--text` (full green).
                   text: TextSpan(
-                    style: TextStyle(color: c.text, fontSize: 14),
+                    style: TextStyle(
+                        color: widget.dimmed ? c.textDim : c.text, fontSize: 14),
                     children: [
                       TextSpan(text: widget.base),
                       // Generic `.nym-suffix`: `--text` @ opacity 0.7, 0.9em,
@@ -998,6 +1080,10 @@ class _MemberTileState extends State<_MemberTile> {
                 const SizedBox(width: 8),
                 _RoleBadge(label: widget.roleBadge!, colors: c),
               ],
+              if (widget.trailing != null) ...[
+                const SizedBox(width: 8),
+                widget.trailing!,
+              ],
             ],
           ),
         ),
@@ -1018,12 +1104,12 @@ class _RoleBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = colors;
     final isOwner = label == 'Owner';
-    final Color fg = isOwner ? c.lightning : c.secondary;
-    // Owner chip: lightning on rgba(247,147,26,0.12). Mod chip: secondary on a
-    // subtle fill (white@0.08 dark; mode-aware so it stays visible in light).
+    final isAdmin = label == 'Admin';
+    final Color fg =
+        isOwner ? c.lightning : (isAdmin ? c.primary : c.secondary);
     final Color bg = isOwner
         ? const Color(0x1FF7931A) // rgba(247,147,26,0.12)
-        : c.hoverOverlay;
+        : (isAdmin ? c.primary.withValues(alpha: 0.12) : c.hoverOverlay);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(

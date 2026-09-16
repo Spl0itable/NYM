@@ -144,7 +144,7 @@ class NoisePayloadType {
   /// A read receipt (payload identifies the original message id).
   static const int readReceipt = 0x02;
 
-  /// A delivery acknowledgement (payload identifies the original message id).
+  /// A delivery acknowledgment (payload identifies the original message id).
   static const int delivered = 0x03;
 
   /// A file/media transfer (payload is a [BitchatFilePacket]). Matches bitchat's

@@ -8,6 +8,10 @@ class GroupControlType {
   static const removeMember = 'group-remove-member';
   static const promoteMod = 'group-promote-mod';
   static const revokeMod = 'group-revoke-mod';
+  static const promoteAdmin = 'group-promote-admin';
+  static const revokeAdmin = 'group-revoke-admin';
+  static const rosterReq = 'group-roster-req';
+  static const roster = 'group-roster';
   static const transferOwner = 'group-transfer-owner';
   static const metadata = 'group-metadata';
   static const deleteMessage = 'group-delete-message';
@@ -61,6 +65,7 @@ class Group {
     this.lastMessageTime = 0,
     this.createdBy,
     List<String>? mods,
+    List<String>? admins,
     List<String>? banned,
     this.avatar,
     this.banner,
@@ -69,6 +74,9 @@ class Group {
     this.inviteEnabled = false,
     this.inviteEpoch = 0,
     this.metaUpdatedAt = 0,
+    this.metaUpdatedBy,
+    this.genesisOwner,
+    this.genesisNonce,
     this.lastModTs = 0,
     this.lastModEventId,
     this.shareHistory = false,
@@ -78,6 +86,7 @@ class Group {
     List<String>? modSeenIds,
   })  : members = members ?? <String>[],
         mods = mods ?? <String>[],
+        admins = admins ?? <String>[],
         banned = banned ?? <String>[],
         modLog = modLog ?? <ModLogEntry>[],
         modTsByTarget = modTsByTarget ?? <String, int>{},
@@ -90,6 +99,7 @@ class Group {
   int lastMessageTime;
   String? createdBy;
   final List<String> mods;
+  final List<String> admins;
   final List<String> banned;
   String? avatar;
   String? banner;
@@ -98,6 +108,12 @@ class Group {
   bool inviteEnabled;
   int inviteEpoch;
   int metaUpdatedAt;
+
+  String? metaUpdatedBy;
+
+  String? genesisOwner;
+  String? genesisNonce;
+
   int lastModTs;
   String? lastModEventId;
 
@@ -129,6 +145,7 @@ class Group {
         'lastMessageTime': lastMessageTime,
         'createdBy': createdBy,
         'mods': mods,
+        'admins': admins,
         'banned': banned,
         'avatar': avatar,
         'banner': banner,
@@ -137,6 +154,9 @@ class Group {
         'inviteEnabled': inviteEnabled,
         'inviteEpoch': inviteEpoch,
         'metaUpdatedAt': metaUpdatedAt,
+        'metaUpdatedBy': metaUpdatedBy,
+        'genesisOwner': genesisOwner,
+        'genesisNonce': genesisNonce,
         'lastModTs': lastModTs,
         'lastModEventId': lastModEventId,
         'shareHistory': shareHistory,
@@ -157,6 +177,9 @@ class Group {
         mods: ((j['mods'] as List?) ?? const [])
             .map((e) => e.toString())
             .toList(),
+        admins: ((j['admins'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
         banned: ((j['banned'] as List?) ?? const [])
             .map((e) => e.toString())
             .toList(),
@@ -167,6 +190,9 @@ class Group {
         inviteEnabled: j['inviteEnabled'] == true,
         inviteEpoch: (j['inviteEpoch'] as num?)?.toInt() ?? 0,
         metaUpdatedAt: (j['metaUpdatedAt'] as num?)?.toInt() ?? 0,
+        metaUpdatedBy: j['metaUpdatedBy'] as String?,
+        genesisOwner: j['genesisOwner'] as String?,
+        genesisNonce: j['genesisNonce'] as String?,
         lastModTs: (j['lastModTs'] as num?)?.toInt() ?? 0,
         lastModEventId: j['lastModEventId'] as String?,
         shareHistory: j['shareHistory'] == true,

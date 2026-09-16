@@ -240,7 +240,7 @@ class CourierEnvelope {
   ///
   /// Covers the adjacent days as well as today, so an envelope sealed just
   /// before midnight — or under modest clock skew between two phones that have
-  /// never synchronised with anything — still matches while it is being
+  /// never synchronized with anything — still matches while it is being
   /// carried.
   static Future<List<Uint8List>> candidateTagsFor({
     required Uint8List noiseStaticKey,

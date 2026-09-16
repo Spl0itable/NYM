@@ -5,7 +5,7 @@
 // crowd has split into two partitions that never touched, and that message is
 // simply gone — the mesh has no memory. This is the memory: every device keeps
 // a bounded window of recent public packets and periodically reconciles it with
-// its neighbours, so a phone that moves between partitions (or relaunches
+// its neighbors, so a phone that moves between partitions (or relaunches
 // hours later) serves the backlog to whoever missed it.
 //
 // The reconciliation is bitchat's, wire-for-wire, so a Nymchat device and a
@@ -162,7 +162,7 @@ class GossipSync {
       _ => config.publicMessageMaxAgeMs,
     };
     final age = _now() - packet.timestamp;
-    // A packet stamped in the future is clock skew, not a time traveller: keep
+    // A packet stamped in the future is clock skew, not a time traveler: keep
     // it rather than discarding a perfectly good message over a bad clock.
     if (age < 0) return true;
     return age <= maxAge;

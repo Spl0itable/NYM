@@ -156,7 +156,7 @@ void main() {
 
     test('the candidate set spans the day boundary', () async {
       // An envelope sealed just before midnight — or under clock skew between
-      // two phones that have never synchronised — must still match.
+      // two phones that have never synchronized — must still match.
       final (_, bPub) = await NoiseCrypto.x25519Generate();
       final tags =
           await CourierEnvelope.candidateTagsFor(noiseStaticKey: bPub, nowMs: now);

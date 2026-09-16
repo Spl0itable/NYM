@@ -259,8 +259,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     // shown to the user right now, so it should name the sender the way the
     // rest of the UI does.
     final liveNym = ref.read(appStateProvider).users[message.pubkey]?.nym;
-    final baseNym = stripPubkeySuffix(
-        (liveNym != null && liveNym.isNotEmpty) ? liveNym : message.author);
+    final baseNym = pickDisplayNym(liveNym, message.author);
     final notifier = ref.read(appStateProvider.notifier);
     notifier.addSystemMessage(
         tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
@@ -431,7 +430,7 @@ class ZapBurst {
   static const _durationMs = 800;
   static const _boltCount = 9; // zaps.js:1675 `boltCount = 9`.
 
-  /// Spawns a zap burst centred at [globalCenter].
+  /// Spawns a zap burst centerd at [globalCenter].
   static void play(BuildContext context, Offset globalCenter) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
@@ -632,7 +631,7 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
   }
 
   /// The 9 `.zap-bolt` mini-bolts (`@keyframes zapBolt`, 0.5s of the window):
-  /// scaleY 0→1→0.2, translating from the centre out to (dx,dy), each a 2×14px
+  /// scaleY 0→1→0.2, translating from the center out to (dx,dy), each a 2×14px
   /// rounded gradient bar (white→gold→orange) with a gold/cyan glow.
   List<Widget> _buildBolts() {
     return _bolts.map((b) {
@@ -657,8 +656,8 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
       final x = widget.center.dx + b.dx * prog;
       final y = widget.center.dy + b.dy * prog;
       return Positioned(
-        left: x - 1, // 2px wide → centre by 1px
-        top: y - 7, // 14px tall, transform-origin top-centre
+        left: x - 1, // 2px wide → center by 1px
+        top: y - 7, // 14px tall, transform-origin top-center
         child: Opacity(
           opacity: opacity.clamp(0.0, 1.0),
           child: Transform.rotate(

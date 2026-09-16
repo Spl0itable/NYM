@@ -58,7 +58,7 @@ class WallpaperCache {
       _inflight[url] = Future.value(file);
       return file;
     } catch (_) {
-      // Cache is an optimisation; failing to write just means we paint from the
+      // Cache is an optimization; failing to write just means we paint from the
       // network as before.
       return null;
     }

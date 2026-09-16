@@ -823,6 +823,24 @@ class ShopController extends StateNotifier<ShopState> {
     _savePendingPurchases(arr);
   }
 
+  /// Live, non-expired pending entries of one [kind] (`shop`, `credit`, `zap`).
+  /// Expired entries are dropped as they are passed over, matching the sweep
+  /// [reconcilePendingPurchases] does for shop rows.
+  List<Map<String, dynamic>> pendingPurchasesOfKind(String kind) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final out = <Map<String, dynamic>>[];
+    for (final e in _loadPendingPurchases()) {
+      final invoiceId = e['invoiceId']?.toString();
+      if (invoiceId == null || invoiceId.isEmpty) continue;
+      if (now - ((e['createdAt'] as num?)?.toInt() ?? 0) > _pendingTtlMs) {
+        removePendingPurchase(invoiceId);
+        continue;
+      }
+      if (e['kind'] == kind) out.add(e);
+    }
+    return out;
+  }
+
   /// Drops the pending entry for [invoiceId] (shop.js `_removePendingPurchase`).
   void removePendingPurchase(String invoiceId) {
     if (invoiceId.isEmpty) return;

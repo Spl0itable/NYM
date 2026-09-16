@@ -3,6 +3,15 @@
 <plist version="1.0">
 <dict>
 	<!-- Keychain access group for flutter_secure_storage (Keychain-backed). -->
+	<!-- App Attest: the hardware-backed proof the attestation ledger accepts
+	     as evidence that a pubkey belongs to a real Nymchat install. The App
+	     ID must have the App Attest capability and the provisioning profile
+	     must include it, or attestKey fails at runtime and the app simply
+	     enrolls nothing. `production` on a store build; switch to
+	     `development` alongside APPLE_APP_ATTEST_ALLOW_DEVELOPMENT=1 on the
+	     worker to test against Apple's development environment. -->
+	<key>com.apple.developer.devicecheck.appattest-environment</key>
+	<string>production</string>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.nym.bar</string>

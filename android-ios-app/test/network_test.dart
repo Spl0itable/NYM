@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:nym_bar/core/constants/event_kinds.dart';
 import 'package:nym_bar/core/constants/relays.dart';
 import 'package:nym_bar/core/crypto/keys.dart' as keys;
 import 'package:nym_bar/models/nostr_event.dart';
@@ -273,6 +274,95 @@ void main() {
       final closest = svc.closestGeoRelays('dr5regw', count: 1);
       expect(closest.length, 1);
       expect(closest.first.url, 'wss://near.example');
+    });
+
+    test('a geohash message is admitted only from its own neighbourhood',
+        () async {
+      // The REQs stay open; this only decides what counts as a message sent to
+      // a PLACE. Anything tagged with a geohash that arrived from outside that
+      // geohash's relays was sprayed at the tag.
+      final client = MockClient((req) async => http.Response(
+            jsonEncode({
+              'relays': [
+                {'url': 'wss://near.example', 'lat': 40.7, 'lng': -74.0},
+                {'url': 'wss://mid.example', 'lat': 20.0, 'lng': -40.0},
+                {'url': 'wss://far.example', 'lat': -80.0, 'lng': 0.0},
+              ]
+            }),
+            200,
+          ));
+      final transport = _NoopTransport(connected: {
+        'wss://near.example',
+        'wss://mid.example',
+        'wss://far.example',
+        'wss://relay.damus.io',
+      });
+      final svc = NostrService(
+        identity: _identity(),
+        pool: transport,
+        apiClient: ApiClient(client: client, baseUrl: 'https://h/api/proxy'),
+      );
+      await svc.fetchGeoRelays();
+
+      NostrEvent ev(int kind, List<List<String>> tags) => NostrEvent(
+            id: '0' * 64,
+            pubkey: 'a' * 64,
+            createdAt: 0,
+            kind: kind,
+            tags: tags,
+            content: 'x',
+            sig: '0' * 128,
+          );
+      final geo = ev(EventKind.geoChannel, [
+        ['g', 'dr5regw']
+      ]);
+      final near = svc.closestGeoRelays('dr5regw').map((r) => r.url).toSet();
+
+      expect(near.contains('wss://near.example'), isTrue);
+      expect(svc.geoOriginAllowsEvent(geo, 'wss://near.example'), isTrue);
+      expect(svc.geoOriginAllowsEvent(geo, 'wss://relay.damus.io'), isFalse,
+          reason: 'a default relay is not this geohash\'s neighbourhood');
+
+      // Kind 20000 only: nothing else is ever published to geo relays, so
+      // gating them would delete every reaction in every geohash channel.
+      expect(
+          svc.geoOriginAllowsEvent(
+              ev(EventKind.reaction, [
+                ['g', 'dr5regw'],
+                ['k', '20000']
+              ]),
+              'wss://relay.damus.io'),
+          isTrue);
+      expect(
+          svc.geoOriginAllowsEvent(
+              ev(EventKind.namedChannel, [
+                ['d', 'nymchat']
+              ]),
+              'wss://relay.damus.io'),
+          isTrue);
+
+      // Fails open wherever it cannot judge — each of these would otherwise
+      // blank a real channel.
+      expect(svc.geoOriginAllowsEvent(geo, null), isTrue);
+      expect(svc.geoOriginAllowsEvent(geo, ''), isTrue);
+      expect(
+          svc.geoOriginAllowsEvent(
+              ev(EventKind.geoChannel, []), 'wss://relay.damus.io'),
+          isTrue);
+      expect(
+          svc.geoOriginAllowsEvent(
+              ev(EventKind.geoChannel, [
+                ['g', '!!!']
+              ]),
+              'wss://relay.damus.io'),
+          isTrue,
+          reason: 'an undecodable geohash is not ours to judge');
+
+      // No socket to any of the neighbourhood: there is no admissible source
+      // to wait for, so rejecting would hide the channel rather than filter
+      // it. This is what keeps low-data mode working.
+      transport.connected = {'wss://relay.damus.io'};
+      expect(svc.geoOriginAllowsEvent(geo, 'wss://relay.damus.io'), isTrue);
     });
   });
 
@@ -685,6 +775,14 @@ Identity _identity() => Identity(
 
 /// A do-nothing PoolTransport so NostrService can be built without sockets.
 class _NoopTransport implements PoolTransport {
+  _NoopTransport({this.connected = const {}});
+
+  /// What the pool is holding sockets to, so the geo gate's "no admissible
+  /// source" branch can be reached.
+  Set<String> connected;
+
+  @override
+  set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) {}
   @override
   void connectAll() {}
   @override
@@ -694,7 +792,7 @@ class _NoopTransport implements PoolTransport {
   @override
   int get connectedCount => 0;
   @override
-  Set<String> get connectedRelayUrls => const {};
+  Set<String> get connectedRelayUrls => connected;
   @override
   RelayStats get stats => RelayStats();
   @override
@@ -715,6 +813,9 @@ class _NoopTransport implements PoolTransport {
 /// Records which publish path NostrService routes each event through so we can
 /// assert GEO_EVENT / DM_EVENT routing without real sockets.
 class _RecordingTransport implements PoolTransport {
+  @override
+  set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) {}
+
   final List<NostrEvent> plainCalls = [];
   final List<NostrEvent> dmCalls = [];
   final List<(NostrEvent, List<String>)> geoCalls = [];

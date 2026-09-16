@@ -23,6 +23,8 @@ enum CtxAction {
   // group moderation (shown only when applicable)
   makeMod, // #ctxAddMod
   revokeMod, // #ctxRemoveMod
+  makeAdmin, // #ctxAddAdmin
+  revokeAdmin, // #ctxRemoveAdmin
   transferOwner, // #ctxTransferOwner
   kick, // #ctxKickMember
   ban, // #ctxBanMember
@@ -46,9 +48,11 @@ class CtxTarget {
     // group context (null when not viewing a group):
     this.inGroup = false,
     this.iAmOwner = false,
+    this.iAmAdmin = false,
     this.iAmMod = false,
     this.targetIsMember = false,
     this.targetIsOwner = false,
+    this.targetIsAdmin = false,
     this.targetIsMod = false,
     this.backToGroupId,
   });
@@ -72,9 +76,11 @@ class CtxTarget {
 
   final bool inGroup;
   final bool iAmOwner;
+  final bool iAmAdmin;
   final bool iAmMod;
   final bool targetIsMember;
   final bool targetIsOwner;
+  final bool targetIsAdmin;
   final bool targetIsMod;
 
   /// When this profile was opened from a group's member list, the originating
@@ -83,7 +89,13 @@ class CtxTarget {
   /// ui-context.js:354/371). Null for every other entry point.
   final String? backToGroupId;
 
-  bool get iCanModerate => iAmOwner || iAmMod;
+  bool get iCanAdminister => iAmOwner || iAmAdmin;
+  bool get iCanModerate => iCanAdminister || iAmMod;
+
+  int get _myRank => iAmOwner ? 0 : (iAmAdmin ? 1 : (iAmMod ? 2 : 3));
+  int get _targetRank =>
+      targetIsOwner ? 0 : (targetIsAdmin ? 1 : (targetIsMod ? 2 : 3));
+  bool get iOutrankTarget => iAmOwner || _myRank < _targetRank;
 }
 
 /// Builds the visible, ordered action list for [t], mirroring the visibility
@@ -119,20 +131,18 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
   }
 
   // Group moderation visibility (ui-context.js lines 477-484).
-  final showKickOrBan = t.inGroup &&
-      t.targetIsMember &&
-      !t.isSelf &&
-      t.iCanModerate &&
-      (t.iAmOwner || (!t.targetIsOwner && !t.targetIsMod));
-  final showAddMod = t.inGroup &&
-      t.targetIsMember &&
-      !t.isSelf &&
-      t.iAmOwner &&
-      !t.targetIsOwner &&
-      !t.targetIsMod;
+  final other = t.inGroup && t.targetIsMember && !t.isSelf;
+  final showKickOrBan = other && t.iCanModerate && t.iOutrankTarget;
+  final showAddMod = other &&
+      t.iCanAdminister &&
+      t.iOutrankTarget &&
+      !t.targetIsMod &&
+      !t.targetIsAdmin;
   final showRemoveMod =
-      t.inGroup && t.targetIsMember && !t.isSelf && t.iAmOwner && t.targetIsMod;
-  final showTransfer = t.inGroup && t.targetIsMember && !t.isSelf && t.iAmOwner;
+      other && t.iCanAdminister && t.iOutrankTarget && t.targetIsMod;
+  final showAddAdmin = other && t.iAmOwner && !t.targetIsAdmin;
+  final showRemoveAdmin = other && t.iAmOwner && t.targetIsAdmin;
+  final showTransfer = other && t.iAmOwner;
 
   // Mod/owner can delete another member's message in the current group.
   final canDeleteOwn = t.isSelf && hasMessage;
@@ -140,7 +150,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
       hasMessage &&
       t.inGroup &&
       !t.isSelf &&
-      (t.iAmOwner || (t.iAmMod && !t.targetIsOwner));
+      (t.iAmOwner || (t.iCanModerate && t.iOutrankTarget));
 
   // Order mirrors the runtime DOM (index.html:94-260) with Slap/Hug injected
   // right after PM (ui-context.js:507-530): React, Mention, PM, Slap, Hug,
@@ -166,6 +176,8 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     if (canDeleteOwn || canModDelete) CtxAction.delete,
     if (showAddMod) CtxAction.makeMod,
     if (showRemoveMod) CtxAction.revokeMod,
+    if (showAddAdmin) CtxAction.makeAdmin,
+    if (showRemoveAdmin) CtxAction.revokeAdmin,
     if (showTransfer) CtxAction.transferOwner,
     if (showKickOrBan) CtxAction.kick,
     if (showKickOrBan) CtxAction.ban,
@@ -208,6 +220,10 @@ String ctxActionLabel(CtxAction a, CtxTarget t) {
       return 'Edit Message';
     case CtxAction.delete:
       return 'Delete Message';
+    case CtxAction.makeAdmin:
+      return 'Make Admin';
+    case CtxAction.revokeAdmin:
+      return 'Revoke Admin';
     case CtxAction.makeMod:
       return 'Make Moderator';
     case CtxAction.revokeMod:
@@ -262,8 +278,10 @@ String ctxActionSvg(CtxAction a) {
     case CtxAction.delete:
       return NymIcons.ctxDelete;
     case CtxAction.makeMod:
+    case CtxAction.makeAdmin:
       return NymIcons.ctxMakeMod;
     case CtxAction.revokeMod:
+    case CtxAction.revokeAdmin:
       return NymIcons.ctxRevokeMod;
     case CtxAction.transferOwner:
       return NymIcons.ctxTransferOwner;
@@ -286,10 +304,11 @@ CtxTarget ctxTargetForMessage(
   required String selfPubkey,
   bool isFriend = false,
   bool isBlocked = false,
+  String? liveNym,
 }) {
   return CtxTarget(
     pubkey: message.pubkey,
-    nym: _baseNym(message.author),
+    nym: pickDisplayNym(liveNym, message.author),
     isSelf: message.pubkey == selfPubkey || message.isOwn,
     content: message.content,
     messageId: message.id,
@@ -299,7 +318,3 @@ CtxTarget ctxTargetForMessage(
     inGroup: message.isGroup || message.groupId != null,
   );
 }
-
-/// Trailing-`#xxxx`-only strip: a `#` inside the name (e.g. `player#1`)
-/// belongs to the name (users.js:1093-1098).
-String _baseNym(String nym) => splitNymSuffix(nym).base;

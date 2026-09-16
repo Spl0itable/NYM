@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -61,7 +63,7 @@ class TutorialTargets {
 
   /// The live [BuildContext] of [target]'s widget (null when not mounted). Used
   /// to scroll the target into view via [Scrollable.ensureVisible], the native
-  /// analogue of the PWA `positionStep`'s `target.scrollIntoView` (app.js:224).
+  /// analog of the PWA `positionStep`'s `target.scrollIntoView` (app.js:224).
   static BuildContext? contextOf(TutorialTarget target) =>
       _keys[target]?.currentContext;
 }
@@ -241,6 +243,20 @@ List<String> tutorialStringsForPretranslate() => <String>[
       'Next',
       'Done',
       'Step {n} of {total}',
+      'Private key (nsec)',
+      'Recovery code (nympq1…)',
+      'Show',
+      'Hide',
+      'Copy',
+      'Save both now and keep them together. The nsec is your identity; '
+          'the nympq1… code is what lets another device read your '
+          'quantum-resistant messages. Nobody can send them back to you.',
+      'Your signer holds the private key, so there is no nsec to '
+          'show here. Save this nympq1… recovery code — it is what lets '
+          'another device read your quantum-resistant messages, and '
+          'nobody can send it back to you.',
+      'Save this now. It is your identity, and nobody can send it '
+          'back to you.',
     ];
 
 /// The guided tutorial overlay (`#tutorialOverlay`).
@@ -260,13 +276,25 @@ List<String> tutorialStringsForPretranslate() => <String>[
 /// Any dismissal path (Skip, Done, Escape) marks the tutorial seen via
 /// [onDismiss].
 class TutorialOverlay extends StatefulWidget {
-  const TutorialOverlay({super.key, required this.onDismiss, this.sidebar});
+  const TutorialOverlay({
+    super.key,
+    required this.onDismiss,
+    this.sidebar,
+    this.nsec,
+    this.recoveryCode,
+  });
 
   /// Called when the tutorial is dismissed (always marks `nym_tutorial_seen`).
   final VoidCallback onDismiss;
 
   /// Optional sidebar driver (narrow layouts open/close the drawer per step).
   final TutorialSidebarDriver? sidebar;
+
+  /// The `nsec1…` for this session, or null when a signer holds the key.
+  final String? Function()? nsec;
+
+  /// The `nympq1…` recovery code, or null before the account has one.
+  final String? Function()? recoveryCode;
 
   @override
   State<TutorialOverlay> createState() => _TutorialOverlayState();
@@ -275,6 +303,14 @@ class TutorialOverlay extends StatefulWidget {
 class _TutorialOverlayState extends State<TutorialOverlay> {
   int _index = 0;
   final FocusNode _focus = FocusNode();
+
+  bool _nsecShown = false;
+  bool _codeShown = false;
+
+  /// A fresh account mints its root while the tour is already up, so the first
+  /// step keeps looking for the code for a little while.
+  Timer? _codeWait;
+  int _codeTries = 0;
 
   /// Measured target rect for the current step (null → centered card).
   Rect? _targetRect;
@@ -293,9 +329,22 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
 
   @override
   void dispose() {
+    _codeWait?.cancel();
     widget.sidebar?.restore();
     _focus.dispose();
     super.dispose();
+  }
+
+  String? get _nsec => widget.nsec?.call();
+  String? get _code => widget.recoveryCode?.call();
+
+  void _waitForCode() {
+    if (_codeWait != null || _codeTries >= 20) return;
+    _codeTries++;
+    _codeWait = Timer(const Duration(seconds: 1), () {
+      _codeWait = null;
+      if (mounted) setState(() {});
+    });
   }
 
   bool get _isFinal => _index >= kTutorialSteps.length - 1;
@@ -321,7 +370,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     _remeasure();
   }
 
-  /// Scrolls the step's target into view — the native analogue of the PWA
+  /// Scrolls the step's target into view — the native analog of the PWA
   /// `positionStep`'s `scrollIntoView` (app.js:216-227). Without this, a
   /// sidebar-anchored step lower down the scroll list (Private Messages, Active
   /// Nyms) never scrolls into view and its spotlight lands off-screen.
@@ -585,6 +634,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
               tr(step.body),
               style: TextStyle(color: c.text, fontSize: 13, height: 1.4),
             ),
+            if (_index == 0) ..._keysPanel(c),
             const SizedBox(height: 10),
             Text(
               tr('Step {n} of {total}',
@@ -614,6 +664,140 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// The nsec and the nympq1 code, on the first step, so they are saved before
+  /// anything else. A signer holds the key, so there is only ever a code there.
+  List<Widget> _keysPanel(NymColors c) {
+    final nsec = _nsec;
+    final code = _code;
+    if (code == null || code.isEmpty) _waitForCode();
+    final rows = <Widget>[
+      if (nsec != null && nsec.isNotEmpty)
+        _keyRow(c, tr('Private key (nsec)'), nsec, 'tutorialNsec',
+            shown: _nsecShown,
+            onToggle: () => setState(() => _nsecShown = !_nsecShown),
+            copied: tr('Private key copied')),
+      if (code != null && code.isNotEmpty)
+        _keyRow(c, tr('Recovery code (nympq1…)'), code, 'tutorialPq',
+            shown: _codeShown,
+            onToggle: () => setState(() => _codeShown = !_codeShown),
+            copied: tr('Post-quantum recovery code copied')),
+    ];
+    if (rows.isEmpty) return const [];
+
+    final hasNsec = nsec != null && nsec.isNotEmpty;
+    final hasCode = code != null && code.isNotEmpty;
+    final note = hasNsec && hasCode
+        ? tr('Save both now and keep them together. The nsec is your identity; '
+            'the nympq1… code is what lets another device read your '
+            'quantum-resistant messages. Nobody can send them back to you.')
+        : (hasCode
+            ? tr('Your signer holds the private key, so there is no nsec to '
+                'show here. Save this nympq1… recovery code — it is what lets '
+                'another device read your quantum-resistant messages, and '
+                'nobody can send it back to you.')
+            : tr('Save this now. It is your identity, and nobody can send it '
+                'back to you.'));
+
+    return [
+      const SizedBox(height: 12),
+      Column(
+        key: const Key('tutorialKeys'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i != 0) const SizedBox(height: 10),
+            rows[i],
+          ],
+          const SizedBox(height: 10),
+          Text(note, style: TextStyle(color: c.textDim, fontSize: 12, height: 1.4)),
+        ],
+      ),
+    ];
+  }
+
+  Widget _keyRow(NymColors c, String label, String value, String keyPrefix,
+      {required bool shown,
+      required VoidCallback onToggle,
+      required String copied}) {
+    return Column(
+      key: Key('${keyPrefix}Row'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: TextStyle(
+            color: c.textDim,
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.04),
+                  borderRadius: NymRadius.rxs,
+                  border: Border.all(color: c.glassBorder),
+                ),
+                child: Text(
+                  shown ? value : '•' * 24,
+                  key: Key('${keyPrefix}Value'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: c.text,
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            _keyBtn(c, shown ? tr('Hide') : tr('Show'),
+                key: Key('${keyPrefix}Eye'), onTap: onToggle),
+            const SizedBox(width: 6),
+            _keyBtn(c, tr('Copy'), key: Key('${keyPrefix}Copy'), onTap: () async {
+              await Clipboard.setData(ClipboardData(text: value));
+              if (!mounted) return;
+              ScaffoldMessenger.maybeOf(context)
+                  ?.showSnackBar(SnackBar(content: Text(copied)));
+            }),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _keyBtn(NymColors c, String label,
+      {required Key key, required VoidCallback onTap}) {
+    return InkWell(
+      key: key,
+      onTap: onTap,
+      borderRadius: NymRadius.rxs,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: NymRadius.rxs,
+          border: Border.all(color: c.glassBorder),
+        ),
+        child: Text(
+          label.toUpperCase(),
+          style: TextStyle(
+            color: c.textDim,
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1,
+          ),
         ),
       ),
     );
@@ -742,7 +926,7 @@ class _TutorialCardLayoutDelegate extends SingleChildLayoutDelegate {
 }
 
 /// Fills the screen with [dim], punching a rounded-rect [hole] clear so the
-/// highlighted element shows through — the Flutter analogue of the PWA's
+/// highlighted element shows through — the Flutter analog of the PWA's
 /// `box-shadow: 0 0 0 9999px rgba(0,0,0,0.5)` spread on `.tutorial-highlight`.
 class _SpotlightPainter extends CustomPainter {
   const _SpotlightPainter({

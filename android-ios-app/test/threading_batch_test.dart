@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/models/nostr_event.dart';
 import 'package:nym_bar/state/app_state.dart';
 
-/// Backfill-coalescing behaviour of [AppStateNotifier.runBatched] and
+/// Backfill-coalescing behavior of [AppStateNotifier.runBatched] and
 /// [AppStateNotifier.ingestEvents], plus the sorted-insert that replaced the
 /// per-event `list.add(m); list.sort(compareMessages)`.
 ///

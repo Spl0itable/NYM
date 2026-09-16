@@ -13,7 +13,7 @@ import '../nym_icons.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
 
-/// The grey "pinned/favorited" tint the PWA paints on a `.channel-item.pinned`
+/// The gray "pinned/favorited" tint the PWA paints on a `.channel-item.pinned`
 /// row when it is not the active channel (`rgba(150,150,160,…)`,
 /// styles-shell.css:348-366).
 const Color _pinnedGrey = Color(0xFF9696A0); // rgb(150,150,160)
@@ -23,8 +23,8 @@ const Color _pinnedGrey = Color(0xFF9696A0); // rgb(150,150,160)
 /// Mirrors `.channel-item` (docs/specs/02 §5.3): padding 9/12, margin 2/4,
 /// radius rxs, min-height 36, 1px transparent border; active state gets a
 /// primary@10 fill, primary@20 border, glow, and a 3px left accent bar. A
-/// favorited (pinned) row that is not active gets a grey fill/border/glow + a
-/// grey accent bar instead. Unread count renders as a pill badge — the PWA's
+/// favorited (pinned) row that is not active gets a gray fill/border/glow + a
+/// gray accent bar instead. Unread count renders as a pill badge — the PWA's
 /// ONLY channel badge.
 ///
 /// A 500ms press-and-hold (mouse primary button or touch — the PWA binds no
@@ -57,7 +57,7 @@ class ChannelListItem extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final name = '#${entry.isGeohash ? entry.geohashKey : entry.channel}';
-    // `.channel-item.pinned:not(.active)` paints the grey treatment; the active
+    // `.channel-item.pinned:not(.active)` paints the gray treatment; the active
     // state always wins.
     final showPinned = pinned && !active;
     // Geohash rows get a `title="{getGeohashLocation(geohash)}"` hover tooltip.
@@ -66,7 +66,7 @@ class ChannelListItem extends ConsumerWidget {
     // `.channel-item.active` fill is primary@0.10 + a primary@0.05 glow (dark);
     // `body.light-mode` neutralises it to black@0.06 with `box-shadow:none`
     // (styles-themes-responsive.css:1139), keeping the primary@0.20 border +
-    // primary accent bar. The pinned (grey) treatment has no light override.
+    // primary accent bar. The pinned (gray) treatment has no light override.
     final Color activeFill =
         c.isLight ? Colors.black.withValues(alpha: 0.06) : c.primaryA(0.10);
     // `@media (hover:hover)` row hover (styles-shell.css:368-374): explicit
@@ -149,7 +149,7 @@ class ChannelListItem extends ConsumerWidget {
                   borderRadius: NymRadius.rxs,
                   border: Border.all(color: borderColor, width: 1),
                   // `.channel-item.active`: box-shadow 0 0 12px primary@5%
-                  // (grey@5% when pinned-not-active).
+                  // (gray@5% when pinned-not-active).
                   boxShadow: glow,
                 ),
                 child: Row(
@@ -210,7 +210,7 @@ class ChannelListItem extends ConsumerWidget {
                           ),
                           // `::before` accent bar glow: 0 0 8px primary@40%
                           // when active; 0 0 8px rgba(150,150,160,0.3) on the
-                          // grey pinned bar.
+                          // gray pinned bar.
                           boxShadow: [
                             BoxShadow(
                               color: active

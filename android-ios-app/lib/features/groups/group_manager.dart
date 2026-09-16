@@ -152,9 +152,12 @@ class GroupManager {
   }) async {
     if (!_service.canSign) return null;
     final members = <String>{...memberPubkeys, selfPubkey}.toList();
-    final groupId = GroupLogic.generateGroupId();
+    final groupNonce = GroupLogic.generateGroupId();
+    final groupId = GroupLogic.genesisId(selfPubkey, groupNonce);
     final group = Group(
       id: groupId,
+      genesisOwner: selfPubkey,
+      genesisNonce: groupNonce,
       name: name.trim(),
       members: members,
       createdBy: selfPubkey,

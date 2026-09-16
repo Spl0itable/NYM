@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 /// Privacy-preserving PKCS#7-style padding — a byte-for-byte port of bitchat's
-/// `MessagePadding` (iOS/Android). Normalising every frame to one of a small set
+/// `MessagePadding` (iOS/Android). Normalizing every frame to one of a small set
 /// of block sizes resists traffic analysis: an eavesdropper cannot infer message
 /// length from the BLE packet size.
 ///

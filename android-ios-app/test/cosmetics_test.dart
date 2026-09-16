@@ -196,7 +196,7 @@ void main() {
       // satoshi's `.message-content` CONTAINER (bare body text) is white
       // (styles-features.css:550) — only the inner `> *` children + the shop
       // preview are the bold orange #f7931a (`:571`). So body = white, the
-      // preview/child colour = orange, and the body is NOT bold.
+      // preview/child color = orange, and the body is NOT bold.
       expect(deco!.textColor, const Color(0xFFFFFFFF));
       expect(deco.previewColorFor(bubble: false), const Color(0xFFF7931A));
       expect(deco.childColor, const Color(0xFFF7931A));
@@ -350,7 +350,7 @@ void main() {
 
     test('light mode drops the bubble colour override + the multi-glow', () {
       final fireLight = messageStyleDecoration('style-fire', isLight: true)!;
-      // Light uses the single light colour for both layouts (no bubble override).
+      // Light uses the single light color for both layouts (no bubble override).
       expect(fireLight.textColorFor(bubble: true), const Color(0xFFCC4400));
       expect(fireLight.textShadows, isNull);
     });

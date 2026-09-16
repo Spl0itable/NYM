@@ -161,7 +161,7 @@ final userCosmeticsProvider =
 /// The inline flair + supporter badges that follow a nym wherever it is
 /// rendered (after the `#suffix`, before any friend badge — mirroring
 /// `_applyFlairBadgesToMessage`). Reuses the shop's [FlairBadge] /
-/// [SupporterBadge] widgets so the glyphs/colours/gradient match the shop 1:1.
+/// [SupporterBadge] widgets so the glyphs/colors/gradient match the shop 1:1.
 ///
 /// Renders nothing when the user has no active flair and is not a supporter.
 class CosmeticNymBadges extends StatelessWidget {
@@ -224,8 +224,8 @@ bool hasGenesisFlair(UserCosmetics cosmetics) =>
 /// A faithful Flutter translation of a `.message.style-X` rule from
 /// `css/styles-features.css`. Captures the parts we can render natively:
 ///
-/// * [textColor] — the glyph colour (`.message-content { color }`).
-/// * [glow] — the text-shadow glow colour, rendered as a [Shadow] on the
+/// * [textColor] — the glyph color (`.message-content { color }`).
+/// * [glow] — the text-shadow glow color, rendered as a [Shadow] on the
 ///   content GLYPHS only (via [textShadows]). The CSS style glow is a
 ///   `text-shadow` — no style paints a `.message-content` box-shadow in either
 ///   theme, so this must never be drawn as a bubble/box shadow (doing so bled
@@ -266,7 +266,7 @@ class MessageStyleDecoration {
   final Color? glow;
 
   /// The full multi-layer CSS `text-shadow` stack (each layer with its own
-  /// colour + blur radius), e.g. neon's `0 0 10/20/30px #ff00ff` or vapor's
+  /// color + blur radius), e.g. neon's `0 0 10/20/30px #ff00ff` or vapor's
   /// pink+cyan dual glow. When present this is the source of [textShadows];
   /// [glow] is only a single-layer fallback for styles without an explicit stack.
   final List<Shadow>? glowShadows;
@@ -315,21 +315,21 @@ class MessageStyleDecoration {
   /// A 135deg background gradient painted on the IRC row (`body:not(.chat-bubbles)
   /// .message.X { background: linear-gradient(135deg,…) }`) — supporter's gold
   /// `.08`→`.03` wash. The bubble layout uses the flat [contentBackground]
-  /// instead (the bubble override is a solid colour). Null = use [contentBackground].
+  /// instead (the bubble override is a solid color). Null = use [contentBackground].
   final List<Color>? backgroundGradient;
 
-  /// A bubble-layout-only text colour override (`body.chat-bubbles .message.
+  /// A bubble-layout-only text color override (`body.chat-bubbles .message.
   /// style-X .message-content { color }`): fire→`#ff6600`, ice→`#00ccff`. IRC
-  /// keeps [textColor]. Null = same colour in both layouts.
+  /// keeps [textColor]. Null = same color in both layouts.
   final Color? bubbleTextColor;
 
-  /// The `.message-content > *` INNER-element colour, when it differs from the
+  /// The `.message-content > *` INNER-element color, when it differs from the
   /// bare-body [textColor] (the container/child split). Only satoshi splits: the
   /// `.message-content` container — and so the bare body text — is white
   /// (`#FFFFFF` dark / `#7a5500` light, styles-features.css:550 / themes:900),
   /// while the inner `> *` children (links/mentions/emoji) are the bold orange
   /// `#f7931a`/`#c47a15` (`:571` / themes:905). The shop DEMO wraps its sample in
-  /// a `<span>` (a child), so previews use this colour; real plain message text
+  /// a `<span>` (a child), so previews use this color; real plain message text
   /// is bare nodes, so the body uses [textColor]. Null = children share [textColor].
   final Color? childColor;
 
@@ -356,8 +356,8 @@ class MessageStyleDecoration {
     return glow != null ? [Shadow(color: glow!, blurRadius: 10)] : null;
   }
 
-  /// The body text colour for [bubble] layout (the bubble override when set).
-  /// This is the `.message-content` CONTAINER colour — what bare body text uses.
+  /// The body text color for [bubble] layout (the bubble override when set).
+  /// This is the `.message-content` CONTAINER color — what bare body text uses.
   Color textColorFor({required bool bubble}) =>
       bubble ? (bubbleTextColor ?? textColor) : textColor;
 
@@ -374,9 +374,9 @@ class MessageStyleDecoration {
     return bubbleOnlyContentBackground ? null : contentBackground;
   }
 
-  /// The colour for an INNER `> *` element (link/mention/emoji) and for the shop
+  /// The color for an INNER `> *` element (link/mention/emoji) and for the shop
   /// DEMO sample (which the PWA wraps in a `<span>`, so it is a child). Falls back
-  /// to the body colour for every style except the satoshi container/child split.
+  /// to the body color for every style except the satoshi container/child split.
   Color previewColorFor({required bool bubble}) =>
       childColor ?? textColorFor(bubble: bubble);
 }
@@ -391,10 +391,10 @@ class RadialWash {
     this.radius = 0.55,
   });
 
-  /// The inner (centre) colour; fades to transparent at [radius].
+  /// The inner (center) color; fades to transparent at [radius].
   final Color color;
 
-  /// The gradient centre (CSS `circle at 20% 50%` → `Alignment(-0.6, 0)`).
+  /// The gradient center (CSS `circle at 20% 50%` → `Alignment(-0.6, 0)`).
   final Alignment center;
 
   /// The transparent stop as a fraction of the box (`transparent 55%` → 0.55).
@@ -428,7 +428,7 @@ class StyleWatermark {
         glyphs = null,
         glyphColor = null;
 
-  /// A repeating horizontal scanline (CRT): [scanline]-coloured lines of
+  /// A repeating horizontal scanline (CRT): [scanline]-colored lines of
   /// [scanlineThickness]px every [scanlineGap]px.
   const StyleWatermark.scanlines({
     required Color color,
@@ -456,7 +456,7 @@ class StyleWatermark {
   final double scanlineGap;
   final double scanlineThickness;
 
-  /// The tiled-text glyphs (satoshi/matrix) + their colour, or null for the
+  /// The tiled-text glyphs (satoshi/matrix) + their color, or null for the
   /// SVG/scanline variants.
   final List<GlyphTile>? glyphs;
   final Color? glyphColor;
@@ -506,7 +506,7 @@ class CosmeticAura {
   /// `message_row` should drop so the ring isn't drawn twice.
   final Color? insetColor;
 
-  /// The bubble-layout inset ring colour when it differs from the IRC [insetColor]
+  /// The bubble-layout inset ring color when it differs from the IRC [insetColor]
   /// (`body.chat-bubbles .message.cosmetic-aura-gold .message-content` strokes a
   /// `.55` ring vs the IRC `.35`). Null = use [insetColor] in both layouts.
   final Color? bubbleInsetColor;
@@ -516,7 +516,7 @@ class CosmeticAura {
   final Color? glowColor;
   final double glowBlur;
 
-  /// The bubble-layout outer-glow COLOUR when it differs from the IRC
+  /// The bubble-layout outer-glow COLOr when it differs from the IRC
   /// [glowColor] — light gold strokes `rgba(180,140,0,.15)` on the bubble
   /// (`body.light-mode.chat-bubbles … .message-content`,
   /// styles-themes-responsive.css:929-932) vs the IRC `.12`. Null = use
@@ -588,11 +588,11 @@ class CosmeticAura {
   /// prism ring, holographic sheen, or a true inset ring to stroke).
   bool get hasOverlay => prismRing || hologram || insetRing;
 
-  /// The inset ring colour for [bubble] layout (the bubble override when set).
+  /// The inset ring color for [bubble] layout (the bubble override when set).
   Color? insetColorFor({required bool bubble}) =>
       bubble ? (bubbleInsetColor ?? insetColor) : insetColor;
 
-  /// The outer-glow colour for [bubble] layout (the bubble override when set).
+  /// The outer-glow color for [bubble] layout (the bubble override when set).
   Color? glowColorFor({required bool bubble}) =>
       bubble ? (bubbleGlowColor ?? glowColor) : glowColor;
 
@@ -631,15 +631,15 @@ MessageStyleDecoration? messageStyleDecoration(String? styleId,
   if (v == null) return null;
   final lightColor = isLight ? _styleLightColor[styleId] : null;
   final hasLightText = lightColor != null;
-  // The `.message-content` CONTAINER (bare body text) colour, for the styles
-  // whose body differs from their inner `> *` child colour. Only satoshi: the
+  // The `.message-content` CONTAINER (bare body text) color, for the styles
+  // whose body differs from their inner `> *` child color. Only satoshi: the
   // body is white (#FFFFFF dark / #7a5500 light) while the children stay the bold
   // orange #f7931a/#c47a15. When set, the body uses this and [childColor] carries
   // the orange for inner elements + the shop preview; otherwise body == inner.
   final bodyColor =
       isLight ? _styleLightBodyColor[styleId] : _styleBodyColor[styleId];
-  // The inner `> *` / preview colour: the light override when present, else the
-  // dark `styleVisuals` colour.
+  // The inner `> *` / preview color: the light override when present, else the
+  // dark `styleVisuals` color.
   final innerColor = hasLightText ? lightColor : v.color;
   // satoshi is the one textured style with no `.message-content` text-shadow at
   // all (its glow is preview-only) — so it has neither a glyph-shadow nor a glow
@@ -647,10 +647,10 @@ MessageStyleDecoration? messageStyleDecoration(String? styleId,
   final hasMessageShadow = _styleGlyphShadows.containsKey(styleId) ||
       _styleGlowShadows.containsKey(styleId);
   return MessageStyleDecoration(
-    // Body text uses the CONTAINER colour (white/brown for satoshi); every other
-    // style's container IS its inner colour, so this is just [innerColor].
+    // Body text uses the CONTAINER color (white/brown for satoshi); every other
+    // style's container IS its inner color, so this is just [innerColor].
     textColor: bodyColor ?? innerColor,
-    // The inner `> *` element + shop-preview colour, set only when it differs
+    // The inner `> *` element + shop-preview color, set only when it differs
     // from the body (the satoshi split). Null = children inherit [textColor].
     childColor: bodyColor != null ? innerColor : null,
     // Light mode resets `text-shadow` to none — except glitch, whose light rule
@@ -687,8 +687,8 @@ MessageStyleDecoration? messageStyleDecoration(String? styleId,
     // Aurora replaces the bubble fill with a transparent border-box layer in
     // BOTH modes (styles-features.css:3675-3686 + themes:843's light gradient).
     transparentBubble: styleId == 'style-aurora',
-    // Bubble-only colour overrides (fire/ice). Light mode uses the single light
-    // colour for both layouts (the bubble override is a dark-mode-only rule).
+    // Bubble-only color overrides (fire/ice). Light mode uses the single light
+    // color for both layouts (the bubble override is a dark-mode-only rule).
     bubbleTextColor: hasLightText ? null : _styleBubbleTextColor[styleId],
     monospace: v.monospace,
     // satoshi's `font-weight: bold` lives on the inner `> *` children
@@ -704,10 +704,10 @@ MessageStyleDecoration? messageStyleDecoration(String? styleId,
 }
 
 /// The full per-style CSS `text-shadow` stack, each layer carrying its real
-/// colour + blur radius (`.message.style-X .message-content { text-shadow }`,
+/// color + blur radius (`.message.style-X .message-content { text-shadow }`,
 /// `styles-features.css`). This replaces the uniform 10px single-glow: most
 /// styles are 8px, fire 14px, neon a 10/20/30px triple, matrix a 10/20px double,
-/// eclipse 8+16px, vapor/royal dual-colour. Styles whose look is a chromatic
+/// eclipse 8+16px, vapor/royal dual-color. Styles whose look is a chromatic
 /// split (glitch) supply [_styleGlyphShadows] instead and are absent here.
 const Map<String, List<Shadow>> _styleGlowShadows = {
   // neon: 0 0 10px, 20px, 30px #ff00ff (triple) (:596-599).
@@ -772,7 +772,7 @@ const Map<String, Shadow> _styleGradientGlow = {
   'style-aurora': Shadow(color: Color(0x4D5B8CFF), blurRadius: 10),
 };
 
-/// Bubble-layout-only text colour overrides (`body.chat-bubbles .message.
+/// Bubble-layout-only text color overrides (`body.chat-bubbles .message.
 /// style-X .message-content { color }`, styles-features.css:3665-3673). fire and
 /// ice paint a brighter glyph in bubbles than the IRC `#ffaa00`/`#00ccee`.
 const Map<String, Color> _styleBubbleTextColor = {
@@ -791,8 +791,8 @@ const Map<String, EdgeInsets> _styleContentPadding = {
   'style-satoshi': EdgeInsets.symmetric(horizontal: 15, vertical: 10),
 };
 
-/// Dark-mode `.message-content` CONTAINER body-text colour for styles whose bare
-/// body differs from their inner `> *` child colour. Only satoshi: the container
+/// Dark-mode `.message-content` CONTAINER body-text color for styles whose bare
+/// body differs from their inner `> *` child color. Only satoshi: the container
 /// is white (`color:#FFFFFF`, styles-features.css:550) while its inner spans are
 /// the bold orange `#f7931a` (`:571`). Real plain message text is bare nodes, so
 /// the body reads white; the orange is reserved for links/mentions/emoji and the
@@ -801,16 +801,16 @@ const Map<String, Color> _styleBodyColor = {
   'style-satoshi': Color(0xFFFFFFFF),
 };
 
-/// Light-mode `.message-content` CONTAINER body colour (the split styles). satoshi
+/// Light-mode `.message-content` CONTAINER body color (the split styles). satoshi
 /// body is `#7a5500` (`body.light-mode .message.style-satoshi .message-content`,
 /// styles-themes-responsive.css:900); its inner children are `#c47a15` (`:905`).
 const Map<String, Color> _styleLightBodyColor = {
   'style-satoshi': Color(0xFF7A5500),
 };
 
-/// Light-mode text colours (`body.light-mode .message.style-X .message-content`,
+/// Light-mode text colors (`body.light-mode .message.style-X .message-content`,
 /// styles-themes-responsive.css:810-1041). For satoshi this is the INNER `> *`
-/// child colour (`#c47a15`); the body uses the dimmer container [_styleLightBodyColor].
+/// child color (`#c47a15`); the body uses the dimmer container [_styleLightBodyColor].
 const Map<String, Color> _styleLightColor = {
   'style-matrix': Color(0xFF006600),
   'style-neon': Color(0xFF990099),
@@ -1267,21 +1267,21 @@ MessageStyleDecoration supporterStyleDecorationFor(
   return isLight ? supporterStyleDecorationLight : supporterStyleDecoration;
 }
 
-/// Message styles whose DARK body-text colour rule is declared AFTER the
+/// Message styles whose DARK body-text color rule is declared AFTER the
 /// supporter gold rule (`.message.supporter-style .message-content
 /// { color:#ffd700 !important }`, styles-features.css:1089) at equal
-/// specificity — so they keep their own colour + text-shadow when both classes
+/// specificity — so they keep their own color + text-shadow when both classes
 /// are present: eclipse (:1249) and crt (:1281).
 const Set<String> _darkStyleColorBeatsSupporter = {
   'style-eclipse',
   'style-crt',
 };
 
-/// Message styles whose LIGHT body-text colour rule is declared AFTER the light
+/// Message styles whose LIGHT body-text color rule is declared AFTER the light
 /// supporter rule (`body.light-mode .message.supporter-style .message-content
 /// { color:#8a6d00 !important }`, styles-themes-responsive.css:939) at equal
 /// specificity — ocean/sakura/galaxy/toxic/blood/royal/circuit/gold (:987-1002)
-/// and vapor (:1009) keep their own light colour; every other style (and
+/// and vapor (:1009) keep their own light color; every other style (and
 /// eclipse/crt, whose 3-class dark rules lose to the 4-class light supporter
 /// rule) goes supporter gold-brown.
 const Set<String> _lightStyleColorBeatsSupporter = {
@@ -1310,12 +1310,12 @@ const Set<String> _lightStyleColorBeatsSupporter = {
 ///   background at equal-or-winning specificity/importance, so it replaces the
 ///   style's bubble fill.
 /// * Body text: supporter's `color:#ffd700 !important` + gold text-shadow
-///   (:1089-1092) beat the style colour rules declared before them (source
+///   (:1089-1092) beat the style color rules declared before them (source
 ///   order at equal specificity); the styles in
 ///   [_darkStyleColorBeatsSupporter] / [_lightStyleColorBeatsSupporter] are
 ///   declared later and keep their own text. The style's content plates
 ///   (satoshi/eclipse/crt), watermark, monospace/bold and the bubble-only
-///   fire/ice colours (`body.chat-bubbles …`, 4 classes, :3664-3672) survive.
+///   fire/ice colors (`body.chat-bubbles …`, 4 classes, :3664-3672) survive.
 ///
 /// aurora is exempt: its text is gradient-clipped with
 /// `-webkit-text-fill-color: transparent`, so the gold `color` never shows.
@@ -1335,7 +1335,7 @@ MessageStyleDecoration composeSupporterStyle(
     textColor: goldText ? supporter.textColor : styled.textColor,
     glow: goldText ? supporter.glow : styled.glow,
     // Supporter's `text-shadow: 0 0 8px gold@.25` (:1090) replaces the style's
-    // stack (glitch's chromatic split included) whenever the gold colour wins;
+    // stack (glitch's chromatic split included) whenever the gold color wins;
     // light supporter resets `text-shadow: none` (themes:940).
     glowShadows: goldText ? supporter.glowShadows : styled.glowShadows,
     glyphShadows: goldText ? null : styled.glyphShadows,
@@ -1787,8 +1787,8 @@ class _EdgeTiledSvg extends StatelessWidget {
         // Inner vertical strips skip the top/bottom row so the corners aren't
         // double-stacked (the horizontal strips already cover them).
         final innerRows = rows - 2 > 0 ? rows - 2 : 0;
-        // `center top/bottom` → the horizontal strips centre on the box;
-        // `left/right center` → the vertical strips centre vertically. Cells are
+        // `center top/bottom` → the horizontal strips center on the box;
+        // `left/right center` → the vertical strips center vertically. Cells are
         // absolutely positioned (a Stack never reports RenderFlex overflow —
         // the overhang is clipped by the wrapping ClipRect).
         final x0 = (w - cols * tile.width) / 2;
@@ -1889,9 +1889,9 @@ class CosmeticOverlayPainter extends CustomPainter {
     // Hologram fill + sheen are background-image layers the PWA drops when a
     // message style is active (`:not([class*="style-"])`); the ring stays.
     if (aura.hologram && !styleActive) {
-      // 135deg multi-colour gradient + a 115deg white sheen. CSS
+      // 135deg multi-color gradient + a 115deg white sheen. CSS
       // `background-blend-mode: screen, normal` (styles-features.css:1209):
-      // only the white sheen screen-blends — the colour gradient composites
+      // only the white sheen screen-blends — the color gradient composites
       // normally over the bubble fill.
       final base = Paint()
         ..shader = const LinearGradient(
@@ -1927,15 +1927,15 @@ class CosmeticOverlayPainter extends CustomPainter {
       final w = aura.insetWidth;
       // A stroked rounded-rect deflated by half its width keeps the whole stroke
       // INSIDE the bubble edge — matching CSS `inset 0 0 0 {w}px` (which paints
-      // the ring entirely within the box) rather than a centred `Border.all`.
+      // the ring entirely within the box) rather than a centerd `Border.all`.
       final ringRect = rrect.deflate(w / 2);
       final ring = Paint()
         ..color = ringColor
         ..style = PaintingStyle.stroke
         ..strokeWidth = w;
       canvas.drawRRect(ringRect, ring);
-      // The soft inward feather an inset box-shadow casts: the ring colour at a
-      // low alpha fading from the edge toward the centre, clipped to the bubble
+      // The soft inward feather an inset box-shadow casts: the ring color at a
+      // low alpha fading from the edge toward the center, clipped to the bubble
       // so it never bleeds outside. (CSS inset shadows have 0 blur here, so this
       // is a faint accent, not a heavy halo — a fixed low alpha on the ring hue.)
       final inner = rrect.deflate(w);

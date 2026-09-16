@@ -12,7 +12,7 @@ void main() {
       // Even a blatant known-spam string passes when the whole filter is off.
       expect(
         SpamFilter.isSpamMessage(
-          'gm joined the channel via bitchat.land',
+          'gm \u0441\u043b\u0435\u0434\u0443 zzz qqq',
           enabled: false,
         ),
         isFalse,
@@ -26,17 +26,128 @@ void main() {
     });
   });
 
+  group('stripMaliciousDomains', () {
+    // Stripped, not dropped: the link is the payload, and dropping the whole
+    // message would hide the conversation around it too.
+    test('a full url goes, the sentence stays', () {
+      expect(
+          SpamFilter.stripMaliciousDomains(
+              'check out https://glub.chat/x?y=1 now'),
+          'check out now');
+    });
+
+    test('a bare domain goes', () {
+      expect(SpamFilter.stripMaliciousDomains('join glub.chat today'),
+          'join today');
+    });
+
+    test('subdomains and www go', () {
+      expect(SpamFilter.stripMaliciousDomains('see www.glub.chat/a/b here'),
+          'see here');
+      expect(SpamFilter.stripMaliciousDomains('http://sub.glub.chat'), '');
+    });
+
+    test('case does not save it', () {
+      expect(SpamFilter.stripMaliciousDomains('GLUB.CHAT is bad'), 'is bad');
+    });
+
+    test('the space before punctuation is closed up', () {
+      expect(SpamFilter.stripMaliciousDomains('go to glub.chat.'), 'go to.');
+    });
+
+    test('lookalikes are left alone', () {
+      // The rule is a domain match, not a substring one.
+      for (final s in [
+        'a real site glubs.chat stays',
+        'club.chat stays too',
+        'glub.chatter is a word',
+        'nothing to strip here',
+        '',
+      ]) {
+        expect(SpamFilter.stripMaliciousDomains(s), s);
+      }
+    });
+  });
+
+  group('isGlubClient', () {
+    test('the client tag is caught', () {
+      expect(
+          SpamFilter.isGlubClient([
+            ['d', 'nymchat'],
+            ['client', 'glub.chat'],
+          ]),
+          isTrue);
+    });
+
+    test('the version tag is caught whatever the version', () {
+      // Pinning 339ddb0 would last exactly until their next build.
+      expect(
+          SpamFilter.isGlubClient([
+            ['glub', 'v', '339ddb0']
+          ]),
+          isTrue);
+      expect(
+          SpamFilter.isGlubClient([
+            ['glub', 'v', 'deadbee']
+          ]),
+          isTrue);
+      expect(
+          SpamFilter.isGlubClient([
+            ['glub', 'v']
+          ]),
+          isTrue);
+    });
+
+    test('case does not save the client value', () {
+      expect(
+          SpamFilter.isGlubClient([
+            ['client', 'GLUB.CHAT']
+          ]),
+          isTrue);
+    });
+
+    test('ordinary events are untouched', () {
+      expect(
+          SpamFilter.isGlubClient([
+            ['d', 'nymchat'],
+            ['n', 'alice'],
+            ['client', 'nymchat'],
+            ['nonce', '12', '16'],
+          ]),
+          isFalse);
+    });
+
+    test('a channel merely named after them is not their client', () {
+      expect(
+          SpamFilter.isGlubClient([
+            ['d', 'glubbers']
+          ]),
+          isFalse);
+      expect(
+          SpamFilter.isGlubClient([
+            ['t', 'glub']
+          ]),
+          isFalse);
+    });
+
+    test('malformed tags do not throw', () {
+      expect(SpamFilter.isGlubClient([]), isFalse);
+      expect(
+          SpamFilter.isGlubClient([
+            [],
+            ['client']
+          ]),
+          isFalse);
+    });
+  });
+
   group('isSpamMessage — known-spam strings (fire even when aggressive off)',
       () {
-    test('"joined the channel via bitchat.land" is always spam', () {
+    test('bitchat.land is no longer a rule — that site is gone', () {
+      // Removed rather than left in place: a dead domain in a spam list is a
+      // false-positive waiting for someone to register it.
       expect(SpamFilter.isSpamMessage('joined the channel via bitchat.land'),
-          isTrue);
-      // The known-spam check sits BEFORE the `aggressive === false` short-circuit.
-      expect(
-        SpamFilter.isSpamMessage('joined the channel via bitchat.land',
-            aggressive: false),
-        isTrue,
-      );
+          isFalse);
     });
 
     test('the chorus client tag is always spam', () {

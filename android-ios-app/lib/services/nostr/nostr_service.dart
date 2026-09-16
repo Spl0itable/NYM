@@ -358,6 +358,10 @@ class NostrService {
     if (_autoFallback) {
       ApiClient.apiStatsSink = _apiStats;
     }
+    // The transports know which socket a frame arrived on; only the service
+    // knows the geo directory. Set here rather than at each construction site
+    // so a pool swapped in by the fallback path carries the gate too.
+    _pool.geoOriginAllows = geoOriginAllowsEvent;
   }
 
   /// Persistent /api traffic counters, kept on the service (NOT the pool) so the
@@ -392,6 +396,12 @@ class NostrService {
   /// NIP-46 remote path works end-to-end (mirrors the PWA's `signEvent`).
   /// Mutable for the same hardcore-rotation reason as [identity].
   EventSigner? signer;
+
+  /// The attestation badge to carry on outgoing channel messages, set by
+  /// [AttestService] once this install has enrolled. Null until then, and on a
+  /// device that cannot attest it stays null — the message still sends, it
+  /// just goes unbadged.
+  String? attestBadge;
 
   /// Surgically swap the signing identity in place — hardcore keypair mode
   /// (messages.js:2392-2404 → `generateKeypair()`, which only swaps `privkey`/
@@ -918,6 +928,7 @@ class NostrService {
       // leave the direct relays serving the D1-collapsed live-only set with no
       // D1 behind it to fill the history.
       _pool = direct;
+      direct.geoOriginAllows = geoOriginAllowsEvent;
       direct.connectAll();
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
@@ -1038,6 +1049,7 @@ class NostrService {
       final live = _activeSubsOf(old);
       await _detachSockets(old);
       _pool = restored;
+      restored.geoOriginAllows = geoOriginAllowsEvent;
       restored.onProxyUnreachable = _onProxyUnreachable; // future blips
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
@@ -1108,7 +1120,7 @@ class NostrService {
   }
 
   /// Cap on how long a one-shot announcement lookup waits before giving up and
-  /// letting the message go classical — which is the behaviour that was there
+  /// letting the message go classical — which is the behavior that was there
   /// before, not a new failure mode.
   static const Duration pqLookupTimeout = Duration(milliseconds: 2500);
 
@@ -1580,10 +1592,16 @@ class NostrService {
     final nowMs =
         hasStamp ? createdAtSec * 1000 : DateTime.now().millisecondsSinceEpoch;
 
+    // The attestation badge binds to the key that signs the event, so a
+    // pseudonymous send (its own ephemeral key) carries none — and must not,
+    // or it would link the throwaway identity back to the durable one.
+    final badge = signerOverride == null ? attestBadge : null;
+
     final tags = <List<String>>[
       ['n', nym],
       ['ms', '$nowMs'],
       [isGeo ? 'g' : 'd', isGeo ? geohash : channelKey],
+      if (badge != null && badge.isNotEmpty) ['nymattest', badge],
       if (threadRoot != null && threadRoot.isNotEmpty)
         ['e', threadRoot, '', 'root'],
       // NIP-30: declare any custom emoji used in the message so other clients
@@ -2178,11 +2196,14 @@ class NostrService {
   /// Publishes a gift-wrapped delivery/read receipt (kind 69420) for
   /// [messageId] to [recipientPubkey]. (docs/specs/03 §10)
   Future<bool> publishReceipt({
-    required String messageId,
+    String? messageId,
+    List<String>? messageIds,
     required String receiptType, // 'delivered' | 'read'
     required String recipientPubkey,
     String? encryptToPubkey,
   }) async {
+    final ids = messageIds ?? (messageId == null ? const <String>[] : [messageId]);
+    if (ids.isEmpty) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final rumor = UnsignedEvent(
       pubkey: identity.pubkey,
@@ -2190,7 +2211,7 @@ class NostrService {
       kind: EventKind.nymReceiptRumor,
       tags: [
         ['p', recipientPubkey],
-        ['x', messageId],
+        for (final id in ids) ['x', id],
         ['receipt', receiptType],
       ],
       content: '',
@@ -2206,12 +2227,14 @@ class NostrService {
     required String status, // 'start' | 'stop'
     required List<String> recipients,
     String? groupId,
+    int ttlSec = 0,
     String Function(String memberPubkey)? encryptTo,
   }) async {
     if (recipients.isEmpty) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final tags = <List<String>>[
       ['typing', status],
+      if (status == 'start' && ttlSec > 0) ['ttl', '$ttlSec'],
       if (groupId != null) ['g', groupId],
     ];
     var any = false;
@@ -2854,6 +2877,48 @@ class NostrService {
   /// Picks the [count] geo relays closest to [geohash]'s center using the
   /// Haversine distance (`calculateDistance`, channel.dart). Mirrors
   /// `getClosestRelaysForGeohash`.
+  /// Whether a geohash channel message may be admitted from the relay that
+  /// delivered it.
+  ///
+  /// The subscriptions stay open — the sidebar, the explorer and the archive
+  /// are built from seeing every channel on every relay. What this decides is
+  /// narrower: bitchat publishes a geohash message to the relays nearest that
+  /// geohash and reads it back from the same ones, so a kind 20000 tagged
+  /// `g=<geohash>` that arrived from anywhere else was not sent by a
+  /// participant in that place. It was sprayed at the tag.
+  ///
+  /// Kind 20000 only. Nothing else is ever published to geo relays — reactions
+  /// and polls on a geohash channel go to the defaults like every other kind —
+  /// so applying this to them would delete every reaction in every geohash
+  /// channel, ours included.
+  ///
+  /// Fails open wherever it cannot judge: an unloaded directory, a geohash
+  /// that will not decode, an untagged frame, and a neighbourhood we hold no
+  /// socket to. That last one is what keeps low-data mode working, where only
+  /// the channels already visited are sharded — there is no admissible source
+  /// to wait for, so rejecting would hide the channel rather than filter it.
+  bool geoOriginAllowsEvent(NostrEvent e, String? relayUrl) {
+    if (e.kind != EventKind.geoChannel) return true;
+    if (relayUrl == null || relayUrl.isEmpty) return true;
+    final gh = e.tagValue('g')?.toLowerCase();
+    if (gh == null || gh.isEmpty) return true;
+    // decodeGeohash tolerates characters outside the base32 alphabet and
+    // returns a coordinate anyway, so junk would otherwise be measured against
+    // real relays and judged. The PWA guards the same way.
+    if (!ch.isValidGeohash(gh)) return true;
+
+    final closest = closestGeoRelays(gh);
+    if (closest.isEmpty) return true;
+    final allow = {for (final r in closest) r.url};
+    if (allow.contains(relayUrl)) return true;
+
+    final connected = pool.connectedRelayUrls;
+    for (final u in allow) {
+      if (connected.contains(u)) return false; // a source exists; this is not it
+    }
+    return true;
+  }
+
   List<GeoRelay> closestGeoRelays(String geohash,
       {int count = RelayConfig.geoRelayCount}) {
     if (geoRelays.isEmpty || geohash.isEmpty) return const [];

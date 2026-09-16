@@ -18,7 +18,6 @@ import '../../features/i18n/localization_service.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/identity/panic_overlay.dart';
-import '../../features/identity/panic_wipe.dart';
 import '../../features/onboarding/tutorial_overlay.dart';
 import '../../features/pms/new_pm_modal.dart';
 import '../../features/relays/relay_stats_modal.dart';
@@ -545,7 +544,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 final name = g.name.isEmpty ? 'Group' : g.name;
                 rendered = '$name · ${_abbreviateNumber(g.members.length)}';
               } else {
-                rendered = '${stripPubkeySuffix(e.pm!.nym)}'
+                rendered =
+                    '${pickDisplayNym(users[e.pm!.pubkey]?.nym, e.pm!.nym)}'
                     '#${getPubkeySuffix(e.pm!.pubkey)}';
               }
               return rendered.toLowerCase().contains(term);
@@ -797,7 +797,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final c = context.nym;
     // Live connected-relay count (PWA `poolConnectedRelays.length`, used by
     // `updateConnectionStatus`). Read-only here — drives the status-indicator
-    // label + dot colour below the nym box.
+    // label + dot color below the nym box.
     final connectedRelays = ref.watch(
       appStateProvider.select((s) => s.connectedRelays),
     );
@@ -915,23 +915,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
     );
   }
 
-  void _triggerPanic(BuildContext context) {
-    PanicOverlay.show(
-      context,
-      wipe: PanicWipe.production(),
-      onComplete: () {
-        // The disk stores are wiped (PanicWipe). Now reset the RUNNING session:
-        // drop the in-memory identity/keys/vault, reset AppState to the empty
-        // logged-out shell, and drive the app back to first-run setup — the
-        // in-memory half of the PWA's `panicWipe` (panic.js nulls
-        // privkey/pubkey/_vaultMem then reloads to a pristine first run). The
-        // boot-epoch bump inside `resetAfterPanic` remounts the BootGate (now
-        // setup-needed) and its `popUntil(first)` also tears down this overlay,
-        // so no manual pop is required.
-        unawaited(ref.read(nostrControllerProvider).resetAfterPanic());
-      },
-    );
-  }
+  // The disk stores go with PanicWipe; resetAfterPanic drops the running
+  // session and its boot-epoch bump remounts the gate at first run, whose
+  // popUntil(first) also tears the overlay down.
+  void _triggerPanic(BuildContext context) => startPanicWipe(context, ref);
 }
 
 /// Wraps the identity header to implement the panic gesture: a tap fires
@@ -1003,7 +990,7 @@ class _PanicHoldDetectorState extends State<_PanicHoldDetector> {
   void _up(PointerUpEvent _) {
     final held = _timer != null;
     _cancel();
-    // A movement-cancelled press must not fall through to the tap action
+    // A movement-canceled press must not fall through to the tap action
     // either (the PWA's click handler only fires when the pointer stayed put).
     if (!_fired && held) widget.onTap();
     _fired = false;
@@ -1095,10 +1082,10 @@ class _NymValueText extends StatelessWidget {
 /// `.status-indicator` (index.html:434-437, styles-shell.css:105-119): the
 /// connection-status row that sits in `.sidebar-header` directly below
 /// `.nym-display` (a sibling of it, NOT nested inside). inline-flex, gap 5,
-/// 11px `--text-dim`, centred by the header's `text-align:center`; tapping
+/// 11px `--text-dim`, centerd by the header's `text-align:center`; tapping
 /// opens the Network Stats modal (`data-action="openRelayStats"`).
 ///
-/// `.status-dot` is a plain 8px circle whose colour `updateConnectionStatus`
+/// `.status-dot` is a plain 8px circle whose color `updateConnectionStatus`
 /// (relays.js:3886) sets inline from the live pool count:
 /// `--primary` Connected / `--warning` Connecting / `--danger` Disconnected.
 /// In the default proxy/pool mode the label is `Connected (N relays)` when any
@@ -1131,7 +1118,7 @@ class _ConnectionStatusIndicator extends StatelessWidget {
           key: TutorialTargets.keyFor(TutorialTarget.statusIndicator),
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // `.status-dot`: plain 8px circle, colour set per connection state.
+            // `.status-dot`: plain 8px circle, color set per connection state.
             Container(
               width: 8,
               height: 8,

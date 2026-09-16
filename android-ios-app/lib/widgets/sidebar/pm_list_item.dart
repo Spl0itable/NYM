@@ -55,7 +55,7 @@ class PMListItem extends ConsumerWidget {
     final isDev = controller.isVerifiedDeveloper(pubkey);
     final isBot = controller.isVerifiedBot(pubkey);
     final isFriend = appState.isFriend(pubkey);
-    final base = stripPubkeySuffix(nym);
+    final base = pickDisplayNym(appState.users[pubkey]?.nym, nym);
     final suffix = getPubkeySuffix(pubkey);
 
     return Padding(

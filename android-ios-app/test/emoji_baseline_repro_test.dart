@@ -184,7 +184,7 @@ void main() {
   });
 }
 
-/// Minimal analogue of the composer's WYSIWYG field: a [TextField] whose
+/// Minimal analog of the composer's WYSIWYG field: a [TextField] whose
 /// controller replaces the  sentinel with the emoji WidgetSpan, exactly
 /// like `_SentinelEditingController.buildTextSpan` (composer.dart).
 class _ComposerLike extends StatelessWidget {

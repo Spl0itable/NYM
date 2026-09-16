@@ -222,7 +222,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (nym.isNotEmpty && isReservedNick(nym)) {
       final verified = await DevNsecModal.open(context);
       if (!mounted) return;
-      if (verified == null) return; // cancelled — don't proceed with the name
+      if (verified == null) return; // canceled — don't proceed with the name
     }
 
     setState(() => _busy = true);

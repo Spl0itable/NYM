@@ -190,21 +190,21 @@ const String kSansFont = 'Roboto';
 const String kEmojiFont = 'Noto Color Emoji';
 
 /// Bundled broad text sans (`pubspec.yaml`): the catch-all for the codepoints
-/// Roboto lacks but which are NOT colour emoji — the bitcoin sign ₿ (U+20BF),
+/// Roboto lacks but which are NOT color emoji — the bitcoin sign ₿ (U+20BF),
 /// extra currency / punctuation / dashes, Greek / Cyrillic — so they render
 /// instead of tofu. Deliberately a TEXT sans with NO emoji-range glyphs: a
 /// monochrome symbol font here (e.g. Noto Sans Symbols 2) would shadow the OS
-/// COLOUR emoji for codepoints like ⚡ ★ ☂ ❤ (they have both a text outline and
-/// an emoji presentation), rendering them as black outlines instead of colour.
+/// COLOr emoji for codepoints like ⚡ ★ ☂ ❤ (they have both a text outline and
+/// an emoji presentation), rendering them as black outlines instead of color.
 const String kSansSymFont = 'Noto Sans';
 
 /// The glyph-coverage fallback chain appended after the real [kSansFont] primary.
 /// Because the primary is a bundled, always-resolved sans, the line strut comes
 /// from IT — not these fallbacks — so Latin metrics stay correct. Order:
-/// [kEmojiFont] is an UNRESOLVED hint that Flutter skips, so colour-emoji
+/// [kEmojiFont] is an UNRESOLVED hint that Flutter skips, so color-emoji
 /// codepoints fall through to the OS native emoji font (Apple Color Emoji on iOS),
 /// matching the PWA; [kSansSymFont] then catches the non-emoji text symbols Roboto
-/// lacks (₿). It carries NO emoji-range glyphs, so it never shadows colour emoji.
+/// lacks (₿). It carries NO emoji-range glyphs, so it never shadows color emoji.
 const List<String> kEmojiFontFallback = [
   kEmojiFont,
   kSansSymFont,
@@ -232,8 +232,8 @@ ThemeData buildNymThemeData(NymColors c) {
   // Every text style gets the bundled [kSansFont] primary + the emoji/symbol
   // [kEmojiFontFallback]. The primary is a real, always-resolved sans, so the
   // line strut is driven by Roboto (correct metrics) while emoji / enclosed
-  // letters / symbols in nyms, labels, and chrome still resolve to colour /
-  // symbol glyphs via the fallback — the PWA's `--font-sans` behaviour. This is
+  // letters / symbols in nyms, labels, and chrome still resolve to color /
+  // symbol glyphs via the fallback — the PWA's `--font-sans` behavior. This is
   // a pure value assignment (no font is loaded here), so binding-less unit tests
   // stay green.
   final textTheme = base.textTheme

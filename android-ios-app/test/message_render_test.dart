@@ -98,7 +98,7 @@ void main() {
     });
 
     test('SVG custom-emoji URL routes through the SVG path (proxied)', () {
-      // BUG 3: a custom emoji served as SVG must be recognised AFTER proxying so
+      // BUG 3: a custom emoji served as SVG must be recognized AFTER proxying so
       // InlineNetworkImage renders it via flutter_svg rather than the raster
       // decoder (which throws "ImageDecoder unimplemented"). We assert on the
       // proxied URL the renderer feeds the widget — `isSvgUrl` must still see the

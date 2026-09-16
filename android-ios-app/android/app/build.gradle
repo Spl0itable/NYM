@@ -47,7 +47,7 @@ android {
         // unchanged.
         minSdk = 24
         targetSdk = 36
-        versionCode = 296
+        versionCode = 305
         versionName = flutter.versionName
         
         // Support all ABIs - AGP 8.9.1 automatically handles 16 KB alignment
@@ -78,4 +78,8 @@ dependencies {
     // Enable Java 8+ API desugaring across app and transitive dependencies
     // This satisfies AAR metadata requirements from flutter_local_notifications
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+
+    // Play Integrity: the signed verdict the attestation ledger accepts as
+    // proof that this really is the published app on a sound device.
+    implementation 'com.google.android.play:integrity:1.4.0'
 }

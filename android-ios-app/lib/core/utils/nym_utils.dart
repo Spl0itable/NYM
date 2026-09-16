@@ -19,6 +19,18 @@ String getNymFromPubkey(String baseNym, String pubkey) {
   return '$base#${getPubkeySuffix(pubkey)}';
 }
 
+bool isPlaceholderNym(String? nym) {
+  if (nym == null) return true;
+  final base = stripPubkeySuffix(nym).trim();
+  return base.isEmpty || base.toLowerCase() == 'nym';
+}
+
+String pickDisplayNym(String? liveNym, String? storedNym) {
+  if (!isPlaceholderNym(liveNym)) return stripPubkeySuffix(liveNym!);
+  if (!isPlaceholderNym(storedNym)) return stripPubkeySuffix(storedNym!);
+  return 'nym';
+}
+
 final RegExp _nymSplitRe =
     RegExp(r'^([\s\S]*)#([0-9a-f]{4})$', caseSensitive: false);
 

@@ -229,7 +229,7 @@ class CacheStore {
     );
   }
 
-  /// Initialise the schema on an already-open [Database]. Useful for tests that
+  /// Initialize the schema on an already-open [Database]. Useful for tests that
   /// open an in-memory database through sqflite_common_ffi and pass it in.
   Future<void> initSchema() async {
     await _createSchema(_database);
@@ -963,7 +963,7 @@ class CacheStore {
   /// EMERGENCY destruction for the panic wipe (panic.js `_panicWipeDb`,
   /// :237-277): overwrite a few junk records into every store, clear the
   /// stores, then close the connection and delete the database FILE itself —
-  /// the sqflite analogue of the PWA's junk `put`s + `indexedDB.deleteDatabase`.
+  /// the sqflite analog of the PWA's junk `put`s + `indexedDB.deleteDatabase`.
   /// Every step is best-effort and isolated so a locked table can't block the
   /// wipe. Injected (test/in-memory) databases have no file; for those the
   /// junk-overwrite + clear + close is the whole wipe.

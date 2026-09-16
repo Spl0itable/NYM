@@ -212,6 +212,82 @@ void main() {
       expect(find.byType(TutorialOverlay), findsNothing);
     });
 
+    testWidgets('the first step offers the nsec and the recovery code',
+        (tester) async {
+      roomy(tester);
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
+
+      await tester.pumpWidget(_host(
+        kv,
+        TutorialOverlay(
+          onDismiss: () {},
+          nsec: () => 'nsec1aaaaaaaaaaaaaaaaaaaaaaaa',
+          recoveryCode: () => 'nympq1bbbbbbbbbbbbbbbbbbbbbb',
+        ),
+      ));
+      await tester.pump();
+
+      expect(find.byKey(const Key('tutorialKeys')), findsOneWidget);
+      expect(find.byKey(const Key('tutorialNsecRow')), findsOneWidget);
+      expect(find.byKey(const Key('tutorialPqRow')), findsOneWidget);
+
+      // Both start masked.
+      final masked = tester.widget<Text>(find.byKey(const Key('tutorialNsecValue')));
+      expect(masked.data, isNot(contains('nsec1')));
+
+      await tester.tap(find.byKey(const Key('tutorialNsecEye')));
+      await tester.pump();
+      expect(
+          tester.widget<Text>(find.byKey(const Key('tutorialNsecValue'))).data,
+          'nsec1aaaaaaaaaaaaaaaaaaaaaaaa');
+      // Revealing one does not reveal the other.
+      expect(tester.widget<Text>(find.byKey(const Key('tutorialPqValue'))).data,
+          isNot(contains('nympq1')));
+
+      // The panel belongs to the first step only.
+      await tester.tap(find.byKey(const Key('tutorialNextBtn')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tutorialKeys')), findsNothing);
+    });
+
+    testWidgets('a signer login is offered the recovery code alone',
+        (tester) async {
+      roomy(tester);
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
+
+      await tester.pumpWidget(_host(
+        kv,
+        TutorialOverlay(
+          onDismiss: () {},
+          nsec: () => null,
+          recoveryCode: () => 'nympq1bbbbbbbbbbbbbbbbbbbbbb',
+        ),
+      ));
+      await tester.pump();
+
+      expect(find.byKey(const Key('tutorialPqRow')), findsOneWidget);
+      expect(find.byKey(const Key('tutorialNsecRow')), findsNothing);
+    });
+
+    testWidgets('nothing to save shows no panel at all', (tester) async {
+      roomy(tester);
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final kv = await KeyValueStore.open();
+
+      await tester.pumpWidget(_host(
+        kv,
+        TutorialOverlay(onDismiss: () {}, nsec: () => null, recoveryCode: () => null),
+      ));
+      await tester.pump();
+
+      expect(find.byKey(const Key('tutorialKeys')), findsNothing);
+      // It keeps looking, because a fresh account mints its root late.
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const Key('tutorialKeys')), findsNothing);
+    });
+
     test('there are 12 tutorial steps, matching the PWA', () {
       expect(kTutorialSteps.length, 12);
       expect(kTutorialSteps.first.title, 'Nymchat Tutorial');

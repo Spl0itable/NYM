@@ -45,7 +45,7 @@ class QuickContextItem {
   final QuickContextItemColor color;
 }
 
-/// Colour variants for [QuickContextItem] (`.lightning` #f7931a, `.danger`).
+/// Color variants for [QuickContextItem] (`.lightning` #f7931a, `.danger`).
 enum QuickContextItemColor { normal, lightning, danger }
 
 /// The inline quick-context-menu (`.quick-context-menu`, styles-features.css
@@ -166,7 +166,7 @@ class _QuickContextRowState extends State<_QuickContextRow> {
 /// :2712-2776): a pill of emoji buttons (28px) plus exactly one trailing "more"
 /// chevron with a left divider (`.quick-react-expand`) that opens the full
 /// picker. Shown on long-press. The PWA pill carries no other affordance — the
-/// labelled actions live in the separate `.quick-context-menu` card rendered
+/// labeled actions live in the separate `.quick-context-menu` card rendered
 /// below (ui-context.js:1312-1323, 1452-1475).
 class QuickReactPopup extends StatelessWidget {
   const QuickReactPopup({

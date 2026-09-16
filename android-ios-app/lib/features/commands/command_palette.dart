@@ -174,7 +174,7 @@ class BotCommandPalette extends StatefulWidget {
     required this.onSelect,
   });
 
-  /// Filtered bot rows from [buildBotPaletteRows], in catalogue order.
+  /// Filtered bot rows from [buildBotPaletteRows], in catalog order.
   final List<BotPaletteCommand> rows;
 
   /// Index of the selected row.
@@ -339,7 +339,7 @@ Widget commandItemRow(
             // The description fills ALL remaining width and is right-anchored
             // like the PWA's space-between `.command-desc`, wrapping so the
             // whole localized text shows. Localized via `tr()` here (both
-            // palettes' catalogues store English source).
+            // palettes' catalogs store English source).
             Expanded(
               child: Text(
                 tr(desc),

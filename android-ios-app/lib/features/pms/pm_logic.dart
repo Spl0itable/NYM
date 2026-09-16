@@ -167,16 +167,17 @@ class PmLogic {
   /// than a 1:1 checkmark. Group vs PM is decided by the matched own message's
   /// `isGroup` flag on receive, so no wire `g` tag is required (matching the PWA).
   static ReceiptInfo? parseReceipt(Map<String, dynamic> rumor) {
-    String? messageId;
+    final messageIds = <String>[];
     String? type;
     for (final t in _tags(rumor)) {
       if (t.length < 2) continue;
-      if (t[0] == 'x') messageId = t[1];
+      if (t[0] == 'x') messageIds.add(t[1]);
       if (t[0] == 'receipt') type = t[1];
     }
-    if (messageId == null || type == null) return null;
+    if (messageIds.isEmpty || type == null) return null;
     return ReceiptInfo(
-      messageId: messageId,
+      messageId: messageIds.first,
+      messageIds: messageIds,
       receiptType: type,
       readerPubkey: rumor['pubkey'] as String?,
     );
@@ -186,16 +187,19 @@ class PmLogic {
   static TypingInfo? parseTyping(Map<String, dynamic> rumor) {
     String? status;
     String? groupId;
+    var ttl = 0;
     for (final t in _tags(rumor)) {
       if (t.length < 2) continue;
       if (t[0] == 'typing') status = t[1];
       if (t[0] == 'g') groupId = t[1];
+      if (t[0] == 'ttl') ttl = int.tryParse(t[1]) ?? 0;
     }
     if (status == null) return null;
     return TypingInfo(
       status: status,
       groupId: groupId,
       pubkey: rumor['pubkey'] as String?,
+      ttlSec: ttl > 0 ? ttl : 0,
     );
   }
 
@@ -247,11 +251,13 @@ class ReceiptInfo {
   ReceiptInfo({
     required this.messageId,
     required this.receiptType,
+    List<String>? messageIds,
     this.readerPubkey,
-  });
+  }) : messageIds = messageIds ?? [messageId];
 
-  /// The `['x', …]` nymMessageId of the original message.
   final String messageId;
+
+  final List<String> messageIds;
 
   /// 'delivered' | 'read'.
   final String receiptType;
@@ -263,12 +269,14 @@ class ReceiptInfo {
 
 /// A parsed typing indicator from a kind-69420 rumor.
 class TypingInfo {
-  TypingInfo({required this.status, this.groupId, this.pubkey});
+  TypingInfo({required this.status, this.groupId, this.pubkey, this.ttlSec = 0});
 
   /// 'start' | 'stop'.
   final String status;
   final String? groupId;
   final String? pubkey;
+
+  final int ttlSec;
 
   bool get isStart => status == 'start';
 }

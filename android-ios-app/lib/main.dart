@@ -134,7 +134,7 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
 
   void _onUnlocked(Map<String, String> secrets) {
     if (!mounted) return;
-    // Decrypted secrets are held in memory (the native analogue of `_vaultMem`)
+    // Decrypted secrets are held in memory (the native analog of `_vaultMem`)
     // and handed to identity restore — never re-plaintexted at rest.
     _bootController(unlockedSecrets: secrets);
     setState(() => _unlocked = true);
@@ -152,7 +152,7 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
     if (_unlocked) return const NymchatApp();
     // The unlock screen needs the theme too; wrap it in a minimal MaterialApp
     // so it matches the app's appearance (the PWA applies the saved color mode
-    // before showing the unlock modal). Reuses the same colour provider the
+    // before showing the unlock modal). Reuses the same color provider the
     // full app does so the look is identical.
     final colors = ref.watch(nymColorsProvider);
     return MaterialApp(

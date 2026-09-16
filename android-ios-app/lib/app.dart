@@ -185,6 +185,12 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     // we ask the OS to keep the relay sockets and the mesh radio running and
     // leave the geo-relay keep-alive pinging; otherwise we pause it so it
     // doesn't fire reconnects off-screen (the PWA's `document.hidden` skip).
+    try {
+      ref.read(nostrControllerProvider).flushPendingGroupReactions();
+    } catch (_) {}
+    try {
+      ref.read(nostrControllerProvider).flushPendingDeposits();
+    } catch (_) {}
     var keepAlive = false;
     try {
       keepAlive = ref.read(settingsProvider).backgroundConnectivity;

@@ -49,10 +49,10 @@ class CallNym extends ConsumerWidget {
   /// Render a plain "You" with no decorations (calls.js `opts.self`).
   final bool self;
 
-  /// Base-nym colour (defaults to the surrounding text colour).
+  /// Base-nym color (defaults to the surrounding text color).
   final Color? baseColor;
 
-  /// Base-nym text style override (size/weight). Colour comes from [baseColor].
+  /// Base-nym text style override (size/weight). Color comes from [baseColor].
   final TextStyle? baseStyle;
 
   final double suffixOpacity;
@@ -75,9 +75,11 @@ class CallNym extends ConsumerWidget {
 
     final users = ref.watch(usersProvider);
     final user = users[pubkey];
-    final rawNym = (nym != null && nym!.isNotEmpty)
-        ? nym!
-        : (user?.nym.isNotEmpty == true ? user!.nym : pubkey);
+    final rawNym = !isPlaceholderNym(user?.nym)
+        ? user!.nym
+        : ((nym != null && nym!.isNotEmpty)
+            ? nym!
+            : (user?.nym.isNotEmpty == true ? user!.nym : pubkey));
     final baseNym = stripPubkeySuffix(rawNym);
     final suffix = getPubkeySuffix(pubkey);
 
@@ -139,7 +141,7 @@ class CallNym extends ConsumerWidget {
 
 /// Inline `@mention` highlighting for call-chat text (calls.js
 /// `_formatCallChatText`, lines 1457-1472): `@name#suffix` segments rendered in
-/// the primary colour, weight 600. Returns a [TextSpan] tree to drop into a
+/// the primary color, weight 600. Returns a [TextSpan] tree to drop into a
 /// `Text.rich`.
 TextSpan callChatTextSpans(String text, TextStyle base, Color mentionColor) {
   final raw = text;

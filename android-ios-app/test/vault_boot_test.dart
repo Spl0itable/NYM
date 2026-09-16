@@ -124,7 +124,7 @@ void main() {
 
       expect(unlocked, isTrue);
       // The decrypted secrets are handed to the caller IN MEMORY (not written
-      // back to storage) — the native analogue of the PWA's `_vaultMem`.
+      // back to storage) — the native analog of the PWA's `_vaultMem`.
       expect(receivedSecrets?[SecretKeys.sessionNsec], isNotNull);
     });
 

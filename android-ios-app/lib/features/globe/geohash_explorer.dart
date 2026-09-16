@@ -631,7 +631,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
             setState(() => _view = _view.clamped(size));
-            // A requested focus can only be honoured once the map has a size
+            // A requested focus can only be honored once the map has a size
             // to frame the cell against, so it rides the first real layout.
             // Guarded by `_focusApplied` so a later resize doesn't yank the
             // camera back after the user has panned away.

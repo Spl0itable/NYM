@@ -77,7 +77,7 @@ class IdentityVault {
   static final _aes = AesGcm.with256bits();
 
   /// The derived AES session key, retained after a successful [enable] /
-  /// [unlock] — the native analogue of the PWA's `this._vaultKey`
+  /// [unlock] — the native analog of the PWA's `this._vaultKey`
   /// (key-vault.js `unlockVault`). Lets [secretSet] keep encrypting secrets
   /// written AFTER boot (nsec login, NIP-46 session, key rotation) instead of
   /// silently downgrading them to plaintext. Cleared by [disable] / [reset].
@@ -289,7 +289,7 @@ class IdentityVault {
           throw StateError('Vault verification failed.');
         }
       } catch (_) {
-        throw StateError('Wrong password/PIN or unrecognised passkey.');
+        throw StateError('Wrong password/PIN or unrecognized passkey.');
       }
     }
     // Verified — retain the key for the session (`this._vaultKey = key`,

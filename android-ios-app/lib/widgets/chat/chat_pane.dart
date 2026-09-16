@@ -160,7 +160,7 @@ class ChatPane extends ConsumerWidget {
       // area paints only a translucent wash (`rgba(0,0,0,0.15)` / light
       // `rgba(255,255,255,0.3)`), so the wallpaper reads through the message
       // region in both single-chat and columns views. Painting an opaque `c.bg`
-      // here (the old behaviour) covered the wallpaper everywhere.
+      // here (the old behavior) covered the wallpaper everywhere.
       color: Colors.transparent,
       child: Column(
         children: [
@@ -181,7 +181,7 @@ class ChatPane extends ConsumerWidget {
             // isn't consumed by an interactive child (message rows / buttons
             // still win the arena). Swipe-down dismissal lives in `MessagesList`
             // (`keyboardDismissBehavior: onDrag`). On the web/browser PWA this is
-            // native browser behaviour; Flutter needs it wired explicitly.
+            // native browser behavior; Flutter needs it wired explicitly.
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: () => FocusScope.of(context).unfocus(),
@@ -275,7 +275,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   int _geocodeToken = 0;
 
   /// Pending retries for place names that missed, keyed by geohash. One shared
-  /// timer meant switching channels cancelled the previous geohash's retry, so
+  /// timer meant switching channels canceled the previous geohash's retry, so
   /// whichever header you left behind kept its coordinates for good.
   final Map<String, Timer> _placeRetries = {};
 
@@ -632,10 +632,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                     right: -2,
                     bottom: -2,
                     // `.user-status-dot` is `box-sizing: content-box`, so the 7px
-                    // is the COLOURED size and the 2px ring sits OUTSIDE (11px
+                    // is the COLOrED size and the 2px ring sits OUTSIDE (11px
                     // box) — matching the sidebar `_AvatarWithStatus`. Drawing the
                     // border INSIDE a 7px box (Flutter's default) left only a ~3px
-                    // colour centre, which read as "too small". Ring colour is the
+                    // color center, which read as "too small". Ring color is the
                     // hardcoded `#0a0a0f` dark / `#f5f5f2` light, not `--bg`.
                     child: Container(
                       width: 11,
@@ -823,7 +823,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       color: c.textDim,
       fontSize: 12,
       decoration: loc.geohash != null ? TextDecoration.underline : null,
-      // Match the text colour rather than defaulting to the foreground, so the
+      // Match the text color rather than defaulting to the foreground, so the
       // rule reads as dim as the words it sits under.
       decorationColor: c.textDim,
     );
@@ -869,7 +869,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         children: [
           Flexible(
             // A geohash channel's place name is tappable and keeps the line's
-            // text-dim colour, so only the tap action (and pointer) differ. The
+            // text-dim color, so only the tap action (and pointer) differ. The
             // dist span stays OUTSIDE the tap target. The tap opens the
             // in-app geohash explorer framed on this cell — no browser hand-off
             // any more, so nothing here can fail on a third party's outage.
@@ -1003,7 +1003,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         // Nothing else re-triggers a lookup, so schedule the retry the cache's
         // backoff allows — otherwise the header keeps the coordinates. Keyed
         // per geohash: one shared timer meant opening a second channel
-        // cancelled the first one's retry and stranded it on coordinates. When
+        // canceled the first one's retry and stranded it on coordinates. When
         // the cache has run out of automatic attempts (`retryAt == null`) the
         // key stays in `_placeFailed` and the app-resume handler above is what
         // gives it another go.
@@ -1170,7 +1170,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     // (forward / share・video) line up vertically. Without the fixed cell the
     // top row collapses to the nav buttons' 24px phone width while the bottom
     // row stays 28px, and the forward arrow drifts left of the share/call icon
-    // beneath it (the reported off-centre glyph).
+    // beneath it (the reported off-center glyph).
     const cell = 28.0;
     Widget gridCell(Widget child) =>
         SizedBox(width: cell, child: Center(child: child));
@@ -1219,7 +1219,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           // `.icon-btn.notifications-btn` (index.html:644-650) is ICON-ONLY —
-          // just a 16×16 bell (vs the 14px icons on the labelled pills) + the
+          // just a 16×16 bell (vs the 14px icons on the labeled pills) + the
           // count badge; no text node.
           _HeaderPill(
             svg: NymIcons.bell,
@@ -1492,7 +1492,7 @@ class _NavBtnState extends State<_NavBtn> {
 
 /// `.favorite-channel-btn` / `.share-channel-btn` / `.call-channel-btn`: no box —
 /// just a 5px-padded 18px glyph that scales to 1.1 and tints `--primary` on
-/// hover. [activeColor] paints the resting glyph a fixed colour (the favorite
+/// hover. [activeColor] paints the resting glyph a fixed color (the favorite
 /// star's gold `#f5c518` when pinned); otherwise it rests at `--text-dim`.
 /// Disabled rests dim and ignores taps (the always-favorited `#nymchat`).
 class _ActionBtn extends StatefulWidget {

@@ -45,7 +45,7 @@ class BitchatPacket {
   bool get isBroadcast =>
       recipientID == null || _bytesEqual(recipientID!, kBroadcastRecipient);
 
-  /// Serialises for transmission (optionally padded to a privacy block size).
+  /// Serializes for transmission (optionally padded to a privacy block size).
   Uint8List? toBytes({bool padding = true}) =>
       BinaryProtocol.encode(this, padding: padding);
 

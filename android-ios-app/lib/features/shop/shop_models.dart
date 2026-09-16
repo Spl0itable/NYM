@@ -164,9 +164,9 @@ class ActiveItems {
   }
 }
 
-/// The per-style text colour + glow used to render the cosmetic preview,
+/// The per-style text color + glow used to render the cosmetic preview,
 /// ported from `css/styles-features.css` (`.message.style-X .message-content`).
-/// Faithful subset: primary colour and glow; gradient styles use [gradient].
+/// Faithful subset: primary color and glow; gradient styles use [gradient].
 class MessageStyleVisual {
   const MessageStyleVisual({
     required this.color,
@@ -194,7 +194,7 @@ class MessageStyleVisual {
   final Color? contentBackground;
 }
 
-/// Cosmetic aura visual: border + glow colour (from `.message.cosmetic-X`).
+/// Cosmetic aura visual: border + glow color (from `.message.cosmetic-X`).
 ///
 /// [boxShadows] are the exact `box-shadow` layers from `.message.cosmetic-X`
 /// (inset ring + outer glow) so the preview bubble matches the rendered
@@ -221,7 +221,7 @@ class CosmeticVisual {
   /// paints a [SweepGradient] border ring instead of a flat gradient fill.
   final List<Color>? ringGradient;
 
-  /// The holographic multi-colour sheen (`cosmetic-bubble-hologram`); when set
+  /// The holographic multi-color sheen (`cosmetic-bubble-hologram`); when set
   /// the preview layers a screen-blended gradient sheen over the bubble.
   final List<Color>? sheenGradient;
 }
@@ -232,7 +232,7 @@ class CosmeticVisual {
 enum ShopAvailabilityState { available, soon, ended, soldout }
 
 /// A resolved availability `{state, label}` for a limited item — the supply
-/// badge text + colour tier (`shop.js:813-830`).
+/// badge text + color tier (`shop.js:813-830`).
 class ShopAvailability {
   const ShopAvailability(this.state, this.label);
 

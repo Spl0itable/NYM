@@ -1,0 +1,185 @@
+{
+ "id": "scams",
+ "version": 1,
+ "label": "Scams & spam",
+ "note": "Almost entirely structural: seed-phrase requests, non-Bitcoin chain addresses, doubling offers, Telegram/WhatsApp handoffs, punycode links. A scam is recognisable by its shape, and shape needs no translation, so this pack works in every language without a word list per language.",
+ "terms": {
+  "en": [
+   "seedphrase",
+   "airdrop claim",
+   "wallet drainer",
+   "giveaway winner",
+   "binary options",
+   "forex signals",
+   "pump group",
+   "signal group",
+   "investment plan",
+   "roi daily",
+   "bitcoin doubler",
+   "crypto doubler",
+   "money doubler",
+   "free money",
+   "easy money",
+   "work from home opportunity",
+   "no experience needed",
+   "be your own boss",
+   "financial freedom",
+   "passive income stream",
+   "life changing money",
+   "act now limited time",
+   "limited slots available",
+   "guaranteed win",
+   "sure odds",
+   "fixed matches",
+   "betting tips guaranteed",
+   "loan without collateral",
+   "credit repair expert",
+   "recovery expert",
+   "refund agent",
+   "blessing sponsor",
+   "charity donation urgent"
+  ]
+ },
+ "allow": [
+  "airdrop",
+  "giveaway",
+  "investment",
+  "trading",
+  "mining",
+  "staking",
+  "wallet",
+  "recovery",
+  "seed",
+  "forex",
+  "support",
+  "admin",
+  "telegram",
+  "whatsapp",
+  "nft",
+  "token",
+  "tokens"
+ ],
+ "patterns": [
+  {
+   "re": "\\b(?:seed|recovery|mnemonic|backup)\\s+(?:phrase|phrases|words|key)\\b",
+   "flags": "i",
+   "note": "nobody has a legitimate reason to ask for one"
+  },
+  {
+   "re": "\\b(?:12|24)\\s*[- ]?\\s*word(?:s)?\\s+(?:phrase|seed|recovery|backup)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:private\\s*key|privkey|nsec)\\s*(?::|=|is|to)\\s*\\S",
+   "flags": "i",
+   "note": "a pasted or solicited secret key"
+  },
+  {
+   "re": "\\bimport\\s+(?:your\\s+)?(?:wallet|seed|keys?)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:validate|verify|sync|restore|migrate|connect)\\s+(?:your\\s+)?wallet\\b",
+   "flags": "i",
+   "note": "the standard drainer pretext"
+  },
+  {
+   "re": "0x[a-fA-F0-9]{40}\\b",
+   "note": "an EVM address; this app is Bitcoin/Lightning, so it is a shill or a drain"
+  },
+  {
+   "re": "\\bT[A-Za-z1-9]{33}\\b",
+   "note": "TRON address"
+  },
+  {
+   "re": "\\b4[0-9AB][1-9A-HJ-NP-Za-km-z]{93}\\b",
+   "note": "Monero address"
+  },
+  {
+   "re": "\\b(?:double|triple|10x|100x|1000x)\\s+your\\s+(?:money|btc|bitcoin|sats|crypto|investment|deposit)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\bsend\\s+(?:me\\s+)?\\d[\\d.,]*\\s*(?:btc|eth|sol|usdt|sats)\\b.{0,40}\\b(?:get|receive|back|return)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\bguaranteed\\s+(?:profit|profits|returns?|income|roi|winnings?)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:risk[- ]free|no\\s+risk)\\s+(?:profit|investment|trading|returns?)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:earn|make)\\s*(?:up\\s*to\\s*)?[$€£]?\\s?\\d{2,}[\\d.,]*\\s*(?:k|usd|dollars?|eur|per|a|each|daily|weekly)?\\s*(?:per\\s+)?(?:day|week|hour|month|daily|weekly)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:investment|trading|mining|staking)\\s+(?:opportunity|platform|program|plan|scheme)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:forex|binary\\s+options?|copy\\s+trading|signal\\s+group)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:account\\s+manager|expert\\s+trader|trading\\s+expert|financial\\s+advisor)\\b.{0,60}\\b(?:dm|inbox|message|whatsapp|telegram)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:dm|pm|inbox|message)\\s+me\\s+(?:for|to)\\s+(?:more|details|info|profit|earnings|investment|the\\s+link)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\bhttps?://t\\.me/\\S+",
+   "flags": "i",
+   "note": "Telegram handoff"
+  },
+  {
+   "re": "\\bhttps?://(?:wa\\.me|api\\.whatsapp\\.com)/\\S+",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:whatsapp|telegram)\\s*(?::|@|\\+|number|me)\\s*\\S",
+   "flags": "i"
+  },
+  {
+   "re": "\\bhttps?://[^\\s/]*xn--",
+   "flags": "i",
+   "note": "punycode in a link is nearly always a lookalike domain"
+  },
+  {
+   "re": "\\b(?:claim|collect)\\s+(?:your\\s+)?(?:free\\s+)?(?:airdrop|tokens?|reward|bonus|giveaway|nft)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\bfirst\\s+\\d{2,}\\s+(?:people|users|winners|participants)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:official\\s+)?(?:support|admin|helpdesk|customer\\s+service)\\s+(?:team\\s+)?(?:will\\s+never|dm|contact|here)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:recover|recovery)\\s+(?:your\\s+)?(?:lost|stolen|hacked)\\s+(?:funds?|crypto|bitcoin|wallet|account)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:hack|hacker|hacking)\\s+(?:service|services|for\\s+hire|any\\s+account)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:sugar\\s+(?:daddy|mommy|momma)|sugardaddy)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\bonly\\s*fans?\\b.{0,40}\\b(?:link|bio|dm|profile|subscribe)\\b",
+   "flags": "i"
+  },
+  {
+   "re": "\\b(?:nude|nudes|naked|sexcam|camgirl|escort)\\b.{0,40}\\b(?:link|bio|dm|click|profile|whatsapp|telegram)\\b",
+   "flags": "i"
+  }
+ ]
+}

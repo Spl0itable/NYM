@@ -5,7 +5,7 @@
 // of seconds and every user paid for the same work again. The finished
 // translations now ship with the app, and this reads one.
 //
-// What these pin is that the pack is an OPTIMISATION and never a dependency: a
+// What these pin is that the pack is an OPTIMIzATION and never a dependency: a
 // missing or malformed pack has to leave the old runtime path exactly as it
 // was, and an on-device translation must never be overwritten by an older one
 // from the pack. That matters most for a language whose pack has not been

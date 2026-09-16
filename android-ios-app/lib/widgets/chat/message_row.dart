@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/constants/relays.dart';
 import '../../core/crypto/bech32_codec.dart' show encodeNevent;
+import 'event_details_sheet.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -451,7 +452,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// `#suffix` tail (`_getMentionPattern`, :12-22), HTML stripped and doubled
   /// suffixes deduped first, quoted `>` lines dropped — though a quote-reply
   /// addressed to us (`> @me[#sfx]:`, `_getQuoteToMePattern`) still counts.
-  /// The bare `contains` missed real mentions (e.g. an iOS-auto-capitalised
+  /// The bare `contains` missed real mentions (e.g. an iOS-auto-capitalized
   /// "@Nym" against the lowercase self nym), leaving the highlight off.
   ///
   /// Self and PM/group rows never highlight — the PWA class chain is an
@@ -676,8 +677,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // Strip it so the canonical suffix below isn't appended twice (PWA renders
     // the base nym + a separate `.nym-suffix` span — `parseNymFromDisplay`,
     // `messages.js:1781`).
-    final baseNym = stripPubkeySuffix(
-        (liveNym != null && liveNym.isNotEmpty) ? liveNym : message.author);
+    final baseNym = pickDisplayNym(liveNym, message.author);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1074,9 +1074,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   ) {
     final c = context.nym;
     final pk = member.pubkey;
-    final nym = users[pk]?.nym;
-    final baseNym =
-        (nym != null && nym.isNotEmpty) ? stripPubkeySuffix(nym) : 'nym';
+    final baseNym = pickDisplayNym(users[pk]?.nym, null);
     final suffix = getPubkeySuffix(pk);
     final nymStyle = TextStyle(color: c.textDim, fontSize: size, height: 1.3);
     return Row(
@@ -1215,7 +1213,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                           child: Text.rich(
                             TextSpan(children: [
                               TextSpan(
-                                text: stripPubkeySuffix(message.author),
+                                text: pickDisplayNym(
+                                    ref.watch(usersProvider.select(
+                                        (u) => u[message.pubkey]?.nym)),
+                                    message.author),
                                 style: TextStyle(
                                   color: c.secondary,
                                   fontWeight: FontWeight.w600,
@@ -1394,6 +1395,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                   // Public channel messages only: PM/group rows are
                   // gift-wrapped and carry no mined work.
                   powApplies: !message.isPM && !message.isGroup,
+                  detailNym: message.author,
+                  detailChannel: message.geohash ?? message.channel,
+                  detailCreatedAt: message.dateTime,
                 ),
                 // `.crypto-lock-irc`: the verification lock sits inside
                 // `.message-time` after the clock (PM/group only).
@@ -1852,7 +1856,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       // Ghost-solid flatten (see [ghostSolid] above): the satoshi/supporter/
       // gold `#2a2a2a !important` group rule (themes:1781-1785, 0,6,1) beats
       // the non-important self `#444444` (:1690), so ONLY an unstyled or
-      // fire/ice/rainbow self bubble keeps the self grey.
+      // fire/ice/rainbow self bubble keeps the self gray.
       final flattenedToOther = _cosmetics.styleId == 'style-satoshi' ||
           _cosmetics.supporter ||
           auras.any((a) => a.id == 'cosmetic-aura-gold');
@@ -1907,6 +1911,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           powTarget: message.powTarget,
           copyPubkey: message.pubkey,
           powApplies: !message.isPM && !message.isGroup,
+          detailNym: message.author,
+          detailChannel: message.geohash ?? message.channel,
+          detailCreatedAt: message.dateTime,
           label: formatRelativeTime(message.dateTime),
           fullTimestamp: formatFullTimestamp(
               message.dateTime, settings.timeFormat, settings.dateFormat),
@@ -2231,7 +2238,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final shadows = <BoxShadow>[];
     for (final a in auras) {
       // Inset ring (approximated as a tight 0-blur spread inside the box via a
-      // border below) + the outer glow at the bubble's colour + blur (light
+      // border below) + the outer glow at the bubble's color + blur (light
       // gold: 10px rgba(180,140,0,.15), themes:929-932 — not the IRC .12/12px).
       final blur = a.glowBlurFor(bubble: true);
       final glowColor = a.glowColorFor(bubble: true);
@@ -2421,7 +2428,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       for (final e in message.readers.entries)
         ReactorEntry(
           pubkey: e.key,
-          nym: _baseNym(e.value),
+          nym: pickDisplayNym(users[e.key]?.nym, e.value),
           suffix: getPubkeySuffix(e.key),
           imageUrl: users[e.key]?.profile?.picture,
         ),
@@ -2497,7 +2504,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (!wasReacted && _selfReactedLocally(r.emoji)) {
       HapticFeedback.mediumImpact();
       // Anchor at the reaction badge for this emoji once the optimistic add
-      // has laid it out (post-frame), falling back to the message centre —
+      // has laid it out (post-frame), falling back to the message center —
       // `_burstOnBadge(messageId, emoji, messageEl)`, reactions.js:977.
       ReactionBurst.playAtBadge(context, message.id, r.emoji,
           fallbackCenter: _globalCenterOfContext(context));
@@ -2530,7 +2537,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       for (final e in map.entries)
         ReactorEntry(
           pubkey: e.key,
-          nym: _baseNym(e.value),
+          nym: pickDisplayNym(users[e.key]?.nym, e.value),
           suffix: getPubkeySuffix(e.key),
           isYou: e.key == app.selfPubkey,
           imageUrl: users[e.key]?.profile?.picture,
@@ -2587,7 +2594,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       emojis: quickReactEmojis(recents),
       onReact: (emoji) => _quickReact(context, emoji),
       onMore: () => widget.onReactionPicker?.call(message),
-      // The PWA long-press surface also carries the labelled quick actions
+      // The PWA long-press surface also carries the labeled quick actions
       // (Slap/Hug/Zap/Quote/Copy/Translate/Edit/Delete) below the emoji pill.
       contextItems: buildQuickContextItems(
         context,
@@ -2623,7 +2630,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // Buzz + burst with the optimistic local add, BEFORE any signing/publish
     // (`nymHapticTap` + `_burstOnBadge`, reactions.js:955-977). Anchored at
     // the emoji's reaction badge once the optimistic add lays it out
-    // (post-frame), message-centre fallback — like the badge-tap toggle path.
+    // (post-frame), message-center fallback — like the badge-tap toggle path.
     if (!already && _selfReactedLocally(emoji)) {
       HapticFeedback.mediumImpact();
       ReactionBurst.playAtBadge(context, message.id, emoji,
@@ -2757,7 +2764,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   void _openContextMenu(BuildContext context) {
     final app = ref.read(appStateProvider);
-    final target = ctxTargetForMessage(message, selfPubkey: app.selfPubkey);
+    final target = ctxTargetForMessage(message,
+        selfPubkey: app.selfPubkey, liveNym: app.users[message.pubkey]?.nym);
     ContextMenuPanel.show(
       context,
       target: target,
@@ -2790,7 +2798,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// the rendered author watches the same source.
   String _displayNym() {
     final live = ref.read(appStateProvider).users[message.pubkey]?.nym;
-    return (live != null && live.isNotEmpty) ? live : message.author;
+    return pickDisplayNym(live, message.author);
   }
 
   BorderRadius _bubbleRadius(bool self) {
@@ -2816,7 +2824,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// Renders the message body through the rich formatter pipeline, tinted by the
   /// author's active message style ([deco]) when present.
   ///
-  /// The style's glyph colour is threaded via [MessageContent.baseColor]; a
+  /// The style's glyph color is threaded via [MessageContent.baseColor]; a
   /// gradient style (aurora) clips the text with a `ShaderMask`. The per-glyph
   /// `text-shadow` glow can't be pushed through `MessageContent`, so the glow is
   /// rendered as the bubble/row halo instead (see TODO(verify) in the report).
@@ -3718,7 +3726,7 @@ class _MsgHoverButtons extends StatelessWidget {
       _HoverActionButton(svg: NymIcons.addReaction, onTap: onReact),
       // `.msg-hover-buttons { gap: 4px }`.
       SizedBox(width: vertical ? 0 : 4, height: vertical ? 4 : 0),
-      // `.thread-msg-btn` — static, same chrome as its neighbours.
+      // `.thread-msg-btn` — static, same chrome as its neighbors.
       if (onThread != null) ...[
         _HoverActionButton(
           svg: NymIcons.thread,
@@ -3854,6 +3862,39 @@ class _CopyRefButtonState extends State<_CopyRefButton> {
   }
 }
 
+/// Full width beneath the two copy buttons, matching the PWA: a different kind
+/// of action from copying a reference, and squeezed into their row all three
+/// labels shrink to fit.
+class _DetailsButton extends StatelessWidget {
+  const _DetailsButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: NymRadius.rsm,
+      child: Container(
+        width: double.infinity,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.06),
+          border: Border.all(color: c.glassBorder),
+          borderRadius: NymRadius.rsm,
+        ),
+        child: Text(
+          tr('Show all event details'),
+          softWrap: false,
+          style: TextStyle(color: c.text, fontSize: 11),
+        ),
+      ),
+    );
+  }
+}
+
 /// The tappable message timestamp (`.clickable-timestamp`, messages.js:936-938).
 /// Hover tints it `--primary` over 120ms (`.clickable-timestamp:hover`,
 /// styles-chat.css:596-604) and shows the glass full-timestamp tooltip
@@ -3874,6 +3915,9 @@ class _TimestampText extends StatefulWidget {
     this.powTarget,
     this.powApplies = false,
     this.copyPubkey = '',
+    this.detailNym,
+    this.detailChannel,
+    this.detailCreatedAt,
   });
 
   final String label;
@@ -3894,6 +3938,12 @@ class _TimestampText extends StatefulWidget {
   /// are gift-wrapped and never mined, so the section is omitted for them
   /// rather than reported as "none", which would read as a fault.
   final bool powApplies;
+
+  /// What the rendered message knows, for the details panel to fall back on
+  /// when neither the session nor the archive holds the signed event.
+  final String? detailNym;
+  final String? detailChannel;
+  final DateTime? detailCreatedAt;
 
   @override
   State<_TimestampText> createState() => _TimestampTextState();
@@ -3991,6 +4041,23 @@ class _TimestampTextState extends State<_TimestampText> {
             ],
             _CopyRefButton(label: tr('Copy event ID'), value: id),
           ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: _DetailsButton(
+          onTap: () {
+            _closePopup();
+            showEventDetails(
+              context,
+              eventId: id,
+              pubkey: widget.copyPubkey,
+              nym: widget.detailNym,
+              channel: widget.detailChannel,
+              createdAt: widget.detailCreatedAt,
+              powTarget: widget.powTarget,
+            );
+          },
         ),
       ),
     ];
@@ -4158,7 +4225,7 @@ class _TimestampTextState extends State<_TimestampText> {
 }
 
 /// The in-message P2P file-offer card (`.file-offer`, `messages.js:851-917`,
-/// `styles-features.css:2087-2290`). Header = category-coloured doc icon + name
+/// `styles-features.css:2087-2290`). Header = category-colored doc icon + name
 /// + meta (`size • type • Torrent?`); status block flips between
 /// seeding/unseeded (own) and Download / inline-progress / "No longer available"
 /// (peer). Driven live by [P2PService] (a [ChangeNotifier]) keyed by offerId.
@@ -4202,14 +4269,14 @@ class _FileOfferCardState extends State<FileOfferCard> {
   P2PService get service => widget.service;
 
   /// True once this mounted card has rendered the offer in a SEEDED state —
-  /// the analogue of the PWA card whose actions div already exists when the
+  /// the analog of the PWA card whose actions div already exists when the
   /// unseeded status arrives (`updateFileOfferUI` mutates the button in place
   /// rather than swapping to the dot row).
   bool _sawSeeded = false;
 
-  /// Category → icon stroke colour (`.file-offer-icon.audio/video/archive/…`).
+  /// Category → icon stroke color (`.file-offer-icon.audio/video/archive/…`).
   /// The PWA uses ONE generic file glyph and only re-tints the stroke per
-  /// category (default → `--primary`), so this returns the colour alone.
+  /// category (default → `--primary`), so this returns the color alone.
   static Color _category(NymColors c, FileOffer o) {
     final ext =
         o.name.contains('.') ? o.name.split('.').last.toLowerCase() : '';
@@ -4892,7 +4959,8 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
   /// `stack.lastElementChild` and calls `showContextMenu`).
   void _openAvatarMenu(BuildContext context, WidgetRef ref, Message last) {
     final app = ref.read(appStateProvider);
-    final target = ctxTargetForMessage(last, selfPubkey: app.selfPubkey);
+    final target = ctxTargetForMessage(last,
+        selfPubkey: app.selfPubkey, liveNym: app.users[last.pubkey]?.nym);
     ContextMenuPanel.show(
       context,
       target: target,

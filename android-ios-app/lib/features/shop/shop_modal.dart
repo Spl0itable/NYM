@@ -219,7 +219,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
           ],
           // `.shop-title .nm-h-16` subtitle: 12px, `--text-dim`, and it INHERITS
           // the `.shop-title { font-weight: 700 }` (the `.nm-h-16` rules only set
-          // size + colour) — so the subtitle is bold too. Reserve right room for
+          // size + color) — so the subtitle is bold too. Reserve right room for
           // the absolute ✕ chip so the first wrapped line clears it.
           Padding(
             padding: const EdgeInsets.only(right: 28),
@@ -416,7 +416,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   }
 
   /// A wrapping row of item cards (PWA `.shop-items` flex-wrap). [cardBuilder]
-  /// customises the card (limited availability / inventory variants); defaults
+  /// customizes the card (limited availability / inventory variants); defaults
   /// to the plain shop card.
   Widget _cardWrap(
     NymColors c,
@@ -699,7 +699,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       ),
     );
     // Only a settled claim confirms the gift (the PWA's "Gift sent!" comes from
-    // `_renderShopSuccess` after shop-claim, shop.js:1579) — a cancelled or
+    // `_renderShopSuccess` after shop-claim, shop.js:1579) — a canceled or
     // failed payment must NOT report success.
     if (granted == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -810,7 +810,7 @@ class _ShopItemCard extends StatelessWidget {
   }) : purchasesDisabled = purchasesDisabled ?? shopPurchasesDisabled;
 
   /// Hides the BUY / GIFT actions where this platform can't sell (iOS — see
-  /// shop_purchase_policy.dart). Injectable so the behaviour is testable off
+  /// shop_purchase_policy.dart). Injectable so the behavior is testable off
   /// the platform it applies to.
 
   final bool purchasesDisabled;
@@ -936,7 +936,7 @@ class _ShopItemCard extends StatelessWidget {
           // Per-card description — the PWA renders `.shop-item-description` on
           // EVERY card type (styles/flair/special/limited/bundle/inventory;
           // shop.js:737,757,800,877,908,1022). `.shop-item-description` has NO
-          // text-align rule → left-aligned (only icon/name centre).
+          // text-align rule → left-aligned (only icon/name center).
           // `.shop-item-name { margin-bottom: 5px }`.
           const SizedBox(height: 5),
           Text(
@@ -1286,7 +1286,7 @@ class _ActiveItemsPreview extends ConsumerWidget {
     // ${supporterBadge}<nym-bracket>&gt;` — the flair + supporter badges sit
     // INSIDE the brackets, before the closing `>`. Brackets are hidden in
     // chat-bubbles mode (`body.chat-bubbles .nym-bracket { display:none }`).
-    // The author carries the USER colour class — the self author colour (the
+    // The author carries the USER color class — the self author color (the
     // theme primary; the bitchat self class is likewise the theme orange), not
     // the secondary accent. Genesis bolds the nym (suffix stays w400); redacted
     // dims the author (`.message-author.cosmetic-redacted`).
@@ -1340,7 +1340,7 @@ class _ActiveItemsPreview extends ConsumerWidget {
         bubble: bubble,
         // The active-items block puts the text directly in `.message-content`
         // (a bare body node, shop.js:964) — NOT wrapped in a `<span>` like the
-        // item-card demo — so satoshi shows its white/brown container body colour.
+        // item-card demo — so satoshi shows its white/brown container body color.
         sampleIsChild: false,
       );
     } else if (supporter) {
@@ -2081,7 +2081,7 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
                     ),
                     const SizedBox(height: 4),
                     // `Price: N sats — gift to <pk8>...` (`.nm-shop-9`:
-                    // 12px, warning colour).
+                    // 12px, warning color).
                     Text(
                       recipient != null
                           ? tr('Price: {price} sats — gift to {pk}...', {

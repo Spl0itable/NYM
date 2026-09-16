@@ -42,7 +42,6 @@ import '../../features/shop/cosmetics.dart';
 import '../../features/translate/translate_languages.dart';
 import '../../features/translate/translate_service.dart';
 import '../../features/zaps/zap_modal.dart';
-import '../../models/group.dart' show GroupControlType;
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
@@ -213,7 +212,7 @@ class _ComposerState extends ConsumerState<Composer> {
   ///
   /// Blossom is content-addressed and several servers return a bare
   /// `https://host/<sha256>` with no file extension, which the media regex
-  /// cannot recognise. We know these are media because we just uploaded them,
+  /// cannot recognize. We know these are media because we just uploaded them,
   /// so they are matched by identity — see [composerMediaMatches]. Videos are
   /// included even though [_localMediaPreviews] has no bytes for them, since
   /// the strip still needs to know they are attachments.
@@ -275,7 +274,7 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// Measures the message-input box so the autocomplete dropdown spans the
   /// INPUT width (`.autocomplete-dropdown{left:0;right:0}` = `.input-wrapper`),
-  /// not the overlay-theatre / screen width (04-F1). Attached to the input's
+  /// not the overlay-theater / screen width (04-F1). Attached to the input's
   /// [CompositedTransformTarget]; [_anchorWidth] reads this box.
   final GlobalKey _inputKey = GlobalKey();
 
@@ -326,7 +325,7 @@ class _ComposerState extends ConsumerState<Composer> {
   AutocompleteView? _acView;
   List<PaletteRow> _paletteRows = const [];
   // The public `?` Nymbot command palette rows (showBotCommandPalette). Same
-  // `#commandPalette` surface as `/`, populated from the real bot catalogue.
+  // `#commandPalette` surface as `/`, populated from the real bot catalog.
   List<BotPaletteCommand> _botRows = const [];
   int _selectedIndex = 0;
 
@@ -541,13 +540,15 @@ class _ComposerState extends ConsumerState<Composer> {
           _withCurrentGroup((gid) => controller.kickFromGroup(gid, pubkey)),
       ban: (pubkey) =>
           _withCurrentGroup((gid) => controller.banFromGroup(gid, pubkey)),
-      // `/unban @nym` → lift a group ban, owner-only (`cmdUnbanFromGroup` →
-      // `unbanFromGroup`, groups.js:1926-1968).
       unban: _unbanFromCurrentGroup,
       addMod: (pubkey) =>
           _withCurrentGroup((gid) => controller.promoteModerator(gid, pubkey)),
       removeMod: (pubkey) =>
           _withCurrentGroup((gid) => controller.revokeModerator(gid, pubkey)),
+      addAdmin: (pubkey) =>
+          _withCurrentGroup((gid) => controller.promoteAdmin(gid, pubkey)),
+      removeAdmin: (pubkey) =>
+          _withCurrentGroup((gid) => controller.revokeAdmin(gid, pubkey)),
       transferOwner: (pubkey) =>
           _withCurrentGroup((gid) => controller.transferOwner(gid, pubkey)),
       // `/nick <reserved>` → the developer-nsec challenge (cmdNick's reserved
@@ -567,7 +568,7 @@ class _ComposerState extends ConsumerState<Composer> {
     if (!mounted) return;
     final result = await DevNsecModal.open(context);
     if (result == null) {
-      _onSystemMessage(tr('Nickname change cancelled.'));
+      _onSystemMessage(tr('Nickname change canceled.'));
       return;
     }
     try {
@@ -575,7 +576,7 @@ class _ComposerState extends ConsumerState<Composer> {
     } catch (_) {
       // The modal pre-verified the nsec, so a failure here is a login-flow
       // error; surface the abort line rather than crashing the composer.
-      if (mounted) _onSystemMessage(tr('Nickname change cancelled.'));
+      if (mounted) _onSystemMessage(tr('Nickname change canceled.'));
       return;
     }
     if (!mounted) return;
@@ -607,15 +608,11 @@ class _ComposerState extends ConsumerState<Composer> {
         .addGroupMembers(view.id, [target.pubkey]));
   }
 
-  /// `/unban @nym` — a port of the PWA's owner-only `unbanFromGroup`
-  /// (groups.js:1926-1968): gate on ownership ("Only the group owner can unban
-  /// users."), require the target to actually be banned ("That user is not
-  /// banned."), then drop the pubkey from `group.banned` and append the
-  /// `{type:'unban'}` mod-log entry via the shared control-apply, confirming
-  /// with the PWA's system line. The gift-wrapped `group-unban` rumor that
-  /// notifies the unbanned user (tags `p`/`g`/`subject`/`type`/`unban`/`x`)
-  /// needs an outbound publish path on [NostrController] (`unbanFromGroup`),
-  /// which doesn't exist yet — see the handoff note.
+  /// `/unban @nym` — a port of the PWA's `unbanFromGroup` (groups.js): gate on
+  /// owner-or-moderator, require the target to actually be banned ("That user
+  /// is not banned."), then publish the `group-unban` control to every member
+  /// so their own banned lists clear too, confirming with the PWA's system
+  /// line.
   void _unbanFromCurrentGroup(String pubkey) {
     final view = ref.read(currentViewProvider);
     if (view.kind != ViewKind.group) return;
@@ -623,24 +620,17 @@ class _ComposerState extends ConsumerState<Composer> {
     final app = ref.read(appStateProvider);
     final group = appState.groupById(view.id);
     if (group == null) return;
-    if (!GroupLogic.isOwner(group, app.selfPubkey)) {
-      _onSystemMessage(tr('Only the group owner can unban users.'));
+    if (!GroupLogic.canModerate(group, app.selfPubkey)) {
+      _onSystemMessage(
+          tr('Only the group owner or a moderator can unban users.'));
       return;
     }
     if (!group.banned.contains(pubkey)) {
       _onSystemMessage(tr('That user is not banned.'));
       return;
     }
-    appState.applyGroupControl(
-      groupId: view.id,
-      type: GroupControlType.unban,
-      tags: [
-        ['unban', pubkey],
-      ],
-      senderPubkey: app.selfPubkey,
-      ts: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      eventId: GroupLogic.generateGroupId(),
-    );
+    unawaited(
+        ref.read(nostrControllerProvider).unbanFromGroup(view.id, pubkey));
     // Resolve the target's profile if unknown (the PWA's fetchProfileDirect).
     ref.read(nostrControllerProvider).ensureProfiles([pubkey]);
     final nym = ref.read(usersProvider)[pubkey]?.nym ??
@@ -665,7 +655,7 @@ class _ComposerState extends ConsumerState<Composer> {
     final ownerPk = group.createdBy;
     final mods = group.mods;
     String nymOf(String pk) => users[pk]?.nym ?? '';
-    int rank(String pk) => pk == ownerPk ? 0 : (mods.contains(pk) ? 1 : 2);
+    int rank(String pk) => GroupLogic.roleRank(group, pk);
     final sorted = [...group.members]..sort((a, b) {
         final ra = rank(a), rb = rank(b);
         if (ra != rb) return ra - rb;
@@ -676,7 +666,12 @@ class _ComposerState extends ConsumerState<Composer> {
         (
           pubkey: pk,
           labels: [
-            if (pk == ownerPk) 'owner' else if (mods.contains(pk)) 'mod',
+            if (pk == ownerPk)
+              'owner'
+            else if (group.admins.contains(pk))
+              'admin'
+            else if (mods.contains(pk))
+              'mod',
             if (pk == app.selfPubkey) 'you',
           ],
         ),
@@ -1937,7 +1932,7 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// Width of the message-input box (the `.input-wrapper`, = `.autocomplete-
   /// dropdown` left:0/right:0 span), measured via the [_inputKey] leader rather
-  /// than the overlay-theatre `context` (which is full-screen) — 04-F1.
+  /// than the overlay-theater `context` (which is full-screen) — 04-F1.
   double _anchorWidth(BuildContext context) {
     final box = _inputKey.currentContext?.findRenderObject() as RenderBox?;
     return box?.size.width ?? MediaQuery.sizeOf(context).width;
@@ -3435,7 +3430,7 @@ class _TranslateInputButtonState extends State<_TranslateInputButton>
   void initState() {
     super.initState();
     // Created eagerly (not lazily) so a never-translated button still has a
-    // controller to dispose — a lazy `late` field would otherwise initialise a
+    // controller to dispose — a lazy `late` field would otherwise initialize a
     // ticker against a deactivated State during dispose().
     _pulse = AnimationController(
       vsync: this,

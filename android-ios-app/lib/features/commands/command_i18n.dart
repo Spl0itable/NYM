@@ -49,7 +49,7 @@ List<String> canonicalCommandTokens() {
   for (final c in kBotCommands) {
     add('?${c.name}');
   }
-  // The PM-only set (?image, ?speak, ?clear) isn't in the public catalogue.
+  // The PM-only set (?image, ?speak, ?clear) isn't in the public catalog.
   for (final c in kBotPMCommands) {
     add(c.name);
   }

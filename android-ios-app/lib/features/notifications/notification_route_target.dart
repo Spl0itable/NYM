@@ -20,7 +20,7 @@ class AppNotificationRouteTarget implements NotificationRouteTarget {
 
   /// Used to open a thread once its conversation is showing. Optional so a
   /// caller with no container still routes conversations (thread taps then land
-  /// on the flat conversation, which is the pre-thread behaviour).
+  /// on the flat conversation, which is the pre-thread behavior).
   final ProviderContainer? container;
 
   @override

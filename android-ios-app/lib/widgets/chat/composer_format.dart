@@ -161,7 +161,7 @@ FormatEdit _wordRangeAt(String v, int pos) {
 }
 
 /// Toggle `token…token` around the selection (or the word under the caret).
-/// Recognises an existing wrap both INSIDE the selection (`**bold**` selected)
+/// Recognizes an existing wrap both INSIDE the selection (`**bold**` selected)
 /// and just outside it (`bold` selected between the asterisks), so a second
 /// press always undoes the first.
 FormatEdit applyWrap(FormatEdit input, String token) {
@@ -311,7 +311,7 @@ const _videoExts = {'mp4', 'webm', 'ogg', 'mov'};
 /// Media URLs in [value], for the composer's attachment strip.
 ///
 /// [knownMedia] maps a URL we uploaded this session to whether it is a video.
-/// It exists because the regex can only recognise media by file extension, and
+/// It exists because the regex can only recognize media by file extension, and
 /// Blossom is content-addressed: several servers hand back a bare
 /// `https://host/<sha256>` with no extension at all. Those are unmistakably
 /// media — we just uploaded them — so they are matched by identity instead of

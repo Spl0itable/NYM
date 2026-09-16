@@ -159,7 +159,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
           (d1Buckets != null && i < d1Buckets.length) ? d1Buckets[i] : 0;
       total += math.max(local, d1c);
     }
-    // (c) Coverage fallback (no PWA analogue — its `_geohashD1Activity` always
+    // (c) Coverage fallback (no PWA analog — its `_geohashD1Activity` always
     // carries buckets for a D1-active geohash): a geohash with a D1 last-activity
     // inside the window but no per-hour buckets still plots at the presence floor
     // rather than vanishing. Real buckets, when present, always win.

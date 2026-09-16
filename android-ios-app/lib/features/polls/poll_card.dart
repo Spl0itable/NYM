@@ -88,10 +88,7 @@ class _PollCardState extends ConsumerState<PollCard> {
     // was known yet. The PWA resolves this at render the same way
     // (`user ? parseNymFromDisplay(user.nym) : 'nym'`, polls.js:519); only the
     // fallback comes from the event.
-    final liveNym = users[poll.pubkey]?.nym ?? '';
-    final storedNym = poll.nym.isEmpty ? 'nym' : poll.nym;
-    final baseNym =
-        stripPubkeySuffix(liveNym.isNotEmpty ? liveNym : storedNym);
+    final baseNym = pickDisplayNym(users[poll.pubkey]?.nym, poll.nym);
     final suffix = getPubkeySuffix(poll.pubkey);
 
     // Clamp the timestamp to now so polls never appear in the future
@@ -155,7 +152,7 @@ class _PollCardState extends ConsumerState<PollCard> {
     final rowRing = goldAura?.insetColor;
     final glowBlur = goldAura?.glowBlurFor(bubble: false) ?? 0;
 
-    // The author nym colour: self → primary (`.message-author.self`), bitchat
+    // The author nym color: self → primary (`.message-author.self`), bitchat
     // theme → the deterministic per-user hue (`getUserColorClass`, users.js:
     // 11-18), else secondary. Genesis flair bolds the nym
     // (`.has-genesis-flair`).
@@ -492,7 +489,8 @@ class _PollCardState extends ConsumerState<PollCard> {
       context,
       target: CtxTarget(
         pubkey: poll.pubkey,
-        nym: stripPubkeySuffix(poll.nym.isEmpty ? 'nym' : poll.nym),
+        nym: pickDisplayNym(
+            ref.read(appStateProvider).users[poll.pubkey]?.nym, poll.nym),
         isSelf: poll.pubkey == selfPubkey,
         content: '[Poll] ${poll.question}',
         messageId: poll.id,
@@ -518,7 +516,8 @@ class _PollCardState extends ConsumerState<PollCard> {
       ref,
       Message(
         id: poll.id,
-        author: poll.nym.isEmpty ? 'nym' : poll.nym,
+        author: pickDisplayNym(
+            ref.read(appStateProvider).users[poll.pubkey]?.nym, poll.nym),
         pubkey: poll.pubkey,
         content: poll.question,
         createdAt: poll.createdAt,
@@ -1263,8 +1262,7 @@ class _PollVotersModal extends ConsumerWidget {
   ) {
     final c = context.nym;
     final isYou = pk == selfPubkey;
-    final nym =
-        stripPubkeySuffix(users[pk]?.nym ?? getNymFromPubkey('nym', pk));
+    final nym = pickDisplayNym(users[pk]?.nym, null);
     final suffix = getPubkeySuffix(pk);
     return InkWell(
       onTap: () => onTapRow(pk),

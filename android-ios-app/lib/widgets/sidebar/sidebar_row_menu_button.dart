@@ -34,7 +34,7 @@ class SidebarRowMenuButton extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () {
-          // Anchor to the button's own centre rather than the pointer, so the
+          // Anchor to the button's own center rather than the pointer, so the
           // menu lands in the same place however the row was tapped.
           final box = context.findRenderObject() as RenderBox?;
           final anchor = (box != null && box.hasSize)

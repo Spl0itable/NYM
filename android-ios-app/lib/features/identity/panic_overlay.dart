@@ -3,16 +3,34 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import 'panic_wipe.dart';
+
+/// Runs the emergency wipe, whichever gesture or button asked for it.
+///
+/// The server purge is signed while the key is still here and bounded, because
+/// a wipe that waits on the network is a wipe that did not happen.
+void startPanicWipe(BuildContext context, WidgetRef ref) {
+  final ctrl = ref.read(nostrControllerProvider);
+  unawaited(ctrl
+      .purgeServerRecords()
+      .timeout(const Duration(seconds: 3), onTimeout: () => false));
+  PanicOverlay.show(
+    context,
+    wipe: PanicWipe.production(),
+    onComplete: () => unawaited(ctrl.resetAfterPanic()),
+  );
+}
 
 /// Full-screen "Encrypting" scramble overlay shown during a panic wipe
 /// (`_panicShowOverlay`, docs/specs/04 §10.2 step 1):
 ///
-/// * "ENCRYPTING" title (uppercase, letter-spacing, primary colour)
-/// * a 40×8 hex/symbol grid re-randomised every ~60 ms (mono, primary, dim)
+/// * "ENCRYPTING" title (uppercase, letter-spacing, primary color)
+/// * a 40×8 hex/symbol grid re-randomized every ~60 ms (mono, primary, dim)
 /// * a status line that updates through the wipe stages
 /// * an indeterminate progress bar (`nm-panic-fill`)
 ///

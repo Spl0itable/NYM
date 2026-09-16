@@ -22,6 +22,7 @@ import UIKit
     excludeMessageStoreFromBackup()
     registerBackgroundConnectivityChannel()
     registerBackgroundRefreshChannel()
+    registerAttestChannel()
     // Must happen before launch finishes, or BGTaskScheduler throws.
     registerBackgroundRefreshTask()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -41,6 +42,38 @@ import UIKit
       var values = URLResourceValues()
       values.isExcludedFromBackup = true
       try? url.setResourceValues(values)
+    }
+  }
+
+  // MARK: - App attestation
+
+  /// Dart side: `lib/services/attest/attest_service.dart`.
+  ///
+  /// Hands back an App Attest key id and attestation object for the server's
+  /// challenge, or nil on a device that cannot attest — which Dart reads as
+  /// "no proof" and enrolls nothing.
+  private func registerAttestChannel() {
+    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+    let channel = FlutterMethodChannel(
+      name: "app.nymchat/attest",
+      binaryMessenger: controller.binaryMessenger
+    )
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "attest" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard
+        let args = call.arguments as? [String: Any],
+        let challenge = args["challenge"] as? String,
+        !challenge.isEmpty
+      else {
+        result(nil)
+        return
+      }
+      AppAttest.attest(challenge: challenge) { payload in
+        DispatchQueue.main.async { result(payload) }
+      }
     }
   }
 

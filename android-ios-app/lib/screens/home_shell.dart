@@ -211,7 +211,7 @@ class HomeShellState extends ConsumerState<HomeShell>
   /// CLOSES an open drawer.
   void _edgePointerMove(PointerMoveEvent e) {
     if (e.pointer != _edgeSwipePointer) return;
-    // Right edge, travelling left: step back INTO the thread just left.
+    // Right edge, traveling left: step back INTO the thread just left.
     if (_edgeSwipeFromRight) {
       if (_edgeSwipeStartX - e.position.dx > _sidebarSwipeThreshold) {
         _edgeSwipePointer = null;
@@ -376,7 +376,20 @@ class HomeShellState extends ConsumerState<HomeShell>
     final isGhost =
         ref.watch(settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
 
-    return Scaffold(
+    // Android's back gesture had nothing to pop — a thread, the mesh screen and
+    // the drawer are state, not routes — so it left the app instead of the
+    // thread. It now unwinds them in the same order the left-edge swipe does,
+    // and only leaves when there is nothing left to close.
+    final canLeave = !(_drawerOpen ||
+        ref.watch(meshScreenOpenProvider) ||
+        ref.watch(activeThreadProvider) != null);
+    return PopScope(
+      canPop: canLeave,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _popInApp();
+      },
+      child: Scaffold(
       backgroundColor: c.bg,
       body: Stack(
         children: [
@@ -406,7 +419,22 @@ class HomeShellState extends ConsumerState<HomeShell>
           const Positioned.fill(child: IncomingCallModal()),
         ],
       ),
-    );
+    ));
+  }
+
+  /// Closes the innermost thing back should close, one per press.
+  void _popInApp() {
+    if (_drawerOpen) {
+      if (mounted) setState(() => _drawerOpen = false);
+      return;
+    }
+    if (ref.read(meshScreenOpenProvider)) {
+      ref.read(meshScreenOpenProvider.notifier).state = false;
+      return;
+    }
+    if (ref.read(activeThreadProvider) != null) {
+      ref.read(activeThreadProvider.notifier).state = null;
+    }
   }
 
   /// The main content region: always the ChatPane. In columns mode the deck

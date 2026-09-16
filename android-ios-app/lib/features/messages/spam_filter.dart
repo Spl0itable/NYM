@@ -120,6 +120,58 @@ class SpamFilter {
   /// `isSpamMessage(content)` (nostr-core.js:887-940). [enabled] / [aggressive]
   /// mirror `spamFilterEnabled` / `spamFilterAggressive` (both default `true`,
   /// the PWA defaults).
+  /// Domains removed from message text rather than used to drop the message.
+  /// A hostile link inside an otherwise ordinary message is the whole payload;
+  /// dropping the message would also hide the conversation around it, and the
+  /// people being targeted are the ones who would notice the gap.
+  static const List<String> maliciousDomains = ['glub.chat'];
+
+  /// Scheme and subdomains optional, trailing path swallowed with it, so
+  /// `https://www.glub.chat/x?y` and a bare `glub.chat` both go.
+  static final RegExp _rxMaliciousDomain = RegExp(
+    '(?:https?:\\/\\/)?(?:[\\w-]+\\.)*(?:'
+    '${maliciousDomains.map((d) => d.replaceAll('.', '\\.')).join('|')}'
+    ')\\b(?:\\/[^\\s]*)?',
+    caseSensitive: false,
+  );
+  static final RegExp _rxDoubleSpace = RegExp(r'[ \t]{2,}');
+  static final RegExp _rxSpaceBeforePunct = RegExp(r'[ \t]+([.,!?;:])');
+
+  /// Removes known-malicious domains from message text, leaving the rest of
+  /// the message intact. Mirrors `stripMaliciousDomains` in the PWA's
+  /// `js/modules/nostr-core.js`.
+  static String stripMaliciousDomains(String content) {
+    if (content.isEmpty || !_rxMaliciousDomain.hasMatch(content)) {
+      return content;
+    }
+    return content
+        .replaceAll(_rxMaliciousDomain, '')
+        // Collapse the gap the link leaves behind so the sentence still reads.
+        .replaceAll(_rxDoubleSpace, ' ')
+        .replaceAllMapped(_rxSpaceBeforePunct, (m) => m[1]!)
+        .trim();
+  }
+
+  /// Whether an event's tags mark it as published by the glub.chat client,
+  /// which exists to spam these channels.
+  ///
+  /// Matched on the tags rather than the content: the client stamps itself on
+  /// every event it sends, and a tag survives any rewording of the payload.
+  /// The version is deliberately not matched — pinning `339ddb0` would last
+  /// exactly until their next build.
+  static bool isGlubClient(List<List<String>> tags) {
+    for (final t in tags) {
+      if (t.isEmpty) continue;
+      if (t[0] == 'glub') return true;
+      if (t[0] == 'client' &&
+          t.length > 1 &&
+          t[1].toLowerCase() == 'glub.chat') {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static bool isSpamMessage(
     Object? content, {
     bool enabled = true,
@@ -130,7 +182,6 @@ class SpamFilter {
 
     final trimmed = content.trim();
 
-    if (trimmed.contains('joined the channel via bitchat.land')) return true;
     if (trimmed.contains('["client","chorus"]')) return true;
 
     if (aggressive == false) return false;
@@ -382,7 +433,7 @@ class SpamFilter {
     return score;
   }
 
-  /// Counts non-overlapping matches of [re] in [s] — the Dart analogue of
+  /// Counts non-overlapping matches of [re] in [s] — the Dart analog of
   /// `(s.match(/re/g) || []).length`.
   static int _countMatches(String s, RegExp re) => re.allMatches(s).length;
 }

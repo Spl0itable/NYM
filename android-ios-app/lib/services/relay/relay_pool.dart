@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math';
 
 import '../../core/constants/relays.dart';
+import '../../features/messages/spam_filter.dart';
+import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import 'relay_connection.dart';
 import 'relay_message.dart';
@@ -100,6 +102,15 @@ abstract interface class PoolTransport {
   /// keep-alive to detect a dropped geo relay (`poolConnectedRelays` /
   /// per-relay ws state in the PWA's `startGeoRelayKeepAlive`, relays.js:152/161).
   Set<String> get connectedRelayUrls;
+
+  /// Decides whether a geohash channel event may be admitted from the relay
+  /// that delivered it. Owned by NostrService, which holds the geo directory;
+  /// the transports only know which socket a frame came in on.
+  ///
+  /// Null admits everything, which is also what the implementation does for
+  /// anything it cannot judge — the failure that matters here is hiding a
+  /// channel, not letting one message through.
+  set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn);
 
   /// Live relay-traffic counters (bytes in/out, events, throughput history,
   /// per-relay events + latency) for the Network Stats modal. Aggregated across
@@ -537,9 +548,32 @@ class RelayPool implements PoolTransport {
   Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) =>
       publish(event);
 
+
+  /// See [PoolTransport.geoOriginAllows].
+  bool Function(NostrEvent event, String? relayUrl)? _geoOriginAllows;
+  @override
+  set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) =>
+      _geoOriginAllows = fn;
+
   void _onRelayMessage(String relayUrl, RelayMessage msg) {
     switch (msg) {
       case EventMessage(:final subId, :final event):
+        // Dropped before verification: the glub.chat client tags
+        // every event it sends, so this costs one tag scan and
+        // saves a signature check on every one of them.
+        if (SpamFilter.isGlubClient(event.tags)) return;
+        if (RelayConfig.isAppRelayOnly(
+                event.kind, event.tagValue('g'), event.tagValue('d')) &&
+            relayUrl != RelayConfig.appRelay) {
+          return;
+        }
+        // Before verification and before dedup: a copy off the wrong relay
+        // must not claim the event id and suppress the neighbourhood's own.
+        final geoGate = _geoOriginAllows;
+        if (geoGate != null && !geoGate(event, relayUrl)) return;
+        // Before the dedup below, because the copies it discards are the
+        // relay list.
+        eventProvenance.record(event, relayUrl);
         final sub = _subscriptions[subId];
         if (sub != null) {
           // Fire and forget; verification is async.

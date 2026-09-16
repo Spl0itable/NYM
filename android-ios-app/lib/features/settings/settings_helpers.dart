@@ -190,7 +190,7 @@ String? validateTransferPubkey(String input, {required String selfPubkey}) {
 /// preferred over the content estimate — the PWA prefers the real
 /// `navigator.storage.estimate()` usage over its per-record estimate
 /// (app.js:3699 `estimateUsage > 0 ? estimateUsage : counts.totalBytes`); the
-/// native analogue is the on-disk `CacheStore.totalBytes()` reading.
+/// native analog is the on-disk `CacheStore.totalBytes()` reading.
 ///
 /// Returns the same human strings:
 ///  * `"{size} cached on device — N channels, N PM/group threads, N profiles,

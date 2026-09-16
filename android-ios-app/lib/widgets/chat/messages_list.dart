@@ -38,12 +38,36 @@ class MessageListScroller {
   /// index), rebuilt by [MessagesList] each build for the current view.
   Map<String, int> _indexById = const {};
 
+  /// Where the list was when a thread replaced it, so backing out of the
+  /// thread lands where it left rather than at the newest message. Held by
+  /// message id, because indexes move as messages arrive.
+  ({String id, double alignment})? _anchor;
+
   /// Called by [MessagesList] every build to (re)bind its controller + the
   /// current id→index map.
   void bind(ItemScrollController controller, Map<String, int> indexById) {
     _controller = controller;
     _indexById = indexById;
   }
+
+  void rememberAnchor(String messageId, double alignment) {
+    _anchor = (id: messageId, alignment: alignment);
+  }
+
+  /// The anchor as an index into the CURRENT list, consumed as it is read: a
+  /// restore happens once, on the remount the thread caused.
+  ({int index, double alignment})? takeAnchor() {
+    final anchor = _anchor;
+    _anchor = null;
+    if (anchor == null) return null;
+    final index = _indexById[anchor.id];
+    if (index == null) return null;
+    return (index: index, alignment: anchor.alignment);
+  }
+
+  /// A view switch is not a thread round trip; whatever was remembered is
+  /// stale.
+  void forgetAnchor() => _anchor = null;
 
   /// Whether [messageId] is in the currently-rendered set (so a jump can land).
   bool canScrollTo(String messageId) =>
@@ -62,7 +86,7 @@ class MessageListScroller {
     controller.scrollTo(
       index: index,
       // Leading-edge fraction of the viewport — ~0.4 lands the message a little
-      // above center, the closest analogue to `scrollIntoView({block:'center'})`.
+      // above center, the closest analog to `scrollIntoView({block:'center'})`.
       alignment: 0.4,
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
@@ -111,6 +135,11 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   /// up away from the newest message).
   bool _showScrollButton = false;
 
+  /// The position to open at, taken once from the scroller on the first build
+  /// after a thread handed the list back.
+  ({int index, double alignment})? _restore;
+  bool _restoreDone = false;
+
   /// The messages viewport height in px, captured at build — converts the
   /// normalized [ItemPosition] edges into the PWA's pixel scroll distance.
   double _viewportHeight = 0;
@@ -148,10 +177,48 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     _positionsListener.itemPositions.addListener(_onPositionsChanged);
   }
 
+  /// The view this list last built for, so the id→index map used to save an
+  /// anchor is the one the anchor belongs to.
+  String _viewKey = '';
+
+  /// The message ids of the units currently rendered, by render index.
+  Map<int, String> _idByIndex = const {};
+
   @override
   void dispose() {
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
+    _saveAnchorIfThreadTookOver();
     super.dispose();
+  }
+
+  /// A thread replacing this list is the one unmount worth remembering: the
+  /// user is coming back to the same conversation, at the message they were
+  /// reading. Every other unmount (a view switch, a rebuild) is not.
+  void _saveAnchorIfThreadTookOver() {
+    try {
+      final thread = ref.read(activeThreadProvider);
+      final scroller = ref.read(messageListScrollerProvider(_viewKey));
+      if (thread == null || _viewKey.isEmpty) {
+        scroller.forgetAnchor();
+        return;
+      }
+      final positions = _positionsListener.itemPositions.value;
+      if (positions.isEmpty) return;
+      // The item nearest the bottom of the viewport — the leading edge in a
+      // reversed list — is what initialScrollIndex/initialAlignment restore.
+      ItemPosition? nearest;
+      for (final p in positions) {
+        if (nearest == null || p.itemLeadingEdge < nearest.itemLeadingEdge) {
+          nearest = p;
+        }
+      }
+      final id = nearest == null ? null : _idByIndex[nearest.index];
+      if (id == null) return;
+      // Already at the newest message: there is nothing to restore, and
+      // pinning it would fight the autoscroll.
+      if (nearest!.index == 0 && nearest.itemLeadingEdge >= -0.01) return;
+      scroller.rememberAnchor(id, nearest.itemLeadingEdge);
+    } catch (_) {}
   }
 
   /// Recomputes [_showScrollButton] from the visible item positions — the
@@ -347,9 +414,20 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         }
       }
     }
-    ref
-        .read(messageListScrollerProvider(view.storageKey))
-        .bind(_itemScrollController, indexById);
+    final scroller = ref.read(messageListScrollerProvider(view.storageKey));
+    scroller.bind(_itemScrollController, indexById);
+    _idByIndex = {for (final e in indexById.entries) e.value: e.key};
+    if (!_restoreDone) {
+      // Only the first build can act on it: initialScrollIndex is read once,
+      // when the list first lays out.
+      _restore = scroller.takeAnchor();
+      _restoreDone = true;
+    } else if (_viewKey != view.storageKey) {
+      // Switched conversation without remounting; whatever this view had
+      // remembered is from an older visit.
+      scroller.forgetAnchor();
+    }
+    _viewKey = view.storageKey;
 
     // Reversed list: index 0 = newest at the bottom; the typing row is pinned
     // below the newest message, above the composer (`.typing-indicator`).
@@ -380,6 +458,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         itemScrollController: _itemScrollController,
                         itemPositionsListener: _positionsListener,
                         reverse: true,
+                        // Where the list was when a thread took its place.
+                        initialScrollIndex: _restore?.index ?? 0,
+                        initialAlignment: _restore?.alignment ?? 0,
                         padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
                         // Channel views carry one extra unit ABOVE the oldest
                         // message: the `.channel-history-limit` pill ("You've
@@ -703,7 +784,7 @@ class _CachedUnitWidget {
 
 /// `.scroll-to-bottom-btn` (`styles-chat.css:9-43`): a 40×40 round glass FAB
 /// with a primary down-chevron, hover glow + scale 1.1 (`:34-39`). A single-view
-/// analogue of the columns deck's `_ScrollBottomButton`, but 40px (vs 36) and —
+/// analog of the columns deck's `_ScrollBottomButton`, but 40px (vs 36) and —
 /// unlike the columns copy — it carries the light-mode style
 /// (`styles-themes-responsive.css:607-615`): rest fill white@0.85 / border
 /// primary@0.2 / shadow `0 2px 12px black@0.15`. Dark hover: primary@0.15 fill,

@@ -97,7 +97,7 @@ void main() {
         await _pump(tester, container,
             content: 'hey @alice#abcd how are you', layout: layout);
 
-        // Near the left edge, over the leading "hey" — the widget's centre
+        // Near the left edge, over the leading "hey" — the widget's center
         // would land on the mention chip itself.
         final body = find.textContaining('how are you').first;
         await tester.tapAt(tester.getTopLeft(body) + const Offset(6, 6));

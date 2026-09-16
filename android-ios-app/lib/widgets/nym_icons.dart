@@ -6,7 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 /// app pixel-for-pixel instead of approximating with Material glyphs.
 ///
 /// Each entry is the raw `<svg>` markup the PWA ships. They are rendered through
-/// [NymSvgIcon], which tints the whole drawing to a single colour with a
+/// [NymSvgIcon], which tints the whole drawing to a single color with a
 /// `srcIn` filter — so the same string works whether the path is stroked
 /// (feather icons: `fill:none; stroke:currentColor`) or filled (the share /
 /// filled-star glyphs).
@@ -47,7 +47,7 @@ class NymIcons {
       '<svg viewBox="0 0 24 24" fill="currentColor">'
       '<path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>';
 
-  /// Mesh peer-list ping button — concentric sweep rings around a centre
+  /// Mesh peer-list ping button — concentric sweep rings around a center
   /// return, for a button that measures a round trip rather than shares.
   static const String radar =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -141,7 +141,7 @@ class NymIcons {
 
   /// `.friend-badge` (users.js:1923): a person-with-plus glyph in a 16×16 viewBox
   /// (filled head/body + stroked plus). Verbatim PWA markup; tinted to the friend
-  /// colour by the caller.
+  /// color by the caller.
   static const String friendBadge =
       '<svg viewBox="0 0 16 16" fill="currentColor">'
       '<circle cx="6" cy="5" r="2.5"/>'
@@ -639,8 +639,8 @@ class NymIcons {
 }
 
 /// Renders one of the [NymIcons] SVG strings at [size], tinted to [color] with a
-/// `srcIn` filter (so a single colour drives both stroked and filled glyphs,
-/// matching the PWA's `currentColor` behaviour).
+/// `srcIn` filter (so a single color drives both stroked and filled glyphs,
+/// matching the PWA's `currentColor` behavior).
 class NymSvgIcon extends StatelessWidget {
   const NymSvgIcon(
     this.svg, {
