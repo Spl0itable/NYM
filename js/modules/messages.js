@@ -348,73 +348,173 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    /// Capacity and refill are a burst allowance, not a quota: three copies
-    /// land immediately and one more every two seconds after that. A phrase
-    /// going round a channel stays well inside it; a botnet firing the same
-    /// payload does not.
-    CROSS_CONTENT_CAPACITY: 3,
-    CROSS_CONTENT_REFILL_PER_SEC: 0.5,
-    /// Short messages are exempt. Fifty people saying "gm" in the morning is
-    /// the whole point of a channel, and no spam campaign fits in 24
-    /// characters.
-    CROSS_CONTENT_MIN_LENGTH: 24,
-    CROSS_CONTENT_MAX_BUCKETS: 2000,
-    CROSS_CONTENT_IDLE_MS: 600000,
+    CAMPAIGN_WINDOW_MS: 900000,
+    CAMPAIGN_ALLOWANCE: 3,
+    CAMPAIGN_SENDER_REPEAT: 3,
+    CAMPAIGN_MIN_LENGTH: 24,
+    CAMPAIGN_MIN_SHINGLES: 8,
+    CAMPAIGN_SIMILARITY: 0.6,
+    CAMPAIGN_MAX_CLUSTERS: 2000,
+    CAMPAIGN_MAX_HITS: 64,
+    AUTO_MUTE_MS: 86400000,
 
-    /// Normalized key for the content bucket, or '' when the text is exempt.
-    /// Query strings and fragments are stripped from URLs so one campaign with
-    /// a per-victim tracking parameter is still one payload.
-    _crossContentKey(content) {
-        if (typeof content !== 'string') return '';
-        const s = content
-            .toLowerCase()
-            .replace(/(https?:\/\/[^\s?#]+)(?:[?#]\S*)?/g, '$1')
-            .replace(/\s+/g, ' ')
-            .trim();
-        if (s.length < this.CROSS_CONTENT_MIN_LENGTH) return '';
-        return this._hashContent(s.slice(0, 160));
+    _campaignTokens(content) {
+        if (typeof content !== 'string') return [];
+        const out = [];
+        const words = content.toLowerCase().split(/\s+/);
+        for (let w of words) {
+            if (!w) continue;
+            if (/^(https?:\/\/|www\.)/.test(w)) {
+                w = w.replace(/[?#].*$/, '').replace(/[^\p{L}\p{N}\/]+$/u, '');
+                if (w) out.push(w);
+                continue;
+            }
+            w = w.replace(/^[^\p{L}\p{N}@#]+|[^\p{L}\p{N}]+$/gu, '');
+            if (!w || w[0] === '@' || /\p{N}/u.test(w)) continue;
+            out.push(w);
+        }
+        return out;
     },
 
-    /// True when this exact payload has already used up its allowance,
-    /// whoever sent the earlier copies.
-    isDuplicateContentFlooding(content, now) {
-        const key = this._crossContentKey(content);
-        if (key === '') return false;
-        const t = typeof now === 'number' ? now : Date.now();
-        if (!this._crossContentBuckets) this._crossContentBuckets = new Map();
-        const buckets = this._crossContentBuckets;
-
-        let bucket = buckets.get(key);
-        if (!bucket) {
-            if (buckets.size >= this.CROSS_CONTENT_MAX_BUCKETS) {
-                for (const [k, b] of buckets) {
-                    if (t - b.last >= this.CROSS_CONTENT_IDLE_MS) buckets.delete(k);
-                }
-                if (buckets.size >= this.CROSS_CONTENT_MAX_BUCKETS) {
-                    let oldestKey = null, oldest = Infinity;
-                    for (const [k, b] of buckets) {
-                        if (b.last < oldest) { oldest = b.last; oldestKey = k; }
-                    }
-                    if (oldestKey !== null) buckets.delete(oldestKey);
-                }
-            }
-            bucket = { tokens: this.CROSS_CONTENT_CAPACITY, last: t };
-            buckets.set(key, bucket);
+    _campaignShingles(tokens) {
+        const set = new Set();
+        if (tokens.length === 1) {
+            set.add(this._hashContent(tokens[0]));
+            return set;
         }
+        for (let i = 0; i + 1 < tokens.length; i++) {
+            set.add(this._hashContent(tokens[i] + ' ' + tokens[i + 1]));
+        }
+        return set;
+    },
 
-        const elapsed = Math.max(0, t - bucket.last) / 1000;
-        bucket.tokens = Math.min(
-            this.CROSS_CONTENT_CAPACITY,
-            bucket.tokens + elapsed * this.CROSS_CONTENT_REFILL_PER_SEC
-        );
-        bucket.last = t;
-        if (bucket.tokens >= 1) {
-            bucket.tokens -= 1;
-            return false;
+    _campaignState() {
+        if (!this._campaign) {
+            this._campaign = { clusters: new Set(), byKey: new Map(), byShingle: new Map() };
+        }
+        return this._campaign;
+    },
+
+    _campaignMatch(key, shingles) {
+        const st = this._campaignState();
+        const exact = st.byKey.get(key);
+        if (exact) return exact;
+        if (shingles.size < this.CAMPAIGN_MIN_SHINGLES) return null;
+        const votes = new Map();
+        for (const s of shingles) {
+            const owners = st.byShingle.get(s);
+            if (!owners) continue;
+            for (const c of owners) votes.set(c, (votes.get(c) || 0) + 1);
+        }
+        let best = null, bestScore = 0;
+        for (const [c, v] of votes) {
+            if (c.shingles.size < this.CAMPAIGN_MIN_SHINGLES) continue;
+            const score = v / (shingles.size + c.shingles.size - v);
+            if (score > bestScore) { bestScore = score; best = c; }
+        }
+        return bestScore >= this.CAMPAIGN_SIMILARITY ? best : null;
+    },
+
+    _campaignDrop(cluster) {
+        const st = this._campaignState();
+        st.clusters.delete(cluster);
+        for (const k of cluster.keys) {
+            if (st.byKey.get(k) === cluster) st.byKey.delete(k);
+        }
+        for (const s of cluster.shingles) {
+            const owners = st.byShingle.get(s);
+            if (!owners) continue;
+            owners.delete(cluster);
+            if (owners.size === 0) st.byShingle.delete(s);
+        }
+    },
+
+    _campaignEvict(now) {
+        const st = this._campaignState();
+        const idle = this.CAMPAIGN_WINDOW_MS * 2;
+        for (const c of st.clusters) {
+            if (now - c.last >= idle) this._campaignDrop(c);
+        }
+        if (st.clusters.size < this.CAMPAIGN_MAX_CLUSTERS) return;
+        let oldest = null;
+        for (const c of st.clusters) {
+            if (!oldest || c.last < oldest.last) oldest = c;
+        }
+        if (oldest) this._campaignDrop(oldest);
+    },
+
+    checkCampaign(content, pubkey, createdAtMs, now) {
+        const none = { flood: false, mute: false };
+        const tokens = this._campaignTokens(content);
+        const text = tokens.join(' ');
+        if (text.length < this.CAMPAIGN_MIN_LENGTH) return none;
+        const t = typeof now === 'number' ? now : Date.now();
+        const created = typeof createdAtMs === 'number' && createdAtMs > 0 ? createdAtMs : t;
+        const key = this._hashContent(text);
+        const shingles = this._campaignShingles(tokens);
+        const st = this._campaignState();
+
+        let cluster = this._campaignMatch(key, shingles);
+        if (!cluster) {
+            if (st.clusters.size >= this.CAMPAIGN_MAX_CLUSTERS) this._campaignEvict(t);
+            cluster = { keys: new Set(), shingles, hits: [], last: t };
+            st.clusters.add(cluster);
+            for (const s of shingles) {
+                let owners = st.byShingle.get(s);
+                if (!owners) { owners = new Set(); st.byShingle.set(s, owners); }
+                owners.add(cluster);
+            }
+        }
+        if (!cluster.keys.has(key)) {
+            cluster.keys.add(key);
+            st.byKey.set(key, cluster);
+        }
+        cluster.last = t;
+
+        const W = this.CAMPAIGN_WINDOW_MS;
+        const hits = cluster.hits.filter(h => t - h.at <= W);
+        hits.push({ pubkey: pubkey || '', at: t, created });
+        if (hits.length > this.CAMPAIGN_MAX_HITS) hits.splice(0, hits.length - this.CAMPAIGN_MAX_HITS);
+        cluster.hits = hits;
+
+        let copies = 0, mine = 0;
+        for (const h of hits) {
+            if (Math.abs(h.at - t) > W && Math.abs(h.created - created) > W) continue;
+            copies++;
+            if (pubkey && h.pubkey === pubkey) mine++;
+        }
+        const flood = copies > this.CAMPAIGN_ALLOWANCE;
+        const mute = !!pubkey && (mine >= this.CAMPAIGN_SENDER_REPEAT || (flood && mine >= 2));
+        return { flood, mute };
+    },
+
+    isAutoMuted(pubkey) {
+        if (!pubkey || !this.autoMutedPubkeys) return false;
+        const until = this.autoMutedPubkeys.get(pubkey);
+        if (until === undefined) return false;
+        if (Date.now() < until) return true;
+        this.autoMutedPubkeys.delete(pubkey);
+        return false;
+    },
+
+    autoMute(pubkey, nym) {
+        if (!pubkey || pubkey === this.pubkey) return false;
+        if (this.isFriend?.(pubkey)) return false;
+        if (typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey)) return false;
+        if (!this.autoMutedPubkeys) this.autoMutedPubkeys = new Map();
+        const fresh = !this.isAutoMuted(pubkey);
+        this.autoMutedPubkeys.set(pubkey, Date.now() + this.AUTO_MUTE_MS);
+        if (!fresh) return false;
+        if (typeof this.hideMessagesFromBlockedUser === 'function') this.hideMessagesFromBlockedUser(pubkey);
+        if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
+        if (typeof this.displaySystemMessage === 'function') {
+            const who = typeof this.getNymHtmlFromPubkey === 'function'
+                ? this.getNymHtmlFromPubkey(pubkey)
+                : this.escapeHtml(nym || pubkey.slice(0, 8));
+            this.displaySystemMessage(`Auto-muted ${who} for 24h: kept posting the same message`, 'system', { html: true });
         }
         return true;
     },
-
     isFlooding(pubkey, channel) {
         if (this.isContentFlooding(pubkey)) return true;
 

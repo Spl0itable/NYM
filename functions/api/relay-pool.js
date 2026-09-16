@@ -66,6 +66,18 @@ export async function onRequest(context) {
   }
 
   const clientIsNymchat = isNymchatClient(request, env);
+  function clientIdentity(req) {
+    const out = {};
+    const ip = req.headers.get('CF-Connecting-IP') || '';
+    if (ip) out.nymchat_client_ip = ip.slice(0, 64);
+    const cc = (req.cf && req.cf.country) || req.headers.get('CF-IPCountry') || '';
+    if (cc) out.nymchat_client_cc = String(cc).slice(0, 8);
+    const ua = req.headers.get('User-Agent') || '';
+    if (ua) out.nymchat_client_ua = ua.slice(0, 200);
+    const origin = req.headers.get('Origin') || '';
+    if (origin) out.nymchat_client_origin = origin.slice(0, 120);
+    return out;
+  }
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
 
   const { 0: client, 1: server } = new WebSocketPair();
@@ -984,6 +996,131 @@ export async function onRequest(context) {
     return false;
   }
 
+  const CAMPAIGN_WINDOW_MS = 900000;
+  const CAMPAIGN_ALLOWANCE = 3;
+  const CAMPAIGN_SENDER_REPEAT = 3;
+  const CAMPAIGN_MIN_LENGTH = 24;
+  const CAMPAIGN_MIN_SHINGLES = 8;
+  const CAMPAIGN_SIMILARITY = 0.6;
+  const CAMPAIGN_MAX_CLUSTERS = 2000;
+  const CAMPAIGN_MAX_HITS = 64;
+  const AUTO_MUTE_MS = 86400000;
+  const campaignClusters = new Set();
+  const campaignByKey = new Map();
+  const campaignByShingle = new Map();
+  const autoMuted = new Map();
+
+  function campaignTokens(content) {
+    if (typeof content !== 'string') return [];
+    const out = [];
+    for (let w of content.toLowerCase().split(/\s+/)) {
+      if (!w) continue;
+      if (/^(https?:\/\/|www\.)/.test(w)) {
+        w = w.replace(/[?#].*$/, '').replace(/[^\p{L}\p{N}\/]+$/u, '');
+        if (w) out.push(w);
+        continue;
+      }
+      w = w.replace(/^[^\p{L}\p{N}@#]+|[^\p{L}\p{N}]+$/gu, '');
+      if (!w || w[0] === '@' || /\p{N}/u.test(w)) continue;
+      out.push(w);
+    }
+    return out;
+  }
+
+  function campaignShingles(tokens) {
+    const set = new Set();
+    if (tokens.length === 1) { set.add(hashContent(tokens[0])); return set; }
+    for (let i = 0; i + 1 < tokens.length; i++) set.add(hashContent(tokens[i] + ' ' + tokens[i + 1]));
+    return set;
+  }
+
+  function campaignMatch(key, shingles) {
+    const exact = campaignByKey.get(key);
+    if (exact) return exact;
+    if (shingles.size < CAMPAIGN_MIN_SHINGLES) return null;
+    const votes = new Map();
+    for (const s of shingles) {
+      const owners = campaignByShingle.get(s);
+      if (!owners) continue;
+      for (const c of owners) votes.set(c, (votes.get(c) || 0) + 1);
+    }
+    let best = null, bestScore = 0;
+    for (const [c, v] of votes) {
+      if (c.shingles.size < CAMPAIGN_MIN_SHINGLES) continue;
+      const score = v / (shingles.size + c.shingles.size - v);
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    return bestScore >= CAMPAIGN_SIMILARITY ? best : null;
+  }
+
+  function campaignDrop(cluster) {
+    campaignClusters.delete(cluster);
+    for (const k of cluster.keys) if (campaignByKey.get(k) === cluster) campaignByKey.delete(k);
+    for (const s of cluster.shingles) {
+      const owners = campaignByShingle.get(s);
+      if (!owners) continue;
+      owners.delete(cluster);
+      if (owners.size === 0) campaignByShingle.delete(s);
+    }
+  }
+
+  function campaignEvict(now) {
+    for (const c of campaignClusters) if (now - c.last >= CAMPAIGN_WINDOW_MS * 2) campaignDrop(c);
+    if (campaignClusters.size < CAMPAIGN_MAX_CLUSTERS) return;
+    let oldest = null;
+    for (const c of campaignClusters) if (!oldest || c.last < oldest.last) oldest = c;
+    if (oldest) campaignDrop(oldest);
+  }
+
+  function checkCampaign(content, pubkey, createdAtMs, now) {
+    const tokens = campaignTokens(content);
+    const text = tokens.join(' ');
+    if (text.length < CAMPAIGN_MIN_LENGTH) return { flood: false, mute: false };
+    const t = now;
+    const created = createdAtMs > 0 ? createdAtMs : t;
+    const key = hashContent(text);
+    const shingles = campaignShingles(tokens);
+    let cluster = campaignMatch(key, shingles);
+    if (!cluster) {
+      if (campaignClusters.size >= CAMPAIGN_MAX_CLUSTERS) campaignEvict(t);
+      cluster = { keys: new Set(), shingles, hits: [], last: t };
+      campaignClusters.add(cluster);
+      for (const s of shingles) {
+        let owners = campaignByShingle.get(s);
+        if (!owners) { owners = new Set(); campaignByShingle.set(s, owners); }
+        owners.add(cluster);
+      }
+    }
+    if (!cluster.keys.has(key)) { cluster.keys.add(key); campaignByKey.set(key, cluster); }
+    cluster.last = t;
+    const hits = cluster.hits.filter((h) => t - h.at <= CAMPAIGN_WINDOW_MS);
+    hits.push({ pubkey: pubkey || '', at: t, created });
+    if (hits.length > CAMPAIGN_MAX_HITS) hits.splice(0, hits.length - CAMPAIGN_MAX_HITS);
+    cluster.hits = hits;
+    let copies = 0, mine = 0;
+    for (const h of hits) {
+      if (Math.abs(h.at - t) > CAMPAIGN_WINDOW_MS && Math.abs(h.created - created) > CAMPAIGN_WINDOW_MS) continue;
+      copies++;
+      if (pubkey && h.pubkey === pubkey) mine++;
+    }
+    const flood = copies > CAMPAIGN_ALLOWANCE;
+    const mute = !!pubkey && mine >= CAMPAIGN_SENDER_REPEAT;
+    return { flood, mute };
+  }
+
+  function isAutoMuted(pubkey, now) {
+    const until = autoMuted.get(pubkey);
+    if (until === undefined) return false;
+    if (now < until) return true;
+    autoMuted.delete(pubkey);
+    return false;
+  }
+
+  function extractCreatedAtMs(raw) {
+    const m = /"created_at"\s*:\s*(\d+)/.exec(raw);
+    return m ? parseInt(m[1], 10) * 1000 : 0;
+  }
+
   // Channel spam suppression at the pool boundary
   const RX_BLOCKED_CONTENT_BLOB = /"content":"(?:(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}|test_\d+_\d+)"/;
   function hasBlockedContentPrefix(raw) {
@@ -1004,19 +1141,27 @@ export async function onRequest(context) {
 
   function isSpamEventFrame(raw) {
     const kind = extractEventKind(raw);
-    if (kind !== 20000) return false;
+    if (kind !== 20000 && kind !== 23333) return false;
     const content = extractEventStringField(raw, 'content');
-    if (content && isSpamContent(content)) return true;
-    const nymTag = extractTagValue(raw, 'n');
-    if (nymTag) {
-      const cleanNym = nymTag.replace(/#[a-fA-F0-9]{4}$/, '');
-      if (isSpamNym(cleanNym)) return true;
-    }
     const pubkey = extractEventStringField(raw, 'pubkey');
+    const now = Date.now();
+    if (pubkey && isAutoMuted(pubkey, now)) return true;
+    if (kind === 20000) {
+      if (content && isSpamContent(content)) return true;
+      const nymTag = extractTagValue(raw, 'n');
+      if (nymTag) {
+        const cleanNym = nymTag.replace(/#[a-fA-F0-9]{4}$/, '');
+        if (isSpamNym(cleanNym)) return true;
+      }
+      if (pubkey && content) {
+        if (isContentFlooding(pubkey, now)) return true;
+        trackContentFlood(pubkey, content, now);
+      }
+    }
     if (pubkey && content) {
-      const now = Date.now();
-      if (isContentFlooding(pubkey, now)) return true;
-      trackContentFlood(pubkey, content, now);
+      const verdict = checkCampaign(content, pubkey, extractCreatedAtMs(raw), now);
+      if (verdict.mute) autoMuted.set(pubkey, now + AUTO_MUTE_MS);
+      if (verdict.flood || verdict.mute) return true;
     }
     return false;
   }
@@ -1182,6 +1327,7 @@ export async function onRequest(context) {
       if (relayUrl === APP_RELAY && clientIsNymchat && proxySecret) {
         const u = new URL(relayUrl);
         u.searchParams.set('nymchat_proxy', proxySecret);
+        for (const [k, v] of Object.entries(clientIdentity(request))) u.searchParams.set(k, v);
         upstreamUrl = u.toString();
       }
       const ws = new WebSocket(upstreamUrl);

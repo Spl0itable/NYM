@@ -30,6 +30,7 @@
     const PQ_KEY_TTL_SEC = 7 * 24 * 3600;
     const META_NYMCHAT_VOUCHES = 'nymchatVouches';
     const META_TRUSTED_PUBKEYS = 'trustedPubkeys';
+    const META_AUTO_MUTED = 'autoMutedPubkeys';
     const META_POOL_SHARD_LAST_SEEN = 'poolShardLastSeen';
     // Event ids whose BIP340 signature verified in past sessions (bounded,
     // newest-biased). Restored at boot so the relay replay of already-seen
@@ -405,6 +406,14 @@
                         ids: Array.from(this.trustedPubkeys).slice(-20000)
                     });
                 }
+                if (this.autoMutedPubkeys && this.autoMutedPubkeys.size > 0) {
+                    const now = Date.now();
+                    const ids = [];
+                    for (const [pk, until] of this.autoMutedPubkeys) {
+                        if (typeof until === 'number' && until > now) ids.push([pk, until]);
+                    }
+                    this._cachePut('meta', { key: META_AUTO_MUTED, ids });
+                }
                 if (this._verifiedEventIds && this._verifiedEventIds.size > 0) {
                     this._cachePut('meta', {
                         key: META_VERIFIED_EVENT_IDS,
@@ -496,6 +505,13 @@
                         for (const id of m.ids) this.nymchatVouches.add(id);
                     } else if (m.key === META_TRUSTED_PUBKEYS && this.trustedPubkeys) {
                         for (const id of m.ids) this.trustedPubkeys.add(id);
+                    } else if (m.key === META_AUTO_MUTED) {
+                        if (!this.autoMutedPubkeys) this.autoMutedPubkeys = new Map();
+                        const now = Date.now();
+                        for (const pair of m.ids) {
+                            if (!Array.isArray(pair) || typeof pair[0] !== 'string') continue;
+                            if (typeof pair[1] === 'number' && pair[1] > now) this.autoMutedPubkeys.set(pair[0], pair[1]);
+                        }
                     } else if (m.key === META_VERIFIED_EVENT_IDS) {
                         if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
                         for (const id of m.ids) this._verifiedEventIds.add(id);

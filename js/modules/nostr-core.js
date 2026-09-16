@@ -485,6 +485,10 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            if (typeof this.isAutoMuted === 'function' && this.isAutoMuted(event.pubkey)) {
+                return;
+            }
+
             if (this.isSpamMessage(event.content)) {
                 return;
             }
@@ -513,18 +517,14 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Cross-sender flood control. The per-pubkey tracker above catches
-            // one account repeating itself and does nothing about the actual
-            // shape of a campaign: one payload, five hundred fresh keys. This
-            // bucket is keyed on the CONTENT, so rotating the key does not
-            // rotate the limit. Historical replay is exempt — a D1 backfill
-            // legitimately delivers the same text many times over.
-            if (!isHistorical
-                && event.pubkey !== this.pubkey
+            if (event.pubkey !== this.pubkey
                 && !this.isFriend?.(event.pubkey)
                 && !this.isVerifiedBot(event.pubkey)
-                && this.isDuplicateContentFlooding(event.content)) {
-                return;
+                && typeof this.checkCampaign === 'function') {
+                const verdict = this.checkCampaign(
+                    event.content, event.pubkey, (Math.floor(event.created_at) || 0) * 1000);
+                if (verdict.mute) this.autoMute(event.pubkey, nym);
+                if (verdict.flood || verdict.mute) return;
             }
 
             // Only track flood for new messages in this channel

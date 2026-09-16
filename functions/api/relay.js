@@ -46,6 +46,14 @@ function buildUpstreamUrl(targetRelay, request, env) {
   if (!isNymchatClient(request, env)) return targetRelay;
   const u = new URL(targetRelay);
   u.searchParams.set('nymchat_proxy', env.NYMCHAT_PROXY_SECRET);
+  const ip = request.headers.get('CF-Connecting-IP') || '';
+  if (ip) u.searchParams.set('nymchat_client_ip', ip.slice(0, 64));
+  const cc = (request.cf && request.cf.country) || request.headers.get('CF-IPCountry') || '';
+  if (cc) u.searchParams.set('nymchat_client_cc', String(cc).slice(0, 8));
+  const ua = request.headers.get('User-Agent') || '';
+  if (ua) u.searchParams.set('nymchat_client_ua', ua.slice(0, 200));
+  const origin = request.headers.get('Origin') || '';
+  if (origin) u.searchParams.set('nymchat_client_origin', origin.slice(0, 120));
   return u.toString();
 }
 
