@@ -40,21 +40,11 @@ function isPrivateRelayHost(hostname) {
   return false;
 }
 
-function buildUpstreamUrl(targetRelay, request, env) {
-  if (targetRelay !== APP_RELAY) return targetRelay;
-  if (!env || !env.NYMCHAT_PROXY_SECRET) return targetRelay;
-  if (!isNymchatClient(request, env)) return targetRelay;
-  const u = new URL(targetRelay);
-  u.searchParams.set('nymchat_proxy', env.NYMCHAT_PROXY_SECRET);
-  const ip = request.headers.get('CF-Connecting-IP') || '';
-  if (ip) u.searchParams.set('nymchat_client_ip', ip.slice(0, 64));
-  const cc = (request.cf && request.cf.country) || request.headers.get('CF-IPCountry') || '';
-  if (cc) u.searchParams.set('nymchat_client_cc', String(cc).slice(0, 8));
-  const ua = request.headers.get('User-Agent') || '';
-  if (ua) u.searchParams.set('nymchat_client_ua', ua.slice(0, 200));
-  const origin = request.headers.get('Origin') || '';
-  if (origin) u.searchParams.set('nymchat_client_origin', origin.slice(0, 120));
-  return u.toString();
+const APP_RELAY_HOST = new URL(APP_RELAY).hostname;
+
+function isAppRelayHost(hostname) {
+  const h = (hostname || '').toLowerCase().replace(/\.$/, '');
+  return h === APP_RELAY_HOST;
 }
 
 export async function onRequest(context) {
@@ -85,6 +75,9 @@ export async function onRequest(context) {
     if (isPrivateRelayHost(relayUrl.hostname)) {
       return new Response('Relay host not allowed', { status: 403 });
     }
+    if (isAppRelayHost(relayUrl.hostname)) {
+      return new Response('The app relay is only reachable through /api/relay-pool', { status: 403 });
+    }
   } catch {
     return new Response('Invalid relay URL', { status: 400 });
   }
@@ -95,7 +88,7 @@ export async function onRequest(context) {
 
   // Connect to the upstream relay using the WebSocket constructor
   // (the standard way to make outbound WebSocket connections from Workers)
-  const upstream = new WebSocket(buildUpstreamUrl(targetRelay, request, env));
+  const upstream = new WebSocket(targetRelay);
 
   // Buffer messages from the client until the upstream connection is open
   let upstreamOpen = false;
