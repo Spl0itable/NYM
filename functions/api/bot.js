@@ -1813,15 +1813,27 @@ function proMarkLastBlock(out) {
   last.content[at] = Object.assign({}, block, { cache_control: { type: "ephemeral" } });
 }
 
+function proErrorDetail(data) {
+  var e = data && data.error;
+  if (typeof e === "string") return e;
+  if (!e || typeof e !== "object") return "";
+  if (typeof e.message === "string" && e.message) return e.message;
+  if (e.error && typeof e.error === "object" && typeof e.error.message === "string" && e.error.message) {
+    return e.error.message;
+  }
+  try { return JSON.stringify(e); } catch (x) { return ""; }
+}
+
 async function proHttpChat(url, headers, body) {
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
   var raw = await res.text();
   var data = null;
   try { data = JSON.parse(raw); } catch (e) { }
   if (!res.ok) {
-    var detail = (data && data.error && (data.error.message || data.error)) ||
+    var detail = proErrorDetail(data) ||
       (data && Array.isArray(data.errors) && data.errors[0] &&
-        ((data.errors[0].code ? data.errors[0].code + ": " : "") + data.errors[0].message)) ||
+        ((data.errors[0].code ? data.errors[0].code + ": " : "") +
+          (data.errors[0].message || JSON.stringify(data.errors[0])))) ||
       (raw && raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()) ||
       "";
     var err = new Error("Pro model request failed: HTTP " + res.status +
