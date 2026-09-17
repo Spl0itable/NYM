@@ -2996,6 +2996,9 @@ Object.assign(NYM.prototype, {
                     const difficulty = this._effectivePowDifficulty();
                     if (difficulty > 0) event = await this._minePow(event, difficulty);
                     const signedEvent = await this.signEvent(event);
+                    if (typeof this.recordEventProvenanceSource === 'function') {
+                        this.recordEventProvenanceSource(signedEvent, 'THIS CLIENT');
+                    }
                     this._replaceOptimisticMessage(tempId, signedEvent, storageKey, false);
                     this.sendToRelay(["EVENT", signedEvent]);
                     if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);

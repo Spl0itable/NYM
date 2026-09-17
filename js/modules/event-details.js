@@ -6,6 +6,9 @@
     const MAX_EVENTS = 1500;
     /// A single event seen on more relays than this is not more informative.
     const MAX_RELAYS_PER_EVENT = 40;
+    const PANEL_KINDS = new Set([20000, 23333]);
+    const ARCHIVE_MISS_RETRY_MS = 20000;
+    const RELAY_LOOKUP_MS = 8000;
 
     Object.assign(NYM.prototype, {
 
@@ -14,6 +17,7 @@
         /// away, which is the entire point.
         recordEventProvenance(event, relayUrl) {
             if (!event || typeof event.id !== 'string' || event.id.length !== 64) return;
+            if (!PANEL_KINDS.has(event.kind)) return;
             if (!this._eventProvenance) this._eventProvenance = new Map();
             const store = this._eventProvenance;
 
@@ -84,7 +88,10 @@
             body.textContent = '';
             body.dataset.eventId = eventId;
             body.appendChild(this._buildEventDetails(eventId));
-            if (!this.eventProvenance(eventId)) this._fetchArchivedEvent(eventId);
+            if (!this.eventProvenance(eventId)) {
+                this._fetchArchivedEvent(eventId);
+                this._fetchEventFromRelays(eventId);
+            }
 
             // Copy lives in the modal's own footer, like every other modal in
             // the app, so the payload is handed to that button rather than to
@@ -115,31 +122,80 @@
             if (modal) modal.classList.remove('active');
         },
 
+        _rerenderEventDetails(eventId) {
+            const rec = this.eventProvenance(eventId);
+            if (!rec) return false;
+            const modal = document.getElementById('eventDetailsModal');
+            const body = document.getElementById('eventDetailsBody');
+            if (!modal || !modal.classList.contains('active') || !body) return false;
+            if (body.dataset.eventId !== eventId) return false;
+            body.textContent = '';
+            body.appendChild(this._buildEventDetails(eventId));
+            const copyBtn = document.getElementById('eventDetailsCopyBtn');
+            if (copyBtn) {
+                copyBtn.dataset.nostrCopy = JSON.stringify(rec.event, null, 2);
+                copyBtn.classList.remove('nm-hidden');
+            }
+            return true;
+        },
+
         _fetchArchivedEvent(eventId) {
             if (typeof this._storageApiRequest !== 'function') return;
-            if (this._archivedEventMisses && this._archivedEventMisses.has(eventId)) return;
+            if (!this._archivedEventMisses) this._archivedEventMisses = new Map();
+            const missedAt = this._archivedEventMisses.get(eventId);
+            if (missedAt && Date.now() - missedAt < ARCHIVE_MISS_RETRY_MS) return;
             this._storageApiRequest('event-get', { ids: [eventId] }, false)
                 .then((res) => {
                     const ev = res && Array.isArray(res.events) ? res.events[0] : null;
                     if (!ev || ev.id !== eventId) {
-                        if (!this._archivedEventMisses) this._archivedEventMisses = new Set();
-                        this._archivedEventMisses.add(eventId);
+                        this._archivedEventMisses.set(eventId, Date.now());
                         return;
                     }
+                    this._archivedEventMisses.delete(eventId);
                     this.recordEventProvenanceSource(ev, 'NYMCHAT ARCHIVE');
-                    const modal = document.getElementById('eventDetailsModal');
-                    const body = document.getElementById('eventDetailsBody');
-                    if (!modal || !modal.classList.contains('active') || !body) return;
-                    if (body.dataset.eventId !== eventId) return;
-                    body.textContent = '';
-                    body.appendChild(this._buildEventDetails(eventId));
-                    const copyBtn = document.getElementById('eventDetailsCopyBtn');
-                    if (copyBtn) {
-                        copyBtn.dataset.nostrCopy = JSON.stringify(ev, null, 2);
-                        copyBtn.classList.remove('nm-hidden');
-                    }
+                    this._rerenderEventDetails(eventId);
                 })
                 .catch(() => { });
+        },
+
+        _fetchEventFromRelays(eventId) {
+            if (typeof this.sendToRelay !== 'function') return;
+            if (!/^[0-9a-f]{64}$/.test(eventId)) return;
+            if (!this._relayLookupInflight) this._relayLookupInflight = new Set();
+            if (this._relayLookupInflight.has(eventId)) return;
+            this._relayLookupInflight.add(eventId);
+            if (!this._subscriptionHandlers) this._subscriptionHandlers = new Map();
+            const subId = 'ev-' + Math.random().toString(36).slice(2, 10);
+            let settled = false;
+            const cleanup = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                this._subscriptionHandlers.delete(subId);
+                this._relayLookupInflight.delete(eventId);
+                try { this.sendToRelay(['CLOSE', subId]); } catch (_) { }
+            };
+            const timer = setTimeout(cleanup, RELAY_LOOKUP_MS);
+            this._subscriptionHandlers.set(subId, (type, data, relayUrl) => {
+                if (type === 'EVENT' && data[0] === subId) {
+                    const ev = data[1];
+                    if (!ev || ev.id !== eventId) return;
+                    const source = (typeof data[2] === 'string' && data[2].startsWith('wss://'))
+                        ? data[2]
+                        : (relayUrl && relayUrl !== 'relay-pool' ? relayUrl : null);
+                    this.recordEventProvenance(ev, source);
+                    if (!this.eventProvenance(eventId)) this.recordEventProvenanceSource(ev, 'RELAY LOOKUP');
+                    this._rerenderEventDetails(eventId);
+                    cleanup();
+                } else if (type === 'EOSE' && data[0] === subId) {
+                    cleanup();
+                }
+            });
+            try {
+                this.sendToRelay(['REQ', subId, { ids: [eventId], limit: 1 }]);
+            } catch (_) {
+                cleanup();
+            }
         },
 
         _buildPartialEventDetails(eventId, frag) {

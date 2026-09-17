@@ -1454,7 +1454,7 @@ export async function onRequest(context) {
         } else if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
           const eventId = extractOKEventId(raw);
           if (eventId && relayUrl === APP_RELAY && pendingAppArchive.has(eventId)) {
-            settleAppArchive(eventId, /^\["OK","[^"]*",\s*true\b/.test(raw));
+            if (settleAppArchive(eventId, /^\["OK","[^"]*",\s*true\b/.test(raw))) runArchive(flushArchive());
           }
           if (eventId) {
             if (seenOKs.has(eventId)) return;
