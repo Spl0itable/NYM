@@ -333,14 +333,25 @@ let buildManifestCache = null;
 // deployment describing itself — which is the right comparison here: we are
 // asking "did the caller load THIS build", not "is this build official". The
 // About dialog answers the second question, against GitHub's attestations.
-async function buildManifestFiles(origin) {
+async function fetchOwnAsset(url, env) {
+  const assets = env && env.ASSETS;
+  if (assets && typeof assets.fetch === "function") {
+    try {
+      const res = await assets.fetch(new Request(url));
+      if (res && res.ok) return res;
+    } catch (_) {}
+  }
+  return fetch(url, { cf: { cacheTtl: 300 } });
+}
+
+async function buildManifestFiles(origin, env) {
   const now = Date.now();
   if (buildManifestCache && buildManifestCache.origin === origin
     && now - buildManifestCache.at < BUILD_MANIFEST_TTL_MS) {
     return buildManifestCache.files;
   }
   try {
-    const res = await fetch(origin + BUILD_MANIFEST_PATH, { cf: { cacheTtl: 300 } });
+    const res = await fetchOwnAsset(origin + BUILD_MANIFEST_PATH, env);
     if (!res.ok) return null;
     const manifest = await res.json();
     const files = manifest && manifest.files;
@@ -370,8 +381,8 @@ function buildProbePaths(files, challenge, count) {
   return out;
 }
 
-async function verifyBuildProof(origin, challenge, proof) {
-  const files = await buildManifestFiles(origin);
+async function verifyBuildProof(origin, challenge, proof, env) {
+  const files = await buildManifestFiles(origin, env);
   // Fail closed. The manifest is a static file on our own origin, so this is
   // an outage rather than an attack — but a badge issued without the check is
   // a badge that means nothing.

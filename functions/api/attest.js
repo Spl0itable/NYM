@@ -100,7 +100,7 @@ async function handleEnroll(context, body) {
     if (!enrollPowOk(env, body.auth)) {
       return json({ error: "Enrollment work insufficient", need: enrollPowBits(env) }, 403);
     }
-    const proof = await verifyBuildProof(new URL(request.url).origin, challenge, body.build);
+    const proof = await verifyBuildProof(new URL(request.url).origin, challenge, body.build, env);
     if (!proof.ok) return json({ error: "Build proof failed", reason: proof.reason }, 403);
     tier = "challenged";
   }
@@ -130,7 +130,7 @@ async function routeAttestAction(context, body) {
     // The paths this enrollment must account for. Derived from the challenge,
     // so nothing is stored between here and the enroll call, and the caller
     // cannot pick which files it is asked about.
-    const files = await buildManifestFiles(new URL(context.request.url).origin);
+    const files = await buildManifestFiles(new URL(context.request.url).origin, env);
     if (files) issued.buildProbe = buildProbePaths(files, issued.challenge, 4);
     // Web clients mine their auth event to this before signing it. Native
     // clients ignore it: hardware attestation is a stronger proof than any
