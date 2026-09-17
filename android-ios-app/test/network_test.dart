@@ -13,6 +13,7 @@ import 'package:nym_bar/services/api/api_config.dart';
 import 'package:nym_bar/services/nostr/event_signer.dart';
 import 'package:nym_bar/services/nostr/identity_service.dart';
 import 'package:nym_bar/services/nostr/nostr_service.dart';
+import 'package:nym_bar/services/relay/relay_connection.dart';
 import 'package:nym_bar/services/relay/relay_message.dart';
 import 'package:nym_bar/services/relay/relay_pool.dart';
 import 'package:nym_bar/services/relay/relay_pool_proxy.dart';
@@ -682,6 +683,140 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
       expect(proxy.permanentBlacklist, isNot(contains('http://nope')));
       await proxy.disconnectAll();
+    });
+
+    test('isRelayWideRejection matches the worker list, not per-event reasons',
+        () {
+      for (final r in [
+        'restricted: not on the allow list',
+        'blocked: pubkey is banned here',
+        'paid: this relay requires payment',
+        'not allowed',
+        'auth-required: sign in first',
+        'only members may post',
+      ]) {
+        expect(isRelayWideRejection(r), isTrue, reason: r);
+      }
+      for (final r in [
+        'invalid: event too old',
+        'rate-limited: slow down',
+        'duplicate: already have this event',
+        'error: bad req',
+        '',
+      ]) {
+        expect(isRelayWideRejection(r), isFalse, reason: r);
+      }
+      expect(isUnsupportedKindRejection('blocked: kind 20000 not accepted'),
+          isTrue);
+    });
+
+    test('a relay-wide OK rejection drops the relay from the shards', () async {
+      final fakes = <_FakeChannel>[];
+      final proxy = RelayPoolProxy(
+        relays: RelayConfig.defaultRelays,
+        dmRelays: RelayConfig.defaultRelays,
+        poolUrl: 'wss://h/api/relay-pool',
+        channelFactory: (uri) {
+          final f = _FakeChannel();
+          fakes.add(f);
+          return f;
+        },
+      );
+      proxy.connectAll();
+      proxy.updateGeoRelays(
+          const ['wss://geo.example.com', 'wss://geo2.example.com']);
+      final geoSock = fakes.last;
+      bool sharded(String url) =>
+          proxy.shards.any((s) => s.relays.contains(url));
+      expect(sharded('wss://geo.example.com'), isTrue);
+      final relaysFramesBefore =
+          geoSock.sent.where((m) => m.startsWith('["RELAYS"')).length;
+
+      fakes.first.inject(jsonEncode([
+        'OK',
+        'evt1',
+        false,
+        'restricted: not on the allow list',
+        'wss://geo.example.com',
+      ]));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(proxy.permanentBlacklist, contains('wss://geo.example.com'));
+      expect(sharded('wss://geo.example.com'), isFalse);
+      expect(sharded('wss://geo2.example.com'), isTrue);
+      final relaysFrames =
+          geoSock.sent.where((m) => m.startsWith('["RELAYS"')).toList();
+      expect(relaysFrames.length, relaysFramesBefore + 1);
+      expect(relaysFrames.last, contains('wss://geo2.example.com'));
+      expect(relaysFrames.last, isNot(contains('"wss://geo.example.com"')));
+
+      fakes.first.inject(jsonEncode(
+          ['NOTICE', 'paid: subscription required', 'wss://geo2.example.com']));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(proxy.permanentBlacklist, contains('wss://geo2.example.com'));
+
+      proxy.updateGeoRelays(const ['wss://geo3.example.com']);
+      fakes.first.inject(jsonEncode([
+        'OK',
+        'evt2',
+        false,
+        'invalid: event too old',
+        'wss://geo3.example.com'
+      ]));
+      fakes.first.inject(jsonEncode([
+        'CLOSED',
+        'sub1',
+        'blocked: kind 20000 not accepted',
+        'wss://geo3.example.com',
+      ]));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(
+          proxy.permanentBlacklist, isNot(contains('wss://geo3.example.com')));
+
+      fakes.first.inject(jsonEncode(
+          ['OK', 'evt3', false, 'blocked: pubkey', RelayConfig.appRelay]));
+      fakes.first.inject(jsonEncode([
+        'CLOSED',
+        'sub2',
+        'restricted: members only',
+        RelayConfig.defaultRelays.first,
+      ]));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(proxy.permanentBlacklist, isNot(contains(RelayConfig.appRelay)));
+      expect(proxy.permanentBlacklist,
+          isNot(contains(RelayConfig.defaultRelays.first)));
+      await proxy.disconnectAll();
+    });
+
+    test('the direct pool drops a relay on a relay-wide rejection', () async {
+      final fakes = <String, _FakeChannel>{};
+      final pool = RelayPool(
+        relays: const ['wss://a.example', 'wss://b.example'],
+        connectionFactory: (url) => RelayConnection(
+          url,
+          channelFactory: (uri) {
+            final f = _FakeChannel();
+            fakes[uri.toString()] = f;
+            return f;
+          },
+        ),
+      );
+      pool.connectAll();
+      expect(pool.relayUrls, contains('wss://a.example'));
+
+      fakes['wss://a.example']!
+          .inject(jsonEncode(['NOTICE', 'restricted: not whitelisted']));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(pool.bannedRelays, contains('wss://a.example'));
+      expect(pool.relayUrls, isNot(contains('wss://a.example')));
+
+      pool.updateGeoRelays(const ['wss://a.example']);
+      expect(pool.relayUrls, isNot(contains('wss://a.example')));
+
+      fakes['wss://b.example']!.inject(
+          jsonEncode(['OK', 'x', false, 'blocked: kind 20000 not accepted']));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(pool.relayUrls, contains('wss://b.example'));
+      await pool.disconnectAll();
     });
   });
 

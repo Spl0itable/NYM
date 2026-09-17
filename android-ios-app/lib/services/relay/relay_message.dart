@@ -204,3 +204,45 @@ class ClosedMessage extends RelayMessage {
   final String subId;
   final String reason;
 }
+
+bool isUnsupportedKindRejection(String reason) =>
+    RegExp(r'kinds?\s*not\s*supported', caseSensitive: false)
+        .hasMatch(reason) ||
+    RegExp(r'\bNIP[\s\-_:]*\d+\b', caseSensitive: false).hasMatch(reason) ||
+    RegExp(r'\bkinds?[\s\-_:]*\d+\b', caseSensitive: false).hasMatch(reason);
+
+final List<RegExp> _relayWideRejectionPatterns = [
+  r'auth[\s\-_:]*required',
+  r'\bauthentic',
+  r'nip-?42',
+  r'\bblocked\b',
+  r'\brestricted\b',
+  r'\bbanned\b',
+  r'\bforbidden\b',
+  r'\bunauthorized\b',
+  r'payment[\s\-_:]*required',
+  r'\bpaid\b',
+  r'''must have ['"]?h['"]?,?\s*['"]?e['"]?\s*or\s*['"]?a['"]?\s*tag''',
+  r'\binvalid query\b',
+  r'\bnot\s+whitelisted\b',
+  r'\bauthor[\s\-_]+banned\b',
+  r'\bnot\s+allowed\b',
+  r'(does\s+not\s+have\s+permission|no\s+permission|permission\s+to\s+write)',
+  r'\bonly\s+members\b',
+  r'out\s+of\s+time\b',
+  r'\btop[\s\-]?up\b',
+  r'\baccepted\s+(repository|event)\b',
+  r'\bmust\s+reference\b',
+  r'\bweb\s+of\s+trust\b',
+  r'\bpolicy\s+violated\b',
+  r'\bonly\s+(serves|accepts|supports)\b',
+  r'\blow\s+trust\b',
+].map((p) => RegExp(p, caseSensitive: false)).toList(growable: false);
+
+bool isRelayWideRejection(String reason) {
+  if (reason.isEmpty) return false;
+  for (final p in _relayWideRejectionPatterns) {
+    if (p.hasMatch(reason)) return true;
+  }
+  return false;
+}

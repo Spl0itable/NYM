@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
 import '../../core/constants/relays.dart';
 import '../../features/messages/spam_filter.dart';
 import '../nostr/event_provenance.dart';
@@ -362,9 +364,14 @@ class RelayPool implements PoolTransport {
     _msgSubs[url] = conn.messages.listen((msg) => _onRelayMessage(url, msg));
   }
 
+  final Set<String> _bannedRelays = {};
+
+  Set<String> get bannedRelays => Set.unmodifiable(_bannedRelays);
+
   /// Add a relay to the pool. If the pool is already connected, the new relay
   /// is connected and back-filled with active read subscriptions.
   void addRelay(String url) {
+    if (_bannedRelays.contains(url)) return;
     if (_connections.containsKey(url)) return;
     _addRelayInternal(url);
     final conn = _connections[url]!;
@@ -548,7 +555,6 @@ class RelayPool implements PoolTransport {
   Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) =>
       publish(event);
 
-
   /// See [PoolTransport.geoOriginAllows].
   bool Function(NostrEvent event, String? relayUrl)? _geoOriginAllows;
   @override
@@ -581,15 +587,26 @@ class RelayPool implements PoolTransport {
         }
       case EoseMessage(:final subId):
         _subscriptions[subId]?.onEose(relayUrl);
-      case ClosedMessage(:final subId):
+      case ClosedMessage(:final subId, :final reason):
         // Treat a relay-side CLOSED as that relay reaching EOSE for quorum
         // purposes so a closed sub doesn't stall the eose future.
         _subscriptions[subId]?.onEose(relayUrl);
-      case OkMessage():
+        _dropIfRelayWideRejection(relayUrl, reason);
+      case OkMessage(:final message):
         // Handled per-connection via publish() futures.
-        break;
-      case NoticeMessage():
-        break;
+        _dropIfRelayWideRejection(relayUrl, message);
+      case NoticeMessage(:final message):
+        _dropIfRelayWideRejection(relayUrl, message);
     }
+  }
+
+  void _dropIfRelayWideRejection(String relayUrl, String reason) {
+    if (isUnsupportedKindRejection(reason)) return;
+    if (!isRelayWideRejection(reason)) return;
+    if (relayUrl == RelayConfig.appRelay) return;
+    if (RelayConfig.defaultRelays.contains(relayUrl)) return;
+    if (!_bannedRelays.add(relayUrl)) return;
+    debugPrint('[RelayPool] dropping $relayUrl for the session: $reason');
+    unawaited(removeRelay(relayUrl));
   }
 }

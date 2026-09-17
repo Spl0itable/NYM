@@ -321,11 +321,11 @@
             this._composerVerifying = on;
             if (on) {
                 btn.dataset.attestPrevLabel = btn.textContent;
-                btn.textContent = 'VERIFYING…';
+                btn.textContent = 'VERIFYING...';
                 btn.classList.add('send-btn-verifying');
                 btn.setAttribute('aria-busy', 'true');
                 input.dataset.attestPrevPlaceholder = input.getAttribute('data-placeholder') || '';
-                input.setAttribute('data-placeholder', 'Verifying your session…');
+                input.setAttribute('data-placeholder', 'Verifying your session...');
             } else {
                 if (btn.dataset.attestPrevLabel) btn.textContent = btn.dataset.attestPrevLabel;
                 btn.classList.remove('send-btn-verifying');
@@ -336,9 +336,26 @@
                 }
             }
             if (typeof this.i18nApplyNow === 'function') {
-                try { this.i18nApplyNow(btn); this.i18nApplyNow(input); } catch (_) { }
+                try { this.i18nApplyNow(btn); } catch (_) { }
             }
+            this._i18nComposerPlaceholder(input);
             if (!on) this._flushQueuedSend();
+        },
+
+        _i18nComposerPlaceholder(input) {
+            const lang = typeof this.getUiLanguage === 'function' ? this.getUiLanguage() : '';
+            if (!lang || lang === 'en' || !input) return;
+            if (typeof this._i18nApplyAttr !== 'function' || typeof this._i18nAttrKey !== 'function') return;
+            try {
+                if (input.__i18nAttrOrig) delete input.__i18nAttrOrig['data-placeholder'];
+                if (typeof this._i18nLoadCache === 'function') this._i18nLoadCache(lang);
+                this._i18nApplyAttr({ el: input, attr: 'data-placeholder' }, lang);
+                const key = this._i18nAttrKey(input, 'data-placeholder');
+                const cache = typeof this._i18nLoadCache === 'function' ? this._i18nLoadCache(lang) : null;
+                if (key && cache && cache[key] == null && typeof this._i18nEnqueue === 'function') {
+                    this._i18nEnqueue([key], 'hi', lang);
+                }
+            } catch (_) { }
         },
 
         queueSendAfterVerify() {
@@ -349,7 +366,7 @@
             };
             const btn = typeof document !== 'undefined' ? document.getElementById('sendBtn') : null;
             if (btn) {
-                btn.textContent = 'SENDING…';
+                btn.textContent = 'SENDING...';
                 if (typeof this.i18nApplyNow === 'function') {
                     try { this.i18nApplyNow(btn); } catch (_) { }
                 }

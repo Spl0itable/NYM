@@ -4177,7 +4177,6 @@ Object.assign(NYM.prototype, {
                 } else if (accepted === false) {
                     if (this._isPermanentRejection(reason)) {
                         if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
-                        else this._permanentlyBlacklistRelay(attributedRelay, reason);
                     } else if (/^mute[\s:]/i.test(r)) {
                         // NIP-01 mute: relay accepted but no subscribers
                     } else if (/event[\s_-]?too[\s_-]?large|\btoo[\s_-]large\b|\bsize[\s_]*\d+.*max[\s_]*\d+|created_at\b.*\b(too|in)\b.*(early|late|future|past)|timestamp.*too/i.test(r)) {
@@ -4232,7 +4231,7 @@ Object.assign(NYM.prototype, {
                 }
                 if (this._isUnsupportedKind(reason)) {
                     this._recordUnsupportedKindRejection(attributedRelay, closedSubId, reason);
-                } else if (this._isPermanentRejection(reason)) {
+                } else if (this._isRelayWideRejection(reason)) {
                     this._permanentlyBlacklistRelay(attributedRelay, reason);
                 } else if (typeof reason === 'string' && /rate-?limit|too many|concurrent/i.test(reason)) {
                     this._noteRateLimit(attributedRelay);
@@ -4250,7 +4249,7 @@ Object.assign(NYM.prototype, {
                     ? data[1] : relayUrl;
                 if (this._isUnsupportedKind(notice)) {
                     // Per-REQ only: don't blacklist the relay for other kinds.
-                } else if (this._isPermanentRejection(notice)) {
+                } else if (this._isRelayWideRejection(notice)) {
                     this._permanentlyBlacklistRelay(attributedRelay, notice);
                 } else if (typeof notice === 'string' && /rate-?limit|too many|concurrent/i.test(notice)) {
                     this._noteRateLimit(attributedRelay);
@@ -4419,6 +4418,7 @@ Object.assign(NYM.prototype, {
             || /\bauthentic/i.test(reason)
             || /nip-?42/i.test(reason)
             || /\bblocked\b/i.test(reason)
+            || /\brestricted\b/i.test(reason)
             || /\bbanned\b/i.test(reason)
             || /\bforbidden\b/i.test(reason)
             || /\bunauthorized\b/i.test(reason)
@@ -4442,7 +4442,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Count error responses per relay. If a relay sends 5+ errors within
-    // 60s (rate-limit, malformed-filter, etc.), drop it for the session.
+    // 60s (rate-limit, malformed-filter, etc.), rest it for the blacklist window.
     _recordRelayError(relayUrl, reason) {
         if (!relayUrl || relayUrl === 'relay-pool') return;
         if (this._permanentBlacklist && this._permanentBlacklist.has(relayUrl)) return;
@@ -4456,8 +4456,17 @@ Object.assign(NYM.prototype, {
         entry.count++;
         if (entry.count >= 5) {
             this._relayErrorCounts.delete(relayUrl);
-            this._permanentlyBlacklistRelay(relayUrl, `repeated errors: ${reason}`);
+            this._restRelay(relayUrl);
         }
+    },
+
+    _restRelay(relayUrl) {
+        if (!relayUrl || relayUrl === 'relay-pool') return;
+        if (relayUrl === this.appRelay) return;
+        if (this.defaultRelays && this.defaultRelays.includes(relayUrl)) return;
+        this.blacklistedRelays.add(relayUrl);
+        if (this.blacklistTimestamps) this.blacklistTimestamps.set(relayUrl, Date.now());
+        this._noteRateLimit(relayUrl);
     },
 
     // Add a relay to the permanent (session-long) blacklist and disconnect it.

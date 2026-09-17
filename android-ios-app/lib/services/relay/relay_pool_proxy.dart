@@ -266,6 +266,11 @@ sealed class PoolMessage {
           arr.length > 2 ? (arr[2]?.toString() ?? '') : '',
           arr.length > 3 ? arr[3]?.toString() : null,
         );
+      case 'NOTICE':
+        return PoolNotice(
+          arr.length > 1 ? (arr[1]?.toString() ?? '') : '',
+          arr.length > 2 ? arr[2]?.toString() : null,
+        );
       case 'POOL:PING':
         // ["POOL:PING", ts] — keepalive; ts ignored, just bumps liveness.
         return const PoolPing();
@@ -331,6 +336,12 @@ class PoolClosed extends PoolMessage {
   final String reason;
 
   /// The proxy's per-relay attribution (`wss://…`), when present.
+  final String? relayUrl;
+}
+
+class PoolNotice extends PoolMessage {
+  const PoolNotice(this.reason, [this.relayUrl]);
+  final String reason;
   final String? relayUrl;
 }
 
@@ -906,6 +917,10 @@ class RelayPoolProxy implements PoolTransport {
     _geoRelayUrls
       ..clear()
       ..addAll(next);
+    _reconcileShards();
+  }
+
+  void _reconcileShards() {
     if (_sockets.isEmpty) return; // connectAll() will shard with these urls.
 
     final layout = shardRelaysByRole(
@@ -1000,10 +1015,18 @@ class RelayPoolProxy implements PoolTransport {
   /// True when a rejection [reason] indicates the relay doesn't support the
   /// event/filter kind (`_isUnsupportedKind`, relays.js:4012-4017).
   static bool _isUnsupportedKind(String reason) =>
-      RegExp(r'kinds?\s*not\s*supported', caseSensitive: false)
-          .hasMatch(reason) ||
-      RegExp(r'\bNIP[\s\-_:]*\d+\b', caseSensitive: false).hasMatch(reason) ||
-      RegExp(r'\bkinds?[\s\-_:]*\d+\b', caseSensitive: false).hasMatch(reason);
+      isUnsupportedKindRejection(reason);
+
+  void _banRelay(String? url, String reason) {
+    if (url == null || !url.startsWith('wss://')) return;
+    if (url == RelayConfig.appRelay) return;
+    if (RelayConfig.defaultRelays.contains(url) || _dmRelays.contains(url)) {
+      return;
+    }
+    if (!_permanentBlacklist.add(url)) return;
+    debugPrint('[RelayPoolProxy] dropping $url for the session: $reason');
+    _reconcileShards();
+  }
 
   /// Pulls the explicit kind number out of a rejection [reason] when present
   /// (`_extractUnsupportedKind`, relays.js:2351-2358).
@@ -1126,7 +1149,6 @@ class RelayPoolProxy implements PoolTransport {
     return i > 0 ? subId.substring(0, i) : subId;
   }
 
-
   /// See [PoolTransport.geoOriginAllows].
   bool Function(NostrEvent event, String? relayUrl)? _geoOriginAllows;
   @override
@@ -1196,6 +1218,8 @@ class RelayPoolProxy implements PoolTransport {
           final id = _parentSubId(subId);
           if (_isUnsupportedKind(reason)) {
             _recordUnsupportedKindRejection(relayUrl, id, reason);
+          } else if (isRelayWideRejection(reason)) {
+            _banRelay(relayUrl, reason);
           }
           _stampShardLatency(id, sock.shard.id);
           _subscriptions[id]?.onEose(sock.shard.id);
@@ -1207,6 +1231,13 @@ class RelayPoolProxy implements PoolTransport {
         // accepted flag) so the worker skips that relay for the kind.
         if (_isUnsupportedKind(message)) {
           _recordEventKindRejection(relayUrl, id);
+        } else if (isRelayWideRejection(message)) {
+          _banRelay(relayUrl, message);
+        }
+        break;
+      case PoolNotice(:final reason, :final relayUrl):
+        if (!_isUnsupportedKind(reason) && isRelayWideRejection(reason)) {
+          _banRelay(relayUrl, reason);
         }
         break;
       case PoolStatus(:final latency):

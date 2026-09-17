@@ -175,7 +175,10 @@ export async function onRequest(context) {
 
   // Track reconnection attempts
   const reconnectAttempts = new Map();
-  const MAX_RECONNECT_ATTEMPTS = 5;
+  const everConnected = new Set();
+  const STABLE_SESSION_MS = 15000;
+  const RECONNECT_BASE_MS = 3000;
+  const RECONNECT_CAP_MS = 120000;
 
   // Track relays pending reconnection
   const pendingReconnect = new Set();
@@ -376,6 +379,7 @@ export async function onRequest(context) {
       || /\bauthentic/i.test(reason)
       || /nip-?42/i.test(reason)
       || /\bblocked\b/i.test(reason)
+      || /\brestricted\b/i.test(reason)
       || /\bbanned\b/i.test(reason)
       || /\bforbidden\b/i.test(reason)
       || /\bunauthorized\b/i.test(reason)
@@ -403,8 +407,14 @@ export async function onRequest(context) {
     const existing = failedRelays.get(relayUrl);
     const attempts = existing ? existing.attempts + 1 : 1;
     failedRelays.set(relayUrl, { failedAt: Date.now(), attempts });
-    if (attempts >= 5) {
+    if (attempts >= 5 && !everConnected.has(relayUrl)) {
       markPermanentlySkipped(relayUrl, 'connection-failed: repeated failures');
+    }
+  }
+
+  function retryAfterFailure(relayUrl, type) {
+    if (isProtectedRelay(relayUrl) || everConnected.has(relayUrl)) {
+      scheduleReconnect(relayUrl, type);
     }
   }
 
@@ -1217,29 +1227,21 @@ export async function onRequest(context) {
   function scheduleReconnect(relayUrl, type) {
     if (!serverOpen) return;
     if (pendingReconnect.has(relayUrl)) return;
+    if (permanentlySkipped.has(relayUrl)) return;
 
-    const isProtected = isProtectedRelay(relayUrl);
     const attempts = reconnectAttempts.get(relayUrl) || 0;
-    if (!isProtected && attempts >= MAX_RECONNECT_ATTEMPTS) {
-      trackRelayFailure(relayUrl);
-      reconnectAttempts.delete(relayUrl);
-      markPermanentlySkipped(relayUrl, 'connection-failed: max reconnect attempts');
-      return;
-    }
     reconnectAttempts.set(relayUrl, attempts + 1);
-
     pendingReconnect.add(relayUrl);
 
-    const baseDelay = 3000;
-    const maxAttemptsForBackoff = isProtected ? 6 : attempts;
-    const delay = baseDelay * Math.pow(1.5, Math.min(attempts, maxAttemptsForBackoff)) + Math.random() * 2000;
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.5, attempts), RECONNECT_CAP_MS)
+      + Math.random() * 2000;
 
     const timerId = setTimeout(() => {
       reconnectTimers.delete(relayUrl);
       pendingReconnect.delete(relayUrl);
-      if (serverOpen && !upstreams.has(relayUrl) && !intentionallyClosed.has(relayUrl)) {
-        queueConnection(relayUrl, type);
-      }
+      if (!serverOpen || upstreams.has(relayUrl) || intentionallyClosed.has(relayUrl)) return;
+      failedRelays.delete(relayUrl);
+      queueConnection(relayUrl, type);
     }, delay);
     reconnectTimers.set(relayUrl, timerId);
   }
@@ -1341,7 +1343,7 @@ export async function onRequest(context) {
           try { ws.close(); } catch { /* noop */ }
           upstreams.delete(relayUrl);
           releaseSlot();
-          if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
+          retryAfterFailure(relayUrl, type);
           schedulePoolStatus();
         }
       }, 8000);
@@ -1350,8 +1352,9 @@ export async function onRequest(context) {
         clearTimeout(timeout);
         releaseSlot();
         info.status = 'connected';
+        info.openedAt = Date.now();
+        everConnected.add(relayUrl);
         clearRelayFailure(relayUrl);
-        reconnectAttempts.delete(relayUrl);
         relayLatency.set(relayUrl, Date.now() - connectStartTime);
         replaySubscriptions(relayUrl, ws);
         // Flush any buffered GEO_EVENTs that were waiting for this relay
@@ -1566,10 +1569,13 @@ export async function onRequest(context) {
         }
 
         if (wasConnected) {
+          if (Date.now() - (info.openedAt || 0) >= STABLE_SESSION_MS) {
+            reconnectAttempts.delete(relayUrl);
+          }
           scheduleReconnect(relayUrl, type);
         } else {
           trackRelayFailure(relayUrl);
-          if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
+          retryAfterFailure(relayUrl, type);
         }
       });
 
@@ -1582,7 +1588,7 @@ export async function onRequest(context) {
         info.status = 'failed';
         trackRelayFailure(relayUrl);
         upstreams.delete(relayUrl);
-        if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
+        retryAfterFailure(relayUrl, type);
         schedulePoolStatus();
       });
     } catch {
@@ -1591,7 +1597,7 @@ export async function onRequest(context) {
       trackRelayFailure(relayUrl);
       upstreams.delete(relayUrl);
       releaseSlot();
-      if (isProtectedRelay(relayUrl)) scheduleReconnect(relayUrl, type);
+      retryAfterFailure(relayUrl, type);
       schedulePoolStatus();
     }
   }
@@ -1656,14 +1662,17 @@ export async function onRequest(context) {
               }
             }
 
-            for (const [, timerId] of reconnectTimers) {
+            for (const [url, timerId] of reconnectTimers) {
+              if (newRelaySet.has(url)) continue;
               clearTimeout(timerId);
+              reconnectTimers.delete(url);
+              pendingReconnect.delete(url);
+              reconnectAttempts.delete(url);
+              everConnected.delete(url);
             }
-            reconnectTimers.clear();
-            pendingReconnect.clear();
 
             for (const url of requestedRelays) {
-              if (!upstreams.has(url)) {
+              if (!upstreams.has(url) && !pendingReconnect.has(url)) {
                 queueConnection(url, 'read');
               }
             }
