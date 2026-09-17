@@ -13,7 +13,7 @@
 import { routeStorageAction } from './api/storage.js';
 import { handleBotPMAction, botReleaseStrandedTurn } from './api/bot.js';
 import { verifyClientAuth, getPublicKey } from './api/_shared.js';
-import { isNymchatClient } from './api/_client.js';
+import { isNymchatClient, servedHostAllowed } from './api/_client.js';
 
 // Actions handled by the bot worker (Nymbot PM, credits, invoices, Ledger).
 const BOT_ACTIONS = {
@@ -54,6 +54,9 @@ async function forwardResponse(id, resp, send) {
 export async function onRequest(context) {
   const { request, env } = context;
 
+  if (!servedHostAllowed(request, env)) {
+    return new Response('Forbidden', { status: 403 });
+  }
   const upgrade = request.headers.get('Upgrade');
   if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket upgrade', { status: 426 });

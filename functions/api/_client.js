@@ -82,4 +82,34 @@ function isStandaloneNymbot(request, env) {
   return /NymbotApp\//i.test(request.headers.get("User-Agent") || "");
 }
 
-export { CLIENT_ORIGIN_HOSTS, APP_ORIGIN_HOSTS, clientOriginAllowed, isNymchatClient, isStandaloneNymbot };
+function envServeHosts(env) {
+  const raw = env && typeof env.API_SERVE_HOSTS === "string" ? env.API_SERVE_HOSTS : "";
+  return raw.split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+}
+
+function isLoopbackHost(hostname) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+function servedHostAllowed(request, env) {
+  let hostname;
+  try {
+    hostname = new URL(request.url).hostname.toLowerCase();
+  } catch (_) {
+    return false;
+  }
+  if (!hostname) return false;
+  if (isLoopbackHost(hostname)) return true;
+  if (APP_ORIGIN_HOSTS.has(hostname) || CLIENT_ORIGIN_HOSTS.has(hostname)) return true;
+  for (const entry of envServeHosts(env)) {
+    if (entry.startsWith("*.")) {
+      const suffix = entry.slice(1);
+      if (hostname.endsWith(suffix) && hostname.length > suffix.length) return true;
+    } else if (entry === hostname) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export { CLIENT_ORIGIN_HOSTS, APP_ORIGIN_HOSTS, clientOriginAllowed, isNymchatClient, isStandaloneNymbot, servedHostAllowed };

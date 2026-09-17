@@ -581,17 +581,30 @@ export async function onRequest(context) {
   // payload in front of everyone in #nymchat.
   const APP_RELAY_ONLY_KINDS = new Set([23333, 7, 30078, 24420, 24421]);
 
-  function isForeignAppChannelEvent(raw, relayUrl) {
-    if (relayUrl === APP_RELAY) return false;
-    const kind = extractEventKind(raw);
+  function isAppChannelOnly(kind, getTag) {
     if (!APP_RELAY_ONLY_KINDS.has(kind)) return false;
     // Same derivation as channelFromTags: 'd' names a named channel, and the
     // hangers-on may carry either tag.
-    const name = kind === 23333
-      ? extractTagValue(raw, 'd')
-      : (extractTagValue(raw, 'g') || extractTagValue(raw, 'd'));
+    const name = kind === 23333 ? getTag('d') : (getTag('g') || getTag('d'));
     return !!name && name.toLowerCase() === APP_RELAY_ONLY_CHANNEL;
   }
+
+  function isForeignAppChannelEvent(raw, relayUrl) {
+    if (relayUrl === APP_RELAY) return false;
+    return isAppChannelOnly(extractEventKind(raw), (n) => extractTagValue(raw, n));
+  }
+
+  function isAppRelayOnlyEvent(ev) {
+    if (!ev || typeof ev.kind !== 'number') return false;
+    const tags = Array.isArray(ev.tags) ? ev.tags : [];
+    return isAppChannelOnly(ev.kind, (n) => {
+      const t = tags.find((x) => Array.isArray(x) && x[0] === n && typeof x[1] === 'string');
+      return t ? t[1] : null;
+    });
+  }
+
+  const PENDING_APP_ARCHIVE_MAX = 200;
+  const pendingAppArchive = new Map();
 
   function runArchive(work) {
     if (context && context.waitUntil) { try { context.waitUntil(work); } catch { /* noop */ } }
@@ -689,8 +702,26 @@ export async function onRequest(context) {
     }
     const channel = sanitizeChannelKey(channelFromTags(getTag, ev.kind));
     if (!channel) return;
+    if (isAppRelayOnlyEvent(ev)) {
+      if (pendingAppArchive.size >= PENDING_APP_ARCHIVE_MAX) {
+        pendingAppArchive.delete(pendingAppArchive.keys().next().value);
+      }
+      pendingAppArchive.set(ev.id, { channel, ev });
+      return;
+    }
     bufferArchive(channel, ev.id, ev.kind, typeof ev.pubkey === 'string' ? ev.pubkey : null,
       typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
+  }
+
+  function settleAppArchive(eventId, accepted) {
+    const held = pendingAppArchive.get(eventId);
+    if (!held) return false;
+    pendingAppArchive.delete(eventId);
+    if (!accepted) return false;
+    const ev = held.ev;
+    bufferArchive(held.channel, ev.id, ev.kind, typeof ev.pubkey === 'string' ? ev.pubkey : null,
+      typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
+    return true;
   }
 
   // Verify id hash + schnorr signature before persisting so forged events can't
@@ -1422,6 +1453,9 @@ export async function onRequest(context) {
         // OK: ["OK","eventId",bool,"msg"]
         } else if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
           const eventId = extractOKEventId(raw);
+          if (eventId && relayUrl === APP_RELAY && pendingAppArchive.has(eventId)) {
+            settleAppArchive(eventId, /^\["OK","[^"]*",\s*true\b/.test(raw));
+          }
           if (eventId) {
             if (seenOKs.has(eventId)) return;
             seenOKs.add(eventId);

@@ -1,5 +1,7 @@
 // relays.js - Relay pool, connection lifecycle, proxy worker, geo-relays, stats, retries
 
+const EDGE_CHALLENGE_RELOAD_MIN_MS = 60000;
+
 Object.assign(NYM.prototype, {
 
     /// localStorage key for the persisted geo-relay directory.
@@ -1973,6 +1975,31 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    async _edgeChallengePending() {
+        if (!this._getApiHost()) return false;
+        try {
+            const resp = await fetch('/bundle-hash.txt?t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' });
+            return resp.headers.get('cf-mitigated') === 'challenge';
+        } catch (_) {
+            return false;
+        }
+    },
+
+    _reloadForEdgeChallenge() {
+        const key = 'nym_edge_challenge_reload';
+        let last = 0;
+        try { last = Number(sessionStorage.getItem(key)) || 0; } catch (_) { }
+        if (Date.now() - last < EDGE_CHALLENGE_RELOAD_MIN_MS) return false;
+        try { sessionStorage.setItem(key, String(Date.now())); } catch (_) { }
+        location.reload();
+        return true;
+    },
+
+    async _recoverFromEdgeChallenge() {
+        if (!(await this._edgeChallengePending())) return false;
+        return this._reloadForEdgeChallenge();
+    },
+
     // Schedule a pool reconnection with exponential backoff, preventing concurrent attempts.
     _schedulePoolReconnect() {
         if (this._poolReconnecting) return;
@@ -2015,12 +2042,13 @@ Object.assign(NYM.prototype, {
                         this._poolSubscribe();
                         this.retryPendingDMsOnReconnect();
                     })
-                    .catch(() => {
+                    .catch(async () => {
                         if (retries < 1) {
                             attempt(retries + 1);
                         } else {
                             this._poolReconnecting = false;
                             this._poolReconnectRetries = 0;
+                            if (await this._recoverFromEdgeChallenge()) return;
                             // 2 consecutive failures — fall back to direct relay connections
                             console.warn('[NYM] Relay pool failed after 2 attempts, falling back to direct connections');
                             this._fallbackToDirectConnections();
