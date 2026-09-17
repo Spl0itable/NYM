@@ -1920,9 +1920,10 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
   // the documented one first for those paths so a working route isn't reached
   // only after a 404 on a route that never carried them.
   if (step.apiPath && step.apiPath !== "chat/completions") {
-    endpoints = endpoints.slice().sort(function (a, b) {
-      return (a.kind === "api" ? 0 : 1) - (b.kind === "api" ? 0 : 1);
-    });
+    endpoints = endpoints.filter(function (e) { return e.kind === "api"; });
+    if (!endpoints.length) {
+      throw new Error("No endpoint carries /" + step.apiPath + ": the account REST endpoint needs CF_API_TOKEN on the worker.");
+    }
   }
   if (!endpoints.length) {
     throw new Error("Nymbot Pro needs AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_NAME (or AI_GATEWAY_URL) configured on the worker.");
