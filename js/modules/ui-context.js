@@ -1662,7 +1662,8 @@ Object.assign(NYM.prototype, {
                 ctxItems.push({
                     id: 'qctxReport',
                     label: 'Report',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M 3 14 L 3 2" stroke-linecap="round" /><path d="M 3 2.5 L 12.5 2.5 L 10.5 5.5 L 12.5 8.5 L 3 8.5" stroke-linejoin="round" /></svg>',
+                    cls: 'report',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6" /><path d="M 8 5 L 8 8.5" stroke-linecap="round" stroke-width="2" /><circle cx="8" cy="10.5" r="0.8" fill="currentColor" stroke="none" /></svg>',
                     action: () => {
                         this.contextMenuData = {
                             nym: targetBaseNym,

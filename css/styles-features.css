@@ -2861,6 +2861,19 @@ body:not(.chat-bubbles) .message.supporter-style {
     color: #f7931a;
 }
 
+.quick-context-item.report {
+    color: var(--warning);
+}
+
+.quick-context-item.report svg {
+    color: var(--warning);
+}
+
+.quick-context-item.report:hover {
+    background: rgba(255, 255, 0, 0.08);
+    color: var(--warning);
+}
+
 .quick-context-item.danger {
     color: var(--danger);
 }
