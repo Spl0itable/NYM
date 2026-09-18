@@ -4,6 +4,7 @@ const EDGE_CHALLENGE_RELOAD_MIN_MS = 60000;
 const EDGE_CHALLENGE_RELOAD_WINDOW_MS = 15 * 60 * 1000;
 const EDGE_CHALLENGE_RELOAD_MAX = 3;
 const EDGE_CHALLENGE_CONFIRM_MS = 1500;
+const SOCKET_TICKET_REFRESH_MS = 20000;
 
 Object.assign(NYM.prototype, {
 
@@ -1892,7 +1893,37 @@ Object.assign(NYM.prototype, {
     _getProxiedRelayUrl(relayUrl) {
         const host = this._getApiHost();
         if (!this.useRelayProxy || !host) return relayUrl;
-        return `wss://${host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
+        return this._withSocketTicket(`wss://${host}/api/relay?relay=${encodeURIComponent(relayUrl)}`);
+    },
+
+    async _socketTicket() {
+        const host = this._getApiHost();
+        if (!host) return null;
+        const held = this._socketTicketRec;
+        if (held && held.expiresAt - Date.now() > SOCKET_TICKET_REFRESH_MS) return held.ticket;
+        if (this._socketTicketPending) return this._socketTicketPending;
+        const stillGood = () => (held && held.expiresAt > Date.now() ? held.ticket : null);
+        this._socketTicketPending = (async () => {
+            try {
+                const resp = await fetch(`https://${host}/api/ticket`, { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
+                if (!resp.ok) return stillGood();
+                const data = await resp.json();
+                if (!data || typeof data.ticket !== 'string' || !data.ticket) return stillGood();
+                this._socketTicketRec = { ticket: data.ticket, expiresAt: Number(data.expiresAt) || (Date.now() + 60000) };
+                return data.ticket;
+            } catch (_) {
+                return stillGood();
+            } finally {
+                this._socketTicketPending = null;
+            }
+        })();
+        return this._socketTicketPending;
+    },
+
+    _withSocketTicket(url) {
+        const held = this._socketTicketRec;
+        if (!url || !held || held.expiresAt <= Date.now()) return url;
+        return url + (url.indexOf('?') >= 0 ? '&' : '?') + 't=' + encodeURIComponent(held.ticket);
     },
 
     // Multiplexed relay pool (multi-worker WebSocket proxy)
@@ -2024,6 +2055,15 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
+    async _logEdgeTrace() {
+        try {
+            const resp = await fetch('/cdn-cgi/trace', { cache: 'no-store', credentials: 'same-origin' });
+            const text = await resp.text();
+            const pick = (k) => (text.match(new RegExp('^' + k + '=(.*)$', 'm')) || [])[1] || '-';
+            console.warn(`[NYM] This page reaches the edge as ip=${pick('ip')} over ${pick('http')} (colo ${pick('colo')}); compare with the address on the refused socket's event.`);
+        } catch (_) { }
+    },
+
     async _recoverFromEdgeChallenge() {
         if (!(await this._edgeChallengePending())) return false;
         await new Promise((r) => setTimeout(r, EDGE_CHALLENGE_CONFIRM_MS));
@@ -2082,6 +2122,7 @@ Object.assign(NYM.prototype, {
                             if (await this._recoverFromEdgeChallenge()) return;
                             if (this._edgeHttpPasses === true) {
                                 console.warn('[NYM] The edge refuses the pool socket while plain requests pass. The clearance is not being honoured for WebSocket upgrades; check the Security Events row for /api/relay-pool.');
+                                this._logEdgeTrace();
                             }
                             // 2 consecutive failures — fall back to direct relay connections
                             console.warn('[NYM] Relay pool failed after 2 attempts, falling back to direct connections');
@@ -2298,8 +2339,12 @@ Object.assign(NYM.prototype, {
 
     // Connect the relay-pool coordinator socket
     _connectSinglePoolWorker(shard) {
+        return this._socketTicket().catch(() => null).then(() => this._openPoolWorker(shard));
+    },
+
+    _openPoolWorker(shard) {
         return new Promise((resolve, reject) => {
-            const url = this._getRelayPoolUrl();
+            const url = this._withSocketTicket(this._getRelayPoolUrl());
             if (!url) return reject(new Error('Relay proxy unavailable on this host'));
             const ws = new WebSocket(url);
 

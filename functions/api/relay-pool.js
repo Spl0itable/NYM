@@ -28,6 +28,7 @@ import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
+import { socketTicketGate } from './_ticket.js';
 
 
 // Reject relay hostnames that resolve to private/loopback/link-local space so
@@ -66,6 +67,8 @@ export async function onRequest(context) {
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
+  const ticketRefusal = socketTicketGate(request, env, '/api/relay-pool');
+  if (ticketRefusal) return ticketRefusal;
 
   const clientIsNymchat = isNymchatClient(request, env);
   function clientIdentity(req) {
