@@ -8,7 +8,7 @@ Object.assign(NYM.prototype, {
     },
 
     async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot) {
-        if (!this.useRelayProxy) return;
+        if (!this._getApiHost()) return;
         if (typeof geohash === 'string' && geohash && !this.isValidChannelTag(geohash)) return;
         // Support @Nymbot mentions anywhere in the message as an alias for ?ask
         const mentionRegex = /@nymbot(?:#[a-f0-9]{4})?/i;

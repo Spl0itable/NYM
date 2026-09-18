@@ -3551,7 +3551,6 @@ Object.assign(NYM.prototype, {
     // Returns the base URL for the Cloudflare proxy endpoint (translation, media, unfurl).
     // Routes through the production host when running locally. Returns null if remote is down.
     _getProxyBaseUrl() {
-        if (!this.useRelayProxy) return null;
         const host = this._getApiHost();
         if (!host) return null;
         return `https://${host}/api/proxy`;

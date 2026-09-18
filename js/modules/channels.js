@@ -220,7 +220,7 @@ Object.assign(NYM.prototype, {
     // instead of a relay backfill, so without this the sidebar never learns
     // about active channels it hasn't joined.
     _populateSidebarFromD1Activity() {
-        if (!this.useRelayProxy) return [];
+        if (!this._getApiHost()) return [];
         // The explorer can plot thousands of channels, but the sidebar should
         // only surface the most recently active discovered ones. Never fewer
         // than the collapsed row budget, so every row on screen can carry a
