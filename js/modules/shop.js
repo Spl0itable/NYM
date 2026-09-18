@@ -30,11 +30,9 @@ Object.assign(NYM.prototype, {
             const auth = needAuth ? await this._signBotAuth('api-ws', 'WS') : null;
             try { if (this._apiSock && this._apiSock.ws) this._apiSock.ws.close(); } catch (_) { }
             this._apiSock = null;
-            if (typeof this._socketTicket === 'function') { try { await this._socketTicket(); } catch (_) { } }
-            const wsUrl = typeof this._withSocketTicket === 'function' ? this._withSocketTicket(url) : url;
             return await new Promise((resolve, reject) => {
                 let ws;
-                try { ws = new WebSocket(wsUrl); } catch (e) { this._apiSockPromise = null; return reject(e); }
+                try { ws = new WebSocket(url); } catch (e) { this._apiSockPromise = null; return reject(e); }
                 const sock = { ws, authed: false, ready: false, pending: new Map(), nextId: 1 };
                 let settled = false;
                 const fail = (err) => {

@@ -844,6 +844,12 @@ function normalizeCertDigest(raw) {
   return s.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
+function playIntegrityChallengeBound(details, challenge) {
+  const want = base64UrlEncode(challengeHash(challenge));
+  const strip = (v) => (typeof v === "string" ? v.replace(/=+$/, "") : null);
+  return strip(details && details.nonce) === want || strip(details && details.requestHash) === want;
+}
+
 async function verifyPlayIntegrity(env, { token, challenge }) {
   const packageName = env && env.ANDROID_PACKAGE_NAME;
   const certDigests = String((env && env.ANDROID_CERT_SHA256) || "")
@@ -869,9 +875,10 @@ async function verifyPlayIntegrity(env, { token, challenge }) {
 
   const details = payload.requestDetails || {};
   if (details.requestPackageName !== packageName) return { ok: false, reason: "package-mismatch" };
-  // requestHash is the only part of the verdict we control, so it is the part
-  // that makes this verdict about this enrollment.
-  if (details.requestHash !== base64UrlEncode(challengeHash(challenge))) {
+  // The challenge is the only part of the verdict we control, so it is the
+  // part that makes this verdict about this enrollment. A classic request
+  // echoes it as `nonce`, a standard request as `requestHash`.
+  if (!playIntegrityChallengeBound(details, challenge)) {
     return { ok: false, reason: "challenge-mismatch" };
   }
   const issuedMs = Number(details.timestampMillis);
@@ -1003,6 +1010,7 @@ export {
   challengeHash,
   verifyAppAttest,
   verifyPlayIntegrity,
+  playIntegrityChallengeBound,
   attestDb,
   ensureAttestSchema,
   deviceAtCap,
