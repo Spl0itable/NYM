@@ -374,6 +374,7 @@ window.nymHapticTap = function (ms) {
         'togglePqRootVisibility':     function () { window.togglePqRootVisibility(); },
         'copyPqRoot':                 function () { window.copyPqRoot(); },
         'linkPqRoot':                 function () { window.linkPqRoot(); },
+        'replacePqRoot':              function () { window.replacePqRoot(); },
         'randomizeNick':              function () { window.randomizeNick(); },
         'changeNick':                 function () { window.changeNick(); },
 

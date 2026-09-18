@@ -2259,8 +2259,10 @@ Object.assign(NYM.prototype, {
             const sk = window.NostrTools.generateSecretKey();
             const pk = window.NostrTools.getPublicKey(sk);
 
+            const switched = this.pubkey !== pk;
             this.privkey = sk;
             this.pubkey = pk;
+            if (switched && typeof this.pqResetIdentityState === 'function') this.pqResetIdentityState();
 
 
             return { privkey: sk, pubkey: pk };

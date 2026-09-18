@@ -86,8 +86,10 @@ Object.assign(NYM.prototype, {
     },
 
     applyDeveloperIdentity(secretKey, pubkey) {
+        const switched = this.pubkey !== pubkey;
         this.privkey = secretKey;
         this.pubkey = pubkey;
+        if (switched && typeof this.pqResetIdentityState === 'function') this.pqResetIdentityState();
         this.nym = 'Luxas';
         document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
         this.updateSidebarAvatar();

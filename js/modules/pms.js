@@ -557,8 +557,11 @@ Object.assign(NYM.prototype, {
                         ? await window.nostr.signEvent(selfSealUnsigned)
                         : await _nip46SignEvent(selfSealUnsigned);
                     const selfEphSk = NT.generateSecretKey();
-                    const selfCkWrap = NT.nip44.getConversationKey(selfEphSk, this.pubkey);
-                    const selfWrapContent = NT.nip44.encrypt(JSON.stringify(selfSeal), selfCkWrap);
+                    const selfKemPk = (typeof this.pqSelfKeyFor === 'function' && this.pqSelfUsesPq2())
+                        ? this.pqSelfKeyFor() : null;
+                    const selfWrapContent = selfKemPk
+                        ? window.NymCrypto.pq2Encrypt(JSON.stringify(selfSeal), selfEphSk, this.pubkey, selfKemPk)
+                        : NT.nip44.encrypt(JSON.stringify(selfSeal), NT.nip44.getConversationKey(selfEphSk, this.pubkey));
                     const selfWrapUnsigned = {
                         kind: 1059,
                         content: selfWrapContent,
@@ -885,17 +888,28 @@ Object.assign(NYM.prototype, {
                 // Both layers were sealed to the p-tag target: our identity key
                 // for a PM or self-copy, one of our rotating keys for a group.
                 const recipPk = (pTag && pTag[1]) || this.pubkey;
-                let selfKem = null;
+                let selfKems = null;
                 let usedPq = false;
                 const openPq2 = (content, senderPkHex) => {
                     if (!NC.isPq2Payload(content)) return content;
-                    if (!selfKem) {
-                        const keys = this.pqSelfKeys();
-                        if (!keys) throw new Error('no post-quantum key for this identity');
-                        selfKem = { kemSk: keys.secretKey, kemPk: keys.publicKey };
+                    if (!selfKems) {
+                        const cands = typeof this.pqSelfCandidates === 'function' ? this.pqSelfCandidates() : [];
+                        selfKems = cands.filter(c => c && c.kemSk && c.kemPk);
+                        if (!selfKems.length) {
+                            const keys = this.pqSelfKeys();
+                            if (keys) selfKems = [{ kemSk: keys.secretKey, kemPk: keys.publicKey }];
+                        }
+                        if (!selfKems.length) throw new Error('no post-quantum key for this identity');
                     }
-                    usedPq = true;
-                    return NC.pq2Open(content, senderPkHex, recipPk, selfKem);
+                    let lastErr = null;
+                    for (const kem of selfKems) {
+                        try {
+                            const inner = NC.pq2Open(content, senderPkHex, recipPk, kem);
+                            usedPq = true;
+                            return inner;
+                        } catch (e) { lastErr = e; }
+                    }
+                    throw lastErr || new Error('post-quantum layer did not open');
                 };
 
                 const sealJson = await decryptFn(event.pubkey,

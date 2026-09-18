@@ -1074,8 +1074,8 @@ Object.assign(NYM.prototype, {
             // and a local key opens it too.
             if (NC && NC.isPq2Payload(ciphertext)) {
                 const keys = typeof this.pqSelfKeys === 'function' ? this.pqSelfKeys() : null;
-                const cands = typeof this.pqUnwrapCandidates === 'function'
-                    ? this.pqUnwrapCandidates([this.privkey || null])
+                const cands = typeof this.pqSelfCandidates === 'function'
+                    ? this.pqSelfCandidates()
                     : [];
                 const tried = cands.length
                     ? cands
@@ -1158,20 +1158,24 @@ Object.assign(NYM.prototype, {
     /// under the hashed column or the bare routing name. Decided WITHOUT
     /// decrypting: a row we cannot read is still proof a root exists.
     async _pqRootRowPresent(cats) {
-        if (!cats || typeof cats !== 'object') return false;
+        return !!(await this._pqRootRowBlob(cats));
+    },
+
+    async _pqRootRowBlob(cats) {
+        if (!cats || typeof cats !== 'object') return null;
         let hashed = null;
         try { hashed = await this._d1Category(NYM_PQ_ROOT_CATEGORY); } catch (_) { }
         for (const name of [hashed, NYM_PQ_ROOT_CATEGORY]) {
             if (!name) continue;
             const entry = cats[name];
-            if (entry && typeof entry.blob === 'string' && entry.blob) return true;
+            if (entry && typeof entry.blob === 'string' && entry.blob) return entry.blob;
         }
-        return false;
+        return null;
     },
 
     /// Runs spec §6 against the root record in a decrypted settings load.
     /// `adopted` is the signal to retry the rows sealed to the root.
-    async _pqRootApplyFromDecoded(decoded, rowPresent) {
+    async _pqRootApplyFromDecoded(decoded, rowPresent, rowBlob) {
         if (typeof this.pqRootEnsure !== 'function') return { found: false, adopted: false };
         let record = null;
         // Lifted out of `decoded`: key material, not a settings payload.
@@ -1185,15 +1189,21 @@ Object.assign(NYM.prototype, {
         // A device that cannot open the record has to be told, and this is the
         // moment we learn it — the boot notice fired long before the settings
         // read came back.
-        if (status === 'locked' && typeof this.maybeShowPqUpgradeNotice === 'function') {
-            try { this.maybeShowPqUpgradeNotice(); } catch (_) { }
+        if (status === 'locked' || status === 'generated') {
+            if (typeof this.maybeShowPqUpgradeNotice === 'function') {
+                try { this.maybeShowPqUpgradeNotice(); } catch (_) { }
+            }
         }
         // Only §6.4 writes, plus the repair case: we hold the root and the
         // account has no record row, which is what an earlier launch leaves
         // behind when its record write failed. Without the retry every other
         // device reads "no record" and mints a rival root. A locked device
         // must never publish one.
-        if (status === 'generated' || status === 'publish-record') {
+        const NC = window.NymCrypto;
+        const hybridRow = status === 'adopted' && typeof rowBlob === 'string' && !!NC
+            && ((typeof NC.isPqPayload === 'function' && NC.isPqPayload(rowBlob))
+                || (typeof NC.isPq2Payload === 'function' && NC.isPq2Payload(rowBlob)));
+        if (status === 'generated' || status === 'publish-record' || hybridRow) {
             try { await this.pqRootPublishRecord(); } catch (_) { }
         }
         // The boot announcement went out without a key, because until now we
@@ -1250,16 +1260,52 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
+    pqRootLinkVerdict(code) {
+        const NC = window.NymCrypto;
+        let bytes;
+        try { bytes = NC.pqRootDecode(String(code || '').trim()); } catch (_) { return 'invalid'; }
+        const rec = this._pqRootRecord;
+        if (rec && rec.fp && NC.pqRootFingerprint(bytes) !== rec.fp) return 'mismatch';
+        return 'ok';
+    },
+
     /// The manual path: a pasted or scanned `nympq1...`, checked against the
     /// record's fingerprint so a code from another identity is refused.
     pqRootLinkWithCode(code) {
         const NC = window.NymCrypto;
         let bytes;
-        try { bytes = NC.pqRootDecode(code); } catch (_) { return false; }
+        try { bytes = NC.pqRootDecode(String(code || '').trim()); } catch (_) { return false; }
         const rec = this._pqRootRecord;
         if (rec && rec.fp && NC.pqRootFingerprint(bytes) !== rec.fp) return false;
         if (!this.pqRootAdopt(bytes)) return false;
         this._settingsRestoreUnreadable = false;
+        this._pqRootSettled = true;
+        if (typeof this._pqRootClearRetry === 'function') this._pqRootClearRetry();
+        if (!rec && this._pqRootRowUnreadable) {
+            this._pqRootRowUnreadable = false;
+            this._pqRootPendingPublish = this.pqRootPublishRecord([]).catch(() => false);
+        }
+        return true;
+    },
+
+    async pqRootReplaceWithCode(code) {
+        const NC = window.NymCrypto;
+        let bytes;
+        try { bytes = NC.pqRootDecode(String(code || '').trim()); } catch (_) { return false; }
+        if (!this.pubkey || !this.pqRootAdopt(bytes)) return false;
+        this._pqRootRecord = null;
+        this._pqRootRowUnreadable = false;
+        this._pqRootSettled = true;
+        this._settingsRestoreUnreadable = false;
+        if (typeof this._pqRootClearRetry === 'function') this._pqRootClearRetry();
+        try {
+            const category = await this._d1Category(NYM_PQ_ROOT_CATEGORY);
+            this._clearSettingsContentHashes([category]);
+        } catch (_) { }
+        const written = await this.pqRootPublishRecord([]);
+        if (!written) return false;
+        try { await this.publishPqAnnouncement(); } catch (_) { }
+        await this.reloadSettingsAfterPqLink();
         return true;
     },
 
@@ -1272,6 +1318,10 @@ Object.assign(NYM.prototype, {
     /// after linking can be byte-identical to what we last wrote under the
     /// wrong key, and the "unchanged" short-circuit would skip it.
     async reloadSettingsAfterPqLink() {
+        if (this._pqRootPendingPublish) {
+            try { await this._pqRootPendingPublish; } catch (_) { }
+            this._pqRootPendingPublish = null;
+        }
         try {
             for (const k of Object.keys(localStorage)) {
                 if (k.startsWith(`nym_settings_hash_${this.pubkey}_`)) {
@@ -1371,18 +1421,28 @@ Object.assign(NYM.prototype, {
     //   'empty'   — the API answered and the account genuinely has no rows.
     //   'failed'  — no answer, or rows we could not open. Saving must stay off
     //               until a later attempt succeeds.
-    async settingsLoadFromD1() {
-        const pubkey = (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn())
-            ? localStorage.getItem('nym_nostr_login_pubkey')
-            : this.pubkey;
-        if (!pubkey) return 'failed';
+    settingsLoadFromD1() {
+        const pubkey = this.pubkey;
+        if (!pubkey) return Promise.resolve('failed');
+        const inflight = this._settingsLoadInFlight;
+        if (inflight && inflight.pubkey === pubkey) return inflight.promise;
+        const promise = this._settingsLoadFromD1Run(pubkey).finally(() => {
+            if (this._settingsLoadInFlight && this._settingsLoadInFlight.promise === promise) {
+                this._settingsLoadInFlight = null;
+            }
+        });
+        this._settingsLoadInFlight = { pubkey, promise };
+        return promise;
+    },
 
+    async _settingsLoadFromD1Run(pubkey) {
         let data;
         try {
             data = await this._storageApiRequest('settings-get', {});
         } catch (_) {
             return 'failed';
         }
+        if (this.pubkey !== pubkey) return 'failed';
         const cats = data && data.categories;
         if (!cats || typeof cats !== 'object') return 'failed';
 
@@ -1415,12 +1475,13 @@ Object.assign(NYM.prototype, {
             storedBlobs++;
             if (!await decodeOne([cat, entry])) pending.push([cat, entry]);
         }
+        if (this.pubkey !== pubkey) return 'failed';
 
         // Other categories may be sealed to the root-derived key, and D1's
         // ordering is not ours to control. The root row is classical so it
         // always opens; adopt it, then retry whatever failed.
         const rootRow = await this._pqRootApplyFromDecoded(
-            decoded, await this._pqRootRowPresent(cats));
+            decoded, await this._pqRootRowPresent(cats), await this._pqRootRowBlob(cats));
         if (rootRow.adopted && pending.length) {
             const retry = pending.splice(0, pending.length);
             for (const e of retry) { if (!await decodeOne(e)) pending.push(e); }

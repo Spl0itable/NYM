@@ -11,9 +11,11 @@ Object.assign(NYM.prototype, {
     // client doesn't open an HTTP request (and sign an auth event) per fetch/put.
     _ensureApiSocket() {
         const needAuth = !!this.pubkey;
+        const forPubkey = needAuth ? this.pubkey : null;
         const s = this._apiSock;
-        if (s && s.ws && s.ws.readyState === WebSocket.OPEN && (s.authed || !needAuth)) return Promise.resolve(s);
-        if (this._apiSockPromise) return this._apiSockPromise;
+        const bound = s && (needAuth ? (s.authed && s.pubkey === forPubkey) : !s.authed);
+        if (s && s.ws && s.ws.readyState === WebSocket.OPEN && bound) return Promise.resolve(s);
+        if (this._apiSockPromise && this._apiSockPromiseFor === forPubkey) return this._apiSockPromise;
 
         // After a failure, skip the socket (straight to HTTP) for a cooldown so a
         // broken endpoint doesn't add a connect-timeout delay to every call.
@@ -24,6 +26,7 @@ Object.assign(NYM.prototype, {
         const url = this._apiWsUrl();
         if (!url) return Promise.reject(new Error('api socket unavailable'));
 
+        this._apiSockPromiseFor = forPubkey;
         this._apiSockPromise = (async () => {
             // Logged-in: authenticate the socket. Logged-out: open an
             // unauthenticated socket usable for public reads (channel/profile).
@@ -33,7 +36,7 @@ Object.assign(NYM.prototype, {
             return await new Promise((resolve, reject) => {
                 let ws;
                 try { ws = new WebSocket(url); } catch (e) { this._apiSockPromise = null; return reject(e); }
-                const sock = { ws, authed: false, ready: false, pending: new Map(), nextId: 1 };
+                const sock = { ws, authed: false, ready: false, pending: new Map(), nextId: 1, pubkey: forPubkey };
                 let settled = false;
                 const fail = (err) => {
                     for (const [, p] of sock.pending) { try { p.reject(err); } catch (_) { } }
@@ -42,12 +45,24 @@ Object.assign(NYM.prototype, {
                     // Cool down only on connect/auth failures, not a clean post-ready drop.
                     // Keep it short so transient worker churn doesn't pin reads to HTTP.
                     if (!sock.ready) this._apiSockFailedUntil = Date.now() + 5000;
-                    if (!settled) { settled = true; this._apiSockPromise = null; reject(err); }
+                    if (!settled) {
+                        settled = true;
+                        if (this._apiSockPromiseFor === forPubkey) this._apiSockPromise = null;
+                        reject(err);
+                    }
                 };
                 const timer = setTimeout(() => { try { ws.close(); } catch (_) { } fail(new Error('api socket timeout')); }, 12000);
                 const markReady = () => {
                     clearTimeout(timer);
                     sock.ready = true;
+                    const wanted = this.pubkey || null;
+                    if (sock.pubkey !== wanted) {
+                        try { ws.close(); } catch (_) { }
+                        if (this._apiSockPromiseFor === forPubkey) this._apiSockPromise = null;
+                        settled = true;
+                        reject(new Error('api socket identity changed'));
+                        return;
+                    }
                     this._apiSock = sock;
                     this._apiSockPromise = null;
                     this._apiSockFailedUntil = 0;

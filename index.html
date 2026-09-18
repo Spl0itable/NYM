@@ -1304,11 +1304,20 @@
                                 <button type="button" class="icon-btn nm-h-49" data-action="copyPqRoot" id="pqRootCopyBtn" title="Copy"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
                             </div>
                             <div class="form-hint" id="pqRootFingerprint"></div>
+                            <details class="nm-h-24">
+                                <summary class="form-hint">Replace with a different code</summary>
+                                <div class="form-hint">If this device created a new code by mistake and you still have your previous nympq1… code, paste it here to make it this account’s recovery code again, on this device and in your synced account record.</div>
+                                <div class="nm-h-47">
+                                    <input type="text" class="form-input nm-h-48" id="pqRootReplaceInput" placeholder="nympq1..." autocomplete="off" spellcheck="false">
+                                    <button type="button" class="icon-btn nm-h-49" data-action="replacePqRoot" id="pqRootReplaceBtn" title="Replace the recovery code">Replace</button>
+                                </div>
+                                <div class="form-hint" id="pqRootReplaceStatus"></div>
+                            </details>
                         </div>
                         <div id="pqRootLink" class="nm-hidden">
                             <br/>
                             <label class="form-label nm-h-46">Post-quantum recovery code</label>
-                            <div class="form-hint">This device has no recovery code yet. Paste the one from a device that already has it — you will find it in this same panel there — so both can read the same quantum-resistant messages.</div>
+                            <div class="form-hint" id="pqRootLinkHint">This device has no recovery code yet. Paste the one from a device that already has it — you will find it in this same panel there — so both can read the same quantum-resistant messages.</div>
                             <div class="nm-h-47">
                                 <input type="text" class="form-input nm-h-48" id="pqRootLinkInput" placeholder="nympq1..." autocomplete="off" spellcheck="false">
                                 <button type="button" class="icon-btn nm-h-49" data-action="linkPqRoot" id="pqRootLinkBtn" title="Link this device">Link</button>

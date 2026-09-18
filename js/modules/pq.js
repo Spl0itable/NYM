@@ -27,6 +27,8 @@
     const PQ_DEVICE_STALE_SEC = 30 * 24 * 3600;
     // The root's bech32 code on this device, in _VAULT_KEYS (spec §5.3).
     const PQ_ROOT_LS_KEY = 'nym_pq_root';
+    const PQ_ROOT_LEGACY_SLOT = 'legacy';
+    const PQ_ROOT_RETRY_MS = [15000, 30000, 60000, 120000];
 
     Object.assign(NYM.prototype, {
 
@@ -183,9 +185,7 @@
 
         // the root secret — docs/PQ-ROOT-SPEC.md
 
-        /// Reads through the secret accessors so the at-rest vault covers the
-        /// root exactly as it covers the nsec.
-        _pqRootStoredCode() {
+        _pqRootRawStored() {
             try {
                 if (typeof window !== 'undefined' && typeof window.nymSecretGet === 'function') {
                     return window.nymSecretGet(PQ_ROOT_LS_KEY);
@@ -194,20 +194,94 @@
             try { return localStorage.getItem(PQ_ROOT_LS_KEY); } catch (_) { return null; }
         },
 
-        _pqRootStoreCode(code) {
+        _pqRootRawStore(value) {
             try {
                 if (typeof window !== 'undefined' && typeof window.nymSecretSet === 'function') {
-                    window.nymSecretSet(PQ_ROOT_LS_KEY, code);
+                    window.nymSecretSet(PQ_ROOT_LS_KEY, value);
                     return;
                 }
             } catch (_) { }
-            try { localStorage.setItem(PQ_ROOT_LS_KEY, code); } catch (_) { }
+            try { localStorage.setItem(PQ_ROOT_LS_KEY, value); } catch (_) { }
+        },
+
+        _pqRootStoredMap() {
+            const raw = this._pqRootRawStored();
+            const out = { byPubkey: {}, legacy: null, unreadable: false };
+            if (!raw || typeof raw !== 'string') return out;
+            const s = raw.trim();
+            if (s.startsWith('{')) {
+                try {
+                    const obj = JSON.parse(s);
+                    if (obj && typeof obj === 'object') {
+                        for (const [k, v] of Object.entries(obj)) {
+                            if (typeof v !== 'string' || !v) continue;
+                            if (k === PQ_ROOT_LEGACY_SLOT) out.legacy = v;
+                            else if (/^[0-9a-f]{64}$/.test(k)) out.byPubkey[k] = v;
+                        }
+                    }
+                } catch (_) { out.unreadable = true; }
+                return out;
+            }
+            try {
+                window.NymCrypto.pqRootDecode(s);
+                out.legacy = s;
+            } catch (_) { out.unreadable = true; }
+            return out;
+        },
+
+        _pqRootWriteMap(map) {
+            const obj = {};
+            for (const [k, v] of Object.entries(map.byPubkey || {})) obj[k] = v;
+            if (map.legacy) obj[PQ_ROOT_LEGACY_SLOT] = map.legacy;
+            if (Object.keys(obj).length === 0) {
+                try {
+                    if (typeof window !== 'undefined' && typeof window.nymSecretRemove === 'function') {
+                        window.nymSecretRemove(PQ_ROOT_LS_KEY);
+                        return;
+                    }
+                } catch (_) { }
+                try { localStorage.removeItem(PQ_ROOT_LS_KEY); } catch (_) { }
+                return;
+            }
+            this._pqRootRawStore(JSON.stringify(obj));
+        },
+
+        _pqRootStoredCode() {
+            if (!this.pubkey) return null;
+            return this._pqRootStoredMap().byPubkey[this.pubkey] || null;
+        },
+
+        _pqRootStoreCode(code) {
+            if (!this.pubkey) return;
+            const map = this._pqRootStoredMap();
+            map.byPubkey[this.pubkey] = code;
+            this._pqRootWriteMap(map);
+        },
+
+        _pqRootLegacyBytes() {
+            const code = this._pqRootStoredMap().legacy;
+            if (!code) return null;
+            try { return window.NymCrypto.pqRootDecode(code); } catch (_) { return null; }
+        },
+
+        _pqRootDropLegacy() {
+            const map = this._pqRootStoredMap();
+            if (!map.legacy) return;
+            map.legacy = null;
+            this._pqRootWriteMap(map);
         },
 
         /// The root this device holds, or null. Cached once decoded.
         pqRoot() {
-            if (this._pqRootBytes) return this._pqRootBytes;
-            const code = this._pqRootStoredCode();
+            if (this._pqRootBytes
+                && (this._pqRootBytesFor === undefined || this._pqRootBytesFor === this.pubkey)) {
+                return this._pqRootBytes;
+            }
+            this._pqRootBytes = null;
+            this._pqRootBytesFor = this.pubkey;
+            const map = this._pqRootStoredMap();
+            this._pqRootUnreadable = !!map.unreadable;
+            const code = this.pubkey ? (map.byPubkey[this.pubkey] || null) : null;
             if (!code) return null;
             try {
                 const bytes = window.NymCrypto.pqRootDecode(code);
@@ -215,8 +289,6 @@
                 this._pqRootUnreadable = false;
                 return bytes;
             } catch (_) {
-                // Stored but unreadable (locked vault, corrupt value) is NOT
-                // "no root" — generating over it would discard the real one.
                 this._pqRootUnreadable = true;
                 return null;
             }
@@ -255,6 +327,8 @@
             if (!NC || !NC.pqIsRoot(rootBytes)) return false;
             const code = NC.pqRootEncode(rootBytes);
             this._pqRootBytes = rootBytes;
+            this._pqRootBytesFor = this.pubkey;
+            this._pqRootUnreadable = false;
             this._pqRootStoreCode(code);
             this._pqRootLocked = false;
             this._pqSelfCache = null;
@@ -265,9 +339,12 @@
         /// a root outliving its identity is a liability with no owner.
         pqRootWipe() {
             this._pqRootBytes = null;
+            this._pqRootBytesFor = null;
+            this._pqRootUnreadable = false;
             this._pqSelfCache = null;
             this._pqRootLocked = false;
             this._pqRootRecord = null;
+            this._pqRootRowUnreadable = false;
             try {
                 if (typeof window !== 'undefined' && typeof window.nymSecretRemove === 'function') {
                     window.nymSecretRemove(PQ_ROOT_LS_KEY);
@@ -331,19 +408,44 @@
             // root is what makes it capable, so gating on capability here
             // would be a deadlock — never capable, so never a root.
             if (!this.pqSupported()) return 'unavailable';
+            this._pqRootClearRetry();
+            if (this._pqThrowawayIdentity()) {
+                this._pqRootSettled = true;
+                this._pqRootRecord = null;
+                this._pqRootRowUnreadable = false;
+                this._pqRootLocked = false;
+                return 'skipped';
+            }
             this._pqRootSettled = true;
             this._pqRootRecord = this._pqRootValidRecord(record) ? record : null;
+            this._pqRootRowUnreadable = !!rowPresent && !this._pqRootRecord;
             const NC = window.NymCrypto;
             const mine = this.pqRoot();
+            const legacy = mine ? null : this._pqRootLegacyBytes();
 
             if (this._pqRootRecord) {
                 if (mine && NC.pqRootFingerprint(mine) === this._pqRootRecord.fp) {
                     this._pqRootLocked = false;
                     return 'adopted';
                 }
+                if (!mine && legacy && NC.pqRootFingerprint(legacy) === this._pqRootRecord.fp
+                    && this.pqRootAdopt(legacy)) {
+                    this._pqRootDropLegacy();
+                    return 'adopted';
+                }
                 // Nothing, or a different root (a stale one from a reset
                 // identity). Both mean "cannot open this record".
                 this._pqRootLocked = true;
+                return 'locked';
+            }
+
+            // A record exists that we could not open or could not parse.
+            if (rowPresent) {
+                this._pqRootLocked = true;
+                if (!this.privkey) {
+                    this._pqRootSettled = false;
+                    this._pqRootScheduleRetry();
+                }
                 return 'locked';
             }
 
@@ -361,10 +463,9 @@
                 this._pqRootLocked = true;
                 return 'locked';
             }
-            // A record exists that we could not open or could not parse.
-            if (rowPresent) {
-                this._pqRootLocked = true;
-                return 'locked';
+            if (legacy && this.pqRootAdopt(legacy)) {
+                this._pqRootDropLegacy();
+                return 'publish-record';
             }
 
             let fresh;
@@ -373,6 +474,66 @@
             // Surfaced to the user once (spec §9).
             try { localStorage.setItem('nym_pq_root_reveal', 'pending'); } catch (_) { }
             return 'generated';
+        },
+
+        _pqThrowawayIdentity() {
+            if (this.connectionMode !== 'ephemeral') return false;
+            try {
+                const mode = localStorage.getItem('nym_keypair_mode')
+                    || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
+                return mode === 'random' || mode === 'hardcore';
+            } catch (_) { return false; }
+        },
+
+        pqRootRowUnreadable() { return !!this._pqRootRowUnreadable; },
+
+        _pqRootScheduleRetry() {
+            if (this._pqRootRetryTimer) return;
+            const n = this._pqRootRetryCount || 0;
+            if (n >= PQ_ROOT_RETRY_MS.length) return;
+            this._pqRootRetryCount = n + 1;
+            this._pqRootRetryTimer = setTimeout(async () => {
+                this._pqRootRetryTimer = null;
+                if (this.pqRootSettled()) return;
+                if (typeof this.settingsLoadFromD1 !== 'function') return;
+                try { await this.settingsLoadFromD1(); } catch (_) { }
+            }, PQ_ROOT_RETRY_MS[n]);
+        },
+
+        _pqRootClearRetry() {
+            if (this._pqRootRetryTimer) {
+                clearTimeout(this._pqRootRetryTimer);
+                this._pqRootRetryTimer = null;
+            }
+        },
+
+        pqResetIdentityState() {
+            this._pqRootClearRetry();
+            this._pqRootRetryCount = 0;
+            this._pqRootRetryAt = 0;
+            this._pqRootBytes = null;
+            this._pqRootBytesFor = null;
+            this._pqRootUnreadable = false;
+            this._pqRootLocked = false;
+            this._pqRootSettled = false;
+            this._pqRootRecord = null;
+            this._pqRootRowUnreadable = false;
+            this._pqSelfCache = null;
+            this._pqSelfAnnouncement = null;
+            this._pqSelfSignedAnnouncement = null;
+            this._pqLastPublishAt = 0;
+            this._pqLastPublishTs = 0;
+            this._pqRootWaiters = [];
+            if (this._pqRootWaitTimer) {
+                clearTimeout(this._pqRootWaitTimer);
+                this._pqRootWaitTimer = null;
+            }
+            if (this._pqAnnounceTimer) {
+                clearTimeout(this._pqAnnounceTimer);
+                this._pqAnnounceTimer = null;
+            }
+            this._settingsRestoreUnreadable = false;
+            this._lastInboundSections = null;
         },
 
         /// Drives the one-time "here is your recovery code" surface.
@@ -1317,7 +1478,9 @@
             // Either signal opens this: an upgrade that should save its code,
             // or a device that cannot read the account until it pastes one.
             const linkPending = this.pqRootLinkPromptPending();
-            if (!this.pqUpgradeNoticePending() && !linkPending) return;
+            const revealPending = this.pqRootRevealPending() && this.pqHasRoot();
+            if (!this.pqUpgradeNoticePending() && !linkPending && !revealPending) return;
+            if (this._pqNoticeOpen) return;
             // A locked device is not `pqCapable` — that is the whole problem —
             // so the capability gate must not swallow its prompt.
             if (!linkPending && !this.pqCapable()) { this.dismissPqUpgradeNotice(); return; }
@@ -1325,6 +1488,8 @@
             this.dismissPqUpgradeNotice();
             const linkNeeded = this.pqRootLinkNeeded();
             if (linkNeeded) this.dismissPqRootLinkPrompt();
+            else if (revealPending) this.dismissPqRootReveal();
+            this._pqNoticeOpen = true;
             const body = linkNeeded
                 ? 'This account already has a post-quantum recovery code, and this '
                   + 'device does not have it yet.\n\nUntil you add it, this device '
@@ -1360,6 +1525,9 @@
                         && this.pqRootLinkWithCode(trimmed);
                     if (ok) {
                         try { await this.publishPqAnnouncement(); } catch (_) { }
+                        if (typeof this.reloadSettingsAfterPqLink === 'function') {
+                            try { await this.reloadSettingsAfterPqLink(); } catch (_) { }
+                        }
                     }
                     await window.showAppAlert(ok
                         ? 'Linked. This device can now read your quantum-resistant messages.'
@@ -1374,6 +1542,7 @@
                     copyLabel: 'Copy code'
                 });
             } catch (_) { /* dialog unavailable; the notice is not load-bearing */ }
+            finally { this._pqNoticeOpen = false; }
         },
 
         /// Whether the tutorial is still ahead of this user.

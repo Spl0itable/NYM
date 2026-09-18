@@ -78,6 +78,7 @@ export async function onRequest(context) {
     if (ua) out.nymchat_client_ua = ua.slice(0, 200);
     const origin = req.headers.get('Origin') || '';
     if (origin) out.nymchat_client_origin = origin.slice(0, 120);
+    try { out.nymchat_proxy_host = new URL(req.url).hostname.toLowerCase().slice(0, 120); } catch {}
     return out;
   }
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
@@ -1682,6 +1683,19 @@ export async function onRequest(context) {
     return true;
   }
 
+  function sendAppRelayOnly(msg) {
+    const info = upstreams.get(APP_RELAY);
+    if (!info) return;
+    if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
+      try { info.ws.send(msg); } catch {}
+      return;
+    }
+    if (info.status === 'connecting') {
+      if (!pendingGeoEvents.has(APP_RELAY)) pendingGeoEvents.set(APP_RELAY, []);
+      pendingGeoEvents.get(APP_RELAY).push(msg);
+    }
+  }
+
   function sendToUpstreams(data, filter) {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
     WRITE_ONLY_RELAYS.forEach((url) => {
@@ -1761,6 +1775,7 @@ export async function onRequest(context) {
             if (outboundBadgeRefused(msg[1])) return;
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
             if (archiveEnabled) { archiveOutgoingEvent(msg[1]); archiveOutgoingEmoji(msg[1]); }
+            if (isAppRelayOnlyEvent(msg[1])) { sendAppRelayOnly(rawMsg); return; }
             sendToUpstreams(rawMsg, (url) => {
               if (evtKind < 0) return true;
               const blocked = kindBlacklist.get(url);
@@ -1772,6 +1787,7 @@ export async function onRequest(context) {
             if (outboundBadgeRefused(geoEvt)) return;
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
             if (archiveEnabled) archiveOutgoingEvent(geoEvt);
+            if (isAppRelayOnlyEvent(geoEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', geoEvt])); return; }
             const isBlockedFor = (url) => {
               if (evtKind < 0) return false;
               const blocked = kindBlacklist.get(url);
@@ -1815,6 +1831,7 @@ export async function onRequest(context) {
           } else if (msgType === 'DM_EVENT') {
             const dmEvt = msg[1];
             if (heldOutbound(dmEvt)) return;
+            if (isAppRelayOnlyEvent(dmEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', dmEvt])); return; }
             const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;
             const isBlockedFor = (url) => {
               if (evtKind < 0) return false;

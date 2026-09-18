@@ -304,6 +304,7 @@
         let code = '';
         try {
             if (show && window.nym && typeof nym.pqRootCode === 'function') code = nym.pqRootCode() || '';
+            if (code && typeof nym.dismissPqRootReveal === 'function') nym.dismissPqRootReveal();
         } catch (_) { code = ''; }
 
         clearTimeout(state._keysTimer);
@@ -2794,6 +2795,10 @@ function editNick() {
     if (rootInput) { rootInput.value = ''; rootInput.type = 'password'; }
     const linkStatus = document.getElementById('pqRootLinkStatus');
     if (linkStatus) linkStatus.textContent = '';
+    const replaceInput = document.getElementById('pqRootReplaceInput');
+    if (replaceInput) replaceInput.value = '';
+    const replaceStatus = document.getElementById('pqRootReplaceStatus');
+    if (replaceStatus) replaceStatus.textContent = '';
     // An extension login has no nsec to show — but it does have a recovery
     // code, and is the login that most needs it, so only the nsec half goes.
     const signerOnly = nym.nostrLoginMethod === 'extension';
@@ -3170,6 +3175,13 @@ function refreshPqRootReveal() {
     const code = typeof nym.pqRootCode === 'function' ? nym.pqRootCode() : null;
     reveal.classList.toggle('nm-hidden', !code);
     link.classList.toggle('nm-hidden', !!code);
+    const linkHint = document.getElementById('pqRootLinkHint');
+    if (linkHint) {
+        const unreadable = typeof nym.pqRootRowUnreadable === 'function' && nym.pqRootRowUnreadable();
+        linkHint.textContent = unreadable
+            ? 'This account\u2019s recovery-code record could not be read on this device. Paste your nympq1\u2026 code to restore it for this account.'
+            : 'This device has no recovery code yet. Paste the one from a device that already has it \u2014 you will find it in this same panel there \u2014 so both can read the same quantum-resistant messages.';
+    }
     if (!code) return;
     const input = document.getElementById('pqRootValue');
     if (input) { input.value = code; input.type = 'password'; }
@@ -3200,18 +3212,33 @@ function copyPqRoot() {
     });
 }
 
-function linkPqRoot() {
+async function linkPqRoot() {
     const input = document.getElementById('pqRootLinkInput');
     const status = document.getElementById('pqRootLinkStatus');
     if (!input) return;
     const code = (input.value || '').trim();
     if (!code) return;
-    const ok = typeof nym.pqRootLinkWithCode === 'function'
+    const verdict = typeof nym.pqRootLinkVerdict === 'function'
+        ? nym.pqRootLinkVerdict(code) : 'invalid';
+    if (verdict === 'mismatch') {
+        if (status) status.textContent = 'That code does not match this account\u2019s current recovery code.';
+        const replace = await window.showAppConfirm(
+            'This code does not match the recovery code the account currently uses.\n\n'
+            + 'If the current code was created by mistake, you can replace it with this one. '
+            + 'Every device on this account will then need this code, and messages sealed to '
+            + 'the current code will only stay readable on devices that still hold it.\n\n'
+            + 'Replace the account\u2019s recovery code with the one you pasted?',
+            { title: 'Replace the recovery code?', okLabel: 'Replace', danger: true });
+        if (!replace) return;
+        await replacePqRootWith(code, input, status);
+        return;
+    }
+    const ok = verdict === 'ok' && typeof nym.pqRootLinkWithCode === 'function'
         && nym.pqRootLinkWithCode(code);
     if (status) {
         status.textContent = ok
             ? 'Linked. This device can now read your quantum-resistant messages.'
-            : 'That code does not match this account. Check it and try again.';
+            : 'That is not a valid nympq1\u2026 code. Check it and try again.';
     }
     if (!ok) return;
     input.value = '';
@@ -3226,6 +3253,50 @@ function linkPqRoot() {
     if (typeof nym.reloadSettingsAfterPqLink === 'function') {
         nym.reloadSettingsAfterPqLink();
     }
+}
+
+async function replacePqRoot() {
+    const input = document.getElementById('pqRootReplaceInput');
+    const status = document.getElementById('pqRootReplaceStatus');
+    if (!input) return;
+    const code = (input.value || '').trim();
+    if (!code) return;
+    const verdict = typeof nym.pqRootLinkVerdict === 'function'
+        ? nym.pqRootLinkVerdict(code) : 'invalid';
+    if (verdict === 'invalid') {
+        if (status) status.textContent = 'That is not a valid nympq1\u2026 code. Check it and try again.';
+        return;
+    }
+    const current = typeof nym.pqRootCode === 'function' ? nym.pqRootCode() : null;
+    if (current && current === code) {
+        if (status) status.textContent = 'This device already uses that code.';
+        return;
+    }
+    const confirmed = await window.showAppConfirm(
+        'This replaces the recovery code this account uses with the one you pasted, on this device '
+        + 'and in your synced account record.\n\nEvery other device on this account will then need '
+        + 'the pasted code. Messages sealed to the current code stay readable only on devices that '
+        + 'still hold it.\n\nReplace the recovery code?',
+        { title: 'Replace the recovery code?', okLabel: 'Replace', danger: true });
+    if (!confirmed) return;
+    await replacePqRootWith(code, input, status);
+}
+
+async function replacePqRootWith(code, input, status) {
+    if (status) status.textContent = 'Replacing\u2026';
+    let ok = false;
+    try {
+        ok = typeof nym.pqRootReplaceWithCode === 'function'
+            && await nym.pqRootReplaceWithCode(code);
+    } catch (_) { ok = false; }
+    if (status) {
+        status.textContent = ok
+            ? 'Replaced. This account now uses the code you pasted.'
+            : 'The code could not be saved to your account right now. Check your connection and try again.';
+    }
+    if (!ok) return;
+    if (input) input.value = '';
+    refreshPqRootReveal();
 }
 
 function toggleNsecVisibility() {
@@ -6141,6 +6212,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     localStorage.removeItem('nym_banner_url');
 
     // Switch the active keypair to the persistent identity
+    const identitySwitched = nym.pubkey !== pubkey;
     if (secretKey) {
         nym.privkey = secretKey;
     } else {
@@ -6148,6 +6220,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
         nym.privkey = null;
     }
     nym.pubkey = pubkey;
+    if (identitySwitched && typeof nym.pqResetIdentityState === 'function') nym.pqResetIdentityState();
 
     // Helper to update sidebar with profile name/avatar and load lightning address
     function updateSidebarFromProfile() {
