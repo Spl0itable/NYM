@@ -1,6 +1,9 @@
 // relays.js - Relay pool, connection lifecycle, proxy worker, geo-relays, stats, retries
 
 const EDGE_CHALLENGE_RELOAD_MIN_MS = 60000;
+const EDGE_CHALLENGE_RELOAD_WINDOW_MS = 15 * 60 * 1000;
+const EDGE_CHALLENGE_RELOAD_MAX = 3;
+const EDGE_CHALLENGE_CONFIRM_MS = 1500;
 
 Object.assign(NYM.prototype, {
 
@@ -1998,23 +2001,32 @@ Object.assign(NYM.prototype, {
         if (!this._getApiHost()) return false;
         try {
             const resp = await fetch('/bundle-hash.txt?t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' });
-            return resp.headers.get('cf-mitigated') === 'challenge';
+            const challenged = resp.headers.get('cf-mitigated') === 'challenge';
+            this._edgeHttpPasses = !challenged && resp.ok;
+            return challenged;
         } catch (_) {
             return false;
         }
     },
 
     _reloadForEdgeChallenge() {
-        const key = 'nym_edge_challenge_reload';
-        let last = 0;
-        try { last = Number(sessionStorage.getItem(key)) || 0; } catch (_) { }
-        if (Date.now() - last < EDGE_CHALLENGE_RELOAD_MIN_MS) return false;
-        try { sessionStorage.setItem(key, String(Date.now())); } catch (_) { }
+        const key = 'nym_edge_challenge_reloads';
+        const now = Date.now();
+        let times = [];
+        try { times = JSON.parse(sessionStorage.getItem(key) || '[]'); } catch (_) { times = []; }
+        if (!Array.isArray(times)) times = [];
+        times = times.filter((t) => typeof t === 'number' && now - t < EDGE_CHALLENGE_RELOAD_WINDOW_MS);
+        if (times.length && now - times[times.length - 1] < EDGE_CHALLENGE_RELOAD_MIN_MS) return false;
+        if (times.length >= EDGE_CHALLENGE_RELOAD_MAX) return false;
+        times.push(now);
+        try { sessionStorage.setItem(key, JSON.stringify(times)); } catch (_) { }
         location.reload();
         return true;
     },
 
     async _recoverFromEdgeChallenge() {
+        if (!(await this._edgeChallengePending())) return false;
+        await new Promise((r) => setTimeout(r, EDGE_CHALLENGE_CONFIRM_MS));
         if (!(await this._edgeChallengePending())) return false;
         return this._reloadForEdgeChallenge();
     },
@@ -2068,6 +2080,9 @@ Object.assign(NYM.prototype, {
                             this._poolReconnecting = false;
                             this._poolReconnectRetries = 0;
                             if (await this._recoverFromEdgeChallenge()) return;
+                            if (this._edgeHttpPasses === true) {
+                                console.warn('[NYM] The edge refuses the pool socket while plain requests pass. The clearance is not being honoured for WebSocket upgrades; check the Security Events row for /api/relay-pool.');
+                            }
                             // 2 consecutive failures — fall back to direct relay connections
                             console.warn('[NYM] Relay pool failed after 2 attempts, falling back to direct connections');
                             this._fallbackToDirectConnections();

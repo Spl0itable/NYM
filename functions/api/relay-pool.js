@@ -27,6 +27,7 @@ import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
+import { verifyBadge, authorityPubkey } from './_attest.js';
 
 
 // Reject relay hostnames that resolve to private/loopback/link-local space so
@@ -1657,6 +1658,30 @@ export async function onRequest(context) {
     return true;
   }
 
+  const BADGE_GATED_KINDS = new Set([20000, 23333]);
+  const poolBadgeMode = (() => {
+    const raw = env && typeof env.NYMCHAT_POOL_BADGE_MODE === 'string' ? env.NYMCHAT_POOL_BADGE_MODE.trim().toLowerCase() : '';
+    return raw === 'off' || raw === 'enforce' ? raw : 'log';
+  })();
+  const poolBadgeAuthority = poolBadgeMode === 'off' ? null : authorityPubkey(env);
+
+  function outboundBadgeRefused(ev) {
+    if (poolBadgeMode === 'off' || !poolBadgeAuthority) return false;
+    if (!ev || typeof ev !== 'object' || !BADGE_GATED_KINDS.has(ev.kind)) return false;
+    const tags = Array.isArray(ev.tags) ? ev.tags : [];
+    const tag = tags.find((t) => Array.isArray(t) && t[0] === 'nymattest' && typeof t[1] === 'string');
+    const verified = tag ? verifyBadge(tag[1], ev.pubkey, poolBadgeAuthority, Date.now()) : null;
+    if (verified) return false;
+    const why = tag ? 'invalid badge' : 'no badge';
+    const who = clientIdentity(request);
+    console.log(`Pool ${poolBadgeMode === 'enforce' ? 'refused' : 'would refuse'} event ${ev.id || '-'} (${why}) kind=${ev.kind} pubkey=${ev.pubkey || '-'} ip=${who.nymchat_client_ip || '-'} ua="${who.nymchat_client_ua || '-'}" origin=${who.nymchat_client_origin || '-'}`);
+    if (poolBadgeMode !== 'enforce') return false;
+    if (typeof ev.id === 'string') {
+      sendToClient(JSON.stringify(['OK', ev.id, false, `restricted: attestation badge required (${why})`]));
+    }
+    return true;
+  }
+
   function sendToUpstreams(data, filter) {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
     WRITE_ONLY_RELAYS.forEach((url) => {
@@ -1733,6 +1758,7 @@ export async function onRequest(context) {
             }
           } else if (msgType === 'EVENT') {
             if (heldOutbound(msg[1])) return;
+            if (outboundBadgeRefused(msg[1])) return;
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
             if (archiveEnabled) { archiveOutgoingEvent(msg[1]); archiveOutgoingEmoji(msg[1]); }
             sendToUpstreams(rawMsg, (url) => {
@@ -1743,6 +1769,7 @@ export async function onRequest(context) {
           } else if (msgType === 'GEO_EVENT') {
             const geoEvt = msg[1];
             if (heldOutbound(geoEvt)) return;
+            if (outboundBadgeRefused(geoEvt)) return;
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
             if (archiveEnabled) archiveOutgoingEvent(geoEvt);
             const isBlockedFor = (url) => {
