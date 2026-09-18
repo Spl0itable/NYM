@@ -5,6 +5,7 @@ const EDGE_CHALLENGE_RELOAD_WINDOW_MS = 15 * 60 * 1000;
 const EDGE_CHALLENGE_RELOAD_MAX = 3;
 const EDGE_CHALLENGE_CONFIRM_MS = 1500;
 const SOCKET_TICKET_REFRESH_MS = 20000;
+const SOCKET_TICKET_RETRY_MS = 30000;
 const EDGE_CHALLENGE_NOTE_MIN_MS = 30000;
 
 Object.assign(NYM.prototype, {
@@ -1905,15 +1906,18 @@ Object.assign(NYM.prototype, {
         if (held && held.expiresAt - Date.now() > SOCKET_TICKET_REFRESH_MS) return held.ticket;
         if (this._socketTicketPending) return this._socketTicketPending;
         const stillGood = () => (held && held.expiresAt > Date.now() ? held.ticket : null);
+        if (this._socketTicketRetryAt && Date.now() < this._socketTicketRetryAt) return stillGood();
         this._socketTicketPending = (async () => {
             try {
                 const resp = await this._edgeFetch(`https://${host}/api/ticket`, { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
-                if (!resp.ok) return stillGood();
+                if (!resp.ok) { this._socketTicketRetryAt = Date.now() + SOCKET_TICKET_RETRY_MS; return stillGood(); }
                 const data = await resp.json();
-                if (!data || typeof data.ticket !== 'string' || !data.ticket) return stillGood();
+                if (!data || typeof data.ticket !== 'string' || !data.ticket) { this._socketTicketRetryAt = Date.now() + SOCKET_TICKET_RETRY_MS; return stillGood(); }
+                this._socketTicketRetryAt = 0;
                 this._socketTicketRec = { ticket: data.ticket, expiresAt: Number(data.expiresAt) || (Date.now() + 60000) };
                 return data.ticket;
             } catch (_) {
+                this._socketTicketRetryAt = Date.now() + SOCKET_TICKET_RETRY_MS;
                 return stillGood();
             } finally {
                 this._socketTicketPending = null;
@@ -2083,19 +2087,61 @@ Object.assign(NYM.prototype, {
         this._recoverFromEdgeChallenge().catch(() => { });
     },
 
+    _apiRequestPath(url) {
+        if (typeof url !== 'string') return null;
+        const m = url.match(/^(?:https?:\/\/[^/]+)?(\/api(?:\/[^?#]*)?)(?:[?#]|$)/);
+        return m ? m[1] : null;
+    },
+
+    _ticketedRequest(url, method) {
+        const path = this._apiRequestPath(url);
+        if (!path || path === '/api/ticket') return false;
+        if (path === '/api/proxy') return method !== 'GET' && method !== 'HEAD';
+        return true;
+    },
+
     async _edgeFetch(url, opts) {
-        let init = opts;
         const method = (opts && opts.method ? String(opts.method) : 'GET').toUpperCase();
-        if (method !== 'GET' && method !== 'HEAD' && typeof url === 'string' && /\/api\/proxy(\?|$)/.test(url)) {
-            let ticket = null;
-            try { ticket = await this._socketTicket(); } catch (_) { ticket = null; }
+        const ticketed = this._ticketedRequest(url, method);
+        const send = async (ticket) => {
+            let init = opts;
             if (ticket) {
                 const headers = Object.assign({}, (opts && opts.headers) || {}, { 'X-Nym-Ticket': ticket });
                 init = Object.assign({}, opts, { headers });
             }
+            return this._noteEdgeResponse(await fetch(url, init));
+        };
+        let ticket = null;
+        if (ticketed) { try { ticket = await this._socketTicket(); } catch (_) { ticket = null; } }
+        const resp = await send(ticket);
+        if (!ticketed || !(await this._ticketRefused(resp))) return resp;
+        this._socketTicketRec = null;
+        this._socketTicketRetryAt = 0;
+        let fresh = null;
+        try { fresh = await this._socketTicket(); } catch (_) { fresh = null; }
+        if (fresh && fresh !== ticket) {
+            const again = await send(fresh);
+            if (!(await this._ticketRefused(again))) return again;
+            this._noteTicketRefusal();
+            return again;
         }
-        const resp = await fetch(url, init);
-        return this._noteEdgeResponse(resp);
+        this._noteTicketRefusal();
+        return resp;
+    },
+
+    async _ticketRefused(resp) {
+        if (!resp || resp.status !== 403 || typeof resp.clone !== 'function') return false;
+        try {
+            const data = await resp.clone().json();
+            return !!data && data.error === 'Ticket required';
+        } catch (_) { return false; }
+    },
+
+    _noteTicketRefusal() {
+        const now = Date.now();
+        if (this._edgeChallengeNotedAt && now - this._edgeChallengeNotedAt < EDGE_CHALLENGE_NOTE_MIN_MS) return;
+        this._edgeChallengeNotedAt = now;
+        this._reloadForEdgeChallenge();
     },
 
     async _recoverFromEdgeChallenge() {

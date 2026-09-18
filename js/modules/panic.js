@@ -67,7 +67,7 @@ Object.assign(NYM.prototype, {
         pubkey: this.pubkey,
         auth: await this._signBotAuth('account-purge', 'storage')
       });
-      await fetch(`https://${apiHost}/api/storage`, {
+      await this._edgeFetch(`https://${apiHost}/api/storage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,

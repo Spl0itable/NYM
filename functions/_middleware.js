@@ -6,7 +6,7 @@ export async function onRequest(context) {
   try { path = new URL(request.url).pathname; } catch (_) { path = ''; }
   const resp = await next();
   if (request.method !== 'GET' || (path !== '/' && path !== '/index.html')) return resp;
-  if (!resp || resp.status !== 200) return resp;
+  if (!resp || (resp.status !== 200 && resp.status !== 304)) return resp;
   const cookie = sessionTicketCookie(env, request);
   if (!cookie) return resp;
   const out = new Response(resp.body, resp);

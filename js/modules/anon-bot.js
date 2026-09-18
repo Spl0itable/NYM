@@ -230,7 +230,7 @@
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), (opts && opts.timeout) || 45000);
             try {
-                const resp = await fetch(`https://${host}/api/${endpoint}`, {
+                const resp = await this._edgeFetch(`https://${host}/api/${endpoint}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
