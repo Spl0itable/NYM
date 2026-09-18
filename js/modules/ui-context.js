@@ -828,7 +828,7 @@ Object.assign(NYM.prototype, {
             const base = this._getProxyBaseUrl();
             if (base) {
                 try {
-                    const resp = await fetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
+                    const resp = await this._edgeFetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
                     if (!resp.ok) throw new Error(`Unfurl proxy returned ${resp.status}`);
                     data = await resp.json();
                 } catch (proxyErr) {

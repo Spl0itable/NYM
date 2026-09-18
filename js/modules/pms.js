@@ -2507,7 +2507,7 @@ Object.assign(NYM.prototype, {
         const apiHost = typeof this._getApiHost === 'function' ? this._getApiHost() : '';
         if (!apiHost) return this._botProCatalog;
         try {
-            const resp = await fetch(`https://${apiHost}/api/bot`, {
+            const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'models' })

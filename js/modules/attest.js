@@ -164,7 +164,7 @@
         async _attestApi(body) {
             const apiHost = this._getApiHost && this._getApiHost();
             if (!apiHost) throw new Error('no api host');
-            const resp = await fetch(`https://${apiHost}/api/attest`, {
+            const resp = await this._edgeFetch(`https://${apiHost}/api/attest`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)

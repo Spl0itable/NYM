@@ -8,7 +8,6 @@
 
 // One definition for every route; see _client.js.
 import { isNymchatClient } from './_client.js';
-import { socketTicketGate } from './_ticket.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 
 const APP_RELAY = 'wss://relay.nymchat.app';
@@ -56,8 +55,6 @@ export async function onRequest(context) {
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
-  const ticketRefusal = socketTicketGate(request, env, '/api/relay');
-  if (ticketRefusal) return ticketRefusal;
 
   if (!isNymchatClient(request, env)) {
     return new Response('Forbidden', { status: 403 });

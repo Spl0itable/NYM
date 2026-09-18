@@ -5,6 +5,7 @@ const EDGE_CHALLENGE_RELOAD_WINDOW_MS = 15 * 60 * 1000;
 const EDGE_CHALLENGE_RELOAD_MAX = 3;
 const EDGE_CHALLENGE_CONFIRM_MS = 1500;
 const SOCKET_TICKET_REFRESH_MS = 20000;
+const EDGE_CHALLENGE_NOTE_MIN_MS = 30000;
 
 Object.assign(NYM.prototype, {
 
@@ -79,7 +80,7 @@ Object.assign(NYM.prototype, {
         const tryProxyJson = async () => {
             if (!base) return null;
             try {
-                const res = await fetch(`${base}?action=geo-relays`);
+                const res = await this._edgeFetch(`${base}?action=geo-relays`);
                 if (!res.ok) return null;
                 const data = await res.json();
                 if (!data || !Array.isArray(data.relays)) return null;
@@ -1879,6 +1880,7 @@ Object.assign(NYM.prototype, {
                     this._remoteApiFailed = wasRemoteApiFailed;
                     this.useRelayProxy = false;
                     if (!this._poolFallbackActive) return;
+                    this._recoverFromEdgeChallenge().catch(() => { });
                     const expIdx = Math.min(this._bgPoolReconnectAttempts - 1, 4);
                     const base = Math.min(15000 * Math.pow(2, expIdx), 120000);
                     const delay = this._jitter(base);
@@ -1905,7 +1907,7 @@ Object.assign(NYM.prototype, {
         const stillGood = () => (held && held.expiresAt > Date.now() ? held.ticket : null);
         this._socketTicketPending = (async () => {
             try {
-                const resp = await fetch(`https://${host}/api/ticket`, { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
+                const resp = await this._edgeFetch(`https://${host}/api/ticket`, { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
                 if (!resp.ok) return stillGood();
                 const data = await resp.json();
                 if (!data || typeof data.ticket !== 'string' || !data.ticket) return stillGood();
@@ -2062,6 +2064,38 @@ Object.assign(NYM.prototype, {
             const pick = (k) => (text.match(new RegExp('^' + k + '=(.*)$', 'm')) || [])[1] || '-';
             console.warn(`[NYM] This page reaches the edge as ip=${pick('ip')} over ${pick('http')} (colo ${pick('colo')}); compare with the address on the refused socket's event.`);
         } catch (_) { }
+    },
+
+    _noteEdgeResponse(resp) {
+        if (!resp || resp.status !== 403 || !resp.headers || typeof resp.headers.get !== 'function') return resp;
+        if (resp.headers.get('cf-mitigated') !== 'challenge') return resp;
+        const now = Date.now();
+        if (this._edgeChallengeNotedAt && now - this._edgeChallengeNotedAt < EDGE_CHALLENGE_NOTE_MIN_MS) return resp;
+        this._edgeChallengeNotedAt = now;
+        this._recoverFromEdgeChallenge().catch(() => { });
+        return resp;
+    },
+
+    _noteProxiedMediaFailure() {
+        const now = Date.now();
+        if (this._edgeChallengeNotedAt && now - this._edgeChallengeNotedAt < EDGE_CHALLENGE_NOTE_MIN_MS) return;
+        this._edgeChallengeNotedAt = now;
+        this._recoverFromEdgeChallenge().catch(() => { });
+    },
+
+    async _edgeFetch(url, opts) {
+        let init = opts;
+        const method = (opts && opts.method ? String(opts.method) : 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD' && typeof url === 'string' && /\/api\/proxy(\?|$)/.test(url)) {
+            let ticket = null;
+            try { ticket = await this._socketTicket(); } catch (_) { ticket = null; }
+            if (ticket) {
+                const headers = Object.assign({}, (opts && opts.headers) || {}, { 'X-Nym-Ticket': ticket });
+                init = Object.assign({}, opts, { headers });
+            }
+        }
+        const resp = await fetch(url, init);
+        return this._noteEdgeResponse(resp);
     },
 
     async _recoverFromEdgeChallenge() {
@@ -3608,7 +3642,7 @@ Object.assign(NYM.prototype, {
         if (!base) return fetch(targetUrl, opts);
         const proxyUrl = `${base}?action=json&url=${encodeURIComponent(targetUrl)}`;
         try {
-            return await fetch(proxyUrl, opts);
+            return await this._edgeFetch(proxyUrl, opts);
         } catch (_) {
             return fetch(targetUrl, opts);
         }
@@ -3621,7 +3655,7 @@ Object.assign(NYM.prototype, {
         const direct = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=${zoom}&accept-language=en`;
         if (base) {
             try {
-                const res = await fetch(`${base}?action=geocode&lat=${lat}&lng=${lng}&zoom=${zoom}&lang=en`);
+                const res = await this._edgeFetch(`${base}?action=geocode&lat=${lat}&lng=${lng}&zoom=${zoom}&lang=en`);
                 if (res.ok) return await res.json();
             } catch (_) { /* fall through */ }
         }
@@ -3642,7 +3676,7 @@ Object.assign(NYM.prototype, {
                 const params = trending
                     ? `trending=1&api_key=${encodeURIComponent(apiKey)}`
                     : `q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(apiKey)}`;
-                const res = await fetch(`${base}?action=giphy&${params}`);
+                const res = await this._edgeFetch(`${base}?action=giphy&${params}`);
                 if (res.ok) return await res.json();
             } catch (_) { /* fall through */ }
         }

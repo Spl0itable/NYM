@@ -50,7 +50,7 @@ const TRANSLATE_CACHE_TTL = 86400;
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization, X-Nym-Ticket, X-Nym-Build',
   'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
 };
 

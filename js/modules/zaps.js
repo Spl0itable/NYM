@@ -1057,7 +1057,7 @@ Object.assign(NYM.prototype, {
         const base = this._getProxyBaseUrl();
         if (!base) return false;
         try {
-            const resp = await fetch(`${base}?action=zap-verify`, {
+            const resp = await this._edgeFetch(`${base}?action=zap-verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

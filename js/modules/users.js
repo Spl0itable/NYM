@@ -624,7 +624,7 @@ Object.assign(NYM.prototype, {
 
     async _putToBlossom(file, hashHex, server, signal) {
         const auth = await this._signBlossomEvent(hashHex, 'upload');
-        const resp = await fetch(this._getBlossomUploadUrl(server), {
+        const resp = await this._edgeFetch(this._getBlossomUploadUrl(server), {
             method: 'PUT',
             headers: {
                 'Authorization': `Nostr ${auth}`,
@@ -736,7 +736,7 @@ Object.assign(NYM.prototype, {
         const mirrors = [];
         await Promise.all(remaining.map(async (server) => {
             try {
-                const resp = await fetch(this._getBlossomMirrorUrl(server), {
+                const resp = await this._edgeFetch(this._getBlossomMirrorUrl(server), {
                     method: 'PUT',
                     headers: {
                         'Authorization': `Nostr ${auth}`,

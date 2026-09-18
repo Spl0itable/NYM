@@ -152,6 +152,10 @@ window.nymHapticTap = function (ms) {
     document.addEventListener('error', function (e) {
         var t = e.target;
         if (!t || t.tagName !== 'IMG') return;
+        if (typeof t.src === 'string' && t.src.indexOf('/api/proxy?') !== -1 && !(t.complete && t.naturalHeight > 0)) {
+            var host = nym();
+            if (host && typeof host._noteProxiedMediaFailure === 'function') host._noteProxiedMediaFailure();
+        }
         if (t.dataset && t.dataset.avatarPubkey && window.nym && typeof window.nym.generateAvatarSvg === 'function') {
             // If the image actually decoded (e.g. error fired on a canceled
             // load while the new src is already painting), don't replace it.
@@ -178,6 +182,9 @@ window.nymHapticTap = function (ms) {
                 setTimeout(function () {
                     t.src = baseSrc + sep + '_r=' + (tries + 1);
                 }, 800 * (tries + 1));
+            } else {
+                var n = nym();
+                if (n && typeof n._recoverFromEdgeChallenge === 'function') n._recoverFromEdgeChallenge().catch(function () { });
             }
             return;
         }

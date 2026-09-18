@@ -448,7 +448,7 @@ Object.assign(NYM.prototype, {
     async _doTranslate(text, targetLang) {
         const base = this._getProxyBaseUrl();
         if (!base) throw new Error('Translation is unavailable: no API host configured');
-        const resp = await fetch(`${base}?action=translate`, {
+        const resp = await this._edgeFetch(`${base}?action=translate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text, source: 'auto', target: targetLang }),
@@ -480,7 +480,7 @@ Object.assign(NYM.prototype, {
     async _doTranslateBatch(texts, targetLang) {
         const base = this._getProxyBaseUrl();
         if (!base) throw new Error('Translation is unavailable: no API host configured');
-        const resp = await fetch(`${base}?action=translate`, {
+        const resp = await this._edgeFetch(`${base}?action=translate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ texts, source: 'auto', target: targetLang }),

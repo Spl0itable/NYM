@@ -205,7 +205,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) { this._setBotChannelThinking(false); return; }
-            const resp = await fetch(`https://${apiHost}/api/bot`, {
+            const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers, threadRoot: threadRoot || null, lang: (this.getUiLanguage && this.getUiLanguage()) || '' })

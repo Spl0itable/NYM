@@ -1,4 +1,5 @@
 import { servedHostAllowed } from './_client.js';
+import { apiTicketGate } from './_ticket.js';
 
 export async function onRequest(context) {
   const { request, env, next } = context;
@@ -8,5 +9,7 @@ export async function onRequest(context) {
       headers: { 'Content-Type': 'application/json' }
     });
   }
+  const refused = apiTicketGate(request, env);
+  if (refused) return refused;
   return next();
 }

@@ -174,7 +174,7 @@ Object.assign(NYM.prototype, {
         }
         const auth = await this._signBotAuth(action);
         const body = Object.assign({ action, pubkey: this.pubkey, auth }, extra || {});
-        const resp = await fetch(`https://${apiHost}/api/bot`, {
+        const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -201,7 +201,7 @@ Object.assign(NYM.prototype, {
             body.pubkey = this.pubkey;
             body.auth = await this._signBotAuth(action, 'storage');
         }
-        const resp = await fetch(`https://${apiHost}/api/storage`, {
+        const resp = await this._edgeFetch(`https://${apiHost}/api/storage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -235,7 +235,7 @@ Object.assign(NYM.prototype, {
             body.pubkey = this.pubkey;
             body.auth = await this._signBotAuth(action, 'storage');
         }
-        const resp = await fetch(`https://${apiHost}/api/storage`, {
+        const resp = await this._edgeFetch(`https://${apiHost}/api/storage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
