@@ -73,8 +73,22 @@ async function handleEnroll(context, body) {
 
   let tier = "origin";
   let deviceId = null;
+  // Why a native install is on the challenged tier rather than attested: the
+  // platform verdict when the app was not recognized, or the refusal the app
+  // reports when it comes back for the build-proof path after one.
+  let reason = null;
 
-  const platformResult = ATTESTED_PLATFORMS.has(platform)
+  // A native app that could not produce a platform proof (no Play Services,
+  // no Secure Enclave, a refused verdict) enrolls on the build-proof path
+  // like the web app does, but is still recorded as the platform it is.
+  const hasPlatformProof = platform === "ios"
+    ? typeof body.keyId === "string" && typeof body.attestation === "string"
+    : platform === "android" ? typeof body.token === "string" && body.token.length > 0 : false;
+  if (ATTESTED_PLATFORMS.has(platform) && !hasPlatformProof && typeof body.refusal === "string") {
+    reason = body.refusal.replace(/[^\w .:()-]/g, "").slice(0, 80) || null;
+  }
+
+  const platformResult = ATTESTED_PLATFORMS.has(platform) && hasPlatformProof
     ? (platform === "ios"
       ? await verifyAppAttest(env, { keyId: body.keyId, attestation: body.attestation, challenge })
       : await verifyPlayIntegrity(env, { token: body.token, challenge }))
@@ -95,6 +109,7 @@ async function handleEnroll(context, body) {
       return json({ error: "Enrollment work insufficient", need: enrollPowBits(env) }, 403);
     }
     tier = "challenged";
+    reason = platformResult.reason;
   } else {
     if (!isNymchatClient(request, env)) return json({ error: "Forbidden" }, 403);
     if (!enrollPowOk(env, body.auth)) {
@@ -106,7 +121,7 @@ async function handleEnroll(context, body) {
   }
 
   const expiresAt = Date.now() + BADGE_TTL_DAYS * DAY_MS;
-  await recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt });
+  await recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt, reason });
   const badge = issueBadge(env, pubkey, tier);
   if (!badge) return json({ error: "Attestation not configured" }, 503);
 

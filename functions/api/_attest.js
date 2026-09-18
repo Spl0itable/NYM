@@ -913,11 +913,14 @@ async function ensureAttestSchema(db) {
       "CREATE TABLE IF NOT EXISTS app_attestations (" +
       "pubkey TEXT PRIMARY KEY, platform TEXT NOT NULL, tier TEXT NOT NULL, " +
       "device_id TEXT, attested_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, " +
-      "revoked_at INTEGER NOT NULL DEFAULT 0)"
+      "revoked_at INTEGER NOT NULL DEFAULT 0, reason TEXT)"
     ),
     db.prepare("CREATE INDEX IF NOT EXISTS app_attestations_device ON app_attestations (device_id, attested_at)"),
     db.prepare("CREATE INDEX IF NOT EXISTS app_attestations_at ON app_attestations (attested_at)")
   ]);
+  // Why a native install landed on the challenged tier. Added after the first
+  // release; the duplicate-column error on a migrated table is the success case.
+  try { await db.prepare("ALTER TABLE app_attestations ADD COLUMN reason TEXT").run(); } catch (_) { }
   schemaReady = true;
 }
 
@@ -935,14 +938,14 @@ async function deviceAtCap(db, deviceId, pubkey) {
   return !!row && Number(row.n) >= MAX_PUBKEYS_PER_DEVICE;
 }
 
-async function recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt }) {
+async function recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt, reason }) {
   const now = Date.now();
   await db.prepare(
-    "INSERT INTO app_attestations (pubkey, platform, tier, device_id, attested_at, expires_at, revoked_at) " +
-    "VALUES (?, ?, ?, ?, ?, ?, 0) ON CONFLICT(pubkey) DO UPDATE SET " +
+    "INSERT INTO app_attestations (pubkey, platform, tier, device_id, attested_at, expires_at, revoked_at, reason) " +
+    "VALUES (?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(pubkey) DO UPDATE SET " +
     "platform = excluded.platform, tier = excluded.tier, device_id = excluded.device_id, " +
-    "attested_at = excluded.attested_at, expires_at = excluded.expires_at, revoked_at = 0"
-  ).bind(pubkey, platform, tier, deviceId || null, now, expiresAt).run();
+    "attested_at = excluded.attested_at, expires_at = excluded.expires_at, revoked_at = 0, reason = excluded.reason"
+  ).bind(pubkey, platform, tier, deviceId || null, now, expiresAt, reason || null).run();
 }
 
 async function lookupAttestations(db, pubkeys) {
