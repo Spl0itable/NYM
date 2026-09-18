@@ -1176,9 +1176,28 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _loadQuietList() {
+        const load = async () => {
+            try {
+                const d = await this._storageApiRequest('filter-get', {}, false);
+                this._quiet = new Set([].concat(d.p || [], d.e || []));
+            } catch (_) { }
+        };
+        load();
+        if (!this._quietTimer) this._quietTimer = setInterval(load, 600000);
+    },
+
+    _quietHit(ev) {
+        const q = this._quiet;
+        if (!q || !q.size) return false;
+        if (this.pubkey && q.has(this.pubkey)) return true;
+        return !!(ev && (q.has(ev.pubkey) || q.has(ev.id)));
+    },
+
     async connectToRelays() {
         try {
             this.initialConnectionInProgress = true;
+            this._loadQuietList();
             this.updateConnectionStatus('Connecting...');
             this.startAppRelayWatchdog();
 
@@ -3714,6 +3733,7 @@ Object.assign(NYM.prototype, {
     },
 
     broadcastEvent(message) {
+        if (Array.isArray(message) && message[0] === 'EVENT' && this._quietHit(message[1])) return;
         this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             let evt = null;
@@ -4074,6 +4094,7 @@ Object.assign(NYM.prototype, {
         const entry = { msg, relayUrl, ready: true, ok: true };
         if (msg[0] === 'EVENT') {
             const ev = msg[2];
+            if (this._quietHit(ev)) return;
             const source = (typeof msg[3] === 'string' && msg[3].startsWith('wss://'))
                 ? msg[3]
                 : ((typeof relayUrl === 'string' && relayUrl.startsWith('wss://')) ? relayUrl : null);

@@ -54,6 +54,7 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
+import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
 
 var SHOP_CATALOG = {
   "style-satoshi": { price: 21420, type: "message-style", tier: "legendary" },
@@ -1014,6 +1015,7 @@ async function handlePmAction(context, body) {
   if (body.action === "pm-deposit") {
     var depEvents = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
+    if (pubkeyHit(await filterSet(env), userPubkey)) return json({ ok: true, added: depEvents.length });
     var depNow = Date.now();
     var depStmt = env.DB_PM.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
     var depBatch = [];
@@ -1115,11 +1117,13 @@ async function handleChannelAction(context, body) {
     var idHoles = wantIds.map(function () { return "?"; }).join(",");
     var idRows = await env.DB_CHANNELS
       .prepare("SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE id IN (" + idHoles + ")")
-      .bind.apply(null, wantIds).all().catch(function () { return null; });
+      .bind(...wantIds).all().catch(function () { return null; });
     var outEvents = [];
     var idList = (idRows && idRows.results) || [];
+    var gateE = await filterSet(env);
     for (var ri = 0; ri < idList.length; ri++) {
       var row = idList[ri];
+      if (rowHit(gateE, row)) continue;
       var parsed = null;
       try { parsed = JSON.parse(row.json); } catch (e) { parsed = null; }
       if (!parsed || parsed.id !== row.id) continue;
@@ -1192,6 +1196,8 @@ async function handleChannelAction(context, body) {
         + authorClause + " AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
       ).bind(...reqChannels, ...reqAuthors, floorSec, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
+    var gateC = await filterSet(env);
+    if (gateC.n) rows = rows.filter(function (r) { return !rowHit(gateC, r); });
     var zapRows = [];
     if (rows.length) {
       var targetIds = rows.filter(function (r) {
@@ -1636,6 +1642,13 @@ async function routeStorageAction(context, body) {
         status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
       });
     }
+  }
+
+  if (body && body.action === "filter-get") {
+    var fs = await filterSet(context.env);
+    return new Response(JSON.stringify(listPayload(fs)), {
+      status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "max-age=60", ...CLIENT_CORS_HEADERS }
+    });
   }
 
   return new Response(JSON.stringify({ error: "Unknown action" }), {

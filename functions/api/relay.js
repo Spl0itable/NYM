@@ -8,6 +8,7 @@
 
 // One definition for every route; see _client.js.
 import { isNymchatClient } from './_client.js';
+import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 
 const APP_RELAY = 'wss://relay.nymchat.app';
 
@@ -82,9 +83,35 @@ export async function onRequest(context) {
     return new Response('Invalid relay URL', { status: 400 });
   }
 
+  let gate = await filterSet(env);
+  let sockHeld = null;
+  const gateTimer = setInterval(() => { filterSet(env).then((s) => { gate = s; }, () => { }); }, 30000);
+
   // Create the WebSocket pair for the client connection
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
+
+  function heldOutbound(data) {
+    if (typeof data !== 'string' || !data.startsWith('["EVENT"')) return false;
+    let ev = null;
+    try { const arr = JSON.parse(data); ev = Array.isArray(arr) ? arr[1] : null; } catch { return false; }
+    if (!ev) return false;
+    if (ev.kind === 1984) context.waitUntil(noteReport(env, ev, 'relay'));
+    let mode = sockHeld;
+    if (!mode) {
+      mode = eventHit(gate, ev);
+      if (mode && typeof ev.pubkey === 'string' && gate.p.has(ev.pubkey.toLowerCase())) sockHeld = mode;
+    }
+    if (!mode) return false;
+    if (typeof ev.id === 'string') {
+      try {
+        server.send(JSON.stringify(mode === 'reject'
+          ? ['OK', ev.id, false, 'blocked: not accepted']
+          : ['OK', ev.id, true, '']));
+      } catch { /* noop */ }
+    }
+    return true;
+  }
 
   // Connect to the upstream relay using the WebSocket constructor
   // (the standard way to make outbound WebSocket connections from Workers)
@@ -108,6 +135,7 @@ export async function onRequest(context) {
     context.waitUntil(
       (async () => {
         try {
+          if (heldOutbound(event.data)) return;
           if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
             upstream.send(event.data);
           } else if (!upstreamOpen) {
@@ -123,6 +151,7 @@ export async function onRequest(context) {
   // Forward messages from upstream to client
   upstream.addEventListener('message', (event) => {
     try {
+      if (typeof event.data === 'string' && event.data.startsWith('["EVENT"') && frameHit(gate, event.data)) return;
       if (server.readyState === 1) {
         server.send(event.data);
       }
@@ -133,6 +162,7 @@ export async function onRequest(context) {
 
   // Handle close events
   server.addEventListener('close', (event) => {
+    clearInterval(gateTimer);
     try {
       upstream.close(event.code, event.reason);
     } catch {
@@ -141,6 +171,7 @@ export async function onRequest(context) {
   });
 
   upstream.addEventListener('close', (event) => {
+    clearInterval(gateTimer);
     try {
       server.close(event.code, event.reason);
     } catch {

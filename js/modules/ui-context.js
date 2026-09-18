@@ -1658,6 +1658,31 @@ Object.assign(NYM.prototype, {
                 });
             }
 
+            if (!isSelf && targetPubkey) {
+                ctxItems.push({
+                    id: 'qctxReport',
+                    label: 'Report',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M 3 14 L 3 2" stroke-linecap="round" /><path d="M 3 2.5 L 12.5 2.5 L 10.5 5.5 L 12.5 8.5 L 3 8.5" stroke-linejoin="round" /></svg>',
+                    action: () => {
+                        this.contextMenuData = {
+                            nym: targetBaseNym,
+                            pubkey: targetPubkey,
+                            content: messageContent,
+                            messageId,
+                            reactionId: messageId
+                        };
+                        this.openReportModal();
+                    }
+                });
+                ctxItems.push({
+                    id: 'qctxBlock',
+                    label: this.blockedUsers.has(targetPubkey) ? 'Unblock User' : 'Block User',
+                    cls: 'danger',
+                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6" /><line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" /></svg>',
+                    action: () => { this.cmdBlock(targetPubkey); }
+                });
+            }
+
             let quickCtxMenu = null;
             if (ctxItems.length > 0) {
                 quickCtxMenu = document.createElement('div');

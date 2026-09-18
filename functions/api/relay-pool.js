@@ -26,6 +26,7 @@
 import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
+import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 
 
 // Reject relay hostnames that resolve to private/loopback/link-local space so
@@ -79,6 +80,8 @@ export async function onRequest(context) {
     return out;
   }
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
+  let gate = await filterSet(env);
+  let sockHeld = null;
 
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
@@ -152,6 +155,7 @@ export async function onRequest(context) {
     try {
       if (serverOpen && server.readyState === 1) {
         server.send(JSON.stringify(['POOL:PING', Date.now()]));
+        filterSet(env).then((s) => { gate = s; }, () => { });
         runArchive(flushArchive());
         runArchive(flushEmojiArchive());
       } else {
@@ -1430,6 +1434,7 @@ export async function onRequest(context) {
             seenEvents.set(eventId, 1);
             trimDedup();
           }
+          if (frameHit(gate, raw)) return;
           if (hasBlockedContentPrefix(raw) || isGlubClientFrame(raw) || isSpamEventFrame(raw)) {
             droppedSpamCount++;
             return;
@@ -1636,6 +1641,22 @@ export async function onRequest(context) {
     }
   }
 
+  function heldOutbound(ev) {
+    if (ev && ev.kind === 1984) runArchive(noteReport(env, ev, 'pool'));
+    let mode = sockHeld;
+    if (!mode) {
+      mode = eventHit(gate, ev);
+      if (mode && ev && typeof ev.pubkey === 'string' && gate.p.has(ev.pubkey.toLowerCase())) sockHeld = mode;
+    }
+    if (!mode) return false;
+    if (ev && typeof ev.id === 'string') {
+      sendToClient(JSON.stringify(mode === 'reject'
+        ? ['OK', ev.id, false, 'blocked: not accepted']
+        : ['OK', ev.id, true, '']));
+    }
+    return true;
+  }
+
   function sendToUpstreams(data, filter) {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
     WRITE_ONLY_RELAYS.forEach((url) => {
@@ -1711,6 +1732,7 @@ export async function onRequest(context) {
               }
             }
           } else if (msgType === 'EVENT') {
+            if (heldOutbound(msg[1])) return;
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
             if (archiveEnabled) { archiveOutgoingEvent(msg[1]); archiveOutgoingEmoji(msg[1]); }
             sendToUpstreams(rawMsg, (url) => {
@@ -1720,6 +1742,7 @@ export async function onRequest(context) {
             });
           } else if (msgType === 'GEO_EVENT') {
             const geoEvt = msg[1];
+            if (heldOutbound(geoEvt)) return;
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
             if (archiveEnabled) archiveOutgoingEvent(geoEvt);
             const isBlockedFor = (url) => {
@@ -1764,6 +1787,7 @@ export async function onRequest(context) {
             });
           } else if (msgType === 'DM_EVENT') {
             const dmEvt = msg[1];
+            if (heldOutbound(dmEvt)) return;
             const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;
             const isBlockedFor = (url) => {
               if (evtKind < 0) return false;
