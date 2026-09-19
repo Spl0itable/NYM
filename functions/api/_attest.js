@@ -19,7 +19,12 @@ const BADGE_VERSION = "1";
 const BADGE_TAG = "nymattest";
 // A badge outlives a normal upgrade cycle but not an abandoned device.
 const BADGE_TTL_DAYS = 45;
+const CHALLENGED_BADGE_TTL_DAYS = 14;
+const MIN_BADGE_TTL_DAYS = 8;
 const DAY_MS = 86400000;
+const CHALLENGED_CAP_WINDOW_MS = 86400000;
+const MAX_CHALLENGED_PER_IP = 8;
+const MAX_CHALLENGED_PER_ASN = 250;
 // Long enough for App Attest and Play Integrity round trips on a slow network,
 // short enough that a captured challenge is worthless by the time it is read.
 const CHALLENGE_TTL_MS = 300000;
@@ -184,10 +189,31 @@ function dayOf(ms) {
   return Math.floor(ms / DAY_MS);
 }
 
+function envInt(env, name, fallback) {
+  const raw = env && env[name];
+  if (raw === undefined || raw === null || raw === "") return fallback;
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function badgeTtlDays(env, tier) {
+  if (tier === "attested") return BADGE_TTL_DAYS;
+  const days = envInt(env, "ATTEST_CHALLENGED_TTL_DAYS", CHALLENGED_BADGE_TTL_DAYS);
+  return Math.min(BADGE_TTL_DAYS, Math.max(MIN_BADGE_TTL_DAYS, days));
+}
+
+function challengedCaps(env) {
+  return {
+    ip: envInt(env, "ATTEST_CHALLENGED_IP_CAP", MAX_CHALLENGED_PER_IP),
+    asn: envInt(env, "ATTEST_CHALLENGED_ASN_CAP", MAX_CHALLENGED_PER_ASN),
+    windowMs: Math.max(1, envInt(env, "ATTEST_CHALLENGED_CAP_HOURS", CHALLENGED_CAP_WINDOW_MS / 3600000)) * 3600000
+  };
+}
+
 function issueBadge(env, pubkey, tier) {
   const sec = authoritySecret(env);
   if (!sec) return null;
-  const expDay = dayOf(Date.now()) + BADGE_TTL_DAYS;
+  const expDay = dayOf(Date.now()) + badgeTtlDays(env, tier);
   const sig = schnorr.sign(badgeDigest(pubkey, expDay, tier), sec);
   return `${BADGE_VERSION}.${tier}.${expDay.toString(36)}.${base64UrlEncode(sig)}`;
 }
@@ -928,6 +954,14 @@ async function ensureAttestSchema(db) {
   // Why a native install landed on the challenged tier. Added after the first
   // release; the duplicate-column error on a migrated table is the success case.
   try { await db.prepare("ALTER TABLE app_attestations ADD COLUMN reason TEXT").run(); } catch (_) { }
+  try { await db.prepare("ALTER TABLE app_attestations ADD COLUMN ip TEXT").run(); } catch (_) { }
+  try { await db.prepare("ALTER TABLE app_attestations ADD COLUMN asn INTEGER").run(); } catch (_) { }
+  try {
+    await db.batch([
+      db.prepare("CREATE INDEX IF NOT EXISTS app_attestations_ip ON app_attestations (ip, attested_at)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS app_attestations_asn ON app_attestations (asn, attested_at)")
+    ]);
+  } catch (_) { }
   schemaReady = true;
 }
 
@@ -945,14 +979,35 @@ async function deviceAtCap(db, deviceId, pubkey) {
   return !!row && Number(row.n) >= MAX_PUBKEYS_PER_DEVICE;
 }
 
-async function recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt, reason }) {
+async function challengedSourceAtCap(db, env, { ip, asn, pubkey }) {
+  const caps = challengedCaps(env);
+  const since = Date.now() - caps.windowMs;
+  if (caps.ip > 0 && typeof ip === "string" && ip) {
+    const row = await db.prepare(
+      "SELECT COUNT(*) AS n FROM app_attestations WHERE tier = 'challenged' AND ip = ? AND pubkey != ? AND attested_at > ?"
+    ).bind(ip, pubkey, since).first();
+    if (row && Number(row.n) >= caps.ip) return "ip";
+  }
+  if (caps.asn > 0 && Number.isFinite(asn) && asn > 0) {
+    const row = await db.prepare(
+      "SELECT COUNT(*) AS n FROM app_attestations WHERE tier = 'challenged' AND asn = ? AND pubkey != ? AND attested_at > ?"
+    ).bind(asn, pubkey, since).first();
+    if (row && Number(row.n) >= caps.asn) return "asn";
+  }
+  return null;
+}
+
+async function recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt, reason, ip, asn }) {
   const now = Date.now();
   await db.prepare(
-    "INSERT INTO app_attestations (pubkey, platform, tier, device_id, attested_at, expires_at, revoked_at, reason) " +
-    "VALUES (?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(pubkey) DO UPDATE SET " +
+    "INSERT INTO app_attestations (pubkey, platform, tier, device_id, attested_at, expires_at, revoked_at, reason, ip, asn) " +
+    "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?) ON CONFLICT(pubkey) DO UPDATE SET " +
     "platform = excluded.platform, tier = excluded.tier, device_id = excluded.device_id, " +
-    "attested_at = excluded.attested_at, expires_at = excluded.expires_at, revoked_at = 0, reason = excluded.reason"
-  ).bind(pubkey, platform, tier, deviceId || null, now, expiresAt, reason || null).run();
+    "attested_at = excluded.attested_at, expires_at = excluded.expires_at, revoked_at = 0, reason = excluded.reason, " +
+    "ip = excluded.ip, asn = excluded.asn"
+  ).bind(pubkey, platform, tier, deviceId || null, now, expiresAt, reason || null,
+    typeof ip === "string" && ip ? ip.slice(0, 64) : null,
+    Number.isFinite(asn) && asn > 0 ? asn : null).run();
 }
 
 async function lookupAttestations(db, pubkeys) {
@@ -990,6 +1045,10 @@ async function isRevoked(db, pubkey) {
 export {
   BADGE_TAG,
   BADGE_TTL_DAYS,
+  CHALLENGED_BADGE_TTL_DAYS,
+  badgeTtlDays,
+  challengedCaps,
+  challengedSourceAtCap,
   PLATFORMS,
   ATTESTED_PLATFORMS,
   MAX_PUBKEYS_PER_DEVICE,

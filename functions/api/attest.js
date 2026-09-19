@@ -3,7 +3,8 @@
 import { CLIENT_CORS_HEADERS, verifyClientAuth } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
 import {
-  BADGE_TTL_DAYS,
+  badgeTtlDays,
+  challengedSourceAtCap,
   ATTESTED_PLATFORMS,
   PLATFORMS,
   authorityPubkey,
@@ -120,8 +121,16 @@ async function handleEnroll(context, body) {
     tier = "challenged";
   }
 
-  const expiresAt = Date.now() + BADGE_TTL_DAYS * DAY_MS;
-  await recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt, reason });
+  const ip = request.headers.get("CF-Connecting-IP") || "";
+  const asnRaw = request.cf && request.cf.asn;
+  const asn = Number.isFinite(Number(asnRaw)) && Number(asnRaw) > 0 ? Number(asnRaw) : null;
+  if (tier === "challenged") {
+    const capped = await challengedSourceAtCap(db, env, { ip, asn, pubkey });
+    if (capped) return json({ error: "Enrollment cap", scope: capped }, 429);
+  }
+
+  const expiresAt = Date.now() + badgeTtlDays(env, tier) * DAY_MS;
+  await recordAttestation(db, { pubkey, platform, tier, deviceId, expiresAt, reason, ip, asn });
   const badge = issueBadge(env, pubkey, tier);
   if (!badge) return json({ error: "Attestation not configured" }, 503);
 
