@@ -13,27 +13,42 @@
     const EDGE_NONCE = "[A-Za-z0-9+/=_-]*";
     const EDGE_NONCE_ATTR = '(?: nonce="' + EDGE_NONCE + '")?';
     const EDGE_PLATFORM_PATH = '/cdn-cgi/challenge-platform/[A-Za-z0-9_./-]+';
-    const EDGE_BOOTSTRAP = "<script\u00a7NONCEATTR\u00a7>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML=\"window.__CF$cv$params={r:'\u00a7RAY\u00a7',t:'\u00a7TOKEN\u00a7'};var a=document.createElement('script');a.nonce='\u00a7NONCE\u00a7';a.src='\u00a7SRC\u00a7';document.getElementsByTagName('head')[0].appendChild(a);\";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>";
+    const EDGE_BOOTSTRAP = "<script\u00a7NONCEATTR\u00a7>window.__CF$cv$params={r:'\u00a7RAY\u00a7',t:'\u00a7TOKEN\u00a7'\u00a7SESSION\u00a7};(function(){if(!document.body)return;var s=document.createElement('script');s.nonce='\u00a7NONCE\u00a7';s.src='\u00a7SRC\u00a7';document.head.appendChild(s);})();</script>";
+    const EDGE_BOOTSTRAP_LEGACY = "<script\u00a7NONCEATTR\u00a7>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML=\"window.__CF$cv$params={r:'\u00a7RAY\u00a7',t:'\u00a7TOKEN\u00a7'};var a=document.createElement('script');a.nonce='\u00a7NONCE\u00a7';a.src='\u00a7SRC\u00a7';document.getElementsByTagName('head')[0].appendChild(a);\";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>";
 
     function escapeRe(s) {
         return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    const EDGE_PATTERNS = [
-        new RegExp('<script(?=[^<>]*\\ssrc="https://static\\.cloudflareinsights\\.com/beacon\\.min\\.js[^"<>]*")[^<>]*></script>', 'g'),
-        new RegExp(escapeRe(EDGE_BOOTSTRAP)
+    function bootstrapRe(template) {
+        return new RegExp(escapeRe(template)
             .replace('\u00a7NONCEATTR\u00a7', EDGE_NONCE_ATTR)
             .replace('\u00a7RAY\u00a7', '[0-9a-f]+')
             .replace('\u00a7TOKEN\u00a7', '[A-Za-z0-9+/=]+')
+            .replace('\u00a7SESSION\u00a7', "(?:,u:'[0-9a-f]+')?(?:,ut:'[A-Za-z0-9._-]+')?(?:,i:[0-9]+)?")
             .replace('\u00a7NONCE\u00a7', EDGE_NONCE)
-            .replace('\u00a7SRC\u00a7', EDGE_PLATFORM_PATH), 'g'),
+            .replace('\u00a7SRC\u00a7', EDGE_PLATFORM_PATH), 'g');
+    }
+
+    const EDGE_PATTERNS = [
+        new RegExp('<script(?=[^<>]*\\ssrc="https://static\\.cloudflareinsights\\.com/beacon\\.min\\.js[^"<>]*")[^<>]*></script>', 'g'),
+        bootstrapRe(EDGE_BOOTSTRAP),
+        bootstrapRe(EDGE_BOOTSTRAP_LEGACY),
         new RegExp('<script(?=[^<>]*\\ssrc="' + EDGE_PLATFORM_PATH + '")[^<>]*></script>', 'g'),
     ];
-    const META_NONCE = new RegExp('(<meta http-equiv="Content-Security-Policy" content="[^"]*?script-src) \'nonce-' + EDGE_NONCE + '\'');
+    const ROCKET_LOADER = /<script(?=[^<>]*\ssrc="\/cdn-cgi\/scripts\/[0-9a-f]+\/cloudflare-static\/rocket-loader\.min\.js")(?=[^<>]*\sdata-cf-settings="([0-9a-f]+)-[^"<>]*")[^<>]*><\/script>/;
+    const META_NONCE = new RegExp('(<meta http-equiv="Content-Security-Policy" content="[^"]*?script-src) \\\'nonce-' + EDGE_NONCE + '\\\'');
     const INLINE_SCRIPT = /<script(?:\s[^<>]*)?>[\s\S]*?<\/script>/g;
 
     function stripEdgeInjection(html) {
         let removed = 0;
+        const loader = html.match(ROCKET_LOADER);
+        if (loader) {
+            html = html.replace(loader[0], '');
+            removed++;
+            const marker = ' type="' + loader[1] + '-text/javascript"';
+            html = html.replace(/<script\s[^<>]*>/g, (tag) => tag.split(marker).join(''));
+        }
         for (const re of EDGE_PATTERNS) {
             html = html.replace(re, () => { removed++; return ''; });
         }
@@ -42,20 +57,20 @@
     }
 
     function strayInlineScripts(html) {
-        let count = 0;
+        const out = [];
         for (const m of html.matchAll(INLINE_SCRIPT)) {
             const open = m[0].slice(0, m[0].indexOf('>') + 1);
             if (/\ssrc=/.test(open) || /\stype="application\/ld\+json"/.test(open)) continue;
-            count++;
+            out.push(m[0]);
         }
-        return count;
+        return out;
     }
 
     async function servedBytes(path) {
         const cache = path !== '/sw.js' && /\.(js|css)$/.test(path) ? 'force-cache' : 'no-store';
         const r = await fetch(path, { cache });
         if (!r.ok) throw new Error('http ' + r.status);
-        if (!/\.html$/.test(path)) return { buf: await r.arrayBuffer(), removed: 0, stray: 0 };
+        if (!/\.html$/.test(path)) return { buf: await r.arrayBuffer(), removed: 0, stray: [] };
         const { html, removed } = stripEdgeInjection(await r.text());
         return { buf: new TextEncoder().encode(html), removed, stray: strayInlineScripts(html) };
     }
@@ -113,7 +128,11 @@
                     computed[path] = got;
                     edgeInjected += removed;
                     if (got === files[path]) verified++;
-                    else { mismatches.push(path); strayScripts += stray; }
+                    else {
+                        mismatches.push(path);
+                        strayScripts += stray.length;
+                        for (const text of stray) console.warn('[NYM] Unrecognised inline script in ' + path + ':\n' + text);
+                    }
                 } catch (_) {
                     mismatches.push(path);
                 }
