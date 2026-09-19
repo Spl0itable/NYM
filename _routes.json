@@ -1,5 +1,18 @@
 {
   "version": 1,
-  "include": ["/", "/index.html", "/api", "/api/*"],
-  "exclude": []
+  "include": ["/*"],
+  "exclude": [
+    "/js/*",
+    "/css/*",
+    "/data/*",
+    "/i18n/*",
+    "/.well-known/*",
+    "/sw.js",
+    "/robots.txt",
+    "/sitemap.xml",
+    "/llms.txt",
+    "/version.json",
+    "/build-manifest.json",
+    "/bundle-hash.txt"
+  ]
 }

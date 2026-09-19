@@ -755,6 +755,7 @@
                         }
                         // Merged, not skipped — same reason as the channels above.
                         this.pmMessages.set(p.key, this._mergeCachedMessages(this.pmMessages.get(p.key), msgs));
+                        if (typeof this._pruneForeignBotThreads === 'function') this._pruneForeignBotThreads(p.key);
                     }
                     for (const k of migrateKeys) this.persistPMMessages(k);
                     if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile();

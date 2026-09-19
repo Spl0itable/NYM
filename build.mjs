@@ -226,6 +226,8 @@ async function run() {
   // still link to.
   await emit('_redirects', await fs.readFile(path.join(root, '_redirects')));
 
+  await emit('_routes.json', await fs.readFile(path.join(root, '_routes.json')));
+
   // Vulnerability-disclosure pointer (RFC 9116) verbatim.
   await emit('.well-known/security.txt', await fs.readFile(path.join(root, '.well-known', 'security.txt')));
 

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <!-- Fallback CSP -->
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: ws:; worker-src 'self' blob:; child-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
+        content="default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: ws:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Nymchat — open the app</title>
@@ -2506,6 +2506,7 @@
                     <div class="about-build-meta">
                         <a id="aboutBuildCommit" href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener">source</a>
                         <span class="about-build-hash" id="aboutBuildHash"></span>
+                        <span class="about-build-edge" id="aboutBuildEdge"></span>
                     </div>
                     <div class="about-build-links">
                         <a id="aboutBuildProvenance" href="https://github.com/Spl0itable/NYM/actions" target="_blank" rel="noopener">Build provenance</a>

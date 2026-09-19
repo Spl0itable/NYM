@@ -61,6 +61,67 @@ Object.assign(NYM.prototype, {
         return key ? (this.messages.get(key) || null) : null;
     },
 
+    _botThreadForeign(msg, list) {
+        if (!msg || !msg.isPM || msg.isGroup || !msg.threadRoot) return false;
+        if (typeof this.isVerifiedBot !== 'function' || !this.isVerifiedBot(msg.conversationPubkey)) return false;
+        const held = list || this._threadListForMessage(msg);
+        if (!held) return true;
+        const rootId = msg.threadRoot;
+        return !held.some(m => m && m !== msg && this.threadKeyForMessage(m) === rootId);
+    },
+
+    _holdBotThreadOrphan(msg) {
+        if (!this._botThreadOrphans) this._botThreadOrphans = new Map();
+        const key = msg.threadRoot;
+        let held = this._botThreadOrphans.get(key);
+        if (!held) {
+            held = [];
+            this._botThreadOrphans.set(key, held);
+        }
+        if (!held.some(m => m.id === msg.id)) held.push(msg);
+        if (held.length > 50) held.splice(0, held.length - 50);
+        if (this._botThreadOrphans.size > 500) {
+            this._botThreadOrphans.delete(this._botThreadOrphans.keys().next().value);
+        }
+    },
+
+    _adoptBotThreadOrphans(root, conversationKey) {
+        if (!root || root.threadRoot || !this._botThreadOrphans) return 0;
+        const key = this.threadKeyForMessage(root);
+        const held = key && this._botThreadOrphans.get(key);
+        if (!held || !held.length) return 0;
+        this._botThreadOrphans.delete(key);
+        const list = this.pmMessages.get(conversationKey) || [];
+        let added = 0;
+        for (const m of held) {
+            if (m.conversationKey !== conversationKey) continue;
+            if (list.some(x => x.id === m.id)) continue;
+            list.push(m);
+            added++;
+        }
+        if (!added) return 0;
+        list.sort((a, b) => this._compareMessages(a, b));
+        this.pmMessages.set(conversationKey, list);
+        if (typeof this.persistPMMessages === 'function') this.persistPMMessages(conversationKey);
+        if (this.channelDOMCache) this.channelDOMCache.delete(conversationKey);
+        return added;
+    },
+
+    _pruneForeignBotThreads(conversationKey) {
+        const list = this.pmMessages.get(conversationKey);
+        if (!Array.isArray(list) || !list.length) return 0;
+        const kept = [];
+        let dropped = 0;
+        for (const m of list) {
+            if (this._botThreadForeign(m, list)) { dropped++; continue; }
+            kept.push(m);
+        }
+        if (!dropped) return 0;
+        this.pmMessages.set(conversationKey, kept);
+        if (typeof this.persistPMMessages === 'function') this.persistPMMessages(conversationKey);
+        return dropped;
+    },
+
     // True when a reply's root message is present locally. A reply whose root
     // we never saw falls back to rendering inline so it is never lost.
     _threadRootExistsFor(msg) {

@@ -1557,6 +1557,10 @@ Object.assign(NYM.prototype, {
             }
             this._recordMsgVerification(nymMsgId, senderVerified);
 
+            if (this._botThreadForeign(msg, list)) {
+                this._holdBotThreadOrphan(msg);
+                return;
+            }
             list.push(msg);
             list.sort((a, b) => {
                 return this._compareMessages(a, b);
@@ -1566,6 +1570,7 @@ Object.assign(NYM.prototype, {
                 list = list.slice(-this.pmStorageLimit);
             }
             this.pmMessages.set(conversationKey, list);
+            this._adoptBotThreadOrphans(msg, conversationKey);
             this.persistPMMessages(conversationKey);
             if (isOwn) this._applyEarlyReceipt(msg, conversationKey);
 
@@ -4664,6 +4669,7 @@ Object.assign(NYM.prototype, {
 
         return pmMessages.filter(msg => {
             if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
+            if (this._botThreadForeign(msg, pmMessages)) return false;
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;

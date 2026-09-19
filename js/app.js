@@ -4709,9 +4709,11 @@ function runBuildVerification() {
     const commitEl = document.getElementById('aboutBuildCommit');
     const hashEl = document.getElementById('aboutBuildHash');
     const provEl = document.getElementById('aboutBuildProvenance');
+    const edgeEl = document.getElementById('aboutBuildEdge');
 
     statusEl.textContent = 'Verifying…';
     statusEl.className = 'about-build-status checking';
+    if (edgeEl) edgeEl.textContent = '';
 
     window.verifyRunningBuild().then((r) => {
         const shortCommit = (r.commit || '').slice(0, 7);
@@ -4727,6 +4729,11 @@ function runBuildVerification() {
             hashEl.textContent = shortHash ? '#' + shortHash : '';
             hashEl.title = r.bundleHash || '';
         }
+        if (edgeEl && r.edgeInjected > 0) {
+            edgeEl.textContent = r.edgeInjected === 1
+                ? '1 Cloudflare edge script excluded'
+                : r.edgeInjected + ' Cloudflare edge scripts excluded';
+        }
 
         if (r.ok && r.officialHost) {
             statusEl.textContent = '✓ Verified (' + r.verified + '/' + r.total + ')';
@@ -4735,7 +4742,9 @@ function runBuildVerification() {
             statusEl.textContent = '⚠ Verified build · not the official app';
             statusEl.className = 'about-build-status checking';
         } else if (!r.filesOk) {
-            statusEl.textContent = '✗ Mismatch (' + r.verified + '/' + r.total + ')';
+            statusEl.textContent = r.strayScripts > 0
+                ? '✗ Mismatch (' + r.verified + '/' + r.total + ') · unrecognised inline script'
+                : '✗ Mismatch (' + r.verified + '/' + r.total + ')';
             statusEl.className = 'about-build-status bad';
         } else if (r.anchored === false) {
             statusEl.textContent = '✗ Unofficial build (' + r.verified + '/' + r.total + ')';
