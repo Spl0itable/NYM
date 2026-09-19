@@ -1,11 +1,12 @@
 import { hasD1, replica } from './_d1.js';
+import { verifyBadge, authorityPubkey } from './_attest.js';
 
 export const SPAM_DDL = [
   "CREATE TABLE IF NOT EXISTS spam_config (key TEXT PRIMARY KEY, value TEXT)",
   "CREATE TABLE IF NOT EXISTS spam_events (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, nym TEXT, channel TEXT, kind INTEGER, " +
   "content TEXT, sim_key INTEGER NOT NULL, b0 INTEGER, b1 INTEGER, b2 INTEGER, b3 INTEGER, created_at INTEGER NOT NULL, " +
   "seen_at INTEGER NOT NULL, verdict TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0, category TEXT, reason TEXT, " +
-  "model TEXT, action TEXT, source TEXT, local_score INTEGER NOT NULL DEFAULT 0, nym_key TEXT, lang TEXT)",
+  "model TEXT, action TEXT, source TEXT, local_score INTEGER NOT NULL DEFAULT 0, nym_key TEXT, lang TEXT, badge TEXT)",
   "CREATE INDEX IF NOT EXISTS spam_events_seen ON spam_events (seen_at)",
   "CREATE INDEX IF NOT EXISTS spam_events_pubkey ON spam_events (pubkey, seen_at)",
   "CREATE INDEX IF NOT EXISTS spam_events_sim ON spam_events (sim_key, seen_at)",
@@ -15,6 +16,7 @@ export const SPAM_DDL = [
   "CREATE INDEX IF NOT EXISTS spam_events_b3 ON spam_events (b3, seen_at)",
   "ALTER TABLE spam_events ADD COLUMN nym_key TEXT",
   "ALTER TABLE spam_events ADD COLUMN lang TEXT",
+  "ALTER TABLE spam_events ADD COLUMN badge TEXT",
   "CREATE INDEX IF NOT EXISTS spam_events_nym ON spam_events (nym_key, seen_at)",
   "CREATE TABLE IF NOT EXISTS spam_pubkeys (pubkey TEXT PRIMARY KEY, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, " +
   "audits INTEGER NOT NULL DEFAULT 0, spam INTEGER NOT NULL DEFAULT 0, ham INTEGER NOT NULL DEFAULT 0, strikes INTEGER NOT NULL DEFAULT 0, " +
@@ -153,6 +155,51 @@ export function nymStem(key) {
   return key && key.length > NYM_STEM_LEN ? key.slice(0, NYM_STEM_LEN) : "";
 }
 
+const CHATTER_MAX_CHARS = 24;
+const CHATTER_MAX_TOKENS = 3;
+const LINKISH = /https?:\/\/|www\.|\.(com|net|org|io|app|xyz|me|to|ly|gg)(\/|\b)|(nostr:)?(npub|note|nevent|naddr|nprofile)1[a-z0-9]{10,}/i;
+const APP_ACTIONS = [
+  /^\/me\s+slaps\s+\S+(\s+\S+)?\s+around a bit with a large trout\b/i,
+  /^\/me\s+gives\s+\S+(\s+\S+)?\s+a warm hug\b/i
+];
+
+export function isAppAction(content) {
+  if (typeof content !== "string") return false;
+  const t = content.trim();
+  if (t.length > 160 || LINKISH.test(t)) return false;
+  return APP_ACTIONS.some((re) => re.test(t));
+}
+
+export function isShortChatter(content) {
+  if (typeof content !== "string") return false;
+  const t = content.trim();
+  if (!t || t.length > CHATTER_MAX_CHARS || LINKISH.test(t)) return false;
+  const words = t.split(/\s+/).filter((w) => w[0] !== "@");
+  if (words.length > CHATTER_MAX_TOKENS) return false;
+  return /\p{L}|\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(t) || /^[?!.]+$/.test(t) === false;
+}
+
+export function innocuousKind(content) {
+  if (isAppAction(content)) return "action";
+  if (isShortChatter(content)) return "chatter";
+  return "";
+}
+
+export function senderSuspicious(job, dossier) {
+  if ((job.localScore || 0) > 0) return true;
+  const rec = dossier && dossier.record;
+  if (rec && (Number(rec.spam) > 0 || Number(rec.strikes) > 0)) return true;
+  return false;
+}
+
+export function badgeTier(env, job, now) {
+  if (!job || typeof job.badgeTag !== "string" || !job.badgeTag) return "none";
+  const authority = env ? authorityPubkey(env) : null;
+  if (!authority) return "unverified";
+  const v = verifyBadge(job.badgeTag, job.pubkey, authority, now || Date.now());
+  return v ? v.tier : "invalid";
+}
+
 export function verdictReusable(fp) {
   return !!(fp && fp.simKey && fp.tokens >= MIN_REUSE_TOKENS);
 }
@@ -210,6 +257,8 @@ export const SPAM_SYSTEM_PROMPT = `You are the spam filter for Nymchat, an ephem
 
 Messages come in any language and script (Turkish, Russian, Ukrainian, Spanish, Portuguese, German, Arabic, Persian, Hindi, Indonesian, Chinese, Japanese and more), often colloquial, misspelled, slang, dialect or a regional spelling ("geliyom", "toletini temizle", "q tal", "wsg"). First work out which language the message is in. "gibberish" means random characters, keyboard mashing or token soup with no reading in ANY language; a word or phrase you do not recognise is far more likely a real language you know less well than gibberish, so never use the gibberish category unless you are sure the text has no meaning anywhere. A message of one or two ordinary words is chatter whatever the language, and a sender whose earlier messages were judged ok has a good record, not a bad one.
 
+Some senders carry proof of the client they use. An "attested" badge is hardware-backed by Apple App Attest or Google Play Integrity and cannot be minted by a bot farm; "challenged" is a browser that solved a proof-of-work challenge; "origin" is a plain browser; "invalid" is a forged, lifted or expired badge and a bad sign. The #nymchat channel is reachable only through the Nymchat app relay. A badge and posting in #nymchat make a real person much more likely, and you should weigh the message accordingly, but they are context, not an exemption: a badged sender posting an ad, a scam or a persona flood is still spam.
+
 Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, local heuristics, the sender's history, similar prior messages with their verdicts, and prior senders whose nyms resemble this one. Repetition across channels, nyms or pubkeys, and prior spam verdicts on similar text, are strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to nyms recently judged spam under other pubkeys can corroborate a verdict when this message reads like that family's spam. It never convicts on its own: real people pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. A rude, crude, sexual or angry message from a human talking to the room is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence.
 
 Respond with ONE JSON object and nothing else, exactly this shape:
@@ -228,6 +277,10 @@ export function buildSpamPrompt(job, dossier) {
   lines.push("pubkey: " + short(job.pubkey));
   lines.push("posted: " + when(job.createdAt || job.seenAt));
   lines.push("content: " + JSON.stringify(clip(job.content, CONTENT_MAX)));
+  lines.push("");
+  lines.push("SENDER PROOF");
+  lines.push("attestation badge: " + (job.badge || "none"));
+  lines.push("posting in #nymchat (app relay only): " + (job.kind === 23333 && String(job.channel || "").toLowerCase() === "nymchat" ? "yes" : "no"));
   lines.push("");
   lines.push("LOCAL HEURISTICS");
   lines.push("gibberish score: " + (job.localScore || 0) + " (3+ is drop-worthy on its own)");
@@ -407,7 +460,7 @@ const state = {
   lastErrorAt: 0,
   statusAt: 0,
   cooldownUntil: 0,
-  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, errors: 0 }
+  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, errors: 0 }
 };
 
 export function _resetSpamState() {
@@ -672,11 +725,11 @@ async function persist(env, job, v, dossier, action) {
   const score = v.spam ? prevScore + v.confidence : Math.max(0, prevScore - 0.5);
   const strikes = (rec ? Number(rec.strikes) || 0 : 0) + (strong ? 1 : 0);
   const stmts = [
-    db.prepare("INSERT OR IGNORE INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, lang) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    db.prepare("INSERT OR IGNORE INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, lang, badge) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(job.id, job.pubkey, clip(job.nym, 80) || null, clip(job.channel, 80) || null, job.kind, clip(job.content, 4000), job.fp.simKey,
         job.fp.bands[0], job.fp.bands[1], job.fp.bands[2], job.fp.bands[3], job.createdAt || job.seenAt, job.seenAt,
-        v.spam ? "spam" : "ok", v.confidence, v.category || null, v.reason || null, v.model || null, action, job.source || "pool", job.localScore || 0, job.nymKey || null, v.language || null),
+        v.spam ? "spam" : "ok", v.confidence, v.category || null, v.reason || null, v.model || null, action, job.source || "pool", job.localScore || 0, job.nymKey || null, v.language || null, job.badge && job.badge !== "none" ? job.badge : null),
     db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT(pubkey) DO UPDATE SET last_seen = excluded.last_seen, audits = audits + 1, spam = spam + excluded.spam, ham = ham + excluded.ham, " +
       "strikes = ?, score = ?, channels = ?, nyms = ?, last_reason = excluded.last_reason")
@@ -757,9 +810,14 @@ export async function auditNow(env, job) {
   }
   if (!dossier.recent.length) dossier.recent = await recentArchive(env, job);
   job.pubkeyUnknown = !dossier.record;
+  if (job.badge == null) job.badge = badgeTier(env, job, now);
   let v = null;
+  const innocuous = job.force ? "" : innocuousKind(job.content);
   const cached = verdictReusable(job.fp) ? exactVerdict(job.fp.simKey, now) : null;
-  if (cached && cached.spam) {
+  if (innocuous && !senderSuspicious(job, dossier)) {
+    v = { spam: false, confidence: 0.1, category: "ok", language: "", model: innocuous, reason: innocuous === "action" ? "app action (/slap, /hug) from a sender with a clean record" : "short chatter from a sender with a clean record" };
+    state.counters.chatter++;
+  } else if (cached && cached.spam) {
     v = Object.assign({}, cached, { model: "cache", reason: "same text already judged spam: " + cached.reason });
     state.counters.cached++;
   } else if (dossier.exact) {
@@ -851,7 +909,7 @@ export function spamEngine(env, context) {
       const queued = Object.assign({}, job, { pubkey, fp, nymKey: nymKey(job.nym), seenAt: now, settings: s, source: "pool" });
       delete queued.release;
       delete queued.retract;
-      if (s.autoEnforce && verdictReusable(fp)) {
+      if (s.autoEnforce && verdictReusable(fp) && !innocuousKind(job.content)) {
         const cached = exactVerdict(fp.simKey, now);
         if (cached && cached.spam && cached.confidence >= s.minConfidence) {
           noteDropped(job.id);

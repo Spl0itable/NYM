@@ -1247,6 +1247,7 @@ export async function onRequest(context) {
       pubkey: sig.pubkey,
       content: sig.content,
       nym: nymTag ? nymTag.replace(/#[a-fA-F0-9]{4}$/, '') : '',
+      badgeTag: extractTagValue(raw, 'nymattest') || '',
       channel: sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind)),
       createdAt: extractCreatedAtMs(raw),
       localScore: sig.score,
