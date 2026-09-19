@@ -1182,6 +1182,18 @@ export async function onRequest(context) {
     return RX_GLUB_CLIENT.test(tags) || RX_GLUB_TAG.test(tags);
   }
 
+  const RX_MACHINE_OBJECT = /^\{\s*"[^"\n]{1,64}"\s*:/;
+  const RX_MACHINE_ARRAY = /^\[\s*(?:\{\s*"[^"\n]{1,64}"\s*:|"[^"\n]*"\s*[,\]])/;
+  function isMachinePayload(content) {
+    if (typeof content !== 'string') return false;
+    const t = content.trim();
+    if (t.length < 8) return false;
+    const last = t.charCodeAt(t.length - 1);
+    if (t.charCodeAt(0) === 123 && last === 125) return RX_MACHINE_OBJECT.test(t);
+    if (t.charCodeAt(0) === 91 && last === 93) return RX_MACHINE_ARRAY.test(t);
+    return false;
+  }
+
   let lastSignals = null;
 
   function isSpamEventFrame(raw) {
@@ -1193,6 +1205,7 @@ export async function onRequest(context) {
     const now = Date.now();
     const signals = { pubkey, content, score: 0, copies: 0 };
     lastSignals = signals;
+    if (content && isMachinePayload(content)) return true;
     if (pubkey && isAutoMuted(pubkey, now)) return true;
     if (kind === 20000) {
       if (content) {
