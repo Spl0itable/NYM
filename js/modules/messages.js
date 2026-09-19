@@ -34,6 +34,8 @@ function _getQuoteToMePattern(cleanNym, suffix) {
     return pattern;
 }
 
+const WOT_SPAM_GATE = false;
+
 Object.assign(NYM.prototype, {
 
     // Millisecond sort key for a message. NYM clients stamp outgoing events with
@@ -532,7 +534,7 @@ Object.assign(NYM.prototype, {
     },
 
     _trackPubkeyMessage(pubkey, eventId, silent) {
-        if (!pubkey || !eventId || this.trustedPubkeys.has(pubkey)) return;
+        if (!WOT_SPAM_GATE || !pubkey || !eventId || this.trustedPubkeys.has(pubkey)) return;
         let ids = this.pubkeyMsgIds.get(pubkey);
         if (!ids) {
             ids = new Set();
@@ -695,7 +697,7 @@ Object.assign(NYM.prototype, {
             // Regular geohash channel message
             const storageKey = message.geohash ? `#${message.geohash}` : message.channel;
 
-            const isGated = !message.isOwn && !this.isFriend(message.pubkey) &&
+            const isGated = WOT_SPAM_GATE && this._clientGatesActive() && !message.isOwn && !this.isFriend(message.pubkey) &&
                 !this.nymchatPubkeys.has(message.pubkey) &&
                 this._isPubkeyGated(message.pubkey);
 
@@ -885,7 +887,8 @@ Object.assign(NYM.prototype, {
         // For our own outgoing messages, surface a system message so the sender
         // knows why their message disappeared (it was still sent to relays).
         const keywordHit = this.hasBlockedKeyword(message.content, message.author, message.pubkey);
-        const spamHit = this.isSpamMessage(message.content);
+        const clientGates = this._clientGatesActive();
+        const spamHit = clientGates && this.isSpamMessage(message.content);
         if (message.isOwn) {
             if (keywordHit || this.blockedUsers.has(message.pubkey)) {
                 const reason = keywordHit ? 'matched one of your blocked keywords' : 'matched a block rule';
@@ -903,7 +906,7 @@ Object.assign(NYM.prototype, {
 
         // Check if nym is flooding in THIS CHANNEL (but not for PMs and not for historical messages)
         const channelToCheck = message.geohash || message.channel;
-        if (!message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
+        if (clientGates && !message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
             messageEl.className = 'message flooded';
         }
 
@@ -3473,17 +3476,18 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        const clientGates = this._clientGatesActive();
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
-            if (!msg.isOwn && !this.isFriend(msg.pubkey) &&
+            if (WOT_SPAM_GATE && clientGates && !msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;
             }
             if (!msg.isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
             if (!msg.isOwn && this.hasBlockedKeyword(msg.content, msg.author, msg.pubkey)) return false;
-            if (!msg.isOwn && this.isSpamMessage(msg.content)) return false;
+            if (clientGates && !msg.isOwn && this.isSpamMessage(msg.content)) return false;
             if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
             return true;
         }).sort((a, b) => this._compareMessages(a, b));

@@ -93,6 +93,17 @@ Object.assign(NYM.prototype, {
         return actual >= committed ? committed : 0;
     },
 
+    // Whether the app's own automatic anti-spam heuristics apply: the
+    // web-of-trust gate, the campaign detector, the content heuristics, the
+    // per-channel flood check and the gibberish-nym filter. Through the
+    // relay-pool proxy the pool and the spam engine already filter every
+    // channel message, so they run only in direct mode. Explicit user choices
+    // (blocks, keywords, filter packs, the PoW floor, the verified-app filter)
+    // apply in both modes.
+    _clientGatesActive() {
+        return !(this.useRelayProxy && !this._poolFallbackActive);
+    },
+
     validatePow(event, minimumDifficulty = 0) {
         if (minimumDifficulty === 0) return true;
         return this.validatedPowBits(event) >= minimumDifficulty;
@@ -469,8 +480,11 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Drop spam-bot events
-            if (event.pubkey !== this.pubkey && !this.isFriend?.(event.pubkey) &&
+            // Drop spam-bot events. The client's own automatic heuristics run
+            // only in direct mode: through the relay-pool proxy the pool and
+            // the spam engine already filter every channel message.
+            const clientGates = this._clientGatesActive();
+            if (clientGates && event.pubkey !== this.pubkey && !this.isFriend?.(event.pubkey) &&
                 this.isGibberishNym(nym)) {
                 return;
             }
@@ -485,11 +499,11 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            if (typeof this.isAutoMuted === 'function' && this.isAutoMuted(event.pubkey)) {
+            if (clientGates && typeof this.isAutoMuted === 'function' && this.isAutoMuted(event.pubkey)) {
                 return;
             }
 
-            if (this.isSpamMessage(event.content)) {
+            if (clientGates && this.isSpamMessage(event.content)) {
                 return;
             }
 
@@ -513,11 +527,12 @@ Object.assign(NYM.prototype, {
             }
 
             // Check flooding FOR THIS CHANNEL (only for non-historical messages)
-            if (!isHistorical && this.isFlooding(event.pubkey, geohash)) {
+            if (clientGates && !isHistorical && this.isFlooding(event.pubkey, geohash)) {
                 return;
             }
 
-            if (event.pubkey !== this.pubkey
+            if (clientGates
+                && event.pubkey !== this.pubkey
                 && !this.isFriend?.(event.pubkey)
                 && !this.isVerifiedBot(event.pubkey)
                 && typeof this.checkCampaign === 'function') {
@@ -528,7 +543,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Only track flood for new messages in this channel
-            if (!isHistorical) {
+            if (clientGates && !isHistorical) {
                 this.trackMessage(event.pubkey, geohash, isHistorical, event.content);
             }
 

@@ -1561,6 +1561,7 @@ Object.assign(NYM.prototype, {
             if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
             if (pubkey !== this.pubkey && !this.isFriend?.(pubkey) &&
                 typeof this.isGibberishNym === 'function' &&
+                this._clientGatesActive() &&
                 this.isGibberishNym(user.nym)) return;
 
             const isRecent = (now - user.lastSeen) < ACTIVE_THRESHOLD;

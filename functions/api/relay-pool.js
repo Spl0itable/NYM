@@ -524,6 +524,30 @@ export async function onRequest(context) {
     return raw.substring(start, end);
   }
 
+  function tagNeedleIndex(raw, tagName) {
+    const braceIdx = raw.indexOf('{');
+    if (braceIdx === -1) return -1;
+    const tagsIdx = raw.indexOf('"tags":', braceIdx);
+    if (tagsIdx === -1) return -1;
+    return raw.indexOf('["' + tagName + '","', tagsIdx);
+  }
+
+  function hasTag(raw, tagName) {
+    return tagNeedleIndex(raw, tagName) !== -1;
+  }
+
+  function countTags(raw, tagName) {
+    let idx = tagNeedleIndex(raw, tagName);
+    if (idx === -1) return 0;
+    const needle = '["' + tagName + '","';
+    let n = 0;
+    while (idx !== -1 && n < 64) {
+      n++;
+      idx = raw.indexOf(needle, idx + needle.length);
+    }
+    return n;
+  }
+
   // Numeric created_at from an event frame, without JSON.parse.
   function extractEventCreatedAt(raw) {
     const braceIdx = raw.indexOf('{');
@@ -1248,6 +1272,9 @@ export async function onRequest(context) {
       content: sig.content,
       nym: nymTag ? nymTag.replace(/#[a-fA-F0-9]{4}$/, '') : '',
       badgeTag: extractTagValue(raw, 'nymattest') || '',
+      reply: hasTag(raw, 'e'),
+      quote: hasTag(raw, 'nymquote'),
+      mentions: countTags(raw, 'p'),
       channel: sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind)),
       createdAt: extractCreatedAtMs(raw),
       localScore: sig.score,

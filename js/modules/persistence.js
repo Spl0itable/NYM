@@ -713,11 +713,7 @@
                     for (const m of msgs) {
                         await breathe();
                         if (!m) continue;
-                        const gated = !m.isOwn && !this.isFriend(m.pubkey) &&
-                            !this.nymchatPubkeys.has(m.pubkey) &&
-                            this._isPubkeyGated(m.pubkey);
-                        m._spamGated = gated;
-                        if (gated) continue;
+                        m._spamGated = false;
                         const ts = (m.created_at || 0) * 1000;
                         if (ts > lastTs) lastTs = ts;
                     }
