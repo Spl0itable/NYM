@@ -365,7 +365,7 @@ var BOT_SATS_PER_CREDIT = 10;
 var BOT_MODEL_DEFAULT = "@cf/qwen/qwen3-30b-a3b-fp8";
 // Small, fast, NON-reasoning model for the short structured one-shots (task
 // classification, jokes, riddles, word games, ?define, ?translate).
-var BOT_MODEL_UTILITY = "@cf/meta/llama-3.1-8b-instruct-fast";
+var BOT_MODEL_UTILITY = "@cf/meta/llama-3.1-8b-instruct-fp8";
 // Qwen3's soft switch for its hybrid reasoning mode
 var BOT_FREE_NO_THINK = "\n\n/no_think";
 // Free public-channel reply budget. Covers the stripped reasoning block plus

@@ -21,6 +21,7 @@
 //   ["NOTICE", reason, relayUrl] - attributed to originating relay
 //   ["CLOSED", subId, reason, relayUrl] - attributed to originating relay
 //   ["POOL:RELAY_BAN", relayUrl, reason] - relay permanently dropped (auth, restricted, etc.)
+//   ["POOL:RETRACT", eventId, reason] - an event forwarded earlier was judged spam; remove it
 //   ["POOL:STATUS", { connected, count, latency, events }]
 
 import { getEventHash, schnorr } from './_shared.js';
@@ -748,7 +749,7 @@ export async function onRequest(context) {
     );
     const now = Date.now();
     for (let i = 0; i < rows.length; i += ARCHIVE_BATCH) {
-      const slice = rows.slice(i, i + ARCHIVE_BATCH).filter((r) => archiveEventValid(r.json));
+      const slice = rows.slice(i, i + ARCHIVE_BATCH).filter((r) => !spam.isHidden(r.id) && archiveEventValid(r.json));
       if (slice.length === 0) continue;
       const chunk = slice.map(
         (r) => stmt.bind(r.id, r.channel, r.kind, r.pubkey, r.created_at, r.json, now)
@@ -1233,12 +1234,14 @@ export async function onRequest(context) {
     return false;
   }
 
-  function spamEngineDrops(raw, eventId, kind) {
-    if ((kind !== 20000 && kind !== 23333) || !eventId || !spam.active()) return false;
+  function spamEngineVerdict(raw, eventId, kind, relayTail) {
+    if ((kind !== 20000 && kind !== 23333) || !eventId || !spam.active()) return 'pass';
     const sig = lastSignals || { pubkey: extractEventStringField(raw, 'pubkey'), content: extractEventStringField(raw, 'content'), score: 0, copies: 0 };
-    if (!sig.pubkey || !sig.content) return false;
+    if (!sig.pubkey || !sig.content) return 'pass';
     const nymTag = extractTagValue(raw, 'n');
     return spam.inspect({
+      release: () => sendToClient(raw.slice(0, -1) + relayTail),
+      retract: () => sendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam'])),
       id: eventId,
       kind,
       pubkey: sig.pubkey,
@@ -1481,7 +1484,9 @@ export async function onRequest(context) {
             return;
           }
           const evKind = extractEventKind(raw);
-          if (spamEngineDrops(raw, eventId, evKind)) {
+          const relayTail = ',"' + relayUrl + '"]';
+          const spamVerdict = spamEngineVerdict(raw, eventId, evKind, relayTail);
+          if (spamVerdict === 'drop') {
             droppedSpamCount++;
             return;
           }
@@ -1497,7 +1502,7 @@ export async function onRequest(context) {
             else if (isArchivableEmojiKind(evKind)) archiveInboundEmoji(raw, evKind);
             else if (evKind === 5) deleteArchivedFromDeletion(raw);
           }
-          const relayTail = ',"' + relayUrl + '"]';
+          if (spamVerdict === 'hold') return;
           sendToClient(raw.slice(0, -1) + relayTail);
 
         // OK: ["OK","eventId",bool,"msg"]

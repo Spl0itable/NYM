@@ -2405,6 +2405,13 @@ Object.assign(NYM.prototype, {
                         return;
                     }
 
+                    if (msgType === 'POOL:RETRACT') {
+                        if (typeof msg[1] === 'string' && /^[0-9a-f]{64}$/.test(msg[1]) && typeof this._applyVerifiedDeletion === 'function') {
+                            this._applyVerifiedDeletion(msg[1]);
+                        }
+                        return;
+                    }
+
                     if (msgType === 'POOL:RELAY_BAN') {
                         const banUrl = msg[1];
                         const banReason = msg[2] || 'banned';

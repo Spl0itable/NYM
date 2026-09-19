@@ -23,7 +23,8 @@ export const SPAM_DDL = [
 
 export const SPAM_SETTINGS_KEY = "settings";
 export const SPAM_ACTOR = "ai-spam";
-export const DEFAULT_SPAM_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+export const DEFAULT_SPAM_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+const NO_THINK_SUFFIX = "\n\n/no_think";
 
 export const BUILTIN_EXEMPT_PUBKEYS = [
   "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
@@ -55,6 +56,7 @@ export function defaultSpamSettings(env) {
     muteHours: 24,
     blockEvents: true,
     mode: "shadow",
+    holdMs: 5000,
     exemptPubkeys: []
   };
 }
@@ -82,6 +84,7 @@ export function normalizeSpamSettings(input, base) {
   if (input.muteHours != null) out.muteHours = clampNum(input.muteHours, 1, 24 * 365, out.muteHours);
   if (typeof input.blockEvents === "boolean") out.blockEvents = input.blockEvents;
   if (input.mode === "reject" || input.mode === "shadow") out.mode = input.mode;
+  if (input.holdMs != null) out.holdMs = Math.round(clampNum(input.holdMs, 0, 15000, out.holdMs));
   if (Array.isArray(input.exemptPubkeys)) {
     const set = new Set();
     for (const p of input.exemptPubkeys) {
@@ -153,6 +156,7 @@ export function fingerprint(content) {
 export function parseSpamVerdict(text) {
   if (!text) return null;
   let s = String(text).trim();
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const start = s.indexOf("{");
   const end = s.lastIndexOf("}");
@@ -266,7 +270,22 @@ export function spamTransports(env, model) {
   return out;
 }
 
-async function callTransport(env, t, messages) {
+function needsNoThink(model) {
+  return /qwen3/i.test(String(model || ""));
+}
+
+function transportMessages(t, messages) {
+  if (!needsNoThink(t.model)) return messages;
+  const out = messages.slice();
+  const last = out[out.length - 1];
+  if (last && last.role === "user" && typeof last.content === "string" && !last.content.endsWith(NO_THINK_SUFFIX)) {
+    out[out.length - 1] = { role: "user", content: last.content + NO_THINK_SUFFIX };
+  }
+  return out;
+}
+
+async function callTransport(env, t, rawMessages) {
+  const messages = transportMessages(t, rawMessages);
   if (t.kind === "bound") {
     const opts = env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
     const body = { messages, max_tokens: 300, temperature: 0 };
@@ -320,18 +339,80 @@ const state = {
   exact: new Map(),
   muted: new Map(),
   hidden: new Set(),
+  dropped: new Map(),
+  pending: new Map(),
   queue: [],
   running: 0,
   budgetMinute: 0,
   budgetUsed: 0,
-  counters: { inspected: 0, queued: 0, audited: 0, cached: 0, dropped: 0, muted: 0, skippedBudget: 0, errors: 0 }
+  lastAuditAt: 0,
+  lastError: null,
+  lastErrorAt: 0,
+  statusAt: 0,
+  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, errors: 0 }
 };
 
 export function _resetSpamState() {
   state.settings = null; state.settingsAt = 0; state.settingsLoading = null; state.schemaReady = false;
-  state.seen.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear();
+  state.seen.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear(); state.dropped.clear();
+  for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
+  state.pending.clear();
   state.queue = []; state.running = 0; state.budgetMinute = 0; state.budgetUsed = 0;
+  state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0;
   for (const k of Object.keys(state.counters)) state.counters[k] = 0;
+}
+
+export function isSpamHidden(id) { return state.hidden.has(id); }
+
+function noteDropped(id) {
+  state.dropped.set(id, 1);
+  trimMap(state.dropped, SEEN_MAX);
+}
+
+function settle(id, drop) {
+  const pend = state.pending.get(id);
+  if (!pend) return;
+  state.pending.delete(id);
+  if (pend.timer) clearTimeout(pend.timer);
+  for (const w of pend.waiters) {
+    try {
+      if (drop) {
+        if (w.released) { state.counters.retracted++; if (typeof w.retract === "function") w.retract(); }
+        else state.counters.dropped++;
+      } else if (!w.released) {
+        w.released = true;
+        if (typeof w.release === "function") w.release();
+      }
+    } catch (_) { }
+  }
+}
+
+function releaseAll(id) {
+  const pend = state.pending.get(id);
+  if (!pend) return;
+  pend.released = true;
+  for (const w of pend.waiters) {
+    if (w.released) continue;
+    w.released = true;
+    try { if (typeof w.release === "function") w.release(); } catch (_) { }
+  }
+}
+
+async function noteStatus(env) {
+  const now = Date.now();
+  if (now - state.statusAt < SETTINGS_REFRESH_MS) return;
+  state.statusAt = now;
+  const db = env && env.DB_NOPE;
+  if (!hasD1(db)) return;
+  try {
+    await ensureSchema(db);
+    await db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .bind(JSON.stringify({
+        at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
+        lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length,
+        counters: Object.assign({}, state.counters)
+      })).run();
+  } catch (_) { }
 }
 
 export function spamCounters() { return Object.assign({}, state.counters); }
@@ -523,6 +604,7 @@ async function enforce(env, job, v, dossier, strikes) {
   const campaign = dossier.similarSpamPubkeys + 1 >= s.campaignCopies || (dossier.similarPubkeys + 1 >= s.campaignCopies && (job.copies || 0) >= 2);
   const muteNow = strikes >= s.strikesToMute || campaign;
   const actions = [];
+  noteDropped(job.id);
   if (s.blockEvents) {
     state.hidden.add(job.id);
     if (state.hidden.size > SEEN_MAX) state.hidden.delete(state.hidden.values().next().value);
@@ -594,11 +676,25 @@ export async function auditNow(env, job) {
   return { verdict: v, action, strikes, score: persisted.score, similar: dossier.similar.length, similarPubkeys: dossier.similarPubkeys };
 }
 
+function verdictDrops(job, res) {
+  const s = job.settings || state.settings;
+  return !!(res && res.verdict && res.verdict.spam && s && s.autoEnforce && res.verdict.confidence >= s.minConfidence);
+}
+
 function pump(env, context) {
   while (state.running < MAX_CONCURRENT && state.queue.length) {
     const job = state.queue.shift();
     state.running++;
-    const work = auditNow(env, job).catch(() => { state.counters.errors++; }).then(() => { state.running--; pump(env, context); });
+    const work = auditNow(env, job).then((res) => {
+      state.lastAuditAt = Date.now();
+      settle(job.id, verdictDrops(job, res));
+    }, (e) => {
+      state.counters.errors++;
+      state.lastError = String(e && e.message || e).slice(0, 300);
+      state.lastErrorAt = Date.now();
+      console.error("[spam] audit failed for " + job.id + ": " + state.lastError);
+      settle(job.id, false);
+    }).then(() => noteStatus(env)).then(() => { state.running--; pump(env, context); });
     if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
   }
 }
@@ -614,32 +710,52 @@ export function spamEngine(env, context) {
       return !!(s && s.enabled);
     },
     settings() { return state.settings; },
+    isHidden(id) { return state.hidden.has(id); },
     inspect(job) {
       const s = state.settings;
-      if (!s || !s.enabled || !job || typeof job.pubkey !== "string" || !job.id) return false;
+      if (!s || !s.enabled || !job || typeof job.pubkey !== "string" || !job.id) return "pass";
       const pubkey = job.pubkey.toLowerCase();
       const now = Date.now();
       state.counters.inspected++;
-      if (isExemptPubkey(s, pubkey)) return false;
-      if (isSpamMuted(pubkey, now)) { state.counters.dropped++; return true; }
-      if (state.hidden.has(job.id)) { state.counters.dropped++; return true; }
-      if (typeof job.content !== "string" || !job.content.trim()) return false;
-      if (!noteSeen(job.id)) return false;
-      if (state.queue.length >= MAX_QUEUE) return false;
+      if (isExemptPubkey(s, pubkey)) return "pass";
+      if (isSpamMuted(pubkey, now)) { state.counters.dropped++; return "drop"; }
+      if (state.dropped.has(job.id) || state.hidden.has(job.id)) { state.counters.dropped++; return "drop"; }
+      if (typeof job.content !== "string" || !job.content.trim()) return "pass";
+      const pend = state.pending.get(job.id);
+      if (pend) {
+        const w = { release: job.release, retract: job.retract, released: false };
+        pend.waiters.push(w);
+        if (pend.released) { w.released = true; try { if (typeof w.release === "function") w.release(); } catch (_) { } }
+        return "hold";
+      }
+      if (!noteSeen(job.id)) return "pass";
+      if (state.queue.length >= MAX_QUEUE) return "pass";
       const fp = fingerprint(job.content);
+      const queued = Object.assign({}, job, { pubkey, fp, seenAt: now, settings: s, source: "pool" });
+      delete queued.release;
+      delete queued.retract;
       if (s.autoEnforce && fp.simKey) {
         const cached = exactVerdict(fp.simKey, now);
         if (cached && cached.spam && cached.confidence >= s.minConfidence) {
-          state.queue.push(Object.assign({}, job, { pubkey, fp, seenAt: now, settings: s, source: "pool" }));
+          noteDropped(job.id);
+          state.queue.push(queued);
           pump(env, context);
           state.counters.dropped++;
-          return true;
+          return "drop";
         }
       }
-      state.queue.push(Object.assign({}, job, { pubkey, fp, seenAt: now, settings: s, source: "pool" }));
+      state.queue.push(queued);
       state.counters.queued++;
+      let verdict = "pass";
+      if (s.autoEnforce && s.holdMs > 0 && typeof job.release === "function") {
+        const entry = { waiters: [{ release: job.release, retract: job.retract, released: false }], released: false, timer: null, at: now };
+        entry.timer = setTimeout(() => { entry.timer = null; state.counters.timedOut++; releaseAll(job.id); }, s.holdMs);
+        state.pending.set(job.id, entry);
+        state.counters.held++;
+        verdict = "hold";
+      }
       pump(env, context);
-      return false;
+      return verdict;
     }
   };
 }
