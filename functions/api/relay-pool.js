@@ -28,7 +28,7 @@ import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
-import { spamEngine } from './_spam.js';
+import { spamEngine, reviewSpamReport } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 
@@ -1693,7 +1693,7 @@ export async function onRequest(context) {
   }
 
   function heldOutbound(ev) {
-    if (ev && ev.kind === 1984) runArchive(noteReport(env, ev, 'pool'));
+    if (ev && ev.kind === 1984) runArchive(noteReport(env, ev, 'pool').then((ok) => (ok ? reviewSpamReport(env, ev) : null)).catch(() => null));
     let mode = sockHeld;
     if (!mode) {
       mode = eventHit(gate, ev);

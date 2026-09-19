@@ -9,6 +9,7 @@
 // One definition for every route; see _client.js.
 import { isNymchatClient } from './_client.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
+import { reviewSpamReport } from './_spam.js';
 
 const APP_RELAY = 'wss://relay.nymchat.app';
 
@@ -96,7 +97,7 @@ export async function onRequest(context) {
     let ev = null;
     try { const arr = JSON.parse(data); ev = Array.isArray(arr) ? arr[1] : null; } catch { return false; }
     if (!ev) return false;
-    if (ev.kind === 1984) context.waitUntil(noteReport(env, ev, 'relay'));
+    if (ev.kind === 1984) context.waitUntil(noteReport(env, ev, 'relay').then((ok) => (ok ? reviewSpamReport(env, ev) : null)).catch(() => null));
     let mode = sockHeld;
     if (!mode) {
       mode = eventHit(gate, ev);

@@ -155,6 +155,10 @@ export function nymStem(key) {
   return key && key.length > NYM_STEM_LEN ? key.slice(0, NYM_STEM_LEN) : "";
 }
 
+const REPORT_REVIEWS_PER_REPORTER_HOUR = 5;
+const REPORT_REVIEW_COOLDOWN_MS = 3600000;
+const REPORT_WINDOW_MS = 86400000;
+const REPORT_USER_MESSAGES = 3;
 const CHATTER_MAX_CHARS = 24;
 const CHATTER_MAX_TOKENS = 3;
 const LINKISH = /https?:\/\/|www\.|\.(com|net|org|io|app|xyz|me|to|ly|gg)(\/|\b)|(nostr:)?(npub|note|nevent|naddr|nprofile)1[a-z0-9]{10,}/i;
@@ -259,6 +263,8 @@ Messages come in any language and script (Turkish, Russian, Ukrainian, Spanish, 
 
 Some senders carry proof of the client they use. An "attested" badge is hardware-backed by Apple App Attest or Google Play Integrity and cannot be minted by a bot farm; "challenged" is a browser that solved a proof-of-work challenge; "origin" is a plain browser; "invalid" is a forged, lifted or expired badge and a bad sign. The #nymchat channel is reachable only through the Nymchat app relay. A badge and posting in #nymchat make a real person much more likely, and you should weigh the message accordingly, but they are context, not an exemption: a badged sender posting an ad, a scam or a persona flood is still spam.
 
+Some audits are re-reviews because another user reported the message or its sender as spam. A report means someone in the room objected; it is unverified and reports can be filed out of spite or as a weapon, so treat it as a slight nudge to look again, never as evidence: a clean message stays ok however many reports it gathers, and a report changes nothing about a message you would already call spam.
+
 Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, local heuristics, the sender's history, similar prior messages with their verdicts, and prior senders whose nyms resemble this one. Repetition across channels, nyms or pubkeys, and prior spam verdicts on similar text, are strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to nyms recently judged spam under other pubkeys can corroborate a verdict when this message reads like that family's spam. It never convicts on its own: real people pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. A rude, crude, sexual or angry message from a human talking to the room is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence.
 
 Respond with ONE JSON object and nothing else, exactly this shape:
@@ -277,6 +283,11 @@ export function buildSpamPrompt(job, dossier) {
   lines.push("pubkey: " + short(job.pubkey));
   lines.push("posted: " + when(job.createdAt || job.seenAt));
   lines.push("content: " + JSON.stringify(clip(job.content, CONTENT_MAX)));
+  if (job.report) {
+    lines.push("");
+    lines.push("USER REPORTS (unverified; a slight nudge, never evidence)");
+    lines.push("this is a re-review: reported as spam by " + (job.report.reporters || 1) + " distinct user" + ((job.report.reporters || 1) === 1 ? "" : "s") + " in the last 24h" + (job.report.onSender ? " (the report named the sender, not this message)" : ""));
+  }
   lines.push("");
   lines.push("SENDER PROOF");
   lines.push("attestation badge: " + (job.badge || "none"));
@@ -460,7 +471,7 @@ const state = {
   lastErrorAt: 0,
   statusAt: 0,
   cooldownUntil: 0,
-  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, errors: 0 }
+  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, errors: 0 }
 };
 
 export function _resetSpamState() {
@@ -725,8 +736,11 @@ async function persist(env, job, v, dossier, action) {
   const score = v.spam ? prevScore + v.confidence : Math.max(0, prevScore - 0.5);
   const strikes = (rec ? Number(rec.strikes) || 0 : 0) + (strong ? 1 : 0);
   const stmts = [
-    db.prepare("INSERT OR IGNORE INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, lang, badge) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    db.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, lang, badge) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" +
+      (job.source === "report"
+        ? " ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = excluded.verdict, confidence = excluded.confidence, category = excluded.category, reason = excluded.reason, model = excluded.model, action = excluded.action, source = excluded.source, lang = excluded.lang, badge = excluded.badge"
+        : " ON CONFLICT(id) DO NOTHING"))
       .bind(job.id, job.pubkey, clip(job.nym, 80) || null, clip(job.channel, 80) || null, job.kind, clip(job.content, 4000), job.fp.simKey,
         job.fp.bands[0], job.fp.bands[1], job.fp.bands[2], job.fp.bands[3], job.createdAt || job.seenAt, job.seenAt,
         v.spam ? "spam" : "ok", v.confidence, v.category || null, v.reason || null, v.model || null, action, job.source || "pool", job.localScore || 0, job.nymKey || null, v.language || null, job.badge && job.badge !== "none" ? job.badge : null),
@@ -871,6 +885,97 @@ function pump(env, context) {
     }).then(() => noteStatus(env)).then(() => { state.running--; pump(env, context); });
     if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
   }
+}
+
+function reportTag(tags, name) {
+  const t = Array.isArray(tags) ? tags.find((x) => Array.isArray(x) && x[0] === name && typeof x[1] === "string") : null;
+  return t || null;
+}
+
+function jobFromArchivedRow(row, extra) {
+  let ev = null;
+  try { ev = JSON.parse(row.json); } catch (_) { return null; }
+  if (!ev || typeof ev.id !== "string" || typeof ev.pubkey !== "string" || typeof ev.content !== "string") return null;
+  const n = reportTag(ev.tags, "n");
+  const badge = reportTag(ev.tags, "nymattest");
+  return Object.assign({
+    id: ev.id.toLowerCase(), kind: ev.kind, pubkey: ev.pubkey.toLowerCase(), content: ev.content,
+    nym: n ? n[1].replace(/#[a-fA-F0-9]{4}$/, "") : "", channel: row.channel || "", createdAt: (Number(ev.created_at) || 0) * 1000,
+    badgeTag: badge ? badge[1] : "", localScore: 0, copies: 0, source: "report", force: true
+  }, extra || {});
+}
+
+export async function reviewSpamReport(env, ev, opts) {
+  const now = (opts && opts.now) || Date.now();
+  if (!ev || ev.kind !== 1984 || typeof ev.pubkey !== "string" || !Array.isArray(ev.tags)) return { skipped: "not a report" };
+  const e = reportTag(ev.tags, "e");
+  const p = reportTag(ev.tags, "p");
+  const type = String((e && e[2]) || (p && p[2]) || "").toLowerCase();
+  if (type !== "spam") return { skipped: "not a spam report" };
+  if (!hasD1(env && env.DB_NOPE) || !hasD1(env && env.DB_CHANNELS) || !hasD1(env && env.DB_REPORT)) return { skipped: "no database" };
+  const settings = await readSpamSettings(env);
+  if (!settings || !settings.enabled) return { skipped: "disabled" };
+  const reporter = ev.pubkey.toLowerCase();
+  const targetEvent = e && HEX64.test(e[1].toLowerCase()) ? e[1].toLowerCase() : null;
+  let targetPubkey = p && HEX64.test(p[1].toLowerCase()) ? p[1].toLowerCase() : null;
+  if (!targetEvent && !targetPubkey) return { skipped: "no target" };
+  if (targetPubkey) {
+    if (targetPubkey === reporter) return { skipped: "self report" };
+    if (isExemptPubkey(settings, targetPubkey)) return { skipped: "exempt" };
+    if (isSpamMuted(targetPubkey, now)) return { skipped: "already muted" };
+  }
+  const reports = replica(env.DB_REPORT);
+  try {
+    const mine = await reports.prepare("SELECT COUNT(*) AS n FROM reports WHERE reporter = ? AND report_type = 'spam' AND received_at > ?")
+      .bind(reporter, now - 3600000).first();
+    if (mine && Number(mine.n) > REPORT_REVIEWS_PER_REPORTER_HOUR) return { skipped: "reporter rate" };
+  } catch (_) { }
+  const channels = replica(env.DB_CHANNELS);
+  let rows = [];
+  try {
+    if (targetEvent) {
+      const row = await channels.prepare("SELECT id, channel, kind, pubkey, json FROM events WHERE id = ? AND kind IN (20000, 23333)").bind(targetEvent).first();
+      if (row) rows = [row];
+    } else {
+      const rs = await channels.prepare("SELECT id, channel, kind, pubkey, json FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND created_at > ? ORDER BY created_at DESC LIMIT ?")
+        .bind(targetPubkey, Math.floor((now - REPORT_WINDOW_MS) / 1000), REPORT_USER_MESSAGES).all();
+      rows = (rs && rs.results) || [];
+    }
+  } catch (_) { rows = []; }
+  if (!rows.length) return { skipped: "nothing archived" };
+  if (!targetPubkey && typeof rows[0].pubkey === "string") targetPubkey = rows[0].pubkey.toLowerCase();
+  if (targetPubkey === reporter) return { skipped: "self report" };
+  if (isExemptPubkey(settings, targetPubkey)) return { skipped: "exempt" };
+  if (isSpamMuted(targetPubkey, now)) return { skipped: "already muted" };
+  let reporters = 1;
+  try {
+    const groupKey = targetEvent ? "e:" + targetEvent : "p:" + targetPubkey;
+    const r = await reports.prepare("SELECT COUNT(DISTINCT reporter) AS n FROM reports WHERE group_key = ? AND report_type = 'spam' AND received_at > ?")
+      .bind(groupKey, now - REPORT_WINDOW_MS).first();
+    reporters = Math.max(1, Number(r && r.n) || 0);
+  } catch (_) { }
+  const nope = replica(env.DB_NOPE);
+  const results = [];
+  for (const row of rows) {
+    let prior = null;
+    try { prior = await nope.prepare("SELECT verdict, source, seen_at FROM spam_events WHERE id = ?").bind(row.id).first(); } catch (_) { prior = null; }
+    if (prior && prior.verdict === "spam") { results.push({ id: row.id, skipped: "already judged spam" }); continue; }
+    if (prior && prior.source === "report" && now - Number(prior.seen_at) < REPORT_REVIEW_COOLDOWN_MS) { results.push({ id: row.id, skipped: "reviewed recently" }); continue; }
+    const job = jobFromArchivedRow(row, { seenAt: now, settings, report: { reporters, onSender: !targetEvent } });
+    if (!job) { results.push({ id: row.id, skipped: "unreadable" }); continue; }
+    if (isExemptPubkey(settings, job.pubkey)) { results.push({ id: row.id, skipped: "exempt" }); continue; }
+    try {
+      const res = await auditNow(env, job);
+      state.counters.reportReviews++;
+      results.push({ id: row.id, verdict: res.verdict, action: res.action });
+    } catch (err) {
+      state.counters.errors++;
+      state.lastError = String(err && err.message || err).slice(0, 300);
+      state.lastErrorAt = Date.now();
+      results.push({ id: row.id, error: state.lastError });
+    }
+  }
+  return { reporter, targetPubkey, targetEvent, reporters, results };
 }
 
 export function spamEngine(env, context) {
