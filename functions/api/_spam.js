@@ -424,10 +424,11 @@ function rememberExact(simKey, v, now) {
   trimMap(state.exact, EXACT_CACHE_MAX);
 }
 
-function isCandidate(job, settings) {
+function isCandidate(job, settings, dossier) {
   if (settings.auditScope === "all") return true;
   if ((job.localScore || 0) >= 1) return true;
   if ((job.copies || 0) >= 2) return true;
+  if (dossier && dossier.similarSpam > 0) return true;
   if (job.fp.simKey && state.exact.has(job.fp.simKey)) return true;
   if (job.nym && /^[A-Za-z0-9]{8,}$/.test(job.nym) && /[a-z][A-Z]/.test(job.nym)) return true;
   return job.pubkeyUnknown;
@@ -572,7 +573,7 @@ export async function auditNow(env, job) {
     v = { spam: true, confidence: Number(dossier.exact.confidence) || 0, category: "repeat", model: "cross-ref", reason: "identical text from " + short(dossier.exact.pubkey) + " was judged spam at " + when(dossier.exact.seen_at) };
     state.counters.cached++;
   } else {
-    if (!job.force && !isCandidate(job, settings)) return { skipped: "not a candidate" };
+    if (!job.force && !isCandidate(job, settings, dossier)) return { skipped: "not a candidate" };
     if (!job.force && !budgetOk(settings)) { state.counters.skippedBudget++; return { skipped: "budget" }; }
     const prompt = buildSpamPrompt(job, dossier);
     v = await askSpamModel(env, settings, prompt);
