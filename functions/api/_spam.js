@@ -253,6 +253,7 @@ export function parseSpamVerdict(text) {
     category: String(obj.category || (spam ? "spam" : "ok")).slice(0, 40).toLowerCase(),
     language: String(obj.language || obj.lang || "").trim().slice(0, 16).toLowerCase(),
     messageAlone: typeof obj.message_alone === "boolean" ? obj.message_alone : (typeof obj.messageAlone === "boolean" ? obj.messageAlone : null),
+    hostile: typeof obj.hostile === "boolean" ? obj.hostile : null,
     reason: String(obj.reason || obj.summary || "").slice(0, 400)
   };
 }
@@ -265,11 +266,12 @@ Some senders carry proof of the client they use. An "attested" badge is hardware
 
 Some audits are re-reviews because another user reported the message or its sender as spam. A report means someone in the room objected; it is unverified and reports can be filed out of spite or as a weapon, so treat it as a slight nudge to look again, never as evidence: a clean message stays ok however many reports it gathers, and a report changes nothing about a message you would already call spam.
 
-Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, local heuristics, the sender's history, similar prior messages with their verdicts, and prior senders whose nyms resemble this one. Repetition across channels, nyms or pubkeys, and prior spam verdicts on similar text, are strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to nyms recently judged spam under other pubkeys can corroborate a verdict when this message reads like that family's spam. It never convicts on its own: real people pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. A rude, crude, sexual or angry message from a human talking to the room is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence.
+Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, local heuristics, the sender's history, similar prior messages with their verdicts, and prior senders whose nyms resemble this one. Repetition across channels, nyms or pubkeys, and prior spam verdicts on similar text, are strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to nyms recently judged spam under other pubkeys can corroborate a verdict when this message reads like that family's spam. It never convicts on its own: real people pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. The persona bots have a signature: insults, threats, slurs and profane abuse aimed at the room or at "you" rather than at anyone in a conversation. That hostility together with any other signal (a nym family, similar prior spam, near-copies, prior strikes, a cross-channel spread) IS spam and should be muted. A rude, crude, sexual or angry message from a human talking to the room, with no other signal, is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence.
 
 Respond with ONE JSON object and nothing else, exactly this shape:
-{"spam": true|false, "confidence": 0.0-1.0, "message_alone": true|false, "language": "<ISO 639-1 code of the message, or unknown>", "category": "<one of: bot-flood, gibberish, ad, scam, link-spam, persona-bot, repeat, other, ok>", "reason": "<one sentence>"}
-message_alone answers: would this message text be spam from a brand-new nym with no history, no similar prior messages and no similar nyms?`;
+{"spam": true|false, "confidence": 0.0-1.0, "message_alone": true|false, "hostile": true|false, "language": "<ISO 639-1 code of the message, or unknown>", "category": "<one of: bot-flood, gibberish, ad, scam, link-spam, persona-bot, repeat, other, ok>", "reason": "<one sentence>"}
+message_alone answers: would this message text be spam from a brand-new nym with no history, no similar prior messages and no similar nyms?
+hostile answers: is the message an insult, threat, slur or profane abuse aimed at the room or at people, rather than part of a conversation?`;
 
 function short(pk) { return pk ? pk.slice(0, 8) + "…" + pk.slice(-4) : "?"; }
 function when(ms) { return ms ? new Date(ms).toISOString().replace(/\.\d+Z$/, "Z") : "?"; }
@@ -807,6 +809,7 @@ async function enforce(env, job, v, dossier, strikes) {
 
 export function nymIsOnlyEvidence(job, dossier, v) {
   if (!v || !v.spam || v.messageAlone !== false) return false;
+  if (v.hostile === true) return false;
   if (!dossier || !(dossier.nymSpam > 0)) return false;
   if (dossier.similarSpam > 0) return false;
   if ((job.copies || 0) >= 2 || (job.localScore || 0) > 0) return false;
