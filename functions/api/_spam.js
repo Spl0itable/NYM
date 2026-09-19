@@ -471,7 +471,7 @@ const state = {
   lastErrorAt: 0,
   statusAt: 0,
   cooldownUntil: 0,
-  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, errors: 0 }
+  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0 }
 };
 
 export function _resetSpamState() {
@@ -735,24 +735,32 @@ async function persist(env, job, v, dossier, action) {
   const prevScore = rec ? Number(rec.score) || 0 : 0;
   const score = v.spam ? prevScore + v.confidence : Math.max(0, prevScore - 0.5);
   const strikes = (rec ? Number(rec.strikes) || 0 : 0) + (strong ? 1 : 0);
-  const stmts = [
-    db.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, lang, badge) " +
+  const insert = db.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, lang, badge) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" +
       (job.source === "report"
         ? " ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = excluded.verdict, confidence = excluded.confidence, category = excluded.category, reason = excluded.reason, model = excluded.model, action = excluded.action, source = excluded.source, lang = excluded.lang, badge = excluded.badge"
         : " ON CONFLICT(id) DO NOTHING"))
       .bind(job.id, job.pubkey, clip(job.nym, 80) || null, clip(job.channel, 80) || null, job.kind, clip(job.content, 4000), job.fp.simKey,
         job.fp.bands[0], job.fp.bands[1], job.fp.bands[2], job.fp.bands[3], job.createdAt || job.seenAt, job.seenAt,
-        v.spam ? "spam" : "ok", v.confidence, v.category || null, v.reason || null, v.model || null, action, job.source || "pool", job.localScore || 0, job.nymKey || null, v.language || null, job.badge && job.badge !== "none" ? job.badge : null),
-    db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) " +
+        v.spam ? "spam" : "ok", v.confidence, v.category || null, v.reason || null, v.model || null, action, job.source || "pool", job.localScore || 0, job.nymKey || null, v.language || null, job.badge && job.badge !== "none" ? job.badge : null);
+  const res = await insert.run();
+  const changes = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 1;
+  if (changes === 0 && job.source !== "report" && !job.force) return { lost: true, strikes: 0, score: prevScore };
+  await db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT(pubkey) DO UPDATE SET last_seen = excluded.last_seen, audits = audits + 1, spam = spam + excluded.spam, ham = ham + excluded.ham, " +
       "strikes = ?, score = ?, channels = ?, nyms = ?, last_reason = excluded.last_reason")
       .bind(job.pubkey, job.seenAt, job.seenAt, spam, 1 - spam, strikes, score,
         mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym), v.spam ? clip(v.reason, 300) : (rec && rec.last_reason) || null,
-        strikes, score, mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym))
-  ];
-  await db.batch(stmts);
+        strikes, score, mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym)).run();
   return { strikes, score };
+}
+
+function adoptPeer(row, job) {
+  const v = { spam: row.verdict === "spam", confidence: Number(row.confidence) || 0, category: row.category || (row.verdict === "spam" ? "spam" : "ok"), language: row.lang || "", reason: row.reason || "", model: "peer" };
+  const action = row.action || (v.spam ? "flagged" : "ok");
+  if (/event-hidden/.test(action)) { noteDropped(job.id); state.hidden.add(job.id); }
+  state.counters.cached++;
+  return { verdict: v, action, strikes: 0, score: 0, similar: 0, similarPubkeys: 0, similarNyms: 0, nymSpam: 0, peer: true };
 }
 
 async function enforce(env, job, v, dossier, strikes) {
@@ -761,7 +769,8 @@ async function enforce(env, job, v, dossier, strikes) {
   const now = job.seenAt;
   const nymFamily = dossier.nymSpamPubkeys + 1 >= s.campaignCopies;
   const campaign = dossier.similarSpamPubkeys + 1 >= s.campaignCopies || (dossier.similarPubkeys + 1 >= s.campaignCopies && (job.copies || 0) >= 2) || nymFamily;
-  const muteNow = strikes >= s.strikesToMute || campaign;
+  const shortFloor = !!innocuousKind(job.content) && strikes < 2;
+  const muteNow = (strikes >= s.strikesToMute && !shortFloor) || campaign;
   const actions = [];
   noteDropped(job.id);
   if (s.blockEvents) {
@@ -814,14 +823,7 @@ export async function auditNow(env, job) {
   if (!job.fp) job.fp = fingerprint(job.content);
   if (job.nymKey == null) job.nymKey = nymKey(job.nym);
   const dossier = await loadDossier(env, job, settings);
-  if (dossier.self) {
-    const row = dossier.self;
-    const v = { spam: row.verdict === "spam", confidence: Number(row.confidence) || 0, category: row.category || (row.verdict === "spam" ? "spam" : "ok"), language: row.lang || "", reason: row.reason || "", model: "peer" };
-    const action = row.action || (v.spam ? "flagged" : "ok");
-    if (/event-hidden/.test(action)) { noteDropped(job.id); state.hidden.add(job.id); }
-    state.counters.cached++;
-    return { verdict: v, action, strikes: 0, score: 0, similar: 0, similarPubkeys: 0, similarNyms: 0, nymSpam: 0, peer: true };
-  }
+  if (dossier.self) return adoptPeer(dossier.self, job);
   if (!dossier.recent.length) dossier.recent = await recentArchive(env, job);
   job.pubkeyUnknown = !dossier.record;
   if (job.badge == null) job.badge = badgeTier(env, job, now);
@@ -854,6 +856,13 @@ export async function auditNow(env, job) {
   let action = v.spam ? (strong ? "flagged" : "suspect") : "ok";
   let strikes = 0;
   const persisted = await persist(env, job, v, dossier, action);
+  if (persisted.lost) {
+    state.counters.raced++;
+    let row = null;
+    try { row = await env.DB_NOPE.prepare("SELECT verdict, confidence, category, reason, model, action, lang FROM spam_events WHERE id = ?").bind(job.id).first(); } catch (_) { row = null; }
+    if (row) return adoptPeer(row, job);
+    return { verdict: v, action: "ok", strikes: 0, score: 0, similar: 0, similarPubkeys: 0, similarNyms: 0, nymSpam: 0, peer: true };
+  }
   strikes = persisted.strikes;
   let actions = [];
   if (strong && settings.autoEnforce) {
