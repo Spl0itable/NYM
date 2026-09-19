@@ -40,6 +40,8 @@ const SEEN_MAX = 20000;
 const MUTED_MAX = 5000;
 const MAX_CONCURRENT = 2;
 const MAX_QUEUE = 200;
+let RATE_LIMIT_COOLDOWN_MS = 20000;
+export function _setRateLimitCooldownMs(ms) { RATE_LIMIT_COOLDOWN_MS = ms; }
 const CONTENT_MAX = 1200;
 const LIST_CAP = 12;
 
@@ -287,7 +289,7 @@ function transportMessages(t, messages) {
 async function callTransport(env, t, rawMessages) {
   const messages = transportMessages(t, rawMessages);
   if (t.kind === "bound") {
-    const opts = env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
+    const opts = String(env.SPAM_VIA_GATEWAY || "") === "1" && env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
     const body = { messages, max_tokens: 300, temperature: 0 };
     const res = opts ? await env.AI.run(t.model, body, opts) : await env.AI.run(t.model, body);
     return messageText(res);
@@ -304,6 +306,11 @@ async function callTransport(env, t, rawMessages) {
   return messageText(data);
 }
 
+export function isRateLimitError(e) {
+  const m = String(e && e.message || e || "");
+  return /\b429\b|rate.?limit|"code":\s*2003|too many requests/i.test(m);
+}
+
 export async function askSpamModel(env, settings, prompt) {
   const transports = spamTransports(env, settings.model);
   if (!transports.length) throw new Error("no AI transport configured");
@@ -316,7 +323,14 @@ export async function askSpamModel(env, settings, prompt) {
       if (!v) throw new Error("unparseable verdict: " + String(text).slice(0, 120));
       v.model = t.model;
       return v;
-    } catch (e) { lastErr = e; }
+    } catch (e) {
+      lastErr = e;
+      if (isRateLimitError(e)) break;
+    }
+  }
+  if (isRateLimitError(lastErr)) {
+    state.cooldownUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+    state.counters.rateLimited++;
   }
   throw lastErr || new Error("model failed");
 }
@@ -349,7 +363,8 @@ const state = {
   lastError: null,
   lastErrorAt: 0,
   statusAt: 0,
-  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, errors: 0 }
+  cooldownUntil: 0,
+  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, errors: 0 }
 };
 
 export function _resetSpamState() {
@@ -358,8 +373,12 @@ export function _resetSpamState() {
   for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
   state.pending.clear();
   state.queue = []; state.running = 0; state.budgetMinute = 0; state.budgetUsed = 0;
-  state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0;
+  state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0; state.cooldownUntil = 0;
   for (const k of Object.keys(state.counters)) state.counters[k] = 0;
+}
+
+export function isCoolingDown(now) {
+  return (now || Date.now()) < state.cooldownUntil;
 }
 
 export function isSpamHidden(id) { return state.hidden.has(id); }
@@ -410,6 +429,7 @@ async function noteStatus(env) {
       .bind(JSON.stringify({
         at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
         lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length,
+        cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
         counters: Object.assign({}, state.counters)
       })).run();
   } catch (_) { }
@@ -657,6 +677,7 @@ export async function auditNow(env, job) {
   } else {
     if (!job.force && !isCandidate(job, settings, dossier)) return { skipped: "not a candidate" };
     if (!job.force && !budgetOk(settings)) { state.counters.skippedBudget++; return { skipped: "budget" }; }
+    if (!job.force && isCoolingDown(now)) { state.counters.skippedCooldown++; return { skipped: "cooldown" }; }
     const prompt = buildSpamPrompt(job, dossier);
     v = await askSpamModel(env, settings, prompt);
     state.counters.audited++;
@@ -721,6 +742,7 @@ export function spamEngine(env, context) {
       if (isSpamMuted(pubkey, now)) { state.counters.dropped++; return "drop"; }
       if (state.dropped.has(job.id) || state.hidden.has(job.id)) { state.counters.dropped++; return "drop"; }
       if (typeof job.content !== "string" || !job.content.trim()) return "pass";
+      if (isCoolingDown(now)) { state.counters.skippedCooldown++; return "pass"; }
       const pend = state.pending.get(job.id);
       if (pend) {
         const w = { release: job.release, retract: job.retract, released: false };
