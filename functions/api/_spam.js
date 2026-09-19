@@ -201,6 +201,7 @@ export function parseSpamVerdict(text) {
     confidence: Math.max(0, Math.min(1, Number(obj.confidence) || 0)),
     category: String(obj.category || (spam ? "spam" : "ok")).slice(0, 40).toLowerCase(),
     language: String(obj.language || obj.lang || "").trim().slice(0, 16).toLowerCase(),
+    messageAlone: typeof obj.message_alone === "boolean" ? obj.message_alone : (typeof obj.messageAlone === "boolean" ? obj.messageAlone : null),
     reason: String(obj.reason || obj.summary || "").slice(0, 400)
   };
 }
@@ -209,10 +210,11 @@ export const SPAM_SYSTEM_PROMPT = `You are the spam filter for Nymchat, an ephem
 
 Messages come in any language and script (Turkish, Russian, Ukrainian, Spanish, Portuguese, German, Arabic, Persian, Hindi, Indonesian, Chinese, Japanese and more), often colloquial, misspelled, slang, dialect or a regional spelling ("geliyom", "toletini temizle", "q tal", "wsg"). First work out which language the message is in. "gibberish" means random characters, keyboard mashing or token soup with no reading in ANY language; a word or phrase you do not recognise is far more likely a real language you know less well than gibberish, so never use the gibberish category unless you are sure the text has no meaning anywhere. A message of one or two ordinary words is chatter whatever the language, and a sender whose earlier messages were judged ok has a good record, not a bad one.
 
-Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, local heuristics, the sender's history, similar prior messages with their verdicts, and prior senders whose nyms resemble this one. Repetition across channels, nyms or pubkeys, and prior spam verdicts on similar text, are strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to nyms recently judged spam under other pubkeys, combined with the same style of message, is strong evidence too; a common name alone is not. A rude, crude, sexual or angry message from a human talking to the room is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence.
+Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, local heuristics, the sender's history, similar prior messages with their verdicts, and prior senders whose nyms resemble this one. Repetition across channels, nyms or pubkeys, and prior spam verdicts on similar text, are strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to nyms recently judged spam under other pubkeys can corroborate a verdict when this message reads like that family's spam. It never convicts on its own: real people pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. A rude, crude, sexual or angry message from a human talking to the room is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence.
 
 Respond with ONE JSON object and nothing else, exactly this shape:
-{"spam": true|false, "confidence": 0.0-1.0, "language": "<ISO 639-1 code of the message, or unknown>", "category": "<one of: bot-flood, gibberish, ad, scam, link-spam, persona-bot, repeat, other, ok>", "reason": "<one sentence>"}`;
+{"spam": true|false, "confidence": 0.0-1.0, "message_alone": true|false, "language": "<ISO 639-1 code of the message, or unknown>", "category": "<one of: bot-flood, gibberish, ad, scam, link-spam, persona-bot, repeat, other, ok>", "reason": "<one sentence>"}
+message_alone answers: would this message text be spam from a brand-new nym with no history, no similar prior messages and no similar nyms?`;
 
 function short(pk) { return pk ? pk.slice(0, 8) + "…" + pk.slice(-4) : "?"; }
 function when(ms) { return ms ? new Date(ms).toISOString().replace(/\.\d+Z$/, "Z") : "?"; }
@@ -256,7 +258,7 @@ export function buildSpamPrompt(job, dossier) {
     }
   }
   lines.push("");
-  lines.push("OTHER SENDERS WITH A SIMILAR NYM (last 48h)");
+  lines.push("OTHER SENDERS WITH A SIMILAR NYM (last 48h; a shared or similar nym is never spam by itself)");
   const nyms = dossier.nymMatches || [];
   if (!job.nymKey) lines.push("n/a (generic or empty nym)");
   else if (!nyms.length) lines.push("none");
@@ -405,7 +407,7 @@ const state = {
   lastErrorAt: 0,
   statusAt: 0,
   cooldownUntil: 0,
-  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, errors: 0 }
+  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, errors: 0 }
 };
 
 export function _resetSpamState() {
@@ -727,6 +729,16 @@ async function enforce(env, job, v, dossier, strikes) {
   return actions;
 }
 
+export function nymIsOnlyEvidence(job, dossier, v) {
+  if (!v || !v.spam || v.messageAlone !== false) return false;
+  if (!dossier || !(dossier.nymSpam > 0)) return false;
+  if (dossier.similarSpam > 0) return false;
+  if ((job.copies || 0) >= 2 || (job.localScore || 0) > 0) return false;
+  const rec = dossier.record;
+  if (rec && (Number(rec.spam) > 0 || Number(rec.strikes) > 0)) return false;
+  return true;
+}
+
 export async function auditNow(env, job) {
   const settings = job.settings || state.settings || defaultSpamSettings(env);
   job.settings = settings;
@@ -760,6 +772,10 @@ export async function auditNow(env, job) {
     const prompt = buildSpamPrompt(job, dossier);
     v = await askSpamModel(env, settings, prompt);
     state.counters.audited++;
+    if (nymIsOnlyEvidence(job, dossier, v)) {
+      v = Object.assign({}, v, { spam: false, category: "ok", confidence: Math.min(v.confidence, 0.5), reason: "let through: the message is not spam on its own and only the nym resembles prior spam (model: " + clip(v.reason, 200) + ")" });
+      state.counters.nymOnly++;
+    }
     rememberExact(job.fp, v, now);
   }
   const strong = v.spam && v.confidence >= settings.minConfidence;
