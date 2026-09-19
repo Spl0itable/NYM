@@ -3863,6 +3863,41 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     box-shadow: 0 0 0 2px rgb(from var(--primary) r g b / 0.4);
 }
 
+.relay-stats-mode {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    margin: 0 4px 12px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+}
+
+.relay-stats-mode-label {
+    font-family: var(--font-sans);
+    font-size: 9px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.relay-stats-mode-value {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.relay-stats-mode-hint {
+    flex-basis: 100%;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.35;
+}
+
 .relay-stats-cards {
     display: grid;
     grid-template-columns: repeat(5, 1fr);

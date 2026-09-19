@@ -4398,7 +4398,7 @@ Object.assign(NYM.prototype, {
             if (this.useRelayProxy) {
                 const count = this.poolConnectedRelays.length;
                 if (this._isAnyPoolOpen() && count > 0) {
-                    statusEl.textContent = `Connected (${count} relays)`;
+                    statusEl.textContent = `Proxy Connected (${count} relays)`;
                     dot.style.background = 'var(--primary)';
                     this.connected = true;
                 } else {
@@ -4419,7 +4419,7 @@ Object.assign(NYM.prototype, {
             });
 
             if (actuallyConnected > 0) {
-                statusEl.textContent = `Connected (${actuallyConnected} relays)`;
+                statusEl.textContent = `Direct Connected (${actuallyConnected} relays)`;
                 dot.style.background = 'var(--primary)';
                 this.connected = true;
             } else {

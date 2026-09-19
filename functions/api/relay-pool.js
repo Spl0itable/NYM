@@ -27,6 +27,7 @@ import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
+import { spamEngine } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 
@@ -73,6 +74,7 @@ export async function onRequest(context) {
   }
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
   let gate = await filterSet(env);
+  const spam = spamEngine(env, context);
   let sockHeld = null;
 
   const { 0: client, 1: server } = new WebSocketPair();
@@ -952,25 +954,29 @@ export async function onRequest(context) {
   }
 
   // Drop gibberish channel events before they reach the client
-  function isSpamContent(content) {
-    if (typeof content !== 'string') return false;
+  function contentSpamScore(content) {
+    if (typeof content !== 'string') return 0;
     const trimmed = content.trim();
-    if (trimmed.includes('["client","chorus"]')) return true;
-    if (trimmed.length < 6) return false;
-    if (trimmed.includes('://') || trimmed.startsWith('www.')) return false;
-    if (/^ln(bc|tb|ts)/i.test(trimmed)) return false;
-    if (/^cashu/i.test(trimmed)) return false;
-    if (/^(npub|nsec|note|nevent|naddr|nprofile)1[a-z0-9]+$/i.test(trimmed)) return false;
-    if (/^[0-9a-fA-F]{64}$/.test(trimmed)) return false;
-    if (trimmed.includes('```') || trimmed.includes('`')) return false;
-    if (trimmed.startsWith('data:image')) return false;
+    if (trimmed.includes('["client","chorus"]')) return 99;
+    if (trimmed.length < 6) return 0;
+    if (trimmed.includes('://') || trimmed.startsWith('www.')) return 0;
+    if (/^ln(bc|tb|ts)/i.test(trimmed)) return 0;
+    if (/^cashu/i.test(trimmed)) return 0;
+    if (/^(npub|nsec|note|nevent|naddr|nprofile)1[a-z0-9]+$/i.test(trimmed)) return 0;
+    if (/^[0-9a-fA-F]{64}$/.test(trimmed)) return 0;
+    if (trimmed.includes('```') || trimmed.includes('`')) return 0;
+    if (trimmed.startsWith('data:image')) return 0;
     const scrubbed = trimmed
       .split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
       .replace(/@\S+/g, ' ')
       .replace(/(nostr:)?(npub|nsec|note|nevent|naddr|nprofile)1[a-z0-9]+/gi, ' ')
       .replace(/\b[0-9a-fA-F]{64}\b/g, ' ')
       .trim();
-    return spamScore(scrubbed) >= 3;
+    return spamScore(scrubbed);
+  }
+
+  function isSpamContent(content) {
+    return contentSpamScore(content) >= 3;
   }
 
   function isSpamNym(nym) {
@@ -1112,7 +1118,7 @@ export async function onRequest(context) {
   function checkCampaign(content, pubkey, createdAtMs, now) {
     const tokens = campaignTokens(content);
     const text = tokens.join(' ');
-    if (text.length < CAMPAIGN_MIN_LENGTH) return { flood: false, mute: false };
+    if (text.length < CAMPAIGN_MIN_LENGTH) return { flood: false, mute: false, copies: 0 };
     const t = now;
     const created = createdAtMs > 0 ? createdAtMs : t;
     const key = hashContent(text);
@@ -1142,7 +1148,7 @@ export async function onRequest(context) {
     }
     const flood = copies > CAMPAIGN_ALLOWANCE;
     const mute = !!pubkey && mine >= CAMPAIGN_SENDER_REPEAT;
-    return { flood, mute };
+    return { flood, mute, copies };
   }
 
   function isAutoMuted(pubkey, now) {
@@ -1176,15 +1182,23 @@ export async function onRequest(context) {
     return RX_GLUB_CLIENT.test(tags) || RX_GLUB_TAG.test(tags);
   }
 
+  let lastSignals = null;
+
   function isSpamEventFrame(raw) {
+    lastSignals = null;
     const kind = extractEventKind(raw);
     if (kind !== 20000 && kind !== 23333) return false;
     const content = extractEventStringField(raw, 'content');
     const pubkey = extractEventStringField(raw, 'pubkey');
     const now = Date.now();
+    const signals = { pubkey, content, score: 0, copies: 0 };
+    lastSignals = signals;
     if (pubkey && isAutoMuted(pubkey, now)) return true;
     if (kind === 20000) {
-      if (content && isSpamContent(content)) return true;
+      if (content) {
+        signals.score = contentSpamScore(content);
+        if (signals.score >= 3) return true;
+      }
       const nymTag = extractTagValue(raw, 'n');
       if (nymTag) {
         const cleanNym = nymTag.replace(/#[a-fA-F0-9]{4}$/, '');
@@ -1194,13 +1208,34 @@ export async function onRequest(context) {
         if (isContentFlooding(pubkey, now)) return true;
         trackContentFlood(pubkey, content, now);
       }
+    } else if (content) {
+      signals.score = contentSpamScore(content);
     }
     if (pubkey && content) {
       const verdict = checkCampaign(content, pubkey, extractCreatedAtMs(raw), now);
+      signals.copies = verdict.copies;
       if (verdict.mute) autoMuted.set(pubkey, now + AUTO_MUTE_MS);
       if (verdict.flood || verdict.mute) return true;
     }
     return false;
+  }
+
+  function spamEngineDrops(raw, eventId, kind) {
+    if ((kind !== 20000 && kind !== 23333) || !eventId || !spam.active()) return false;
+    const sig = lastSignals || { pubkey: extractEventStringField(raw, 'pubkey'), content: extractEventStringField(raw, 'content'), score: 0, copies: 0 };
+    if (!sig.pubkey || !sig.content) return false;
+    const nymTag = extractTagValue(raw, 'n');
+    return spam.inspect({
+      id: eventId,
+      kind,
+      pubkey: sig.pubkey,
+      content: sig.content,
+      nym: nymTag ? nymTag.replace(/#[a-fA-F0-9]{4}$/, '') : '',
+      channel: sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind)),
+      createdAt: extractCreatedAtMs(raw),
+      localScore: sig.score,
+      copies: sig.copies
+    });
   }
 
   // Enqueue a connection, capping concurrent establishment to MAX_CONCURRENT_CONNECTS.
@@ -1433,6 +1468,10 @@ export async function onRequest(context) {
             return;
           }
           const evKind = extractEventKind(raw);
+          if (spamEngineDrops(raw, eventId, evKind)) {
+            droppedSpamCount++;
+            return;
+          }
           // Drop settings wraps off the relay stream (loaded from D1).
           if (evKind === 1059) {
             const kTag = extractTagValue(raw, 'k');

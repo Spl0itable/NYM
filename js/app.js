@@ -8306,6 +8306,28 @@ function renderRelayStats() {
     });
     const avgLat = latCount > 0 ? Math.round(latSum / latCount) : null;
 
+    const modeEl = document.getElementById('rsConnectionModeValue');
+    const modeHint = document.getElementById('rsConnectionModeHint');
+    const proxyMode = !!(nym.useRelayProxy && nym._isAnyPoolOpen());
+    if (modeEl) {
+        let modeText;
+        let hint;
+        if (proxyMode) {
+            modeText = 'Proxy';
+            hint = 'Relay pool proxy: one multiplexed connection, relays only see the proxy, spam filtering applies.';
+        } else if (connected > 0 || !nym.useRelayProxy) {
+            modeText = 'Direct';
+            hint = nym._poolFallbackActive
+                ? 'Direct relay connections: the proxy was unreachable, so the app talks to relays itself and will switch back when it recovers.'
+                : 'Direct relay connections: the app talks to each relay itself.';
+        } else {
+            modeText = 'Connecting...';
+            hint = '';
+        }
+        if (modeEl.textContent !== modeText) modeEl.textContent = modeText;
+        if (modeHint && modeHint.textContent !== hint) modeHint.textContent = hint;
+    }
+
     // Update summary cards
     const elConn = document.getElementById('rsConnected');
     const elLat = document.getElementById('rsLatency');
