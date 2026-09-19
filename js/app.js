@@ -4709,11 +4709,9 @@ function runBuildVerification() {
     const commitEl = document.getElementById('aboutBuildCommit');
     const hashEl = document.getElementById('aboutBuildHash');
     const provEl = document.getElementById('aboutBuildProvenance');
-    const edgeEl = document.getElementById('aboutBuildEdge');
 
     statusEl.textContent = 'Verifying…';
     statusEl.className = 'about-build-status checking';
-    if (edgeEl) edgeEl.textContent = '';
 
     window.verifyRunningBuild().then((r) => {
         const shortCommit = (r.commit || '').slice(0, 7);
@@ -4728,11 +4726,6 @@ function runBuildVerification() {
         if (hashEl) {
             hashEl.textContent = shortHash ? '#' + shortHash : '';
             hashEl.title = r.bundleHash || '';
-        }
-        if (edgeEl && r.edgeInjected > 0) {
-            edgeEl.textContent = r.edgeInjected === 1
-                ? '1 Cloudflare edge script excluded'
-                : r.edgeInjected + ' Cloudflare edge scripts excluded';
         }
 
         if (r.ok && r.officialHost) {

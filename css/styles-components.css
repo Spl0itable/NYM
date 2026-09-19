@@ -466,10 +466,6 @@ html.nym-needs-setup #setupModal {
     font-family: monospace;
 }
 
-.about-build-edge {
-    color: var(--text-dim);
-}
-
 .about-build-links {
     display: flex;
     flex-wrap: wrap;

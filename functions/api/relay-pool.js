@@ -68,18 +68,8 @@ export async function onRequest(context) {
   }
 
   const clientIsNymchat = isNymchatClient(request, env);
-  function clientIdentity(req) {
-    const out = {};
-    const ip = req.headers.get('CF-Connecting-IP') || '';
-    if (ip) out.nymchat_client_ip = ip.slice(0, 64);
-    const cc = (req.cf && req.cf.country) || req.headers.get('CF-IPCountry') || '';
-    if (cc) out.nymchat_client_cc = String(cc).slice(0, 8);
-    const ua = req.headers.get('User-Agent') || '';
-    if (ua) out.nymchat_client_ua = ua.slice(0, 200);
-    const origin = req.headers.get('Origin') || '';
-    if (origin) out.nymchat_client_origin = origin.slice(0, 120);
-    try { out.nymchat_proxy_host = new URL(req.url).hostname.toLowerCase().slice(0, 120); } catch {}
-    return out;
+  function proxyHost(req) {
+    try { return new URL(req.url).hostname.toLowerCase().slice(0, 120); } catch { return ''; }
   }
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
   let gate = await filterSet(env);
@@ -1366,7 +1356,8 @@ export async function onRequest(context) {
       if (relayUrl === APP_RELAY && clientIsNymchat && proxySecret) {
         const u = new URL(relayUrl);
         u.searchParams.set('nymchat_proxy', proxySecret);
-        for (const [k, v] of Object.entries(clientIdentity(request))) u.searchParams.set(k, v);
+        const host = proxyHost(request);
+        if (host) u.searchParams.set('nymchat_proxy_host', host);
         upstreamUrl = u.toString();
       }
       const ws = new WebSocket(upstreamUrl);
@@ -1674,8 +1665,7 @@ export async function onRequest(context) {
     const verified = tag ? verifyBadge(tag[1], ev.pubkey, poolBadgeAuthority, Date.now()) : null;
     if (verified) return false;
     const why = tag ? 'invalid badge' : 'no badge';
-    const who = clientIdentity(request);
-    console.log(`Pool ${poolBadgeMode === 'enforce' ? 'refused' : 'would refuse'} event ${ev.id || '-'} (${why}) kind=${ev.kind} pubkey=${ev.pubkey || '-'} ip=${who.nymchat_client_ip || '-'} ua="${who.nymchat_client_ua || '-'}" origin=${who.nymchat_client_origin || '-'}`);
+    console.log(`Pool ${poolBadgeMode === 'enforce' ? 'refused' : 'would refuse'} event ${ev.id || '-'} (${why}) kind=${ev.kind} pubkey=${ev.pubkey || '-'}`);
     if (poolBadgeMode !== 'enforce') return false;
     if (typeof ev.id === 'string') {
       sendToClient(JSON.stringify(['OK', ev.id, false, `restricted: attestation badge required (${why})`]));
