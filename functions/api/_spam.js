@@ -677,6 +677,38 @@ async function noteStatus(env) {
 
 export function spamCounters() { return Object.assign({}, state.counters); }
 
+const HIDDEN_LOOKUP_CHUNK = 80;
+const HIDDEN_SINCE_MAX = 5000;
+
+export async function hiddenEventIds(env, ids) {
+  const out = new Set();
+  const list = Array.from(new Set((ids || []).filter((id) => typeof id === "string" && id)));
+  for (const id of list) if (state.hidden.has(id)) out.add(id);
+  const db = env && env.DB_NOPE;
+  if (!hasD1(db) || !list.length) return out;
+  for (let i = 0; i < list.length; i += HIDDEN_LOOKUP_CHUNK) {
+    const chunk = list.slice(i, i + HIDDEN_LOOKUP_CHUNK);
+    try {
+      const rs = await db.prepare("SELECT id FROM spam_events WHERE id IN (" + chunk.map(() => "?").join(", ") + ") AND action LIKE '%event-hidden%'").bind(...chunk).all();
+      for (const row of (rs && rs.results) || []) out.add(row.id);
+    } catch (_) { }
+  }
+  return out;
+}
+
+export async function hiddenEventIdsSince(env, channels, sinceMs) {
+  const out = new Set();
+  const db = env && env.DB_NOPE;
+  const list = Array.isArray(channels) ? Array.from(new Set(channels.filter((c) => typeof c === "string" && c))).slice(0, 50) : [];
+  if (!hasD1(db) || !list.length) return out;
+  try {
+    const rs = await db.prepare("SELECT id FROM spam_events WHERE channel IN (" + list.map(() => "?").join(", ") + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
+      .bind(...list, Number(sinceMs) || 0).all();
+    for (const row of (rs && rs.results) || []) out.add(row.id);
+  } catch (_) { }
+  return out;
+}
+
 async function ensureSchema(db) {
   if (state.schemaReady) return;
   for (const ddl of SPAM_DDL) { try { await db.prepare(ddl).run(); } catch (_) { } }

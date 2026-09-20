@@ -55,6 +55,7 @@ import {
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
 import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
+import { hiddenEventIdsSince } from "./_spam.js";
 
 var SHOP_CATALOG = {
   "style-satoshi": { price: 21420, type: "message-style", tier: "legendary" },
@@ -791,6 +792,22 @@ var ZAP_EVENT_MAX = 32 * 1024;
 // stateless workers serve them from the per-colo cache instead of hitting D1.
 var READ_CACHE_HOST = "https://nymchat-read.invalid";
 var CHANNEL_READ_TTL = 45;
+var HIDDEN_LOOKBACK_MS = 60 * 60 * 1000;
+
+// A message the spam engine hid can still reach the archive when another pool
+// worker flushed it before the verdict landed. The read drops it and removes
+// the row so the next read, and the relay backfill, stay clean.
+function purgeHiddenRows(context, env, ids) {
+  try {
+    var stmts = [];
+    for (var i = 0; i < ids.length; i += 50) {
+      var chunk = ids.slice(i, i + 50);
+      stmts.push(env.DB_CHANNELS.prepare("DELETE FROM events WHERE id IN (" + chunk.map(function () { return "?"; }).join(",") + ")").bind(...chunk));
+    }
+    var op = env.DB_CHANNELS.batch(stmts).catch(function () { });
+    if (context && context.waitUntil) context.waitUntil(op);
+  } catch (e) { }
+}
 var PROFILE_READ_TTL = 300;
 var SHOP_READ_TTL = 300;
 function readCacheRequest(path) {
@@ -1198,6 +1215,15 @@ async function handleChannelAction(context, body) {
     } catch (e) { rows = []; }
     var gateC = await filterSet(env);
     if (gateC.n) rows = rows.filter(function (r) { return !rowHit(gateC, r); });
+    var hiddenIds = await hiddenEventIdsSince(env, reqChannels, floorSec * 1000 - HIDDEN_LOOKBACK_MS);
+    if (hiddenIds.size) {
+      var leaked = [];
+      rows = rows.filter(function (r) {
+        if (hiddenIds.has(r.id)) { leaked.push(r.id); return false; }
+        return true;
+      });
+      if (leaked.length) purgeHiddenRows(context, env, leaked);
+    }
     var zapRows = [];
     if (rows.length) {
       var targetIds = rows.filter(function (r) {

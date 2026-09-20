@@ -28,7 +28,7 @@ import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
-import { spamEngine, reviewSpamReport } from './_spam.js';
+import { spamEngine, reviewSpamReport, hiddenEventIds } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 
@@ -775,7 +775,10 @@ export async function onRequest(context) {
     for (let i = 0; i < rows.length; i += ARCHIVE_BATCH) {
       const slice = rows.slice(i, i + ARCHIVE_BATCH).filter((r) => !spam.isHidden(r.id) && archiveEventValid(r.json));
       if (slice.length === 0) continue;
-      const chunk = slice.map(
+      const hidden = await hiddenEventIds(env, slice.map((r) => r.id));
+      const keep = hidden.size ? slice.filter((r) => !hidden.has(r.id)) : slice;
+      if (keep.length === 0) continue;
+      const chunk = keep.map(
         (r) => stmt.bind(r.id, r.channel, r.kind, r.pubkey, r.created_at, r.json, now)
       );
       try { await CHANNELS_DB.batch(chunk); } catch { /* best-effort */ }
