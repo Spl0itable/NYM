@@ -1263,7 +1263,9 @@ class NYM {
         };
         this.verifiedBot = {
             pubkey: 'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2',
-            title: 'Nymchat Bot'
+            title: 'Nymchat Bot',
+            picture: '/images/nymbot-icon.png',
+            banner: '/images/nymbot-banner.png'
         };
         this.verifiedBotPubkeys = new Set([this.verifiedBot.pubkey]);
         this.nymchatPubkeys.add(this.verifiedDeveloper.pubkey);
@@ -1276,8 +1278,8 @@ class NYM {
             status: 'online',
             channels: new Set()
         });
-        // Seed nymbot avatar so it shows in sidebar and user list instead of the generated identicon
-        this.userAvatars.set(this.verifiedBot.pubkey, 'https://nymchat.app/images/nymbot-icon.png');
+        this.userAvatars.set(this.verifiedBot.pubkey, this.verifiedBot.picture);
+        this.userBanners.set(this.verifiedBot.pubkey, this.verifiedBot.banner);
         this.isFlutterWebView = /NymchatApp\//i.test(navigator.userAgent);
         this.shopItems = {
             styles: [

@@ -150,6 +150,14 @@ async function run() {
     manifestFiles['/' + hashed] = sha256b64(Buffer.from(code));
   }
 
+  for (const file of await walk(path.join(root, 'images'))) {
+    const rel = toPosix(path.relative(root, file));
+    const content = await fs.readFile(file);
+    const hashed = hashedName(rel, content);
+    await emit(hashed, content);
+    assetMap.set(rel, hashed);
+  }
+
   // Minify + hash every JS file under js/. Some JS references other JS by
   // absolute path ('/js/...': worker scripts, importScripts, vendored libs),
   // so leaves are processed first and those references rewritten to the
@@ -302,6 +310,8 @@ async function run() {
 /css/*
   Cache-Control: public, max-age=31536000, immutable
 /data/*
+  Cache-Control: public, max-age=31536000, immutable
+/images/*
   Cache-Control: public, max-age=31536000, immutable
 /i18n/*
   Cache-Control: public, max-age=86400

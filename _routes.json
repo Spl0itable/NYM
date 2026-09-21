@@ -5,6 +5,7 @@
     "/js/*",
     "/css/*",
     "/data/*",
+    "/images/*",
     "/i18n/*",
     "/.well-known/*",
     "/sw.js",

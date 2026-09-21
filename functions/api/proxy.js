@@ -421,6 +421,13 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
     return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
   }
 
+  if (isOwnMediaHost(targetUrl, request)) {
+    const headers = new Headers(CORS_HEADERS);
+    headers.set('Location', targetUrl);
+    headers.set('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    return new Response(null, { status: 302, headers });
+  }
+
   // Forward Range header to upstream if present (for video/audio streaming)
   const upstreamHeaders = {
     'User-Agent': BROWSER_USER_AGENT,
@@ -905,6 +912,19 @@ function ipv6IsPrivate(host) {
   if (/^f[cd][0-9a-f]{2}:/.test(h)) return true; // fc00::/7 unique local
   if (/^fe[89ab][0-9a-f]:/.test(h)) return true; // fe80::/10 link-local
   return false;
+}
+
+const OWN_MEDIA_APEX = 'nymchat.app';
+
+function isOwnMediaHost(urlStr, request) {
+  try {
+    const host = new URL(urlStr).hostname.toLowerCase().replace(/\.$/, '');
+    if (host === OWN_MEDIA_APEX || host.endsWith('.' + OWN_MEDIA_APEX)) return true;
+    const self = request && request.url ? new URL(request.url).hostname.toLowerCase() : '';
+    return !!self && host === self;
+  } catch {
+    return false;
+  }
 }
 
 function isPrivateUrl(urlStr) {

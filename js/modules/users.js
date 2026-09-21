@@ -69,7 +69,7 @@ Object.assign(NYM.prototype, {
     },
 
     isVerifiedBot(pubkey) {
-        return pubkey === this.verifiedBot.pubkey;
+        return !!this.verifiedBot && pubkey === this.verifiedBot.pubkey;
     },
 
     verifyDeveloperNsec(nsec) {
@@ -469,6 +469,7 @@ Object.assign(NYM.prototype, {
     },
 
     getAvatarUrl(pubkey) {
+        if (this.isVerifiedBot(pubkey)) return this.verifiedBot.picture;
         const blob = this.avatarBlobCache.get(pubkey);
         if (blob) {
             this.avatarBlobCache.delete(pubkey);
@@ -497,6 +498,7 @@ Object.assign(NYM.prototype, {
     // Fetch an avatar image and cache it as a blob object URL.
     // Deduplicates concurrent requests for the same pubkey.
     cacheAvatarImage(pubkey, url) {
+        if (this.isVerifiedBot(pubkey)) return Promise.resolve();
         if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
         if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
         // Negative cache: don't re-fetch a recently failed URL on every kind 0 /
@@ -538,6 +540,7 @@ Object.assign(NYM.prototype, {
 
     // Fetch a banner image and cache it as a blob object URL.
     cacheBannerImage(pubkey, url) {
+        if (this.isVerifiedBot(pubkey)) return Promise.resolve();
         if (this.bannerBlobCache.has(pubkey)) return Promise.resolve();
         if (this.bannerBlobInflight.has(pubkey)) return this.bannerBlobInflight.get(pubkey);
         const fetchUrl = this.getProxiedMediaUrl(url);
@@ -566,6 +569,7 @@ Object.assign(NYM.prototype, {
     },
 
     getBannerUrl(pubkey) {
+        if (this.isVerifiedBot(pubkey)) return this.verifiedBot.banner;
         const blob = this.bannerBlobCache.get(pubkey);
         if (blob) return blob;
         return this.userBanners.get(pubkey) || null;
@@ -575,8 +579,21 @@ Object.assign(NYM.prototype, {
         return this.userBios.get(pubkey) || '';
     },
 
+    isOwnMediaUrl(url) {
+        if (typeof url !== 'string' || !url) return false;
+        if (url.startsWith('/')) return !url.startsWith('//');
+        if (!/^https?:\/\//i.test(url)) return false;
+        try {
+            const host = new URL(url).hostname.toLowerCase();
+            return host === location.hostname.toLowerCase() || host === 'nymchat.app' || host.endsWith('.nymchat.app');
+        } catch (_) {
+            return false;
+        }
+    },
+
     // Returns a proxied URL for media (images/videos) to hide the user's IP
     getProxiedMediaUrl(originalUrl) {
+        if (this.isOwnMediaUrl(originalUrl)) return originalUrl;
         const base = this._getProxyBaseUrl();
         if (!base) return originalUrl;
         return `${base}?url=${encodeURIComponent(originalUrl)}`;
@@ -585,6 +602,7 @@ Object.assign(NYM.prototype, {
     // Proxied URL for a custom emoji image. The emoji flag tells the proxy to
     // apply a long edge-cache TTL so emoji render instantly on repeat views.
     getProxiedEmojiUrl(originalUrl) {
+        if (this.isOwnMediaUrl(originalUrl)) return originalUrl;
         const base = this._getProxyBaseUrl();
         if (!base) return originalUrl;
         return `${base}?emoji=1&url=${encodeURIComponent(originalUrl)}`;
@@ -870,6 +888,7 @@ Object.assign(NYM.prototype, {
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);
         if (!safePk) return;
+        if (this.isVerifiedBot(pubkey)) avatarUrl = this.verifiedBot.picture;
         if (!this._avatarUpdateQueue) this._avatarUpdateQueue = new Map();
         this._avatarUpdateQueue.set(safePk, { url: avatarUrl, pubkey });
         if (this._avatarUpdateRaf) return;
