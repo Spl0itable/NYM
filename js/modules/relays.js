@@ -651,6 +651,17 @@ Object.assign(NYM.prototype, {
 
         html += `<div class="nm-relay-4">Total Connected: ${this.relayPool.size} relays</div>`;
 
+        const gateSockets = (this.poolSockets || []).filter(p => p && typeof p.badgeGate === 'string');
+        if (gateSockets.length) {
+            const gated = gateSockets.filter(p => p.badgeGate !== 'off');
+            if (gated.length) {
+                const dropped = gated.reduce((n, p) => n + (p.unbadged || 0), 0);
+                html += `<div class="nm-relay-4">Badge gate: ${this.escapeHtml(gated[0].badgeGate)} · ${dropped} unbadged message${dropped === 1 ? '' : 's'} dropped by this pool</div>`;
+            } else {
+                html += '<div class="nm-relay-4">Badge gate: off</div>';
+            }
+        }
+
         listEl.innerHTML = html || '<div class="nm-dim12">No relays connected</div>';
     },
 
@@ -2430,6 +2441,8 @@ Object.assign(NYM.prototype, {
                         const status = msg[1];
                         poolEntry.connectedRelays = status.connected || [];
                         if (poolEntry.connectedRelays.length > 0) poolEntry._healthyAt = Date.now();
+                        poolEntry.badgeGate = typeof status.badgeGate === 'string' ? status.badgeGate : null;
+                        poolEntry.unbadged = Number(status.unbadged) || 0;
 
                         // Update per-relay latency from this worker
                         if (status.latency) {

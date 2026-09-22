@@ -9,7 +9,7 @@
 // One definition for every route; see _client.js.
 import { isNymchatClient } from './_client.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
-import { reviewSpamReport } from './_spam.js';
+import { reviewSpamReport, spamEngine, frameBadgeRefused } from './_spam.js';
 
 const APP_RELAY = 'wss://relay.nymchat.app';
 
@@ -85,6 +85,7 @@ export async function onRequest(context) {
   }
 
   let gate = await filterSet(env);
+  const spam = spamEngine(env, context);
   let sockHeld = null;
   const gateTimer = setInterval(() => { filterSet(env).then((s) => { gate = s; }, () => { }); }, 30000);
 
@@ -153,6 +154,7 @@ export async function onRequest(context) {
   upstream.addEventListener('message', (event) => {
     try {
       if (typeof event.data === 'string' && event.data.startsWith('["EVENT"') && frameHit(gate, event.data)) return;
+      if (frameBadgeRefused(env, spam, event.data)) return;
       if (server.readyState === 1) {
         server.send(event.data);
       }

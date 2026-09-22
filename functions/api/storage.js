@@ -55,8 +55,7 @@ import {
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
 import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
-import { hiddenEventIdsSince, spamEngine, badgeGateRefuses, readSpamSettings } from "./_spam.js";
-import { verifyBadge, authorityPubkey } from "./_attest.js";
+import { hiddenEventIdsSince, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
 
 var SHOP_CATALOG = {
   "style-satoshi": { price: 21420, type: "message-style", tier: "legendary" },
@@ -794,9 +793,7 @@ var ZAP_EVENT_MAX = 32 * 1024;
 var READ_CACHE_HOST = "https://nymchat-read.invalid";
 var CHANNEL_READ_TTL = 45;
 var HIDDEN_LOOKBACK_MS = 60 * 60 * 1000;
-var badgeReadCache = new Map();
-
-function archivedBadgeRefused(row, mode, authority, engine) {
+function archivedBadgeRefused(env, row, mode, engine) {
   if (row.kind !== 20000 && row.kind !== 23333) return false;
   if (typeof row.json !== "string") return false;
   var ev = null;
@@ -810,17 +807,7 @@ function archivedBadgeRefused(row, mode, authority, engine) {
       if (Array.isArray(t) && t[0] === "nymattest" && typeof t[1] === "string") { tag = t[1]; break; }
     }
   }
-  if (!tag) return badgeGateRefuses(mode, "");
-  var now = Date.now();
-  var key = Math.floor(now / 86400000) + ":" + ev.pubkey + ":" + tag;
-  var tier = badgeReadCache.get(key);
-  if (tier === undefined) {
-    var v = verifyBadge(tag, ev.pubkey, authority, now);
-    tier = v ? v.tier : "";
-    if (badgeReadCache.size >= 4000) badgeReadCache.delete(badgeReadCache.keys().next().value);
-    badgeReadCache.set(key, tier);
-  }
-  return badgeGateRefuses(mode, tier);
+  return badgeGateRefuses(mode, badgeTierFor(env, ev.pubkey, tag || ""));
 }
 
 async function badgeGateMode(env) {
@@ -1264,11 +1251,8 @@ async function handleChannelAction(context, body) {
     }
     var badgeMode = await badgeGateMode(env);
     if (badgeMode !== "off") {
-      var badgeAuthority = authorityPubkey(env);
-      if (badgeAuthority) {
-        var badgeEngine = spamEngine(env, null);
-        rows = rows.filter(function (r) { return !archivedBadgeRefused(r, badgeMode, badgeAuthority, badgeEngine); });
-      }
+      var badgeEngine = spamEngine(env, null);
+      rows = rows.filter(function (r) { return !archivedBadgeRefused(env, r, badgeMode, badgeEngine); });
     }
     var zapRows = [];
     if (rows.length) {

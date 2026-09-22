@@ -28,7 +28,7 @@ import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
-import { spamEngine, reviewSpamReport, hiddenEventIds, badgeGateRefuses } from './_spam.js';
+import { spamEngine, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 
@@ -234,7 +234,10 @@ export async function onRequest(context) {
     sendToClient(JSON.stringify(['POOL:STATUS', {
       connected,
       count: connected.length,
-      latency
+      latency,
+      badgeGate: spam.badgeGate(),
+      unbadged: droppedUnbadgedCount,
+      droppedSpam: droppedSpamCount
     }]));
   }
 
@@ -1262,27 +1265,13 @@ export async function onRequest(context) {
     return false;
   }
 
-  const badgeGateCache = new Map();
-  let badgeGateAuthority;
   function badgeGateRefused(raw, kind) {
     if (kind !== 20000 && kind !== 23333) return false;
     const mode = spam.badgeGate();
     if (mode === 'off') return false;
     const pubkey = extractEventStringField(raw, 'pubkey');
     if (!pubkey || spam.isExempt(pubkey)) return false;
-    if (badgeGateAuthority === undefined) badgeGateAuthority = authorityPubkey(env);
-    if (!badgeGateAuthority) return false;
-    const tag = extractTagValue(raw, 'nymattest') || '';
-    const now = Date.now();
-    const key = Math.floor(now / 86400000) + ':' + pubkey + ':' + tag;
-    let tier = badgeGateCache.get(key);
-    if (tier === undefined) {
-      const v = tag ? verifyBadge(tag, pubkey, badgeGateAuthority, now) : null;
-      tier = v ? v.tier : '';
-      if (badgeGateCache.size >= 4000) badgeGateCache.delete(badgeGateCache.keys().next().value);
-      badgeGateCache.set(key, tier);
-    }
-    if (!badgeGateRefuses(mode, tier)) return false;
+    if (!badgeGateRefuses(mode, badgeTierFor(env, pubkey, extractTagValue(raw, 'nymattest') || ''))) return false;
     droppedUnbadgedCount++;
     spam.noteUnbadged();
     return true;

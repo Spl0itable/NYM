@@ -302,8 +302,45 @@ export function ruleVerdict(job, dossier, settings) {
 
 export function badgeGateRefuses(mode, tier) {
   if (mode !== "challenged" && mode !== "attested") return false;
+  if (tier === null) return false;
   if (tier === "attested") return false;
   if (tier === "challenged") return mode === "attested";
+  return true;
+}
+
+const BADGE_TIER_CACHE_MAX = 4000;
+const badgeTierCache = new Map();
+let badgeAuthority;
+
+export function badgeTierFor(env, pubkey, tag, nowMs) {
+  if (badgeAuthority === undefined) badgeAuthority = (env && authorityPubkey(env)) || null;
+  if (!badgeAuthority) return null;
+  if (typeof pubkey !== "string" || typeof tag !== "string" || !tag) return "";
+  const now = typeof nowMs === "number" ? nowMs : Date.now();
+  const key = Math.floor(now / 86400000) + ":" + pubkey + ":" + tag;
+  let tier = badgeTierCache.get(key);
+  if (tier === undefined) {
+    const v = verifyBadge(tag, pubkey, badgeAuthority, now);
+    tier = v ? v.tier : "";
+    if (badgeTierCache.size >= BADGE_TIER_CACHE_MAX) badgeTierCache.delete(badgeTierCache.keys().next().value);
+    badgeTierCache.set(key, tier);
+  }
+  return tier;
+}
+
+const CHANNEL_KIND_RE = /"kind":\s*(20000|23333)\b/;
+
+export function frameBadgeRefused(env, engine, data) {
+  if (typeof data !== "string" || !data.startsWith("[\"EVENT\"") || !CHANNEL_KIND_RE.test(data)) return false;
+  const mode = engine.badgeGate();
+  if (mode === "off") return false;
+  let ev = null;
+  try { const arr = JSON.parse(data); ev = Array.isArray(arr) ? arr[2] : null; } catch (_) { return false; }
+  if (!ev || (ev.kind !== 20000 && ev.kind !== 23333) || typeof ev.pubkey !== "string") return false;
+  if (engine.isExempt(ev.pubkey)) return false;
+  const tag = Array.isArray(ev.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === "nymattest" && typeof t[1] === "string") : null;
+  if (!badgeGateRefuses(mode, badgeTierFor(env, ev.pubkey, tag ? tag[1] : ""))) return false;
+  engine.noteUnbadged();
   return true;
 }
 
@@ -651,6 +688,8 @@ export function _resetSpamState() {
   state.queue = []; state.running = 0; state.budgetMinute = 0; state.budgetUsed = 0;
   state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0; state.cooldownUntil = 0;
   for (const k of Object.keys(state.counters)) state.counters[k] = 0;
+  badgeTierCache.clear();
+  badgeAuthority = undefined;
 }
 
 export function _dropExamplesCache() { state.examples = null; }
@@ -727,6 +766,7 @@ async function noteStatus(env) {
         at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
         lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length,
         cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
+        badgeGate: state.settings ? state.settings.requireBadge || "off" : "unloaded", authority: !!authorityPubkey(env),
         counters: Object.assign({}, state.counters)
       })).run();
   } catch (_) { }
@@ -1530,7 +1570,11 @@ export function spamEngine(env, context) {
     isExempt(pubkey) {
       return typeof pubkey === "string" && isExemptPubkey(state.settings || defaultSpamSettings(env), pubkey.toLowerCase());
     },
-    noteUnbadged() { state.counters.unbadged++; },
+    noteUnbadged() {
+      state.counters.unbadged++;
+      const p = noteStatus(env);
+      if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
+    },
     isHidden(id) { return state.hidden.has(id); },
     inspect(job) {
       const s = state.settings;
