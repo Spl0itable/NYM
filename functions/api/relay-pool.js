@@ -28,7 +28,7 @@ import { getEventHash, schnorr } from './_shared.js';
 import { isNymchatClient } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
-import { spamEngine, reviewSpamReport, hiddenEventIds } from './_spam.js';
+import { spamEngine, reviewSpamReport, hiddenEventIds, badgeGateRefuses } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 
@@ -1200,6 +1200,7 @@ export async function onRequest(context) {
 
   let droppedSpamCount = 0;
   let droppedGeoOriginCount = 0;
+  let droppedUnbadgedCount = 0;
   const RX_GLUB_CLIENT = /\[\s*"client"\s*,\s*"glub\.chat"/i;
   const RX_GLUB_TAG = /\[\s*"glub"\s*,/i;
 
@@ -1259,6 +1260,32 @@ export async function onRequest(context) {
       if (verdict.flood || verdict.mute) return true;
     }
     return false;
+  }
+
+  const badgeGateCache = new Map();
+  let badgeGateAuthority;
+  function badgeGateRefused(raw, kind) {
+    if (kind !== 20000 && kind !== 23333) return false;
+    const mode = spam.badgeGate();
+    if (mode === 'off') return false;
+    const pubkey = extractEventStringField(raw, 'pubkey');
+    if (!pubkey || spam.isExempt(pubkey)) return false;
+    if (badgeGateAuthority === undefined) badgeGateAuthority = authorityPubkey(env);
+    if (!badgeGateAuthority) return false;
+    const tag = extractTagValue(raw, 'nymattest') || '';
+    const now = Date.now();
+    const key = Math.floor(now / 86400000) + ':' + pubkey + ':' + tag;
+    let tier = badgeGateCache.get(key);
+    if (tier === undefined) {
+      const v = tag ? verifyBadge(tag, pubkey, badgeGateAuthority, now) : null;
+      tier = v ? v.tier : '';
+      if (badgeGateCache.size >= 4000) badgeGateCache.delete(badgeGateCache.keys().next().value);
+      badgeGateCache.set(key, tier);
+    }
+    if (!badgeGateRefuses(mode, tier)) return false;
+    droppedUnbadgedCount++;
+    spam.noteUnbadged();
+    return true;
   }
 
   function spamEngineVerdict(raw, eventId, kind, relayTail) {
@@ -1515,6 +1542,7 @@ export async function onRequest(context) {
             return;
           }
           const evKind = extractEventKind(raw);
+          if (badgeGateRefused(raw, evKind)) return;
           const relayTail = ',"' + relayUrl + '"]';
           const spamVerdict = spamEngineVerdict(raw, eventId, evKind, relayTail);
           if (spamVerdict === 'drop') {

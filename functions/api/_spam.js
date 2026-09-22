@@ -81,6 +81,7 @@ export function defaultSpamSettings(env) {
     blockEvents: true,
     mode: "shadow",
     holdMs: 5000,
+    requireBadge: "off",
     exemptPubkeys: []
   };
 }
@@ -109,6 +110,7 @@ export function normalizeSpamSettings(input, base) {
   if (typeof input.blockEvents === "boolean") out.blockEvents = input.blockEvents;
   if (input.mode === "reject" || input.mode === "shadow") out.mode = input.mode;
   if (input.holdMs != null) out.holdMs = Math.round(clampNum(input.holdMs, 0, 15000, out.holdMs));
+  if (input.requireBadge === "off" || input.requireBadge === "challenged" || input.requireBadge === "attested") out.requireBadge = input.requireBadge;
   if (Array.isArray(input.exemptPubkeys)) {
     const set = new Set();
     for (const p of input.exemptPubkeys) {
@@ -296,6 +298,13 @@ export function ruleVerdict(job, dossier, settings) {
     }
   }
   return null;
+}
+
+export function badgeGateRefuses(mode, tier) {
+  if (mode !== "challenged" && mode !== "attested") return false;
+  if (tier === "attested") return false;
+  if (tier === "challenged") return mode === "attested";
+  return true;
 }
 
 export function badgeTier(env, job, now) {
@@ -630,7 +639,7 @@ const state = {
   lastErrorAt: 0,
   statusAt: 0,
   cooldownUntil: 0,
-  counters: { inspected: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0 }
+  counters: { inspected: 0, unbadged: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0 }
 };
 
 export function _resetSpamState() {
@@ -1513,6 +1522,15 @@ export function spamEngine(env, context) {
       return !!(s && s.enabled);
     },
     settings() { return state.settings; },
+    badgeGate() {
+      if (!usable) return "off";
+      const s = settingsSync(env);
+      return s && (s.requireBadge === "challenged" || s.requireBadge === "attested") ? s.requireBadge : "off";
+    },
+    isExempt(pubkey) {
+      return typeof pubkey === "string" && isExemptPubkey(state.settings || defaultSpamSettings(env), pubkey.toLowerCase());
+    },
+    noteUnbadged() { state.counters.unbadged++; },
     isHidden(id) { return state.hidden.has(id); },
     inspect(job) {
       const s = state.settings;
