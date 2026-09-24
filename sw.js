@@ -8,17 +8,75 @@ try { PRECACHE = JSON.parse('__PRECACHE_ASSETS__'); } catch (_) { }
 // and cold webview launches reuse images instead of refetching every one.
 const MEDIA_CACHE = 'nym-media-v1';
 const MEDIA_MAX_ENTRIES = 600;
+const MEDIA_MAX_BYTES = 100 * 1024 * 1024;
+const MEDIA_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MEDIA_STAMP = 'x-nym-cached-at';
+const MEDIA_SIZE = 'x-nym-size';
 
-async function trimMediaCache() {
+function mediaStamp(resp) {
+    const t = Number(resp && resp.headers && resp.headers.get(MEDIA_STAMP));
+    return Number.isFinite(t) && t > 0 ? t : 0;
+}
+
+function mediaFresh(resp, now) {
+    const t = mediaStamp(resp);
+    return t > 0 && t <= now + 60000 && now - t < MEDIA_MAX_AGE_MS;
+}
+
+let mediaPruning = null;
+let mediaPruneAgain = false;
+
+async function pruneMediaCache() {
+    const cache = await caches.open(MEDIA_CACHE);
+    const keys = await cache.keys();
+    const now = Date.now();
+    const live = [];
+    const drop = [];
+    for (const k of keys) {
+        const r = await cache.match(k);
+        if (!r || !mediaFresh(r, now)) { drop.push(k); continue; }
+        const size = Number(r.headers.get(MEDIA_SIZE)) || 0;
+        live.push({ k, t: mediaStamp(r), size });
+    }
+    live.sort((a, b) => a.t - b.t);
+    let bytes = live.reduce((n, x) => n + x.size, 0);
+    let count = live.length;
+    for (const x of live) {
+        if (count <= MEDIA_MAX_ENTRIES && bytes <= MEDIA_MAX_BYTES) break;
+        drop.push(x.k);
+        count--;
+        bytes -= x.size;
+    }
+    await Promise.all(drop.map((k) => cache.delete(k)));
+}
+
+function trimMediaCache() {
+    if (mediaPruning) { mediaPruneAgain = true; return mediaPruning; }
+    mediaPruning = (async () => {
+        try {
+            do {
+                mediaPruneAgain = false;
+                await pruneMediaCache();
+            } while (mediaPruneAgain);
+        } catch (_) { }
+        mediaPruning = null;
+    })();
+    return mediaPruning;
+}
+
+async function storeMedia(cache, req, resp) {
     try {
-        const cache = await caches.open(MEDIA_CACHE);
-        const keys = await cache.keys();
-        const over = keys.length - MEDIA_MAX_ENTRIES;
-        if (over > 0) {
-            await Promise.all(keys.slice(0, over).map((k) => cache.delete(k)));
-        }
+        const body = await resp.blob();
+        if (body.size > MEDIA_MAX_BYTES) return;
+        const headers = new Headers(resp.headers);
+        headers.set(MEDIA_STAMP, String(Date.now()));
+        headers.set(MEDIA_SIZE, String(body.size));
+        await cache.put(req, new Response(body, { status: resp.status, statusText: resp.statusText, headers }));
+        await trimMediaCache();
     } catch (_) { }
 }
+
+let mediaStartupPruned = false;
 
 self.addEventListener('install', (e) => {
     e.waitUntil((async () => {
@@ -40,6 +98,8 @@ self.addEventListener('activate', (e) => {
     e.waitUntil((async () => {
         const keys = await caches.keys();
         await Promise.all(keys.filter((k) => k.startsWith('nym-') && k !== CACHE && k !== MEDIA_CACHE).map((k) => caches.delete(k)));
+        mediaStartupPruned = true;
+        await trimMediaCache();
         await self.clients.claim();
     })());
 });
@@ -71,15 +131,23 @@ self.addEventListener('fetch', (e) => {
     // cache-first and only refetch images the device hasn't seen. Range requests
     // (video seeking) and non-image responses are passed through uncached.
     if (url.pathname === '/api/proxy' && url.searchParams.has('url') && !req.headers.has('range')) {
+        if (!mediaStartupPruned) {
+            mediaStartupPruned = true;
+            const startup = trimMediaCache();
+            if (e.waitUntil) e.waitUntil(startup);
+        }
         e.respondWith((async () => {
             const cache = await caches.open(MEDIA_CACHE);
             const cached = await cache.match(req);
-            if (cached) return cached;
+            if (cached) {
+                if (mediaFresh(cached, Date.now())) return cached;
+                await cache.delete(req);
+            }
             const resp = await fetch(req);
             const type = resp && resp.headers.get('content-type') || '';
             if (resp && resp.ok && type.indexOf('image/') === 0) {
-                cache.put(req, resp.clone());
-                trimMediaCache();
+                const stored = storeMedia(cache, req, resp.clone());
+                if (e.waitUntil) e.waitUntil(stored);
             }
             return resp;
         })());
@@ -91,7 +159,8 @@ self.addEventListener('fetch', (e) => {
             const cache = await caches.open(CACHE);
             try {
                 const resp = await fetch(req);
-                if (resp && resp.ok) cache.put('/', resp.clone());
+                if (resp && resp.ok && (url.pathname === '/' || url.pathname === '/index.html')
+                    && (resp.headers.get('content-type') || '').indexOf('text/html') === 0) cache.put('/', resp.clone());
                 return resp;
             } catch (_) {
                 const cached = (await cache.match(req)) || (await cache.match('/'));

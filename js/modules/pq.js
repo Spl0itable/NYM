@@ -1539,7 +1539,8 @@
                     title: 'Quantum-resistant encryption is on',
                     okLabel: 'Got it',
                     copyValue: code || undefined,
-                    copyLabel: 'Copy code'
+                    copyLabel: 'Copy code',
+                    copySecret: true
                 });
             } catch (_) { /* dialog unavailable; the notice is not load-bearing */ }
             finally { this._pqNoticeOpen = false; }

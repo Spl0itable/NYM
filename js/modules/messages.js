@@ -988,7 +988,8 @@ Object.assign(NYM.prototype, {
             const userColorClass = this.getUserColorClass(message.pubkey);
 
             // Add verified badge if this is the developer or the nymbot
-            const verifiedBadge = this.isVerifiedDeveloper(message.pubkey)
+            const verifiedBadge = message.senderVerified === false ? ''
+                : this.isVerifiedDeveloper(message.pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
                 : (message.isBot || this.isVerifiedBot(message.pubkey))
                     ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'

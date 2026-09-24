@@ -37,6 +37,8 @@ import {
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
   verifyClientAuth,
+  enforceAuthReplay,
+  cacheRateTake,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -136,6 +138,19 @@ function shopItemAvailability(cat, now) {
 }
 
 
+function shopClaimVisibleTo(claim, userPubkey) {
+  if (!claim || typeof claim !== "object") return false;
+  var payer = String(claim.paidBy || "").toLowerCase();
+  var owner = String(claim.pubkey || "").toLowerCase();
+  return payer === userPubkey || owner === userPubkey;
+}
+
+function shopClaimReplay(claim, userPubkey) {
+  var owner = String(claim.pubkey || "").toLowerCase();
+  var own = owner === userPubkey;
+  return { itemId: claim.itemId, code: own ? claim.code : null, gift: claim.gift, recipient: claim.pubkey, alreadyClaimed: true };
+}
+
 function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
 }
@@ -210,7 +225,7 @@ async function botInvoiceFromAddress(env, address, sats, zapRequest, comment) {
 // per-request signatures are skipped. The HTTP path verifies each request.
 function clientAuthOk(context, body, userPubkey) {
   if (context && context._wsAuthedPubkey) return context._wsAuthedPubkey === userPubkey;
-  return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action });
+  return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body });
 }
 
 var STORAGE_PQ_RELAYS = [
@@ -335,9 +350,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   // Ledger Durable Object enforces double-spend safety server-side instead.
   var SHOP_MONEY_ACTIONS = { "shop-buy-invoice": 1, "shop-claim": 1, "shop-transfer": 1, "shop-redeem": 1 };
   if (!context._wsAuthedPubkey && SHOP_MONEY_ACTIONS[body.action]) {
-    var rp = await ledgerCall(env, { op: "replay", id: body.auth && body.auth.id, ttl: 130 });
-    if (rp && rp._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
-    if (!rp || !rp.fresh) return json({ error: "This authorization was already used. Please retry." }, 401);
+    var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
+    if (!rp.ok) return json({ error: rp.error }, rp.status);
   }
 
   if (body.action === "shop-get") {
@@ -433,7 +447,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!/^[0-9a-f]{64}$/i.test(invoiceId)) return json({ error: "Invalid invoice reference." }, 400);
     var prevClaim = await invoiceGet(env.DB_INVOICES, "shop", "claimed", invoiceId);
     if (prevClaim) {
-      return json({ itemId: prevClaim.itemId, code: prevClaim.code, gift: prevClaim.gift, recipient: prevClaim.pubkey, alreadyClaimed: true });
+      if (!shopClaimVisibleTo(prevClaim, userPubkey)) return json({ error: "This invoice belongs to a different user." }, 403);
+      return json(shopClaimReplay(prevClaim, userPubkey));
     }
     var pending = await invoiceGet(env.DB_INVOICES, "shop", "pending", invoiceId);
     if (!pending) return json({ error: "Unknown or expired invoice." }, 404);
@@ -469,7 +484,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (claimRes && claimRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
     if (claimRes && claimRes.alreadyClaimed) {
       var prev = claimRes.prev;
-      if (prev) return json({ itemId: prev.itemId, code: prev.code, gift: prev.gift, recipient: prev.pubkey, alreadyClaimed: true });
+      if (prev && shopClaimVisibleTo(prev, userPubkey)) return json(shopClaimReplay(prev, userPubkey));
       return json({ error: "This payment was already claimed." }, 409);
     }
     if (!claimRes || claimRes.error) return json({ error: (claimRes && claimRes.error) || "Claim failed." }, 400);
@@ -482,9 +497,9 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       giftEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, recipient, giftMsg);
     }
     return json({
-      itemId: pending.itemId, code: code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
+      itemId: pending.itemId, code: isGift ? null : code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
       edition: claimRes.edition || null,
-      bundle: bundleItems || null,
+      bundle: bundleItems ? (isGift ? bundleItems.map(function (b) { return { itemId: b.itemId }; }) : bundleItems) : null,
       owned: isGift ? undefined : crec.owned, active: isGift ? undefined : crec.active
     });
   }
@@ -519,14 +534,14 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!codeData) return json({ error: "Unknown recovery code." }, 404);
     var redeemItem = codeData.itemId;
     if (!SHOP_CATALOG[redeemItem]) return json({ error: "Unknown shop item." }, 400);
-    var prevOwner = (codeData.owner || "").toLowerCase();
     // Atomic redeem (move item from prevOwner to redeemer) via the ledger DO.
     var redeemRes = await ledgerCall(env, {
-      op: "shop-redeem", code: code, itemId: redeemItem, user: userPubkey,
-      prevOwner: prevOwner, createdAt: codeData.createdAt || Date.now()
+      op: "shop-redeem", code: code, itemId: redeemItem, user: userPubkey
     });
     if (redeemRes && redeemRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (redeemRes && redeemRes.unknown) return json({ error: "Unknown recovery code." }, 404);
     if (!redeemRes || redeemRes.error) return json({ error: (redeemRes && redeemRes.error) || "Redeem failed." }, 400);
+    var prevOwner = String(redeemRes.prevOwner || "").toLowerCase();
     if (prevOwner && prevOwner !== userPubkey && /^[0-9a-f]{64}$/.test(prevOwner)) {
       readCacheDelete(context, "/shop-status/" + prevOwner);
     }
@@ -552,6 +567,7 @@ var SETTINGS_CATEGORY_RE = /^nym(?:chat|bot)-[a-z0-9-]{1,120}$/i;
 // per group per month, so the full backlog can span many thousands of wraps.
 // A very high ceiling is kept only as an abuse backstop.
 var SETTINGS_MAX_CATEGORIES = 50000;
+var SETTINGS_MAX_BYTES = 256 * 1024 * 1024;
 var SETTINGS_MAX_BLOB = 512 * 1024;
 function isValidSettingsCategory(cat) { return SETTINGS_CATEGORY_RE.test(cat); }
 
@@ -592,17 +608,21 @@ async function handleSettingsAction(context, body) {
       ? body.contentHash.toLowerCase() : null;
     var prevDoc = null;
     try {
-      prevDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
+      prevDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at, LENGTH(blob) AS len FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
     } catch (e) { }
     if (contentHash && prevDoc && prevDoc.content_hash === contentHash) {
       return json({ ok: true, category: cat, updatedAt: prevDoc.updated_at || 0, unchanged: true });
     }
     // Cap distinct categories per user to bound storage from runaway splitting.
-    if (!prevDoc) {
+    var prevLen = prevDoc ? (Number(prevDoc.len) || 0) : 0;
+    if (!prevDoc || body.blob.length > prevLen) {
       try {
-        var cntRow = await env.DB_SETTINGS.prepare("SELECT COUNT(*) AS n FROM settings WHERE pubkey = ?").bind(userPubkey).first();
-        if (cntRow && (cntRow.n || 0) >= SETTINGS_MAX_CATEGORIES) {
+        var cntRow = await env.DB_SETTINGS.prepare("SELECT COUNT(*) AS n, SUM(LENGTH(blob)) AS bytes FROM settings WHERE pubkey = ?").bind(userPubkey).first();
+        if (!prevDoc && cntRow && (cntRow.n || 0) >= SETTINGS_MAX_CATEGORIES) {
           return json({ error: "Too many settings categories." }, 429);
+        }
+        if (cntRow && (Number(cntRow.bytes) || 0) - prevLen + body.blob.length > SETTINGS_MAX_BYTES) {
+          return json({ error: "Settings storage is full." }, 413);
         }
       } catch (e) { }
     }
@@ -786,7 +806,19 @@ async function handleProfileAction(context, body) {
 var PM_EVENT_MAX = 96 * 1024;
 var CHANNEL_EVENT_MAX = 64 * 1024;
 var CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
+var CHANNEL_FUTURE_SKEW_S = 600;
 var ZAP_EVENT_MAX = 32 * 1024;
+var STORAGE_RATE_WINDOW_MS = 60000;
+var PM_DEPOSIT_RATE = 600;
+var PM_DEPOSIT_IP_RATE = 3000;
+var ZAP_PUT_RATE = 300;
+
+function requestIp(context) {
+  try {
+    var h = context && context.request && context.request.headers;
+    return (h && typeof h.get === "function" && h.get("CF-Connecting-IP")) || "";
+  } catch (e) { return ""; }
+}
 
 // Read-through edge cache for PUBLIC reads (channel-get, profile-get) so many
 // stateless workers serve them from the per-colo cache instead of hitting D1.
@@ -1058,7 +1090,13 @@ async function handlePmAction(context, body) {
     var depEvents = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
     if (pubkeyHit(await filterSet(env), userPubkey)) return json({ ok: true, added: depEvents.length });
+    var depUnits = Math.max(1, depEvents.length);
+    if (!(await cacheRateTake("pm-deposit", userPubkey, depUnits, PM_DEPOSIT_RATE, STORAGE_RATE_WINDOW_MS)) ||
+      !(await cacheRateTake("pm-deposit-ip", requestIp(context), depUnits, PM_DEPOSIT_IP_RATE, STORAGE_RATE_WINDOW_MS))) {
+      return json({ error: "Too many messages deposited. Try again in a minute." }, 429);
+    }
     var depNow = Date.now();
+    var depCeil = Math.floor(depNow / 1000);
     var depStmt = env.DB_PM.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
     var depBatch = [];
     for (var di = 0; di < depEvents.length; di++) {
@@ -1067,7 +1105,7 @@ async function handlePmAction(context, body) {
       if (!recipient || recipient === userPubkey) continue;
       if (JSON.stringify(dev).length > PM_EVENT_MAX) continue;
       if (!pmIsValidWrapForUser(dev, recipient)) continue;
-      depBatch.push(depStmt.bind(recipient, dev.id, dev.created_at || 0, JSON.stringify(dev), depNow));
+      depBatch.push(depStmt.bind(recipient, dev.id, Math.min(Number(dev.created_at) || 0, depCeil), JSON.stringify(dev), depNow));
     }
     var depAdded = 0;
     if (depBatch.length) {
@@ -1235,8 +1273,8 @@ async function handleChannelAction(context, body) {
         : "";
       rows = (await replica(env.DB_CHANNELS).prepare(
         "SELECT id, kind, json, stored_at FROM events WHERE channel IN (" + cph + ")"
-        + authorClause + " AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
-      ).bind(...reqChannels, ...reqAuthors, floorSec, isSingle ? 500 : 1500).all()).results || [];
+        + authorClause + " AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?"
+      ).bind(...reqChannels, ...reqAuthors, floorSec, Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
     var gateC = await filterSet(env);
     if (gateC.n) rows = rows.filter(function (r) { return !rowHit(gateC, r); });
@@ -1581,6 +1619,9 @@ async function handleZapAction(context, body) {
   if (body.action === "zap-put") {
     var events = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
+    if (!(await cacheRateTake("zap-put", userPubkey, Math.max(1, events.length), ZAP_PUT_RATE, STORAGE_RATE_WINDOW_MS))) {
+      return json({ error: "Too many zap receipts. Try again in a minute." }, 429);
+    }
     var now = Date.now();
     var chan = [];
     var pm = [];

@@ -1021,6 +1021,7 @@ Object.assign(NYM.prototype, {
             } else if (!seal || seal.pubkey !== rumor.pubkey || !NT.verifyEvent(seal)) {
                 return;
             }
+            if (!senderVerified && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(rumor.pubkey)) return;
 
             // Route private friend-presence rumors (status shared by a friend
             // who runs in "Friends only" mode). Verified senders only.
@@ -2681,7 +2682,7 @@ Object.assign(NYM.prototype, {
 
     _getGitConfig() {
         try {
-            const raw = localStorage.getItem('nym_botpm_git');
+            const raw = window.nymSecretGet('nym_botpm_git');
             const cfg = raw ? JSON.parse(raw) : null;
             return cfg && typeof cfg === 'object' ? cfg : null;
         } catch { return null; }
@@ -2689,8 +2690,8 @@ Object.assign(NYM.prototype, {
 
     _saveGitConfig(cfg) {
         try {
-            if (cfg) localStorage.setItem('nym_botpm_git', JSON.stringify(cfg));
-            else localStorage.removeItem('nym_botpm_git');
+            if (cfg) window.nymSecretSet('nym_botpm_git', JSON.stringify(cfg));
+            else window.nymSecretRemove('nym_botpm_git');
         } catch { }
         this._renderBotCreditMeta();
     },

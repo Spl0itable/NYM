@@ -174,7 +174,7 @@
         // stay with video, which already claims them and can be either.
         const audioPlaceholders = [];
         formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s]*)?)/gi,
+            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s<>"\uFDD0-\uFDD5]*)?)/gi,
             (match, url, ext) => {
                 const audioTypes = {
                     mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac',
@@ -204,7 +204,7 @@
         );
 
         formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)/gi,
+            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+\.(mp4|webm|ogg|mov)(\?[^\s<>"\uFDD0-\uFDD5]*)?)/gi,
             (match, url, ext) => {
                 const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
                 const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
@@ -220,7 +220,7 @@
         );
 
         formatted = formatted.replace(
-            /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)/gi,
+            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+\.(jpg|jpeg|png|gif|webp)(\?[^\s<>"\uFDD0-\uFDD5]*)?)/gi,
             (match, url) => {
                 const proxiedUrl = proxied(url, ctx.proxyBase);
                 const fbAttr = buildFallbackAttr(url);
@@ -234,14 +234,14 @@
         );
 
         formatted = formatted.replace(
-            /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"]+)/gi,
+            /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"\uFDD0-\uFDD5]+)/gi,
             (match, prefix, channelId) => {
                 return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${escapeHtml(channelId)}">${match}</span>`;
             }
         );
 
         formatted = formatted.replace(
-            /https?:\/\/[^\s<>"]*#gjoin=([A-Za-z0-9_-]+)/g,
+            /https?:\/\/[^\s<>"\uFDD0-\uFDD5]*#gjoin=([A-Za-z0-9_-]+)/g,
             (match, token) => {
                 const invite = parseGroupInvite(token);
                 if (!invite) return match;
@@ -268,8 +268,9 @@
         );
 
         formatted = formatted.replace(
-            /(https?:\/\/[^\s]+)(?![^<]*>)(?!__)/g,
-            (match, url) => {
+            /(<[^>]+>)|(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+)(?!__)/g,
+            (match, tag, url) => {
+                if (tag) return tag;
                 const safe = safeUrl(url);
                 return safe ? `<a href="${safe}" target="_blank" rel="noopener">${url}</a>` : match;
             }
@@ -290,8 +291,9 @@
         formatted = formatted.replace(/\uFDD4(\d+)\uFDD5/g, (_m, idx) => audioPlaceholders[parseInt(idx, 10)]);
 
         formatted = formatted.replace(
-            /(?:(@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s][^@\s]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?]))(?![^<]*>)/gi,
-            (match, mentionWithSuffix, simpleMention, whitespace, channel) => {
+            /(<[^>]+>)|(?:(@[^@#\n<>]*?(?<!\s)#[0-9a-f]{4}\b)|(@[^@\s<>"][^@\s<>"]*)|(^|\s)(#[a-z0-9_-]+)(?=\s|$|[.,!?]))(?![^<]*>)/gi,
+            (match, tag, mentionWithSuffix, simpleMention, whitespace, channel) => {
+                if (tag) return tag;
                 if (mentionWithSuffix) {
                     const suffixIdx = mentionWithSuffix.search(/#[0-9a-f]{4}$/i);
                     const namePart = mentionWithSuffix.substring(0, suffixIdx);
@@ -322,7 +324,8 @@
             }
         );
 
-        formatted = formatted.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
+        formatted = formatted.replace(/(<[^>]+>)|:([a-zA-Z0-9_]+):/g, (match, tag, code) => {
+            if (tag) return tag;
             const emoji = ctx.emojiMap ? ctx.emojiMap[code.toLowerCase()] : null;
             if (emoji) return emoji;
             if (ctx.customEmojis && ctx.customEmojis[code]) {

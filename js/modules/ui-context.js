@@ -825,26 +825,18 @@ Object.assign(NYM.prototype, {
     async _unfurlFetch(url) {
         try {
             let data;
+            let proxied = null;
             const base = this._getProxyBaseUrl();
             if (base) {
                 try {
-                    const resp = await this._edgeFetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
-                    if (!resp.ok) throw new Error(`Unfurl proxy returned ${resp.status}`);
-                    data = await resp.json();
-                } catch (proxyErr) {
-                    // Unfurl proxy failed for this URL — try direct fetch.
-                    // Don't treat as a global API outage: unfurl can fail per-URL
-                    // (target site down, CORS, 5xx) without the proxy being down.
-                    const resp = await fetch(url, {
-                        headers: { 'Accept': 'text/html' },
-                        redirect: 'follow',
-                    });
-                    if (!resp.ok) return null;
-                    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-                    if (!contentType.includes('text/html')) return null;
-                    const html = await resp.text();
-                    data = this._extractOpenGraph(html, url);
+                    proxied = await this._edgeFetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
+                } catch (err) {
+                    if (!this._proxyUnreachable(err)) return null;
                 }
+            }
+            if (proxied && !this._proxyUnreachable(proxied)) {
+                if (!proxied.ok) return null;
+                data = await proxied.json();
             } else {
                 // Direct fetch fallback — works when the target sets CORS headers
                 const resp = await fetch(url, {

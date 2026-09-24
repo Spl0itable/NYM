@@ -9,10 +9,19 @@ import {
   invoicePut,
   invoiceDelete,
   invoiceGet,
-  codePut
+  codePut,
+  codeGet,
+  codeDelete
 } from "./_d1.js";
 
 const SATS_PER_CREDIT_DEFAULT = 100;
+const SHOP_CODE_RE = /^NYM-[0-9A-F]{32}$/;
+
+function shopNewCode() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return "NYM-" + Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
 
 // An in-flight turn holds its claim on a lease the running attempt heartbeats
 // ("turn-touch"), so the claim outlives the slowest model yet lapses seconds
@@ -93,6 +102,9 @@ export class NymLedger {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS credit_dust (pubkey TEXT NOT NULL, tier TEXT NOT NULL, milli INTEGER NOT NULL, PRIMARY KEY (pubkey, tier));"
     );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS credit_holds (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, exp INTEGER NOT NULL);"
+    );
   }
 
   // Serialize op handlers so a D1 read-modify-write can't interleave with
@@ -123,7 +135,9 @@ export class NymLedger {
     switch (op) {
       case "replay": return this._replay(a.id, a.ttl);
       case "transfer-credits": return this._transferCredits(a.from, a.to);
-      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier, a.milli);
+      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier, a.milli, a.hold);
+      case "credit-hold": return this._creditHold(a);
+      case "credit-release": return this._creditRelease(a.id);
       case "dust-peek": return this._dustPeek(a.pubkey);
       case "free-claim": return this._freeClaim(a.pubkey, a.limit, a.net, a.netLimit);
       case "free-peek": return this._freePeek(a.pubkey, a.limit, a.net, a.netLimit);
@@ -546,16 +560,21 @@ export class NymLedger {
     if (from === to) return { error: "You can't transfer credits to your own pubkey." };
     const source = await this._getCredits(from);
     const proSource = await this._getCredits(from, "pro");
-    const moved = source.balance > 0 ? source.balance : 0;
-    const proMoved = proSource.balance > 0 ? proSource.balance : 0;
-    if (moved <= 0 && proMoved <= 0) return { error: "No credits to transfer." };
+    const held = this._holdsOf(from, "standard", null);
+    const proHeld = this._holdsOf(from, "pro", null);
+    const moved = Math.max(0, (source.balance || 0) - held);
+    const proMoved = Math.max(0, (proSource.balance || 0) - proHeld);
+    if (moved <= 0 && proMoved <= 0) {
+      if (held > 0 || proHeld > 0) return { error: "Your credits are paying for a reply that is still running. Try again when it finishes." };
+      return { error: "No credits to transfer." };
+    }
     let targetBalance = 0;
     let targetProBalance = 0;
     if (moved > 0) {
       const dest = await this._getCredits(to);
       dest.balance = (dest.balance || 0) + moved;
       dest.totalPurchased = (dest.totalPurchased || 0) + moved;
-      source.balance = 0;
+      source.balance = (source.balance || 0) - moved;
       await this._putCredits(to, dest);
       await this._putCredits(from, source);
       targetBalance = dest.balance;
@@ -564,14 +583,14 @@ export class NymLedger {
       const proDest = await this._getCredits(to, "pro");
       proDest.balance = (proDest.balance || 0) + proMoved;
       proDest.totalPurchased = (proDest.totalPurchased || 0) + proMoved;
-      proSource.balance = 0;
+      proSource.balance = (proSource.balance || 0) - proMoved;
       await this._putCredits(to, proDest, "pro");
       await this._putCredits(from, proSource, "pro");
       targetProBalance = proDest.balance;
     }
     return {
       transferred: moved, proTransferred: proMoved, target: to,
-      sourceBalance: 0, targetBalance, targetProBalance
+      sourceBalance: Math.max(0, (source.balance || 0)), targetBalance, targetProBalance
     };
   }
 
@@ -601,10 +620,76 @@ export class NymLedger {
     );
   }
 
-  async _consumeCredits(pubkey, cost, ts, tier, milli) {
+  _holdsOf(pubkey, tierKey, except) {
+    const now = Date.now();
+    this.sql.exec("DELETE FROM credit_holds WHERE exp <= ?;", now);
+    const rows = this.sql.exec(
+      "SELECT id, amount FROM credit_holds WHERE pubkey = ? AND tier = ? AND exp > ?;", pubkey, tierKey, now
+    ).toArray();
+    let held = 0;
+    for (const r of rows || []) {
+      if (except && r.id === except) continue;
+      held += Math.max(0, Number(r.amount) || 0);
+    }
+    return held;
+  }
+
+  _takeHold(id, pubkey, tierKey) {
+    if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) return false;
+    const rows = this.sql.exec(
+      "SELECT id FROM credit_holds WHERE id = ? AND pubkey = ? AND tier = ? AND exp > ? LIMIT 1;", id, pubkey, tierKey, Date.now()
+    ).toArray();
+    this.sql.exec("DELETE FROM credit_holds WHERE id = ? AND pubkey = ?;", id, pubkey);
+    return !!(rows && rows.length);
+  }
+
+  async _creditHold(a) {
+    const pubkey = String(a.pubkey || "");
+    const id = String(a.id || "");
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return { error: "Invalid pubkey." };
+    if (!/^[0-9a-f]{32}$/.test(id)) return { error: "Invalid hold." };
+    const tierKey = a.tier === "pro" ? "pro" : "standard";
+    const amount = Math.max(0, Math.floor(Number(a.amount) || 0));
+    const ttl = Math.min(3600, Math.max(30, Math.floor(Number(a.ttl) || 900)));
+    const limit = Math.floor(Number(a.rateLimit) || 0);
+    const windowMs = Math.max(1000, Math.floor(Number(a.rateWindowMs) || 60000));
+    const now = Date.now();
+    if (limit > 0) {
+      const cutoff = now - windowMs;
+      let recent = 0;
+      for (const t of ["standard", "pro"]) {
+        const r = await this._getCredits(pubkey, t);
+        recent += (Array.isArray(r.rl) ? r.rl : []).filter((x) => x > cutoff).length;
+      }
+      if (recent >= limit) return { ok: false, rateLimited: true };
+    }
+    const rec = await this._getCredits(pubkey, tierKey);
+    const held = this._holdsOf(pubkey, tierKey, null);
+    const free = (rec.balance || 0) - held;
+    if (free < amount) return { ok: false, balance: rec.balance || 0, held: held, required: amount };
+    this.sql.exec(
+      "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp) VALUES (?, ?, ?, ?, ?);",
+      id, pubkey, tierKey, amount, now + ttl * 1000
+    );
+    if (!Array.isArray(rec.rl)) rec.rl = [];
+    rec.rl = rec.rl.filter((t) => t > now - 600000);
+    rec.rl.push(now);
+    await this._putCredits(pubkey, rec, tierKey);
+    return { ok: true, balance: rec.balance || 0, held: held + amount };
+  }
+
+  _creditRelease(id) {
+    if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) return { ok: false };
+    this.sql.exec("DELETE FROM credit_holds WHERE id = ?;", id);
+    return { ok: true };
+  }
+
+  async _consumeCredits(pubkey, cost, ts, tier, milli, hold) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     cost = Math.max(0, Math.floor(Number(cost) || 0));
     const tierKey = tier === "pro" ? "pro" : "standard";
+    const counted = hold ? this._takeHold(hold, pubkey, tierKey) : false;
+    const heldByOthers = this._holdsOf(pubkey, tierKey, null);
     const owed = Math.max(0, Math.floor(Number(milli) || 0));
     let dust = 0;
     let nextDust = 0;
@@ -615,13 +700,13 @@ export class NymLedger {
       nextDust = total % 1000;
     }
     const rec = await this._getCredits(pubkey, tier);
-    if ((rec.balance || 0) < cost) {
+    if ((rec.balance || 0) - heldByOthers < cost) {
       return { ok: false, balance: rec.balance || 0, required: cost };
     }
     if (owed > 0) this._setDust(pubkey, tierKey, nextDust);
     rec.balance -= cost;
     rec.totalUsed = (rec.totalUsed || 0) + cost;
-    if (Number.isFinite(Number(ts))) {
+    if (!counted && Number.isFinite(Number(ts))) {
       if (!Array.isArray(rec.rl)) rec.rl = [];
       // Drop stamps far older than any rate window so the row can't grow forever.
       const rlCutoff = Date.now() - 600000;
@@ -840,39 +925,49 @@ export class NymLedger {
     delete fromRec.owned[itemId];
     this._pruneActive(fromRec);
     const toRec = await this._getShop(to);
-    toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: entry.code, transferredFrom: from };
+    const newCode = shopNewCode();
+    toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: newCode, transferredFrom: from };
     // Numbered editions keep their number when traded.
     if (entry.edition) { toRec.owned[itemId].edition = entry.edition; toRec.owned[itemId].editionMax = entry.editionMax || 0; }
     await this._putShop(from, fromRec);
     await this._putShop(to, toRec);
+    try { await codePut(this.env.DB_CODES, newCode, itemId, to, Date.now()); } catch {}
     if (entry.code) {
-      try { await codePut(this.env.DB_CODES, entry.code, itemId, to, Date.now()); } catch {}
+      try { await codeDelete(this.env.DB_CODES, entry.code); } catch {}
     }
-    return { ok: true, itemId, owned: fromRec.owned, active: fromRec.active, code: entry.code || null };
+    return { ok: true, itemId, owned: fromRec.owned, active: fromRec.active };
   }
 
   async _shopRedeem(a) {
     const code = String(a.code || "");
-    const itemId = String(a.itemId || "");
     const user = String(a.user || "").toLowerCase();
-    const prevOwner = String(a.prevOwner || "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(user)) return { error: "Invalid pubkey." };
+    if (!SHOP_CODE_RE.test(code)) return { error: "Invalid recovery code." };
+    const found = await codeGet(this.env.DB_CODES, code);
+    if (!found) return { error: "Unknown recovery code.", unknown: true };
+    const itemId = String(found.itemId || "");
+    if (!itemId || (a.itemId != null && String(a.itemId) !== itemId)) {
+      return { error: "That recovery code changed while it was being redeemed. Try again." };
+    }
+    const prevOwner = String(found.owner || "").toLowerCase();
     if (prevOwner === user) {
       const ownRec = await this._getShop(user);
-      return { alreadyOwner: true, owned: ownRec.owned, active: ownRec.active };
+      return { alreadyOwner: true, itemId, owned: ownRec.owned, active: ownRec.active, prevOwner };
     }
     if (prevOwner && /^[0-9a-f]{64}$/.test(prevOwner)) {
       const prevRec = await this._getShop(prevOwner);
-      if (prevRec.owned[itemId]) {
-        delete prevRec.owned[itemId];
-        this._pruneActive(prevRec);
-        await this._putShop(prevOwner, prevRec);
+      const held = prevRec.owned[itemId];
+      if (!held || (held.code && held.code !== code)) {
+        return { error: "This recovery code is no longer valid.", stale: true };
       }
+      delete prevRec.owned[itemId];
+      this._pruneActive(prevRec);
+      await this._putShop(prevOwner, prevRec);
     }
     const rrec = await this._getShop(user);
     rrec.owned[itemId] = { at: Date.now(), amountSats: 0, gift: false, code, redeemed: true };
     await this._putShop(user, rrec);
-    try { await codePut(this.env.DB_CODES, code, itemId, user, a.createdAt || Date.now()); } catch {}
+    try { await codePut(this.env.DB_CODES, code, itemId, user, found.createdAt || Date.now()); } catch {}
     return { itemId, owned: rrec.owned, active: rrec.active, prevOwner };
   }
 }

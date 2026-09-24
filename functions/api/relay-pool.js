@@ -24,8 +24,8 @@
 //   ["POOL:RETRACT", eventId, reason] - an event forwarded earlier was judged spam; remove it
 //   ["POOL:STATUS", { connected, count, latency, events }]
 
-import { getEventHash, schnorr } from './_shared.js';
-import { isNymchatClient } from './_client.js';
+import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake } from './_shared.js';
+import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 import { spamEngine, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor } from './_spam.js';
@@ -43,6 +43,7 @@ function isPrivateRelayHost(hostname) {
   if (h6.startsWith('[') && h6.endsWith(']')) h6 = h6.slice(1, -1);
   if (host.includes(':') || h6.includes(':')) {
     if (h6 === '::1' || h6 === '::' || h6 === '0:0:0:0:0:0:0:1') return true;
+    if (ipv6Blocked(h6)) return true;
     if (/^f[cd][0-9a-f]{2}:/.test(h6)) return true;     // fc00::/7
     if (/^fe[89ab][0-9a-f]:/.test(h6)) return true;     // fe80::/10
     const m = h6.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
@@ -61,12 +62,212 @@ function isPrivateRelayHost(hostname) {
   return false;
 }
 
+const POOL_MAX_UPSTREAMS = 64;
+
+function canonicalRelayUrl(url) {
+  if (typeof url !== 'string' || url.length > 512) return null;
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  if (parsed.protocol !== 'wss:') return null;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+  if (parsed.port && parsed.port !== '443') return null;
+  if (isPrivateRelayHost(parsed.hostname)) return null;
+  const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+  return 'wss://' + parsed.hostname + path;
+}
+
+class TokenBucket {
+  constructor(capacity, perMinute, now) {
+    this.capacity = capacity;
+    this.rate = perMinute / 60000;
+    this.tokens = capacity;
+    this.at = typeof now === 'number' ? now : Date.now();
+  }
+
+  take(n, now) {
+    const t = typeof now === 'number' ? now : Date.now();
+    const units = typeof n === 'number' ? n : 1;
+    this.tokens = Math.min(this.capacity, this.tokens + Math.max(0, t - this.at) * this.rate);
+    this.at = t;
+    if (this.tokens < units) return false;
+    this.tokens -= units;
+    return true;
+  }
+}
+
+const EVENT_FRAME_KEYS = ['id', 'pubkey', 'created_at', 'kind', 'tags', 'content', 'sig'];
+const RX_EVENT_KEY = /"(id|pubkey|created_at|kind|tags|content|sig)"(\s*):(\s*)/g;
+
+function eventFrameCanonical(raw) {
+  if (typeof raw !== 'string' || !raw.startsWith('["EVENT","')) return false;
+  const n = raw.length;
+  if (raw.charCodeAt(n - 1) !== 93 || raw.charCodeAt(n - 2) !== 125) return false;
+  let i = 10;
+  while (i < n) {
+    const c = raw.charCodeAt(i);
+    if (c === 34) break;
+    if (c === 92 || c === 123) return false;
+    i++;
+  }
+  if (raw.charCodeAt(i + 1) !== 44 || raw.charCodeAt(i + 2) !== 123) return false;
+  const seen = new Set();
+  RX_EVENT_KEY.lastIndex = i + 2;
+  let m;
+  while ((m = RX_EVENT_KEY.exec(raw)) !== null) {
+    if (m[2] || m[3] || seen.has(m[1])) return false;
+    seen.add(m[1]);
+  }
+  return seen.size === EVENT_FRAME_KEYS.length;
+}
+
+function canonicalEventFrame(raw) {
+  if (eventFrameCanonical(raw)) return raw;
+  let msg;
+  try { msg = JSON.parse(raw); } catch { return null; }
+  if (!Array.isArray(msg) || msg.length !== 3 || msg[0] !== 'EVENT' || typeof msg[1] !== 'string') return null;
+  const ev = msg[2];
+  if (!ev || typeof ev !== 'object' || Array.isArray(ev)) return null;
+  const out = JSON.stringify(['EVENT', msg[1], ev]);
+  return eventFrameCanonical(out) ? out : null;
+}
+
+const RELAY_MESSAGE_TYPES = new Set(['EVENT', 'OK', 'EOSE', 'NOTICE', 'CLOSED', 'AUTH']);
+
+function reframeRelayMessage(raw) {
+  let msg;
+  try { msg = JSON.parse(raw); } catch { return null; }
+  if (!Array.isArray(msg) || typeof msg[0] !== 'string' || !RELAY_MESSAGE_TYPES.has(msg[0])) return null;
+  return JSON.stringify(msg);
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+const HEX128 = /^[0-9a-f]{128}$/;
+const VERIFIED_SIG_MAX = 20000;
+const verifiedSigs = new Map();
+
+function wellFormedEvent(ev) {
+  if (!ev || typeof ev !== 'object' || Array.isArray(ev)) return false;
+  if (typeof ev.id !== 'string' || !HEX64.test(ev.id)) return false;
+  if (typeof ev.pubkey !== 'string' || !HEX64.test(ev.pubkey)) return false;
+  if (typeof ev.sig !== 'string' || !HEX128.test(ev.sig)) return false;
+  if (!Number.isSafeInteger(ev.kind) || ev.kind < 0) return false;
+  if (!Number.isSafeInteger(ev.created_at) || ev.created_at < 0) return false;
+  if (typeof ev.content !== 'string' || !Array.isArray(ev.tags)) return false;
+  for (const t of ev.tags) {
+    if (!Array.isArray(t)) return false;
+    for (const v of t) if (typeof v !== 'string') return false;
+  }
+  return true;
+}
+
+function verifySignedEvent(ev) {
+  if (!wellFormedEvent(ev)) return false;
+  try {
+    if (getEventHash(ev) !== ev.id) return false;
+    if (verifiedSigs.get(ev.id) === ev.sig) return true;
+    if (!schnorr.verify(ev.sig, ev.id, ev.pubkey)) return false;
+  } catch { return false; }
+  verifiedSigs.set(ev.id, ev.sig);
+  if (verifiedSigs.size > VERIFIED_SIG_MAX) verifiedSigs.delete(verifiedSigs.keys().next().value);
+  return true;
+}
+
+function verifiedEventJson(objJson, expectId) {
+  if (typeof objJson !== 'string') return null;
+  let ev;
+  try { ev = JSON.parse(objJson); } catch { return null; }
+  if (expectId && (!ev || ev.id !== expectId)) return null;
+  return verifySignedEvent(ev) ? ev : null;
+}
+
+function validatedPowBits(ev) {
+  if (!ev || typeof ev.id !== 'string' || !Array.isArray(ev.tags)) return 0;
+  const nonce = ev.tags.find((t) => Array.isArray(t) && t[0] === 'nonce');
+  if (!nonce || typeof nonce[2] !== 'string' || !/^\d{1,3}$/.test(nonce[2])) return 0;
+  const target = parseInt(nonce[2], 10);
+  if (target <= 0 || target > 64) return 0;
+  let bits = 0;
+  for (let i = 0; i < ev.id.length; i++) {
+    const v = parseInt(ev.id[i], 16);
+    if (v === 0) { bits += 4; continue; }
+    bits += Math.clz32(v) - 28;
+    break;
+  }
+  return bits >= target ? target : 0;
+}
+
+const ARCHIVE_RATE_WINDOW_MS = 60000;
+const ARCHIVE_RATE_MAX_KEYS = 5000;
+const ARCHIVE_RATE_LIMITS = { channel: 30, reaction: 60, record: 20, emoji: 6 };
+const archiveRates = new Map();
+
+function archiveRateClass(kind) {
+  if (kind === 20000 || kind === 23333) return 'channel';
+  if (kind === 7) return 'reaction';
+  if (kind === 30030 || kind === 10030) return 'emoji';
+  return 'record';
+}
+
+function archiveRateOk(pubkey, kind, eventId, now) {
+  if (typeof pubkey !== 'string' || !pubkey || typeof eventId !== 'string' || eventId.length < 8) return false;
+  const cls = archiveRateClass(kind);
+  const t = typeof now === 'number' ? now : Date.now();
+  const window = Math.floor(t / ARCHIVE_RATE_WINDOW_MS);
+  const key = cls + ':' + pubkey;
+  let entry = archiveRates.get(key);
+  if (!entry || entry.window !== window) {
+    if (entry) archiveRates.delete(key);
+    entry = { window, ids: new Set() };
+    archiveRates.set(key, entry);
+    if (archiveRates.size > ARCHIVE_RATE_MAX_KEYS) archiveRates.delete(archiveRates.keys().next().value);
+  }
+  let tag = 0x811c9dc5;
+  for (let i = 0; i < eventId.length; i++) {
+    tag ^= eventId.charCodeAt(i);
+    tag = Math.imul(tag, 0x01000193);
+  }
+  if (entry.ids.has(tag)) return true;
+  if (entry.ids.size >= ARCHIVE_RATE_LIMITS[cls]) return false;
+  entry.ids.add(tag);
+  return true;
+}
+
+const ARCHIVE_JSON_MAX = { 20000: 32768, 23333: 32768, 7: 4096, 30078: 32768, 30030: 65536, 10030: 65536 };
+const VOUCH_JSON_MAX = 65536;
+const ARCHIVE_FUTURE_SKEW_S = 600;
+
+function clientIpKey(request) {
+  let ip = '';
+  try { ip = (request && request.headers && request.headers.get('CF-Connecting-IP')) || ''; } catch { ip = ''; }
+  ip = String(ip).trim().slice(0, 64);
+  if (!ip) return '';
+  if (ip.includes(':')) return ipv6NetKey(ip) || ip;
+  return ip;
+}
+
+const POOL_CONNECTS_PER_IP_MIN = 120;
+const POOL_EVENTS_PER_IP_MIN = 1200;
+const POOL_IP_CHARGE_BATCH = 20;
+
+export {
+  isPrivateRelayHost, POOL_MAX_UPSTREAMS, canonicalRelayUrl, TokenBucket, eventFrameCanonical,
+  canonicalEventFrame, reframeRelayMessage, verifySignedEvent, verifiedEventJson, validatedPowBits,
+  archiveRateOk, clientIpKey
+};
+
 export async function onRequest(context) {
   const { request, env } = context;
 
   const upgradeHeader = request.headers.get('Upgrade');
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket upgrade', { status: 426 });
+  }
+  if (!clientOriginAllowed(request, env)) {
+    return new Response('Forbidden', { status: 403 });
+  }
+  const ipKey = clientIpKey(request);
+  if (ipKey && !(await cacheRateTake('pool-connect', ipKey, 1, POOL_CONNECTS_PER_IP_MIN, 60000))) {
+    return new Response('Too Many Requests', { status: 429 });
   }
 
   const clientIsNymchat = isNymchatClient(request, env);
@@ -97,6 +298,26 @@ export async function onRequest(context) {
   const kindBlacklist = new Map();
   const closedKindRetries = new Map();   // relayUrl+'\n'+parentSubId -> resend count
   let serverOpen = true;
+
+  const CLIENT_FRAME_MAX = 512 * 1024;
+  const UPSTREAM_FRAME_MAX = 1024 * 1024;
+  const MAX_ACTIVE_SUBS = 64;
+  const MAX_REQ_FILTERS = 30;
+  const MAX_SUB_ID = 128;
+  const MAX_RELAY_LIST = 256;
+  const MAX_KIND_BLACKLIST_RELAYS = 256;
+  const MAX_KIND_BLACKLIST_KINDS = 64;
+  const PENDING_GEO_PER_RELAY = 50;
+  const MAX_PERMANENTLY_SKIPPED = 1000;
+  const FORGED_FRAME_LIMIT = 10;
+  const eventBucket = new TokenBucket(200, 120);
+  const reqBucket = new TokenBucket(200, 120);
+  const relaysBucket = new TokenBucket(10, 10);
+  const connectBucket = new TokenBucket(128, 64);
+  const subActivity = new Map();
+  const forgedByRelay = new Map();
+  let ipEventUnits = 0;
+  let ipEventBlockedUntil = 0;
 
   // Dedup housekeeping
   const DEDUP_MAX = 50000;
@@ -197,6 +418,7 @@ export async function onRequest(context) {
   let connectionTimer = null;
   let connectionQueue = [];
   const MAX_CONCURRENT_CONNECTS = 6;
+  const MAX_UPSTREAMS = POOL_MAX_UPSTREAMS;
   let inFlightConnects = 0;
   const pendingConnect = new Set();
 
@@ -237,7 +459,8 @@ export async function onRequest(context) {
       latency,
       badgeGate: spam.badgeGate(),
       unbadged: droppedUnbadgedCount,
-      droppedSpam: droppedSpamCount
+      droppedSpam: droppedSpamCount,
+      droppedForged: droppedForgedCount
     }]));
   }
 
@@ -425,14 +648,7 @@ export async function onRequest(context) {
   }
 
   function validateRelayUrl(url) {
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== 'wss:' && parsed.protocol !== 'ws:') return false;
-      if (isPrivateRelayHost(parsed.hostname)) return false;
-      return true;
-    } catch {
-      return false;
-    }
+    return canonicalRelayUrl(url) === url;
   }
 
   // Extract Nostr event ID from raw JSON string without JSON.parse.
@@ -447,16 +663,6 @@ export async function onRequest(context) {
     const start = idx + 6;
     const end = raw.indexOf('"', start);
     if (end === -1 || end - start !== 64) return null; // Nostr event IDs are exactly 64 hex chars
-    return raw.substring(start, end);
-  }
-
-  // Extract OK event ID: ["OK","<eventId>",...]
-  // The event ID is the second element, starts at position 6
-  function extractOKEventId(raw) {
-    // ["OK","  = positions 0-5, event ID starts at 6
-    const start = 6;
-    const end = raw.indexOf('"', start);
-    if (end === -1 || end - start < 16) return null;
     return raw.substring(start, end);
   }
 
@@ -489,7 +695,7 @@ export async function onRequest(context) {
       out += raw[i];
       i++;
     }
-    return null;
+    return out;
   }
 
   function extractEventKind(raw) {
@@ -584,6 +790,8 @@ export async function onRequest(context) {
   }
 
   const isArchivableChannelKind = (k) => k === 20000 || k === 23333 || k === 7 || k === 30078;
+  const ARCHIVE_RECORD_TOPICS = new Set(['nym-poll', 'nym-poll-vote', 'nym-vouches', 'nym-pq']);
+  const RX_GEOHASH_KEY = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
 
   // Channel name for an event: 'g' for geohash (20000), 'd' for named (23333),
   // either for reactions (7) and polls (30078).
@@ -591,6 +799,42 @@ export async function onRequest(context) {
     if (kind === 20000) return getTag('g');
     if (kind === 23333) return getTag('d');
     return getTag('g') || getTag('d');
+  }
+
+  function channelKeyFor(kind, getTag) {
+    if (kind === 20000) {
+      const key = sanitizeChannelKey(getTag('g'));
+      return RX_GEOHASH_KEY.test(key) ? key : '';
+    }
+    if (kind === 23333) {
+      const key = sanitizeChannelKey(getTag('d'));
+      return key && !RX_GEOHASH_KEY.test(key) ? key : '';
+    }
+    const g = getTag('g');
+    if (g) {
+      const key = sanitizeChannelKey(g);
+      return RX_GEOHASH_KEY.test(key) ? key : '';
+    }
+    return sanitizeChannelKey(getTag('d'));
+  }
+
+  function archiveChannelOf(kind, getTag) {
+    if (!isArchivableChannelKind(kind)) return '';
+    if (kind === 30078 && !ARCHIVE_RECORD_TOPICS.has(getTag('t'))) return '';
+    return channelKeyFor(kind, getTag);
+  }
+
+  function archiveJsonMax(kind, getTag) {
+    if (kind === 30078 && getTag('t') === 'nym-vouches') return VOUCH_JSON_MAX;
+    return ARCHIVE_JSON_MAX[kind] || CHANNEL_EVENT_MAX;
+  }
+
+  function evTagReader(ev) {
+    const tags = ev && Array.isArray(ev.tags) ? ev.tags : [];
+    return (n) => {
+      const t = tags.find((x) => Array.isArray(x) && x[0] === n && typeof x[1] === 'string');
+      return t ? t[1] : null;
+    };
   }
 
   // How many extra relays one event reports before the notes stop. Past a
@@ -622,25 +866,39 @@ export async function onRequest(context) {
 
   function isAppRelayOnlyEvent(ev) {
     if (!ev || typeof ev.kind !== 'number') return false;
-    const tags = Array.isArray(ev.tags) ? ev.tags : [];
-    return isAppChannelOnly(ev.kind, (n) => {
-      const t = tags.find((x) => Array.isArray(x) && x[0] === n && typeof x[1] === 'string');
-      return t ? t[1] : null;
-    });
+    return isAppChannelOnly(ev.kind, evTagReader(ev));
   }
 
   const PENDING_APP_ARCHIVE_MAX = 200;
   const pendingAppArchive = new Map();
+  const ARCHIVE_VETO_MAX = 2000;
+  const archiveVetoed = new Set();
+  const OUTBOUND_ARCHIVED_MAX = 500;
+  const outboundArchived = new Map();
 
   function runArchive(work) {
     if (context && context.waitUntil) { try { context.waitUntil(work); } catch { /* noop */ } }
   }
 
   function bufferArchive(channel, eventId, kind, pubkey, createdAt, objJson) {
-    if (!channel || !eventId || !objJson || objJson.length > CHANNEL_EVENT_MAX) return;
-    if (archiveBuf.has(eventId)) return;
+    if (!channel || !eventId || !objJson || objJson.length > CHANNEL_EVENT_MAX) return false;
+    if (archiveBuf.has(eventId) || archiveVetoed.has(eventId)) return false;
     archiveBuf.set(eventId, { id: eventId, channel, kind, pubkey: pubkey || null, created_at: createdAt || 0, json: objJson });
     if (archiveBuf.size >= ARCHIVE_FLUSH_MAX) runArchive(flushArchive());
+    return true;
+  }
+
+  function vetoArchive(eventId) {
+    if (!eventId) return;
+    archiveBuf.delete(eventId);
+    archiveVetoed.add(eventId);
+    if (archiveVetoed.size > ARCHIVE_VETO_MAX) archiveVetoed.delete(archiveVetoed.values().next().value);
+    const pubkey = outboundArchived.get(eventId);
+    if (pubkey === undefined) return;
+    outboundArchived.delete(eventId);
+    if (archiveEnabled) {
+      runArchive(CHANNELS_DB.prepare('DELETE FROM events WHERE id = ? AND pubkey = ?').bind(eventId, pubkey).run().catch(() => null));
+    }
   }
 
   // The relay directory, loaded once per isolate. Held in a plain variable so
@@ -648,6 +906,23 @@ export async function onRequest(context) {
   // and null means admit everything.
   let geoDirectory = null;
   runArchive((async () => { geoDirectory = await loadGeoDirectory(); })());
+  const GEO_ALLOW_CACHE_MAX = 512;
+  let geoAllowCache = new Map();
+  let geoAllowDirectory = null;
+
+  function geoAllowSet(geohash) {
+    if (geoAllowDirectory !== geoDirectory) {
+      geoAllowCache = new Map();
+      geoAllowDirectory = geoDirectory;
+    }
+    let allow = geoAllowCache.get(geohash);
+    if (!allow) {
+      allow = new Set(closestRelayUrls(geohash, geoDirectory));
+      geoAllowCache.set(geohash, allow);
+      if (geoAllowCache.size > GEO_ALLOW_CACHE_MAX) geoAllowCache.delete(geoAllowCache.keys().next().value);
+    }
+    return allow;
+  }
 
   // Fails open on an unloaded directory or an undecodable geohash. In proxy
   // mode the pool holds the whole directory, so the neighbourhood is always
@@ -657,27 +932,23 @@ export async function onRequest(context) {
     if (!geoDirectory || typeof relayUrl !== 'string' || !relayUrl) return true;
     const geohash = extractTagValue(raw, 'g');
     if (!geohash) return true;
-    const allow = closestRelayUrls(geohash.toLowerCase(), geoDirectory);
-    if (!allow.length) return true;
-    return allow.includes(relayUrl);
+    const allow = geoAllowSet(geohash.toLowerCase());
+    if (!allow.size) return true;
+    return allow.has(relayUrl);
   }
 
   // Inbound event from a relay (string frame).
   function archiveInboundEvent(raw, kind, eventId) {
     if (!archiveEnabled || !eventId) return;
-    // kind 30078 is shared by presence/settings/etc; only archive polls/votes
-    // (channel-scoped via g/d), vouch lists (d = nym-vouches) and post-quantum
-    // key announcements (d = nym-pq).
-    if (kind === 30078) {
-      const t = extractTagValue(raw, 't');
-      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches'
-        && t !== 'nym-pq') return;
-    }
-    const channel = sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind));
+    const getTag = (n) => extractTagValue(raw, n);
+    const channel = archiveChannelOf(kind, getTag);
     if (!channel) return;
     const objJson = extractEventObjectJson(raw);
-    if (!objJson) return;
-    bufferArchive(channel, eventId, kind, extractEventStringField(raw, 'pubkey'), extractEventCreatedAt(raw), objJson);
+    if (!objJson || objJson.length > archiveJsonMax(kind, getTag)) return;
+    if (archiveBuf.has(eventId) || archiveVetoed.has(eventId)) return;
+    const pubkey = extractEventStringField(raw, 'pubkey');
+    if (!archiveRateOk(pubkey, kind, eventId)) return;
+    bufferArchive(channel, eventId, kind, pubkey, extractEventCreatedAt(raw), objJson);
   }
 
   // A NIP-09 deletion (kind 5) removes the referenced events from the channel
@@ -691,10 +962,8 @@ export async function onRequest(context) {
 
   async function applyArchiveDeletion(objJson) {
     try {
-      const ev = JSON.parse(objJson);
-      if (!ev || ev.kind !== 5 || typeof ev.id !== 'string' || typeof ev.sig !== 'string'
-        || typeof ev.pubkey !== 'string' || !Array.isArray(ev.tags)) return;
-      if (getEventHash(ev) !== ev.id || !schnorr.verify(ev.sig, ev.id, ev.pubkey)) return;
+      const ev = verifiedEventJson(objJson);
+      if (!ev || ev.kind !== 5) return;
       const targets = ev.tags
         .filter((t) => Array.isArray(t) && t[0] === 'e' && typeof t[1] === 'string')
         .map((t) => t[1].toLowerCase())
@@ -708,26 +977,27 @@ export async function onRequest(context) {
     } catch { /* best-effort */ }
   }
 
+  function outboundChannelRefused(ev) {
+    if (ev.kind !== 20000 && ev.kind !== 23333) return false;
+    if (typeof ev.content !== 'string' || typeof ev.pubkey !== 'string') return true;
+    if (spam.isHidden(ev.id) || spam.isMuted(ev.pubkey)) return true;
+    const frame = JSON.stringify(['EVENT', '', ev]);
+    if (hasBlockedContentPrefix(frame) || isGlubClientFrame(frame)) return true;
+    return isSpamEventFrame(frame, false);
+  }
+
   // Outbound event the client is publishing — archived immediately so sends
   // land in D1 without waiting for the relay echo (deduped, so saved once).
   function archiveOutgoingEvent(ev) {
     if (!archiveEnabled || !ev || typeof ev.id !== 'string' || !isArchivableChannelKind(ev.kind)) return;
-    const tags = Array.isArray(ev.tags) ? ev.tags : [];
-    const getTag = (n) => { const t = tags.find((x) => Array.isArray(x) && x[0] === n); return t ? t[1] : null; };
-    // kind 30078 is shared by presence/settings/etc; only archive polls, vouch
-    // lists and post-quantum key announcements — the same allowlist the
-    // inbound path applies, and it has to stay the same one. An announcement
-    // that reached D1 only via a relay echo would be missing for exactly as
-    // long as no relay echoed it back through this worker, which is precisely
-    // the window right after publishing, when a peer opening a conversation is
-    // most likely to look it up.
-    if (ev.kind === 30078) {
-      const t = getTag('t');
-      if (t !== 'nym-poll' && t !== 'nym-poll-vote' && t !== 'nym-vouches'
-        && t !== 'nym-pq') return;
-    }
-    const channel = sanitizeChannelKey(channelFromTags(getTag, ev.kind));
+    if (typeof ev.pubkey !== 'string') return;
+    const getTag = evTagReader(ev);
+    const channel = archiveChannelOf(ev.kind, getTag);
     if (!channel) return;
+    if (archiveBuf.has(ev.id) || archiveVetoed.has(ev.id)) return;
+    const json = JSON.stringify(ev);
+    if (json.length > archiveJsonMax(ev.kind, getTag)) return;
+    if (outboundChannelRefused(ev)) return;
     if (isAppRelayOnlyEvent(ev)) {
       if (pendingAppArchive.size >= PENDING_APP_ARCHIVE_MAX) {
         pendingAppArchive.delete(pendingAppArchive.keys().next().value);
@@ -735,8 +1005,12 @@ export async function onRequest(context) {
       pendingAppArchive.set(ev.id, { channel, ev });
       return;
     }
-    bufferArchive(channel, ev.id, ev.kind, typeof ev.pubkey === 'string' ? ev.pubkey : null,
-      typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
+    if (!archiveRateOk(ev.pubkey, ev.kind, ev.id)) return;
+    if (bufferArchive(channel, ev.id, ev.kind, ev.pubkey,
+      typeof ev.created_at === 'number' ? ev.created_at : 0, json)) {
+      outboundArchived.set(ev.id, ev.pubkey);
+      if (outboundArchived.size > OUTBOUND_ARCHIVED_MAX) outboundArchived.delete(outboundArchived.keys().next().value);
+    }
   }
 
   function settleAppArchive(eventId, accepted) {
@@ -745,29 +1019,30 @@ export async function onRequest(context) {
     pendingAppArchive.delete(eventId);
     if (!accepted) return false;
     const ev = held.ev;
-    bufferArchive(held.channel, ev.id, ev.kind, typeof ev.pubkey === 'string' ? ev.pubkey : null,
+    if (!archiveRateOk(ev.pubkey, ev.kind, ev.id)) return false;
+    return bufferArchive(held.channel, ev.id, ev.kind, typeof ev.pubkey === 'string' ? ev.pubkey : null,
       typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
-    return true;
   }
 
   // Verify id hash + schnorr signature before persisting so forged events can't
   // be archived to D1. Bounded work: runs once per unique event in the
-  // background flush, not on the forward hot path (which stays parse-free).
-  function archiveEventValid(jsonStr) {
-    try {
-      const ev = JSON.parse(jsonStr);
-      if (!ev || typeof ev.id !== 'string' || typeof ev.sig !== 'string' || typeof ev.pubkey !== 'string') return false;
-      if (!Array.isArray(ev.tags)) return false;
-      if (getEventHash(ev) !== ev.id) return false;
-      return schnorr.verify(ev.sig, ev.id, ev.pubkey);
-    } catch { return false; }
+  // background flush.
+  function archiveRowFrom(buffered, nowSec) {
+    const ev = verifiedEventJson(buffered.json, buffered.id);
+    if (!ev || ev.created_at > nowSec + ARCHIVE_FUTURE_SKEW_S) return null;
+    const getTag = evTagReader(ev);
+    const channel = archiveChannelOf(ev.kind, getTag);
+    if (!channel || channel !== buffered.channel) return null;
+    const json = JSON.stringify(ev);
+    if (json.length > archiveJsonMax(ev.kind, getTag)) return null;
+    return { id: ev.id, channel, kind: ev.kind, pubkey: ev.pubkey, created_at: ev.created_at, json };
   }
 
   // Flush buffered events as batched INSERT OR IGNORE statements. The id primary
   // key drops duplicates; an occasional failed flush is backfilled by relays.
   async function flushArchive() {
     if (!archiveEnabled || archiveBuf.size === 0) return;
-    const rows = Array.from(archiveBuf.values());
+    const buffered = Array.from(archiveBuf.values());
     archiveBuf.clear();
 
     // INSERT OR IGNORE dedupes on the id PK; no Cache layer needed.
@@ -775,8 +1050,14 @@ export async function onRequest(context) {
       'INSERT OR IGNORE INTO events (id, channel, kind, pubkey, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     const now = Date.now();
-    for (let i = 0; i < rows.length; i += ARCHIVE_BATCH) {
-      const slice = rows.slice(i, i + ARCHIVE_BATCH).filter((r) => !spam.isHidden(r.id) && archiveEventValid(r.json));
+    const nowSec = Math.floor(now / 1000);
+    for (let i = 0; i < buffered.length; i += ARCHIVE_BATCH) {
+      const slice = [];
+      for (const b of buffered.slice(i, i + ARCHIVE_BATCH)) {
+        if (spam.isHidden(b.id) || archiveVetoed.has(b.id)) continue;
+        const row = archiveRowFrom(b, nowSec);
+        if (row) slice.push(row);
+      }
       if (slice.length === 0) continue;
       const hidden = await hiddenEventIds(env, slice.map((r) => r.id));
       const keep = hidden.size ? slice.filter((r) => !hidden.has(r.id)) : slice;
@@ -788,10 +1069,11 @@ export async function onRequest(context) {
     }
   }
 
-  function bufferEmoji(coord, kind, pubkey, dTag, createdAt, objJson) {
+  function bufferEmoji(coord, kind, pubkey, dTag, createdAt, objJson, eventId) {
     if (!coord || !objJson || objJson.length > EMOJI_EVENT_MAX) return;
     const existing = emojiBuf.get(coord);
     if (existing && existing.created_at >= createdAt) return;
+    if (!archiveRateOk(pubkey, kind, eventId)) return;
     emojiBuf.set(coord, { coord, kind, pubkey, d: dTag || null, created_at: createdAt || 0, json: objJson });
     if (emojiBuf.size >= 200) runArchive(flushEmojiArchive());
   }
@@ -809,16 +1091,15 @@ export async function onRequest(context) {
     if (!coord) return;
     const objJson = extractEventObjectJson(raw);
     if (!objJson) return;
-    bufferEmoji(coord, kind, pubkey, extractTagValue(raw, 'd'), extractEventCreatedAt(raw), objJson);
+    bufferEmoji(coord, kind, pubkey, extractTagValue(raw, 'd'), extractEventCreatedAt(raw), objJson, extractEventId(raw));
   }
 
   function archiveOutgoingEmoji(ev) {
     if (!archiveEnabled || !ev || !isArchivableEmojiKind(ev.kind) || typeof ev.pubkey !== 'string') return;
-    const tags = Array.isArray(ev.tags) ? ev.tags : [];
-    const dTag = (() => { const t = tags.find((x) => Array.isArray(x) && x[0] === 'd'); return t ? t[1] : null; })();
+    const dTag = evTagReader(ev)('d');
     const coord = emojiCoord(ev.kind, ev.pubkey, dTag);
     if (!coord) return;
-    bufferEmoji(coord, ev.kind, ev.pubkey, dTag, typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
+    bufferEmoji(coord, ev.kind, ev.pubkey, dTag, typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev), ev.id);
   }
 
   async function ensureEmojiSchema() {
@@ -830,10 +1111,22 @@ export async function onRequest(context) {
     emojiSchemaReady = true;
   }
 
+  function emojiRowFrom(buffered, nowSec) {
+    const ev = verifiedEventJson(buffered.json);
+    if (!ev || !isArchivableEmojiKind(ev.kind) || ev.created_at > nowSec + ARCHIVE_FUTURE_SKEW_S) return null;
+    const dTag = evTagReader(ev)('d');
+    const coord = emojiCoord(ev.kind, ev.pubkey, dTag);
+    if (!coord || coord !== buffered.coord) return null;
+    const json = JSON.stringify(ev);
+    if (json.length > EMOJI_EVENT_MAX) return null;
+    return { coord, kind: ev.kind, pubkey: ev.pubkey, d: dTag || null, created_at: ev.created_at, json };
+  }
+
   // Newest-wins upsert keyed by replaceable-event coordinate.
   async function flushEmojiArchive() {
     if (!archiveEnabled || emojiBuf.size === 0) return;
-    const rows = Array.from(emojiBuf.values()).filter((r) => archiveEventValid(r.json));
+    const nowSec = Math.floor(Date.now() / 1000);
+    const rows = Array.from(emojiBuf.values()).map((b) => emojiRowFrom(b, nowSec)).filter(Boolean);
     emojiBuf.clear();
     if (rows.length === 0) return;
     try { await ensureEmojiSchema(); } catch { return; }
@@ -860,7 +1153,7 @@ export async function onRequest(context) {
     const hasUpper = /[A-Z]/.test(token);
     const hasLower = /[a-z]/.test(token);
 
-    const half = Math.floor(token.length / 2);
+    const half = Math.floor(Math.min(token.length, REPEAT_SCAN_MAX) / 2);
     for (let unit = 3; unit <= half; unit++) {
       const head = token.substring(0, unit);
       if (token.substring(unit, unit * 2) === head) {
@@ -880,6 +1173,7 @@ export async function onRequest(context) {
     return false;
   }
 
+  const REPEAT_SCAN_MAX = 256;
   const RX_ZERO_WIDTH = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
   const RARE_BIGRAMS = ['xw','xz','xj','xk','wx','wz','wj','wq','jq','jx','jz','kq','kx','kz','vq','vx','vz','zx','zk','zp','pq','pz','fq','fz','gq','gz','hq','hz'];
 
@@ -941,7 +1235,7 @@ export async function onRequest(context) {
     }
     if (tokens.length === 1 && tokens[0].length >= 12 && /^[A-Za-z0-9]+$/.test(tokens[0])) {
       const t = tokens[0];
-      for (let unit = 4; unit <= Math.floor(t.length / 2); unit++) {
+      for (let unit = 4; unit <= Math.floor(Math.min(t.length, REPEAT_SCAN_MAX) / 2); unit++) {
         const head = t.substring(0, unit);
         if (t.substring(unit, unit * 2) === head && new Set(head).size >= 3) return true;
       }
@@ -1029,6 +1323,8 @@ export async function onRequest(context) {
 
   // Per-pubkey content flood
   const contentFloodTracking = new Map();
+  const CONTENT_FLOOD_MAX_KEYS = 5000;
+  const AUTO_MUTED_MAX = 5000;
   const CONTENT_FLOOD_WINDOW_MS = 120000;
   const CONTENT_FLOOD_BLOCK_MS = 900000;
   const CONTENT_FLOOD_THRESHOLD = 3;
@@ -1041,6 +1337,9 @@ export async function onRequest(context) {
     if (!entry) {
       entry = { hashes: new Map(), blockedUntil: 0 };
       contentFloodTracking.set(pubkey, entry);
+      if (contentFloodTracking.size > CONTENT_FLOOD_MAX_KEYS) {
+        contentFloodTracking.delete(contentFloodTracking.keys().next().value);
+      }
     }
 
     for (const [h, info] of entry.hashes) {
@@ -1204,6 +1503,7 @@ export async function onRequest(context) {
   let droppedSpamCount = 0;
   let droppedGeoOriginCount = 0;
   let droppedUnbadgedCount = 0;
+  let droppedForgedCount = 0;
   const RX_GLUB_CLIENT = /\[\s*"client"\s*,\s*"glub\.chat"/i;
   const RX_GLUB_TAG = /\[\s*"glub"\s*,/i;
 
@@ -1228,7 +1528,13 @@ export async function onRequest(context) {
 
   let lastSignals = null;
 
-  function isSpamEventFrame(raw) {
+  function noteAutoMuted(pubkey, until) {
+    autoMuted.delete(pubkey);
+    autoMuted.set(pubkey, until);
+    if (autoMuted.size > AUTO_MUTED_MAX) autoMuted.delete(autoMuted.keys().next().value);
+  }
+
+  function isSpamEventFrame(raw, observe) {
     lastSignals = null;
     const kind = extractEventKind(raw);
     if (kind !== 20000 && kind !== 23333) return false;
@@ -1237,6 +1543,7 @@ export async function onRequest(context) {
     const now = Date.now();
     const signals = { pubkey, content, score: 0, copies: 0 };
     lastSignals = signals;
+    if (content === null || !pubkey) return true;
     if (content && isMachinePayload(content)) return true;
     if (pubkey && isAutoMuted(pubkey, now)) return true;
     if (kind === 20000) {
@@ -1251,15 +1558,15 @@ export async function onRequest(context) {
       }
       if (pubkey && content) {
         if (isContentFlooding(pubkey, now)) return true;
-        trackContentFlood(pubkey, content, now);
+        if (observe !== false) trackContentFlood(pubkey, content, now);
       }
     } else if (content) {
       signals.score = contentSpamScore(content);
     }
-    if (pubkey && content) {
+    if (pubkey && content && observe !== false) {
       const verdict = checkCampaign(content, pubkey, extractCreatedAtMs(raw), now);
       signals.copies = verdict.copies;
-      if (verdict.mute) autoMuted.set(pubkey, now + AUTO_MUTE_MS);
+      if (verdict.mute) noteAutoMuted(pubkey, now + AUTO_MUTE_MS);
       if (verdict.flood || verdict.mute) return true;
     }
     return false;
@@ -1277,25 +1584,52 @@ export async function onRequest(context) {
     return true;
   }
 
-  function spamEngineVerdict(raw, eventId, kind, relayTail) {
+  function lacksChannel(raw, kind) {
+    if (kind !== 20000 && kind !== 23333) return false;
+    return !channelKeyFor(kind, (n) => extractTagValue(raw, n));
+  }
+
+  function noteForgedFrame(relayUrl) {
+    droppedForgedCount++;
+    if (forgedByRelay.size > MAX_RELAY_LIST) forgedByRelay.clear();
+    const n = (forgedByRelay.get(relayUrl) || 0) + 1;
+    forgedByRelay.set(relayUrl, n);
+    if (n >= FORGED_FRAME_LIMIT) markPermanentlySkipped(relayUrl, 'invalid: event signatures do not verify');
+  }
+
+  function touchSubscription(raw) {
+    const end = raw.indexOf('"', 10);
+    if (end < 0) return;
+    const subId = raw.substring(10, end);
+    const parent = childToParent.get(subId) || subId;
+    if (subActivity.has(parent)) subActivity.set(parent, Date.now());
+  }
+
+  function spamEngineVerdict(raw, eventId, kind, relayTail, ev) {
     if ((kind !== 20000 && kind !== 23333) || !eventId || !spam.active()) return 'pass';
-    const sig = lastSignals || { pubkey: extractEventStringField(raw, 'pubkey'), content: extractEventStringField(raw, 'content'), score: 0, copies: 0 };
-    if (!sig.pubkey || !sig.content) return 'pass';
-    const nymTag = extractTagValue(raw, 'n');
+    if (!ev || ev.id !== eventId || typeof ev.content !== 'string') return 'drop';
+    if (!ev.content) return 'pass';
+    const sig = lastSignals || { score: 0, copies: 0 };
+    const getTag = evTagReader(ev);
+    const nymTag = getTag('n');
+    let mentions = 0;
+    for (const t of ev.tags) if (t[0] === 'p' && mentions < 64) mentions++;
     return spam.inspect({
       release: () => sendToClient(raw.slice(0, -1) + relayTail),
       retract: () => sendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam'])),
       id: eventId,
       kind,
-      pubkey: sig.pubkey,
-      content: sig.content,
+      pubkey: ev.pubkey,
+      content: ev.content,
+      verified: true,
+      pow: validatedPowBits(ev),
       nym: nymTag ? nymTag.replace(/#[a-fA-F0-9]{4}$/, '') : '',
-      badgeTag: extractTagValue(raw, 'nymattest') || '',
-      reply: hasTag(raw, 'e'),
-      quote: hasTag(raw, 'nymquote'),
-      mentions: countTags(raw, 'p'),
-      channel: sanitizeChannelKey(channelFromTags((n) => extractTagValue(raw, n), kind)),
-      createdAt: extractCreatedAtMs(raw),
+      badgeTag: getTag('nymattest') || '',
+      reply: ev.tags.some((t) => t[0] === 'e'),
+      quote: ev.tags.some((t) => t[0] === 'nymquote'),
+      mentions,
+      channel: channelKeyFor(kind, getTag),
+      createdAt: ev.created_at * 1000,
       localScore: sig.score,
       copies: sig.copies
     });
@@ -1304,6 +1638,7 @@ export async function onRequest(context) {
   // Enqueue a connection, capping concurrent establishment to MAX_CONCURRENT_CONNECTS.
   function queueConnection(relayUrl, type) {
     if (upstreams.has(relayUrl) || pendingConnect.has(relayUrl)) return;
+    if (upstreams.size + pendingConnect.size >= MAX_UPSTREAMS) return;
     pendingConnect.add(relayUrl);
     connectionQueue.push({ relayUrl, type });
     pumpConnectQueue();
@@ -1311,12 +1646,24 @@ export async function onRequest(context) {
 
   function pumpConnectQueue() {
     while (inFlightConnects < MAX_CONCURRENT_CONNECTS && connectionQueue.length > 0) {
-      const { relayUrl, type } = connectionQueue.shift();
+      const { relayUrl, type } = connectionQueue[0];
+      if (upstreams.has(relayUrl) || !validateRelayUrl(relayUrl)
+        || relayUrl === 'wss://relay.nosflare.com' || shouldSkipRelay(relayUrl)) {
+        connectionQueue.shift();
+        pendingConnect.delete(relayUrl);
+        continue;
+      }
+      if (relayUrl !== APP_RELAY && !connectBucket.take()) {
+        if (!connectionTimer && serverOpen) {
+          connectionTimer = setTimeout(() => {
+            connectionTimer = null;
+            if (serverOpen) pumpConnectQueue();
+          }, 1000);
+        }
+        return;
+      }
+      connectionQueue.shift();
       pendingConnect.delete(relayUrl);
-      if (upstreams.has(relayUrl)) continue;
-      if (!validateRelayUrl(relayUrl)) continue;
-      if (relayUrl === 'wss://relay.nosflare.com') continue;
-      if (shouldSkipRelay(relayUrl)) continue;
       inFlightConnects++;
       connectUpstream(relayUrl, type);
     }
@@ -1331,7 +1678,11 @@ export async function onRequest(context) {
   function markPermanentlySkipped(relayUrl, reason) {
     if (!relayUrl || permanentlySkipped.has(relayUrl)) return;
     if (isProtectedRelay(relayUrl)) return;
+    if (permanentlySkipped.size >= MAX_PERMANENTLY_SKIPPED) {
+      permanentlySkipped.delete(permanentlySkipped.values().next().value);
+    }
     permanentlySkipped.add(relayUrl);
+    pendingGeoEvents.delete(relayUrl);
     intentionallyClosed.add(relayUrl);
     const pendingTimer = reconnectTimers.get(relayUrl);
     if (pendingTimer) {
@@ -1456,6 +1807,7 @@ export async function onRequest(context) {
         u.searchParams.set('nymchat_proxy', proxySecret);
         const host = proxyHost(request);
         if (host) u.searchParams.set('nymchat_proxy_host', host);
+        if (ipKey) u.searchParams.set('nymchat_proxy_ip', ipKey);
         upstreamUrl = u.toString();
       }
       const ws = new WebSocket(upstreamUrl);
@@ -1468,6 +1820,7 @@ export async function onRequest(context) {
           trackRelayFailure(relayUrl);
           try { ws.close(); } catch { /* noop */ }
           upstreams.delete(relayUrl);
+          pendingGeoEvents.delete(relayUrl);
           releaseSlot();
           retryAfterFailure(relayUrl, type);
           schedulePoolStatus();
@@ -1494,48 +1847,62 @@ export async function onRequest(context) {
         schedulePoolStatus();
       });
 
-      // String-based dedup: extract event IDs without JSON.parse to minimize CPU
       ws.addEventListener('message', (event) => {
-        const raw = event.data;
-        if (typeof raw !== 'string' || raw.length < 10) return;
+        let raw = event.data;
+        if (typeof raw !== 'string' || raw.length < 10 || raw.length > UPSTREAM_FRAME_MAX) return;
+        if (raw.charCodeAt(0) !== 91 || raw.charCodeAt(1) !== 34) {
+          raw = reframeRelayMessage(raw);
+          if (!raw) return;
+        }
 
-        // Detect message type from raw string prefix (avoids JSON.parse)
-        // EVENT: ["EVENT","subId",{...}]
-        if (raw.charCodeAt(2) === 69 && raw.startsWith('["EVENT"')) {
+        if (raw.startsWith('["EVENT",')) {
+          raw = canonicalEventFrame(raw);
+          if (!raw) return;
           if (isForeignAppChannelEvent(raw, relayUrl)) return;
+          const eventId = extractEventId(raw);
+          if (!eventId) return;
+          const prior = seenEvents.get(eventId);
+          if (prior !== undefined) {
+            // The whole event is a duplicate and is not forwarded again, but
+            // WHICH relays carried it is information the first copy could not
+            // contain — the client's event-details panel has no other way to
+            // learn it, because this dedup is exactly what hides it. A 40-byte
+            // note costs far less than the event and answers the question.
+            const dupKind = extractEventKind(raw);
+            if (prior < SEEN_REPORT_CAP && isSeenReportKind(dupKind) && geoOriginAllowsFrame(raw, dupKind, relayUrl)) {
+              seenEvents.set(eventId, prior + 1);
+              sendToClient(JSON.stringify(['POOL:SEEN', eventId, relayUrl]));
+            }
+            return;
+          }
           if (!geoOriginAllowsFrame(raw, extractEventKind(raw), relayUrl)) {
             droppedGeoOriginCount++;
             return;
           }
-          const eventId = extractEventId(raw);
-          if (eventId) {
-            const prior = seenEvents.get(eventId);
-            if (prior !== undefined) {
-              // The whole event is a duplicate and is not forwarded again, but
-              // WHICH relays carried it is information the first copy could not
-              // contain — the client's event-details panel has no other way to
-              // learn it, because this dedup is exactly what hides it. A 40-byte
-              // note costs far less than the event and answers the question.
-              if (prior < SEEN_REPORT_CAP && isSeenReportKind(extractEventKind(raw))) {
-                seenEvents.set(eventId, prior + 1);
-                sendToClient(JSON.stringify(['POOL:SEEN', eventId, relayUrl]));
-              }
+          if (frameHit(gate, raw)) return;
+          const evKind = extractEventKind(raw);
+          if (lacksChannel(raw, evKind)) return;
+          let verified = null;
+          if (evKind === 20000 || evKind === 23333) {
+            verified = verifiedEventJson(extractEventObjectJson(raw), eventId);
+            if (!verified) {
+              noteForgedFrame(relayUrl);
               return;
             }
-            seenEvents.set(eventId, 1);
-            trimDedup();
           }
-          if (frameHit(gate, raw)) return;
+          seenEvents.set(eventId, 1);
+          trimDedup();
           if (hasBlockedContentPrefix(raw) || isGlubClientFrame(raw) || isSpamEventFrame(raw)) {
             droppedSpamCount++;
+            vetoArchive(eventId);
             return;
           }
-          const evKind = extractEventKind(raw);
           if (badgeGateRefused(raw, evKind)) return;
-          const relayTail = ',"' + relayUrl + '"]';
-          const spamVerdict = spamEngineVerdict(raw, eventId, evKind, relayTail);
+          const relayTail = ',' + JSON.stringify(relayUrl) + ']';
+          const spamVerdict = spamEngineVerdict(raw, eventId, evKind, relayTail, verified);
           if (spamVerdict === 'drop') {
             droppedSpamCount++;
+            vetoArchive(eventId);
             return;
           }
           // Drop settings wraps off the relay stream (loaded from D1).
@@ -1551,137 +1918,113 @@ export async function onRequest(context) {
             else if (evKind === 5) deleteArchivedFromDeletion(raw);
           }
           if (spamVerdict === 'hold') return;
+          touchSubscription(raw);
           sendToClient(raw.slice(0, -1) + relayTail);
 
         // OK: ["OK","eventId",bool,"msg"]
-        } else if (raw.charCodeAt(2) === 79 && raw.startsWith('["OK"')) {
-          const eventId = extractOKEventId(raw);
-          if (eventId && relayUrl === APP_RELAY && pendingAppArchive.has(eventId)) {
-            if (settleAppArchive(eventId, /^\["OK","[^"]*",\s*true\b/.test(raw))) runArchive(flushArchive());
+        } else if (raw.startsWith('["OK",')) {
+          const okMatch = raw.match(/^\["OK",\s*(?:"([^"\\]{0,128})"|null),\s*(true|false)\s*(?:,\s*"((?:[^"\\]|\\.)*)")?/);
+          if (!okMatch) return;
+          const okId = okMatch[1] || null;
+          const acceptedFlag = okMatch[2] === 'true';
+          const reason = okMatch[3] || '';
+          if (okId && relayUrl === APP_RELAY && pendingAppArchive.has(okId)) {
+            if (settleAppArchive(okId, acceptedFlag)) runArchive(flushArchive());
           }
-          if (eventId) {
-            if (seenOKs.has(eventId)) return;
-            seenOKs.add(eventId);
+          if (okId) {
+            if (relayUrl !== APP_RELAY && seenOKs.has(okId)) return;
+            seenOKs.add(okId);
           }
-          const okMatch = raw.match(/^\["OK",(?:"([^"]*)"|null),\s*(true|false)\s*,\s*"((?:[^"\\]|\\.)*)"/);
-          if (okMatch) {
-            const okId = okMatch[1] || null;
-            const acceptedFlag = okMatch[2] === 'true';
-            const reason = okMatch[3];
-            if (isUnsupportedKind(reason)) {
-              sendToClient(JSON.stringify(['OK', okId, acceptedFlag, reason, relayUrl]));
-              return;
-            }
-            if (isRelayWideRejection(reason)) {
-              markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
-              sendToClient(JSON.stringify(['OK', okId, acceptedFlag, reason, relayUrl]));
-              return;
-            }
-            if (!acceptedFlag && isPermanentRejection(reason)) {
-              sendToClient(JSON.stringify(['OK', okId, false, reason, relayUrl]));
-              return;
-            }
+          if (isRelayWideRejection(reason) && !isUnsupportedKind(reason)) {
+            markPermanentlySkipped(relayUrl, `event-rejected: ${reason}`);
           }
-          sendToClient(raw);
+          sendToClient(JSON.stringify(['OK', okId, acceptedFlag, reason, relayUrl]));
 
-        // EOSE, AUTH, NOTICE, CLOSED, or anything else
-        } else {
-          if (raw.charCodeAt(2) === 69 && raw.startsWith('["EOSE"')) {
-            const eoseMatch = raw.match(/^\["EOSE","([^"]+)"/);
-            if (eoseMatch) {
-              const eoseSubId = eoseMatch[1];
-              const parent = childToParent.get(eoseSubId) || eoseSubId;
-              if (seenEOSE.has(parent)) return;
-              seenEOSE.add(parent);
-              if (parent !== eoseSubId) {
-                sendToClient('["EOSE","' + parent + '"]');
-                return;
-              }
-            }
-            sendToClient(raw);
-            return;
-          }
+        } else if (raw.startsWith('["EOSE",')) {
+          const eoseMatch = raw.match(/^\["EOSE",\s*"([^"\\]{1,128})"/);
+          if (!eoseMatch) return;
+          const eoseSubId = eoseMatch[1];
+          const parent = childToParent.get(eoseSubId) || eoseSubId;
+          if (seenEOSE.has(parent)) return;
+          seenEOSE.add(parent);
+          if (subActivity.has(parent)) subActivity.set(parent, Date.now());
+          sendToClient(JSON.stringify(['EOSE', parent]));
 
-          if (raw.startsWith('["AUTH"')) {
-            // NIP-42 challenge only; we don't authenticate. Most relays still
-            // serve reads after sending it, so don't skip — a real auth wall
-            // arrives as a CLOSED/NOTICE rejection and is handled there.
-            return;
-          }
+        } else if (raw.startsWith('["AUTH",')) {
+          // NIP-42 challenge only; we don't authenticate. Most relays still
+          // serve reads after sending it, so don't skip — a real auth wall
+          // arrives as a CLOSED/NOTICE rejection and is handled there.
+          return;
 
-          if (raw.startsWith('["NOTICE"')) {
-            const m = raw.match(/^\["NOTICE",\s*"((?:[^"\\]|\\.)*)"/);
-            const reason = m ? m[1] : '';
-            if (/no such sub|unknown subscription/i.test(reason)) return;
-            if (m && isUnsupportedKind(reason)) {
-              sendToClient(JSON.stringify(['NOTICE', reason, relayUrl]));
-              return;
-            }
-            if (m && isRelayWideRejection(reason)) {
-              markPermanentlySkipped(relayUrl, reason);
-              return;
-            }
+        } else if (raw.startsWith('["NOTICE",')) {
+          const m = raw.match(/^\["NOTICE",\s*"((?:[^"\\]|\\.)*)"/);
+          if (!m) return;
+          const reason = m[1];
+          if (/no such sub|unknown subscription/i.test(reason)) return;
+          if (isUnsupportedKind(reason)) {
             sendToClient(JSON.stringify(['NOTICE', reason, relayUrl]));
             return;
           }
+          if (isRelayWideRejection(reason)) {
+            markPermanentlySkipped(relayUrl, reason);
+            return;
+          }
+          sendToClient(JSON.stringify(['NOTICE', reason, relayUrl]));
 
-          if (raw.startsWith('["CLOSED"')) {
-            const m = raw.match(/^\["CLOSED","([^"]+)",\s*"((?:[^"\\]|\\.)*)"/);
-            const closedSubId = m ? m[1] : '';
-            const reason = m ? m[2] : '';
-            const parentSubId = childToParent.get(closedSubId) || closedSubId;
-            if (m && isRelayWideRejection(reason)) {
-              markPermanentlySkipped(relayUrl, reason);
-              sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
-              return;
+        } else if (raw.startsWith('["CLOSED",')) {
+          const m = raw.match(/^\["CLOSED",\s*"([^"\\]{1,128})",\s*"((?:[^"\\]|\\.)*)"/);
+          if (!m) return;
+          const closedSubId = m[1];
+          const reason = m[2];
+          const parentSubId = childToParent.get(closedSubId) || closedSubId;
+          if (isRelayWideRejection(reason)) {
+            markPermanentlySkipped(relayUrl, reason);
+            sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
+            return;
+          }
+          if (isUnsupportedKind(reason)) {
+            const rejectedKind = extractRejectedKind(reason);
+            if (rejectedKind !== null) {
+              let bl = kindBlacklist.get(relayUrl);
+              if (!bl) { bl = new Set(); kindBlacklist.set(relayUrl, bl); }
+              if (bl.size < MAX_KIND_BLACKLIST_KINDS) bl.add(rejectedKind);
             }
-            if (m && isUnsupportedKind(reason)) {
-              const rejectedKind = extractRejectedKind(reason);
-              if (rejectedKind !== null) {
-                let bl = kindBlacklist.get(relayUrl);
-                if (!bl) { bl = new Set(); kindBlacklist.set(relayUrl, bl); }
-                bl.add(rejectedKind);
-              }
-              const blockedSet = kindBlacklist.get(relayUrl);
-              const children = splitChildren.get(parentSubId);
-              const upstreamInfo = upstreams.get(relayUrl);
-              const retryKey = relayUrl + '\n' + parentSubId;
-              const retries = closedKindRetries.get(retryKey) || 0;
-              const ready = upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1;
-              let resent = false;
-              // Resend only if the request actually changed, capped, to avoid loops
-              if (ready && retries < 3) {
-                if (children) {
-                  const child = children.find(c => c.childSubId === closedSubId);
-                  if (child) {
-                    const newPayload = buildChildPayload(child, blockedSet);
-                    if (newPayload && newPayload !== child.rawChild) {
-                      try { upstreamInfo.ws.send(newPayload); resent = true; } catch { /* noop */ }
-                    }
-                  }
-                } else if (activeSubscriptions.has(parentSubId) && blockedSet && blockedSet.size > 0) {
-                  const rawReq = activeSubscriptions.get(parentSubId);
-                  const stripped = stripKindsFromReq(rawReq, blockedSet);
-                  if (stripped && stripped !== rawReq) {
-                    try { upstreamInfo.ws.send(stripped); resent = true; } catch { /* noop */ }
+            const blockedSet = kindBlacklist.get(relayUrl);
+            const children = splitChildren.get(parentSubId);
+            const upstreamInfo = upstreams.get(relayUrl);
+            const retryKey = relayUrl + '\n' + parentSubId;
+            const retries = closedKindRetries.get(retryKey) || 0;
+            const ready = upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1;
+            let resent = false;
+            // Resend only if the request actually changed, capped, to avoid loops
+            if (ready && retries < 3) {
+              if (children) {
+                const child = children.find(c => c.childSubId === closedSubId);
+                if (child) {
+                  const newPayload = buildChildPayload(child, blockedSet);
+                  if (newPayload && newPayload !== child.rawChild) {
+                    try { upstreamInfo.ws.send(newPayload); resent = true; } catch { /* noop */ }
                   }
                 }
+              } else if (activeSubscriptions.has(parentSubId) && blockedSet && blockedSet.size > 0) {
+                const rawReq = activeSubscriptions.get(parentSubId);
+                const stripped = stripKindsFromReq(rawReq, blockedSet);
+                if (stripped && stripped !== rawReq) {
+                  try { upstreamInfo.ws.send(stripped); resent = true; } catch { /* noop */ }
+                }
               }
-              if (resent) {
-                if (closedKindRetries.size > 5000) closedKindRetries.clear();
-                closedKindRetries.set(retryKey, retries + 1);
-              } else {
-                const targets = subRelays.get(parentSubId);
-                if (targets) targets.delete(relayUrl);
-              }
-              sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
-              return;
+            }
+            if (resent) {
+              if (closedKindRetries.size > 5000) closedKindRetries.clear();
+              closedKindRetries.set(retryKey, retries + 1);
+            } else {
+              const targets = subRelays.get(parentSubId);
+              if (targets) targets.delete(relayUrl);
             }
             sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
             return;
           }
-
-          sendToClient(raw);
+          sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
         }
       });
 
@@ -1694,6 +2037,7 @@ export async function onRequest(context) {
         const wasConnected = info.status === 'connected';
         info.status = 'closed';
         upstreams.delete(relayUrl);
+        pendingGeoEvents.delete(relayUrl);
         for (const targets of subRelays.values()) targets.delete(relayUrl);
         for (const k of closedKindRetries.keys()) {
           if (k.startsWith(relayUrl + '\n')) closedKindRetries.delete(k);
@@ -1725,6 +2069,7 @@ export async function onRequest(context) {
         info.status = 'failed';
         trackRelayFailure(relayUrl);
         upstreams.delete(relayUrl);
+        pendingGeoEvents.delete(relayUrl);
         retryAfterFailure(relayUrl, type);
         schedulePoolStatus();
       });
@@ -1733,6 +2078,7 @@ export async function onRequest(context) {
       info.status = 'failed';
       trackRelayFailure(relayUrl);
       upstreams.delete(relayUrl);
+      pendingGeoEvents.delete(relayUrl);
       releaseSlot();
       retryAfterFailure(relayUrl, type);
       schedulePoolStatus();
@@ -1740,7 +2086,7 @@ export async function onRequest(context) {
   }
 
   function heldOutbound(ev) {
-    if (ev && ev.kind === 1984) runArchive(noteReport(env, ev, 'pool').then((ok) => (ok ? reviewSpamReport(env, ev) : null)).catch(() => null));
+    if (ev && ev.kind === 1984) runArchive(noteReport(env, ev, 'pool').then((ok) => (ok ? reviewSpamReport(env, ev, { context }) : null)).catch(() => null));
     let mode = sockHeld;
     if (!mode) {
       mode = eventHit(gate, ev);
@@ -1778,6 +2124,13 @@ export async function onRequest(context) {
     return true;
   }
 
+  function queuePendingGeo(url, msg) {
+    let list = pendingGeoEvents.get(url);
+    if (!list) { list = []; pendingGeoEvents.set(url, list); }
+    if (list.length >= PENDING_GEO_PER_RELAY) list.shift();
+    list.push(msg);
+  }
+
   function sendAppRelayOnly(msg) {
     const info = upstreams.get(APP_RELAY);
     if (!info) return;
@@ -1786,8 +2139,7 @@ export async function onRequest(context) {
       return;
     }
     if (info.status === 'connecting') {
-      if (!pendingGeoEvents.has(APP_RELAY)) pendingGeoEvents.set(APP_RELAY, []);
-      pendingGeoEvents.get(APP_RELAY).push(msg);
+      queuePendingGeo(APP_RELAY, msg);
     }
   }
 
@@ -1809,9 +2161,125 @@ export async function onRequest(context) {
     });
   }
 
+  function refuseEvent(ev, reason) {
+    if (ev && typeof ev.id === 'string') sendToClient(JSON.stringify(['OK', ev.id, false, reason]));
+  }
+
+  function outboundRateOk(ev) {
+    const now = Date.now();
+    if (now < ipEventBlockedUntil || !eventBucket.take(1, now)) {
+      refuseEvent(ev, 'rate-limited: slow down');
+      return false;
+    }
+    if (ipKey && ++ipEventUnits >= POOL_IP_CHARGE_BATCH) {
+      const units = ipEventUnits;
+      ipEventUnits = 0;
+      runArchive(cacheRateTake('pool-events', ipKey, units, POOL_EVENTS_PER_IP_MIN, 60000).then((ok) => {
+        if (!ok) ipEventBlockedUntil = Date.now() + 60000;
+      }, () => null));
+    }
+    return true;
+  }
+
+  function canonicalRelayList(list, max) {
+    const out = [];
+    if (!Array.isArray(list)) return out;
+    const seen = new Set();
+    for (const url of list.slice(0, MAX_RELAY_LIST)) {
+      const c = canonicalRelayUrl(url);
+      if (!c || seen.has(c)) continue;
+      seen.add(c);
+      out.push(c);
+      if (out.length >= max) break;
+    }
+    return out;
+  }
+
+  function closeSubscription(subId) {
+    const targets = subRelays.get(subId);
+    const children = splitChildren.get(subId);
+    if (children) {
+      if (targets && targets.size > 0) {
+        for (const child of children) {
+          sendToUpstreams(JSON.stringify(['CLOSE', child.childSubId]), (url) => targets.has(url));
+        }
+      }
+      for (const child of children) childToParent.delete(child.childSubId);
+      splitChildren.delete(subId);
+    } else if (targets && targets.size > 0) {
+      sendToUpstreams(JSON.stringify(['CLOSE', subId]), (url) => targets.has(url));
+    }
+    activeSubscriptions.delete(subId);
+    subRole.delete(subId);
+    subRelays.delete(subId);
+    seenEOSE.delete(subId);
+    subActivity.delete(subId);
+  }
+
+  function evictIdlestSubscription() {
+    let victim = null;
+    let oldest = Infinity;
+    for (const [subId, at] of subActivity) {
+      if (at < oldest) { oldest = at; victim = subId; }
+    }
+    if (victim === null) victim = activeSubscriptions.keys().next().value;
+    if (victim === undefined || victim === null) return;
+    closeSubscription(victim);
+    sendToClient(JSON.stringify(['CLOSED', victim, 'closed: subscription limit reached']));
+  }
+
+  let pendingRelaysConfig = null;
+  let relaysTimer = null;
+
+  function applyRelaysConfig(config) {
+    dmRelays = canonicalRelayList(config.dmRelays, MAX_RELAY_LIST);
+    const criticalRelays = canonicalRelayList(config.critical || config.relays, MAX_RELAY_LIST);
+    const geoRelays = canonicalRelayList(config.geo, MAX_RELAY_LIST);
+
+    relayRole.clear();
+    for (const url of criticalRelays) relayRole.set(url, 'critical');
+    for (const url of geoRelays) if (!relayRole.has(url)) relayRole.set(url, 'geo');
+
+    const requestedRelays = [...relayRole.keys()].slice(0, MAX_UPSTREAMS);
+    const newRelaySet = new Set(requestedRelays);
+    for (const url of [...relayRole.keys()]) if (!newRelaySet.has(url)) relayRole.delete(url);
+
+    for (const [url, info] of upstreams) {
+      if (!newRelaySet.has(url)) {
+        intentionallyClosed.add(url);
+        try { if (info.ws) info.ws.close(); } catch { /* noop */ }
+        upstreams.delete(url);
+      }
+    }
+    for (const url of [...pendingGeoEvents.keys()]) {
+      if (!newRelaySet.has(url)) pendingGeoEvents.delete(url);
+    }
+    connectionQueue = connectionQueue.filter((entry) => {
+      if (newRelaySet.has(entry.relayUrl)) return true;
+      pendingConnect.delete(entry.relayUrl);
+      return false;
+    });
+
+    for (const [url, timerId] of reconnectTimers) {
+      if (newRelaySet.has(url)) continue;
+      clearTimeout(timerId);
+      reconnectTimers.delete(url);
+      pendingReconnect.delete(url);
+      reconnectAttempts.delete(url);
+      everConnected.delete(url);
+    }
+
+    for (const url of requestedRelays) {
+      if (!upstreams.has(url) && !pendingReconnect.has(url)) {
+        queueConnection(url, 'read');
+      }
+    }
+  }
+
   // Handle messages from client
   server.addEventListener('message', (event) => {
     try {
+      if (typeof event.data !== 'string' || event.data.length > CLIENT_FRAME_MAX) return;
       let msg = JSON.parse(event.data);
       if (!Array.isArray(msg)) return;
 
@@ -1820,6 +2288,7 @@ export async function onRequest(context) {
       let routedRole = null;
       if (msg[0] === 'ROLE') {
         routedRole = msg[1];
+        if (routedRole !== 'critical' && routedRole !== 'geo' && routedRole !== 'all') return;
         msg = msg.slice(2);
         if (!Array.isArray(msg) || msg.length === 0) return;
       }
@@ -1830,42 +2299,23 @@ export async function onRequest(context) {
           if (msgType === 'RELAYS') {
             const config = msg[1];
             if (!config || typeof config !== 'object') return;
-
-            dmRelays = config.dmRelays || [];
-
-            const criticalRelays = config.critical || config.relays || [];
-            const geoRelays = config.geo || [];
-
-            relayRole.clear();
-            for (const url of criticalRelays) relayRole.set(url, 'critical');
-            for (const url of geoRelays) if (!relayRole.has(url)) relayRole.set(url, 'geo');
-
-            const requestedRelays = [...relayRole.keys()];
-
-            const newRelaySet = new Set(requestedRelays);
-            for (const [url, info] of upstreams) {
-              if (!newRelaySet.has(url)) {
-                intentionallyClosed.add(url);
-                try { if (info.ws) info.ws.close(); } catch { /* noop */ }
-                upstreams.delete(url);
+            if (!relaysBucket.take()) {
+              pendingRelaysConfig = config;
+              if (!relaysTimer) {
+                relaysTimer = setTimeout(() => {
+                  relaysTimer = null;
+                  const next = pendingRelaysConfig;
+                  pendingRelaysConfig = null;
+                  if (next && serverOpen) applyRelaysConfig(next);
+                }, 6000);
               }
+              return;
             }
-
-            for (const [url, timerId] of reconnectTimers) {
-              if (newRelaySet.has(url)) continue;
-              clearTimeout(timerId);
-              reconnectTimers.delete(url);
-              pendingReconnect.delete(url);
-              reconnectAttempts.delete(url);
-              everConnected.delete(url);
-            }
-
-            for (const url of requestedRelays) {
-              if (!upstreams.has(url) && !pendingReconnect.has(url)) {
-                queueConnection(url, 'read');
-              }
-            }
+            pendingRelaysConfig = null;
+            applyRelaysConfig(config);
           } else if (msgType === 'EVENT') {
+            if (!msg[1] || typeof msg[1] !== 'object') return;
+            if (!outboundRateOk(msg[1])) return;
             if (heldOutbound(msg[1])) return;
             if (outboundBadgeRefused(msg[1])) return;
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
@@ -1878,6 +2328,8 @@ export async function onRequest(context) {
             });
           } else if (msgType === 'GEO_EVENT') {
             const geoEvt = msg[1];
+            if (!geoEvt || typeof geoEvt !== 'object') return;
+            if (!outboundRateOk(geoEvt)) return;
             if (heldOutbound(geoEvt)) return;
             if (outboundBadgeRefused(geoEvt)) return;
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
@@ -1889,7 +2341,7 @@ export async function onRequest(context) {
               return !!(blocked && blocked.has(evtKind));
             };
             const geoMsg = JSON.stringify(['EVENT', geoEvt]);
-            const geoUrls = msg[2] || [];
+            const geoUrls = canonicalRelayList(msg[2], MAX_UPSTREAMS);
             const geoSet = new Set(geoUrls);
             const sentGeo = new Set();
             WRITE_ONLY_RELAYS.forEach((url) => {
@@ -1911,10 +2363,7 @@ export async function onRequest(context) {
               if (sentGeo.has(url)) continue;
               if (isBlockedFor(url)) continue;
               const info = upstreams.get(url);
-              if (info && info.status === 'connecting') {
-                if (!pendingGeoEvents.has(url)) pendingGeoEvents.set(url, []);
-                pendingGeoEvents.get(url).push(geoMsg);
-              }
+              if (info && info.status === 'connecting') queuePendingGeo(url, geoMsg);
             }
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
@@ -1925,6 +2374,8 @@ export async function onRequest(context) {
             });
           } else if (msgType === 'DM_EVENT') {
             const dmEvt = msg[1];
+            if (!dmEvt || typeof dmEvt !== 'object') return;
+            if (!outboundRateOk(dmEvt)) return;
             if (heldOutbound(dmEvt)) return;
             if (isAppRelayOnlyEvent(dmEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', dmEvt])); return; }
             const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;
@@ -1956,7 +2407,21 @@ export async function onRequest(context) {
             });
           } else if (msgType === 'REQ') {
             const subId = msg[1];
+            if (typeof subId !== 'string' || !subId || subId.length > MAX_SUB_ID) return;
+            const filters = msg.slice(2);
+            if (filters.length === 0 || filters.length > MAX_REQ_FILTERS
+              || !filters.every((f) => f && typeof f === 'object' && !Array.isArray(f))) {
+              sendToClient(JSON.stringify(['CLOSED', subId, 'closed: filter limit reached']));
+              return;
+            }
+            if (!reqBucket.take()) {
+              sendToClient(JSON.stringify(['CLOSED', subId, 'closed: request limit reached']));
+              return;
+            }
+            if (activeSubscriptions.has(subId)) closeSubscription(subId);
+            while (activeSubscriptions.size >= MAX_ACTIVE_SUBS) evictIdlestSubscription();
             activeSubscriptions.set(subId, rawMsg);
+            subActivity.set(subId, Date.now());
             subRole.set(subId, routedRole || 'all');
             subRelays.set(subId, new Set());
             const children = buildChildrenForParent(subId, msg);
@@ -1969,31 +2434,17 @@ export async function onRequest(context) {
             const config = msg[1];
             if (!config || typeof config !== 'object') return;
             kindBlacklist.clear();
-            for (const relay of Object.keys(config)) {
+            for (const relay of Object.keys(config).slice(0, MAX_KIND_BLACKLIST_RELAYS)) {
+              const url = canonicalRelayUrl(relay);
               const kinds = config[relay];
-              if (Array.isArray(kinds) && kinds.length > 0) {
-                kindBlacklist.set(relay, new Set(kinds.filter(k => typeof k === 'number')));
-              }
+              if (!url || !Array.isArray(kinds) || kinds.length === 0) continue;
+              const set = new Set(kinds.filter(k => Number.isSafeInteger(k)).slice(0, MAX_KIND_BLACKLIST_KINDS));
+              if (set.size > 0) kindBlacklist.set(url, set);
             }
           } else if (msgType === 'CLOSE') {
             const subId = msg[1];
-            const targets = subRelays.get(subId);
-            const children = splitChildren.get(subId);
-            if (children) {
-              if (targets && targets.size > 0) {
-                for (const child of children) {
-                  sendToUpstreams(JSON.stringify(['CLOSE', child.childSubId]), (url) => targets.has(url));
-                }
-              }
-              for (const child of children) childToParent.delete(child.childSubId);
-              splitChildren.delete(subId);
-            } else if (targets && targets.size > 0) {
-              sendToUpstreams(rawMsg, (url) => targets.has(url));
-            }
-            activeSubscriptions.delete(subId);
-            subRole.delete(subId);
-            subRelays.delete(subId);
-            seenEOSE.delete(subId);
+            if (typeof subId !== 'string' || !subId) return;
+            closeSubscription(subId);
           }
     } catch {
       // Parse error
@@ -2022,6 +2473,13 @@ export async function onRequest(context) {
     intentionallyClosed.clear();
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
     if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
+    if (relaysTimer) { clearTimeout(relaysTimer); relaysTimer = null; }
+    pendingRelaysConfig = null;
+    pendingGeoEvents.clear();
+    pendingAppArchive.clear();
+    activeSubscriptions.clear();
+    subActivity.clear();
+    subRelays.clear();
     upstreams.forEach((info) => {
       try { if (info.ws) info.ws.close(); } catch { /* noop */ }
     });

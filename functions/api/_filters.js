@@ -3,6 +3,7 @@ import { hasD1, replica } from './_d1.js';
 
 const REFRESH_MS = 60000;
 const HEX64 = /^[0-9a-f]{64}$/;
+const REPORT_TARGET_JSON_MAX = 16384;
 
 const NOPE_DDL = [
   "CREATE TABLE IF NOT EXISTS nope (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, value TEXT NOT NULL, " +
@@ -234,7 +235,7 @@ export async function noteReport(env, ev, source) {
         if (row) {
           channel = row.channel || null;
           targetKind = typeof row.kind === "number" ? row.kind : null;
-          targetJson = typeof row.json === "string" && row.json.length <= 65536 ? row.json : null;
+          targetJson = typeof row.json === "string" && row.json.length <= REPORT_TARGET_JSON_MAX ? row.json : null;
           if (!resolvedPubkey && typeof row.pubkey === "string") resolvedPubkey = row.pubkey.toLowerCase();
         }
       } catch (_) { }

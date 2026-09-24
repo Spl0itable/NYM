@@ -2681,6 +2681,10 @@ function canonicalAuthBody(body) {
   return out;
 }
 
+var AUTH_MAX_AGE_S = 120;
+var AUTH_MAX_FUTURE_S = 60;
+var AUTH_REPLAY_TTL_S = AUTH_MAX_AGE_S + AUTH_MAX_FUTURE_S + 15;
+
 function verifyClientAuth(auth, expectedPubkey, binding) {
   try {
     if (!auth || typeof auth !== "object") return false;
@@ -2688,8 +2692,9 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
     if (auth.kind !== 27235) return false;
     var nowSec = Math.floor(Date.now() / 1000);
     // Tightened window (was 300s) — auth events are short-lived request proofs.
-    var maxAgeSec = binding && binding.maxAgeSec > 0 ? binding.maxAgeSec : 120;
+    var maxAgeSec = binding && binding.maxAgeSec > 0 ? binding.maxAgeSec : AUTH_MAX_AGE_S;
     if (!auth.created_at || Math.abs(nowSec - auth.created_at) > maxAgeSec) return false;
+    if (auth.created_at - nowSec > AUTH_MAX_FUTURE_S) return false;
     if (getEventHash(auth) !== auth.id) return false;
     if (!schnorr.verify(auth.sig, auth.id, auth.pubkey)) return false;
     // Optional request binding (NIP-98 style): tie the signature to the exact
@@ -2726,7 +2731,7 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
 }
 
 async function enforceAuthReplay(ledgerCall, env, authId, ttl) {
-  var rp = await ledgerCall(env, { op: "replay", id: authId, ttl: ttl || 130 });
+  var rp = await ledgerCall(env, { op: "replay", id: authId, ttl: Math.max(Number(ttl) || 0, AUTH_REPLAY_TTL_S) });
   if (rp && rp._noLedger) return { ok: false, status: 503, error: "Service temporarily unavailable." };
   if (!rp || !rp.fresh) return { ok: false, status: 401, error: "This authorization was already used. Please retry." };
   return { ok: true };
@@ -3015,6 +3020,81 @@ function sanitizeInput(text) {
   return wellFormedText(text).trim();
 }
 
+function ipv6Groups(ip) {
+  var s = String(ip || "").toLowerCase().replace(/^\[|\]$/g, "");
+  var pct = s.indexOf("%");
+  if (pct !== -1) s = s.slice(0, pct);
+  if (s.indexOf(":") === -1) return null;
+  var v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (v4) {
+    if (+v4[1] > 255 || +v4[2] > 255 || +v4[3] > 255 || +v4[4] > 255) return null;
+    s = s.slice(0, v4.index) + ((+v4[1] << 8) | +v4[2]).toString(16) + ":" + ((+v4[3] << 8) | +v4[4]).toString(16);
+  }
+  var halves = s.split("::");
+  if (halves.length > 2) return null;
+  var head = halves[0] ? halves[0].split(":") : [];
+  var tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  var fill = 8 - head.length - tail.length;
+  if (halves.length === 1 ? fill !== 0 : fill < 1) return null;
+  var parts = head.slice();
+  for (var i = 0; i < fill; i++) parts.push("0");
+  parts = parts.concat(tail);
+  var out = [];
+  for (var j = 0; j < parts.length; j++) {
+    if (!/^[0-9a-f]{1,4}$/.test(parts[j])) return null;
+    out.push(parseInt(parts[j], 16));
+  }
+  return out;
+}
+
+function ipv6Blocked(host) {
+  var g = ipv6Groups(host);
+  if (!g) return true;
+  if (!g[0] && !g[1] && !g[2] && !g[3] && !g[4]) return true;
+  if ((g[0] & 0xfe00) === 0xfc00) return true;
+  if ((g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0) return true;
+  if ((g[0] & 0xff00) === 0xff00) return true;
+  if (g[0] === 0x64 && g[1] === 0xff9b) return true;
+  if (g[0] === 0x2002) return true;
+  if (g[0] === 0x2001 && (g[1] === 0 || g[1] === 0xdb8)) return true;
+  if (g[0] === 0x100 && !g[1] && !g[2] && !g[3]) return true;
+  return false;
+}
+
+function ipv6NetKey(ip) {
+  var g = ipv6Groups(ip);
+  if (!g) return "";
+  if (!g[0] && !g[1] && !g[2] && !g[3] && !g[4] && g[5] === 0xffff) {
+    return [g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff].join(".");
+  }
+  var hex = function (n) { return ("000" + n.toString(16)).slice(-4); };
+  return hex(g[0]) + ":" + hex(g[1]) + ":" + hex(g[2]) + ":" + hex(g[3]) + "::/64";
+}
+
+var RATE_CACHE_HOST = "https://nymchat-rate.invalid";
+
+async function cacheRateTake(bucket, who, units, limit, windowMs) {
+  try {
+    if (typeof caches === "undefined" || !caches.default || !who) return true;
+    var span = windowMs > 0 ? windowMs : 60000;
+    var windowId = Math.floor(Date.now() / span);
+    var key = new Request(RATE_CACHE_HOST + "/" + bucket + "?k=" + encodeURIComponent(who) + "&w=" + windowId, { method: "GET" });
+    var count = 0;
+    var hit = await caches.default.match(key);
+    if (hit) {
+      var n = parseInt(await hit.text(), 10);
+      if (Number.isFinite(n)) count = n;
+    }
+    if (count + units > limit) return false;
+    await caches.default.put(key, new Response(String(count + units), {
+      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + Math.ceil(span / 1000) }
+    }));
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
 const CLIENT_CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -3040,6 +3120,11 @@ export {
   canonicalAuthBody,
   authPayloadHashHex,
   enforceAuthReplay,
+  AUTH_REPLAY_TTL_S,
+  ipv6Groups,
+  ipv6Blocked,
+  ipv6NetKey,
+  cacheRateTake,
   validateZapReceipt,
   parseNwcUri,
   nwcInvoicePaid,

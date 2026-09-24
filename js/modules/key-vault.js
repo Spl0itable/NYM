@@ -18,7 +18,7 @@ Object.assign(NYM.prototype, {
   // `nym_pq_root` seeds the ML-KEM identity key, so it is protected — and
   // destroyed on reset — exactly like the nsec (spec §5.3).
   _VAULT_KEYS: ['nym_session_nsec', 'nym_dev_nsec', 'nym_nostr_login_nsec', 'nym_nip46_client_secret',
-    'nym_pq_root'],
+    'nym_pq_root', 'nym_botpm_git'],
 
   // localStorage key prefixes for additional secret material that is encrypted
   // alongside the identity keys (per-pubkey group ephemeral secret keys).
@@ -29,7 +29,7 @@ Object.assign(NYM.prototype, {
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const name = localStorage.key(i);
-        if (name && this._VAULT_EXTRA_PREFIXES.some(p => name.startsWith(p))) names.push(name);
+        if (name && (this._VAULT_EXTRA_PREFIXES.some(p => name.startsWith(p)) || /^nym_botanon_[0-9a-f]{64}$/.test(name))) names.push(name);
       }
     } catch (e) {}
     return names;

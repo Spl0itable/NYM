@@ -140,6 +140,10 @@ export async function codePut(db, code, itemId, owner, createdAt) {
     .bind(code, itemId, owner, createdAt || Date.now()).run();
 }
 
+export async function codeDelete(db, code) {
+  await db.prepare("DELETE FROM codes WHERE code = ?").bind(code).run();
+}
+
 export async function botThreadGet(db, pk) {
   if (!hasD1(db)) return [];
   try {

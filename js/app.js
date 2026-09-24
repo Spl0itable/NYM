@@ -355,7 +355,7 @@
             };
             copy.onclick = () => {
                 if (!input.value) return;
-                navigator.clipboard.writeText(input.value).then(() => {
+                window.copySecretToClipboard(input.value).then(() => {
                     const orig = copy.textContent;
                     copy.textContent = 'Copied!';
                     setTimeout(() => { copy.textContent = orig; }, 1500);
@@ -3205,13 +3205,13 @@ function togglePqRootVisibility() {
 function copyPqRoot() {
     const input = document.getElementById('pqRootValue');
     if (!input || !input.value) return;
-    navigator.clipboard.writeText(input.value).then(() => {
+    window.copySecretToClipboard(input.value).then(() => {
         const btn = document.getElementById('pqRootCopyBtn');
         if (!btn) return;
         const orig = btn.innerHTML;
         btn.textContent = 'Copied!';
         setTimeout(() => { btn.innerHTML = orig; }, 2000);
-    });
+    }).catch(() => { });
 }
 
 async function linkPqRoot() {
@@ -3309,15 +3309,15 @@ function toggleNsecVisibility() {
 
 function copyRevealedNsec() {
     const input = document.getElementById('revealedNsecValue');
-    if (!input) return;
-    navigator.clipboard.writeText(input.value).then(() => {
+    if (!input || !input.value) return;
+    window.copySecretToClipboard(input.value).then(() => {
         const btn = document.getElementById('nsecCopyBtn');
         if (btn) {
             const orig = btn.innerHTML;
             btn.textContent = 'Copied!';
             setTimeout(() => { btn.innerHTML = orig; }, 2000);
         }
-    });
+    }).catch(() => { });
 }
 
 // Avatar upload handler for nick edit modal (uploads immediately since keypair exists)
@@ -5756,9 +5756,11 @@ function _nip46NotifyAuthNeeded(url) {
 
 async function _nip46HandleEvent(event) {
     const state = _nip46State;
-    if (!state) return;
+    if (!state || !event) return;
+    if (state.remotePubkey && event.pubkey !== state.remotePubkey) return;
 
     try {
+        if (!window.NostrTools.verifyEvent(event)) return;
         // Decrypt the NIP-44 encrypted content from the remote signer
         const { nip44 } = window.NostrTools;
         const ck = nip44.getConversationKey(state.clientSecretKey, event.pubkey);
@@ -5787,42 +5789,33 @@ async function _nip46HandleEvent(event) {
             return;
         }
 
-        if (response.method === 'connect') {
-            // This is the signer's connect acknowledgment
+        if (!state.remotePubkey) {
+            const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
+            if (response.id && response.error) {
+                if (statusEl) statusEl.textContent = 'Remote signer rejected the connection: ' + response.error;
+                return;
+            }
+            const echoed = !!state.secret && (response.method === 'connect'
+                ? Array.isArray(response.params) && response.params.includes(state.secret)
+                : typeof response.result === 'string' && response.result === state.secret);
+            if (!echoed) {
+                if (response.result === 'ack' || response.method === 'connect') {
+                    state.sawBareAck = true;
+                    if (statusEl) statusEl.textContent = 'A signer answered without the connection secret, so Nymchat did not trust it. Update your signer app, or paste a bunker:// link instead.';
+                }
+                return;
+            }
             state.remotePubkey = event.pubkey;
             state.connected = true;
             await _nip46CompleteLogin(event.pubkey);
             return;
         }
 
+        if (response.method === 'connect') {
+            return;
+        }
+
         if (response.id) {
-            // Before the session is established, the first inbound response is the
-            // connect ack. Only a successful result establishes the connection; an
-            // error here means the signer rejected the connect request.
-            if (!state.remotePubkey) {
-                if (response.error) {
-                    const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
-                    if (statusEl) statusEl.textContent = 'Remote signer rejected the connection: ' + response.error;
-                    return;
-                }
-                if (response.result === undefined) return; // not a settled response
-
-                // First response — this is the connect ack
-                state.remotePubkey = event.pubkey;
-
-                // Verify the secret if the signer echoed it back
-                if (response.result && response.result !== 'ack' && response.result !== state.secret) {
-                    // Secret mismatch; could be a replay
-                    const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
-                    if (statusEl) statusEl.textContent = 'Connection secret mismatch. Try again.';
-                    return;
-                }
-
-                state.connected = true;
-                await _nip46CompleteLogin(event.pubkey);
-                return;
-            }
-
             // Response to a pending request (sign_event, nip44_encrypt/decrypt).
             // Settle on either a result OR an error so callers fail fast instead
             // of hanging until the 60s timeout — important for PM/group sends,

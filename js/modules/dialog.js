@@ -110,7 +110,10 @@
                     copyVal.textContent = opts.copyValue;
                     copyBtn.textContent = opts.copyLabel || 'Copy';
                     copyBtn.onclick = function () {
-                        try { navigator.clipboard.writeText(opts.copyValue); } catch (_) { }
+                        try {
+                            if (opts.copySecret) window.copySecretToClipboard(opts.copyValue).catch(function () { });
+                            else navigator.clipboard.writeText(opts.copyValue);
+                        } catch (_) { }
                         var was = copyBtn.textContent;
                         copyBtn.textContent = 'Copied!';
                         setTimeout(function () { copyBtn.textContent = was; }, 1200);
@@ -186,7 +189,8 @@
             title: opts.title,
             okLabel: opts.okLabel,
             copyValue: opts.copyValue,
-            copyLabel: opts.copyLabel
+            copyLabel: opts.copyLabel,
+            copySecret: opts.copySecret
         });
     };
 
@@ -204,6 +208,75 @@
             maxLength: opts.maxLength,
             multiline: opts.multiline
         });
+    };
+
+    var SECRET_CLEAR_MS = 60000;
+    var SECRET_COPIED_NOTE = 'Copied. It will be cleared from your clipboard in a minute.';
+    var secretClearTimer = null;
+    var secretToastTimer = null;
+
+    function clipboardReadGranted() {
+        try {
+            if (!navigator.permissions || typeof navigator.permissions.query !== 'function') return Promise.resolve(false);
+            return navigator.permissions.query({ name: 'clipboard-read' })
+                .then(function (st) { return !!st && st.state === 'granted'; })
+                .catch(function () { return false; });
+        } catch (_) { return Promise.resolve(false); }
+    }
+
+    function documentFocused() {
+        try { return typeof document.hasFocus === 'function' ? document.hasFocus() : false; } catch (_) { return false; }
+    }
+
+    function clearSecretFromClipboard(secret) {
+        var cb = navigator.clipboard;
+        if (!cb || typeof cb.writeText !== 'function') return Promise.resolve(false);
+        return clipboardReadGranted().then(function (canRead) {
+            if (canRead && typeof cb.readText === 'function') {
+                return cb.readText().then(function (current) {
+                    if (current !== secret) return false;
+                    return cb.writeText('').then(function () { return true; });
+                });
+            }
+            if (!documentFocused()) return false;
+            return cb.writeText('').then(function () { return true; });
+        }).catch(function () { return false; });
+    }
+
+    function showSecretCopiedToast() {
+        try {
+            var el = document.getElementById('secretCopyToast');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'secretCopyToast';
+                el.className = 'secret-copy-toast';
+                el.setAttribute('role', 'status');
+                el.setAttribute('aria-live', 'polite');
+                document.body.appendChild(el);
+            }
+            el.textContent = SECRET_COPIED_NOTE;
+            el.classList.add('visible');
+            clearTimeout(secretToastTimer);
+            secretToastTimer = setTimeout(function () { el.classList.remove('visible'); }, 3500);
+        } catch (_) { }
+    }
+
+    window.copySecretToClipboard = function (secret) {
+        var cb = navigator.clipboard;
+        if (!secret || !cb || typeof cb.writeText !== 'function') return Promise.reject(new Error('clipboard unavailable'));
+        return cb.writeText(secret).then(function () {
+            clearTimeout(secretClearTimer);
+            secretClearTimer = setTimeout(function () {
+                secretClearTimer = null;
+                clearSecretFromClipboard(secret);
+            }, SECRET_CLEAR_MS);
+            showSecretCopiedToast();
+        });
+    };
+
+    window.cancelSecretClipboardClear = function () {
+        clearTimeout(secretClearTimer);
+        secretClearTimer = null;
     };
 
     var ACTIONS = (window.NYM_ACTIONS = window.NYM_ACTIONS || {});

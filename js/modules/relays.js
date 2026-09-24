@@ -2068,6 +2068,18 @@ Object.assign(NYM.prototype, {
         return this._noteEdgeResponse(resp);
     },
 
+    _proxyUnreachable(errOrResponse) {
+        if (!errOrResponse) return false;
+        if (typeof errOrResponse.status !== 'number') {
+            return errOrResponse.name === 'TypeError' || errOrResponse.name === 'TimeoutError';
+        }
+        const status = errOrResponse.status;
+        if (status !== 502 && status !== 503 && (status < 520 || status > 527)) return false;
+        const headers = errOrResponse.headers;
+        const type = (headers && typeof headers.get === 'function' && headers.get('content-type')) || '';
+        return !/^\s*(application\/([a-z0-9.-]+\+)?json|text\/plain)\b/i.test(type);
+    },
+
     async _recoverFromEdgeChallenge() {
         if (!(await this._edgeChallengePending())) return false;
         await new Promise((r) => setTimeout(r, EDGE_CHALLENGE_CONFIRM_MS));
@@ -2425,21 +2437,23 @@ Object.assign(NYM.prototype, {
 
                     if (msgType === 'POOL:RELAY_BAN') {
                         const banUrl = msg[1];
-                        const banReason = msg[2] || 'banned';
-                        if (typeof banUrl === 'string' && banUrl.startsWith('wss://')) {
+                        const banReason = typeof msg[2] === 'string' ? msg[2].slice(0, 300) : 'banned';
+                        if (msg.length <= 3 && typeof banUrl === 'string' && banUrl.startsWith('wss://') && banUrl.length <= 512) {
                             this._permanentlyBlacklistRelay(banUrl, banReason);
                         }
                         return;
                     }
 
                     if (msgType === 'POOL:SHARDS') {
-                        this.relayStats.shardInfo = Array.isArray(msg[1]) ? msg[1] : [];
                         return;
                     }
 
                     if (msgType === 'POOL:STATUS') {
                         const status = msg[1];
-                        poolEntry.connectedRelays = status.connected || [];
+                        if (!status || typeof status !== 'object' || Array.isArray(status)) return;
+                        poolEntry.connectedRelays = Array.isArray(status.connected)
+                            ? status.connected.filter((u) => typeof u === 'string' && u.startsWith('wss://'))
+                            : [];
                         if (poolEntry.connectedRelays.length > 0) poolEntry._healthyAt = Date.now();
                         poolEntry.badgeGate = typeof status.badgeGate === 'string' ? status.badgeGate : null;
                         poolEntry.unbadged = Number(status.unbadged) || 0;
@@ -3611,28 +3625,34 @@ Object.assign(NYM.prototype, {
     },
 
     // Fetch a JSON resource through the Cloudflare proxy when available.
-    // Falls back to a direct fetch only if the proxy is unreachable.
     async proxiedJsonFetch(targetUrl, opts = {}) {
         const base = this._getProxyBaseUrl();
         if (!base) return fetch(targetUrl, opts);
         const proxyUrl = `${base}?action=json&url=${encodeURIComponent(targetUrl)}`;
+        let resp;
         try {
-            return await this._edgeFetch(proxyUrl, opts);
-        } catch (_) {
+            resp = await this._edgeFetch(proxyUrl, opts);
+        } catch (err) {
+            if (!this._proxyUnreachable(err)) throw err;
             return fetch(targetUrl, opts);
         }
+        return this._proxyUnreachable(resp) ? fetch(targetUrl, opts) : resp;
     },
 
-    // Reverse-geocode via the edge-cached proxy endpoint, with a direct
-    // Nominatim fallback if the worker is unreachable or returns an error.
     async fetchGeocode(lat, lng, zoom = 10) {
         const base = this._getProxyBaseUrl();
         const direct = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=${zoom}&accept-language=en`;
         if (base) {
+            let res = null;
             try {
-                const res = await this._edgeFetch(`${base}?action=geocode&lat=${lat}&lng=${lng}&zoom=${zoom}&lang=en`);
-                if (res.ok) return await res.json();
-            } catch (_) { /* fall through */ }
+                res = await this._edgeFetch(`${base}?action=geocode&lat=${lat}&lng=${lng}&zoom=${zoom}&lang=en`);
+            } catch (err) {
+                if (!this._proxyUnreachable(err)) throw err;
+            }
+            if (res && !this._proxyUnreachable(res)) {
+                if (!res.ok) throw new Error(`Geocode failed: ${res.status}`);
+                return res.json();
+            }
         }
         const res = await fetch(direct, { headers: { 'Accept-Language': 'en' } });
         if (!res.ok) throw new Error(`Geocode failed: ${res.status}`);

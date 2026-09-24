@@ -2051,6 +2051,7 @@ ${bundleCodes || (code ? `
                         <div class="nm-shop-30" title="${this.escapeHtml(t.fromPubkey)}">Verified sender key: ${this.escapeHtml(String(t.fromPubkey).slice(0, 16))}…${this.escapeHtml(String(t.fromPubkey).slice(-8))}</div>
                         <div class="nm-shop-30">${date}</div>
                         <div class="nm-shop-31">Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' : ''}${t.settings ? ', preferences' : ''}</div>
+                        ${t.settings && typeof t.settings.lightningAddress === 'string' && t.settings.lightningAddress ? `<div class="nm-shop-31">Sets your lightning address to ${this.escapeHtml(t.settings.lightningAddress)}</div>` : ''}
                     </div>
                     <div class="nm-shop-32">
                         <button class="icon-btn nm-shop-33" data-action="acceptSettingsTransfer" data-event-id="${t.eventId}">Accept</button>

@@ -8,6 +8,7 @@
 
 // One definition for every route; see _client.js.
 import { isNymchatClient } from './_client.js';
+import { ipv6Blocked } from './_shared.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 import { reviewSpamReport, spamEngine, frameBadgeRefused } from './_spam.js';
 
@@ -24,6 +25,7 @@ function isPrivateRelayHost(hostname) {
   if (h6.startsWith('[') && h6.endsWith(']')) h6 = h6.slice(1, -1);
   if (host.includes(':') || h6.includes(':')) {
     if (h6 === '::1' || h6 === '::' || h6 === '0:0:0:0:0:0:0:1') return true;
+    if (ipv6Blocked(h6)) return true;
     if (/^f[cd][0-9a-f]{2}:/.test(h6)) return true;     // fc00::/7
     if (/^fe[89ab][0-9a-f]:/.test(h6)) return true;     // fe80::/10
     const m = h6.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
@@ -48,6 +50,8 @@ function isAppRelayHost(hostname) {
   const h = (hostname || '').toLowerCase().replace(/\.$/, '');
   return h === APP_RELAY_HOST;
 }
+
+export { isPrivateRelayHost };
 
 export async function onRequest(context) {
   const { request, env } = context;

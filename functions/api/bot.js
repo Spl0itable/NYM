@@ -89,6 +89,9 @@ import {
   randomTimestampNow,
   verifyClientAuth,
   enforceAuthReplay,
+  ipv6Blocked,
+  ipv6NetKey,
+  cacheRateTake,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -305,6 +308,9 @@ async function fetchGiftWrapsByIds(ids, requiredId, timeoutMs, maxAttempts) {
 // Private Nymbot messaging: auth, credits (D1), pricing
 var BOT_PM_RATE_LIMIT = 20;
 var BOT_PM_RATE_WINDOW_MS = 60000;
+var BOT_HOLD_TTL_S = 900;
+var BOT_TRANSCRIBE_RATE = 12;
+var BOT_TRANSCRIBE_IP_RATE = 40;
 
 //
 var BOT_PUBLIC_RATE_LIMIT = 20;
@@ -410,11 +416,8 @@ async function botFreeNetId(request, env) {
     // Without a secret there is nothing to hash against, and a bare hash of an
     // address is an address.
     if (!salt) return "";
-    var key = ip;
-    if (ip.indexOf(":") !== -1) {
-      var parts = ip.split(":");
-      key = parts.slice(0, 4).join(":") + "::/64";
-    }
+    var key = ip.indexOf(":") !== -1 ? ipv6NetKey(ip) : ip;
+    if (!key) return "";
     var day = new Date().toISOString().slice(0, 10);
     var digest = sha256(utf8ToBytes(salt + "|" + day + "|" + key));
     // Base64url of the first 18 bytes: long past collision, short enough that the
@@ -2455,6 +2458,7 @@ function parseGitConfig(raw) {
   var host = typeof raw.host === "string" ? raw.host.trim().toLowerCase() : "";
   if (!host) host = BOT_GIT_DEFAULT_HOSTS[provider];
   if (!/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/.test(host)) return null;
+  if (host.indexOf(".") === -1 || isPrivateHostUrl("https://" + host + "/")) return null;
   var token = typeof raw.token === "string" ? raw.token.trim() : "";
   if (provider === "github" && host === "github.com") {
     if (!/^(gh[a-z]_|github_pat_)[A-Za-z0-9_]{16,255}$/.test(token)) return null;
@@ -4322,6 +4326,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   // device records a clip and Whisper turns it into text.
   if (body.action === "transcribe") {
     if (!env.AI) return json({ error: "Transcription is not configured on this server." }, 503);
+    var transcribeIp = (context.request && context.request.headers && context.request.headers.get("CF-Connecting-IP")) || "";
+    if (!(await cacheRateTake("transcribe", userPubkey, 1, BOT_TRANSCRIBE_RATE, BOT_PM_RATE_WINDOW_MS)) ||
+      !(await cacheRateTake("transcribe-ip", transcribeIp, 1, BOT_TRANSCRIBE_IP_RATE, BOT_PM_RATE_WINDOW_MS))) {
+      return json({ error: "Slow down \u2014 too many recordings. Try again in a minute." }, 429);
+    }
     var audioRaw = typeof body.audio === "string" ? body.audio : "";
     // Data URL or bare base64 — either is what a MediaRecorder blob reads as.
     var comma = audioRaw.indexOf(",");
@@ -4777,9 +4786,39 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var turnArmRelease = function (fn) {
       try { context._botTurnRelease = fn; } catch (e) { }
     };
+    var holdId = null;
+    var holdTake = async function (amount, tier) {
+      var holdTry = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      var held = await ledgerCall(env, {
+        op: "credit-hold", id: holdTry, pubkey: userPubkey, tier: tier,
+        amount: amount, ttl: BOT_HOLD_TTL_S, rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS
+      });
+      if (held && held.ok) {
+        holdId = holdTry;
+        return null;
+      }
+      if (held && held._noLedger) return null;
+      if (held && held.rateLimited) return { status: 429, body: { error: "Slow down \u2014 too many messages. Try again in a minute." } };
+      var free = held ? Math.max(0, (Number(held.balance) || 0) - (Number(held.held) || 0)) : 0;
+      return {
+        status: 402,
+        body: {
+          noCredits: true, pro: tier === "pro", balance: free, required: amount,
+          error: "Another reply is still using part of your " + (tier === "pro" ? "Pro " : "") + "balance, so " + free +
+            " credits are free right now and this one needs up to " + amount + ". Wait for it to finish, or type ?buy for more."
+        }
+      };
+    };
+    var holdDrop = async function () {
+      if (!holdId) return;
+      var dropHold = holdId;
+      holdId = null;
+      await ledgerCall(env, { op: "credit-release", id: dropHold });
+    };
     var turnRelease = async function () {
       turnArmRelease(null);
       turnStopHeartbeat();
+      await holdDrop();
       var keys = turnKeys;
       turnKeys = [];
       for (var i = 0; i < keys.length; i++) await botTurnAbort(env, keys[i]);
@@ -4791,6 +4830,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var turnDone = async function (obj, status) {
       turnArmRelease(null);
       turnStopHeartbeat();
+      await holdDrop();
       var keys = turnKeys;
       turnKeys = [];
       for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status);
@@ -5168,6 +5208,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
             (mediaRecord.balance || 0) + ". Type ?buy for more."
         });
       }
+      var mediaHeld = await holdTake(mediaCost, mediaTier);
+      if (mediaHeld) return await turnFail(mediaHeld.body, mediaHeld.status);
       var mediaUrl;
       try {
         if (media.kind === "video") {
@@ -5185,7 +5227,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         // Nothing is charged when generation or upload fails.
         return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
       }
-      var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier });
+      var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier, hold: holdId || undefined });
+      holdId = null;
       if (mediaSpend && mediaSpend._noLedger) {
         mediaRecord.balance -= mediaCost;
         mediaRecord.totalUsed = (mediaRecord.totalUsed || 0) + mediaCost;
@@ -5297,9 +5340,6 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       }
     }
 
-    pushProgress({ kind: "routing", task: taskType, model: proModel ? (proModel.label || proModelKey) : "auto",
-      repos: ghConfig ? ghConfig.length : 0, resumed: !!resumeState });
-
     var resumeGiveBack = async function () {
       if (!resumeHeld || !resumeState) return null;
       var id = resumeHeld;
@@ -5315,6 +5355,14 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       }
       return await turnFail(obj, status);
     };
+
+    if (!freeTurn) {
+      var turnHeld = await holdTake(proModel ? proRequired : stdRequired, proModel ? "pro" : "standard");
+      if (turnHeld) return await turnFailResumable(turnHeld.body, turnHeld.status);
+    }
+
+    pushProgress({ kind: "routing", task: taskType, model: proModel ? (proModel.label || proModelKey) : "auto",
+      repos: ghConfig ? ghConfig.length : 0, resumed: !!resumeState });
 
     var chatResult;
     try {
@@ -5387,7 +5435,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // allowance, before any of this ran. There is nothing to charge.
     var consumed = freeTurn
       ? { ok: true, balance: 0 }
-      : await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier, milli: costMilli });
+      : await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier, milli: costMilli, hold: holdId || undefined });
+    holdId = null;
     if (consumed && consumed._noLedger) {
       if (costMilli > 0) cost = Math.max(cost, Math.round(costMilli / BOT_MILLI_PER_CREDIT));
       spendRecord.balance -= cost;
@@ -7465,7 +7514,7 @@ async function webSearch(query, geohash, env) {
   if (!merged.length) {
     // Nothing came back at all, or nothing that was about the question
     console.warn("nymbot web search: " + (reachable ? "nothing on topic" : "every source came back empty") +
-      " for " + JSON.stringify(truncateText(terms, 80)) + (narrow ? " (narrow: " + narrow + ")" : ""));
+      (narrow ? " (narrow: " + narrow + ")" : ""));
     if (!reachable && !(env && env.BRAVE_SEARCH_API_KEY)) {
       // The scraped engines block datacenter egress as a matter of course, so
       // a worker with no search API key has no working source at all. Named
@@ -7602,22 +7651,63 @@ async function fetchResultPage(url, limit) {
   return page.text;
 }
 
+var PAGE_FETCH_MAX_BYTES = 2 * 1024 * 1024;
+var PAGE_FETCH_MAX_REDIRECTS = 4;
+
+async function fetchPageFollowing(url, init) {
+  var current = url;
+  for (var hop = 0; hop <= PAGE_FETCH_MAX_REDIRECTS; hop++) {
+    if (!/^https?:\/\//i.test(current) || isPrivateHostUrl(current)) throw new Error("blocked address");
+    var resp = await fetch(current, Object.assign({}, init, { redirect: "manual" }));
+    if ([301, 302, 303, 307, 308].indexOf(resp.status) === -1) return resp;
+    var loc = resp.headers.get("Location");
+    if (!loc) return resp;
+    try { current = new URL(loc, current).toString(); } catch (e) { throw new Error("bad redirect"); }
+  }
+  throw new Error("too many redirects");
+}
+
+async function readPageText(resp, maxBytes) {
+  var cl = parseInt(resp.headers.get("Content-Length") || "", 10);
+  if (Number.isFinite(cl) && cl > maxBytes) throw new Error("page too large");
+  if (!resp.body || typeof resp.body.getReader !== "function") {
+    var all = await resp.text();
+    if (all.length > maxBytes) throw new Error("page too large");
+    return all;
+  }
+  var reader = resp.body.getReader();
+  var decoder = new TextDecoder();
+  var out = "";
+  var total = 0;
+  while (true) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    total += chunk.value.length;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch (e) { }
+      throw new Error("page too large");
+    }
+    out += decoder.decode(chunk.value, { stream: true });
+  }
+  return out + decoder.decode();
+}
+
 // One page, as text plus its title.
 async function fetchPageDocument(url, limit) {
   var controller = new AbortController();
   var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
   try {
-    var resp = await fetch(url, {
+    var resp = await fetchPageFollowing(url, {
       headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "text/html,text/plain;q=0.9" },
       signal: controller.signal
     });
-    clearTimeout(timer);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     var type = (resp.headers.get("Content-Type") || "").toLowerCase();
     if (type && !/text\/html|application\/xhtml|text\/plain|text\/markdown|application\/json|\+xml/.test(type)) {
       throw new Error("not a page: " + type);
     }
-    var raw = await resp.text();
+    var raw = await readPageText(resp, PAGE_FETCH_MAX_BYTES);
+    clearTimeout(timer);
     if (/text\/html|application\/xhtml/.test(type) || /<\s*html/i.test(raw.slice(0, 400))) {
       return { url: url, title: extractPageTitle(raw), text: extractReadableText(raw, limit) };
     }
@@ -7662,12 +7752,13 @@ function isPrivateHostUrl(raw) {
   try { host = new URL(raw).hostname.toLowerCase(); } catch (e) { return true; }
   if (!host) return true;
   if (host === "localhost" || host === "[::1]" || /\.local$/.test(host) || /\.internal$/.test(host)) return true;
-  if (/^\[/.test(host)) return /^\[(?:::1|fc|fd|fe80)/i.test(host);
+  if (/^\[/.test(host)) return ipv6Blocked(host);
   var p = host.split(".");
   if (p.length !== 4 || p.some(function (n) { return !/^\d{1,3}$/.test(n); })) return false;
   var a = +p[0], b = +p[1];
   return a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+    (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 198 && (b === 18 || b === 19)) || a >= 224;
 }
 
 // Reads the pages a message links to.
@@ -7731,7 +7822,7 @@ async function attachPageContent(results) {
     return fetchResultPage(url).then(function (text) {
       if (text && text.length > 120) pages.push({ url: url, text: text });
     }, function (e) {
-      console.warn("nymbot page read failed: " + url + " — " + ((e && e.message) || e));
+      console.warn("nymbot page read failed — " + ((e && e.message) || e));
       if (/HTTP 4\d\d/.test(String((e && e.message) || ""))) dead[url] = true;
     });
   });
@@ -9224,7 +9315,10 @@ export {
   handleBotPMAction,
   botReleaseStrandedTurn,
   botTurnKey,
-  botTurnMsgKey
+  botTurnMsgKey,
+  botFreeNetId,
+  isPrivateHostUrl,
+  fetchPageDocument
 };
 /*! Bundled license information:
 

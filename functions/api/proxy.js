@@ -12,7 +12,7 @@
 //   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
 //   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt / NIP-47 wallet lookup)
 
-import { validateZapReceipt, nwcInvoicePaid } from './_shared.js';
+import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
 import { translateText, MAX_CHARS } from './_translate.js';
 
@@ -54,6 +54,8 @@ const CORS_HEADERS = {
   'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
 };
 
+
+export { isPrivateUrl, ipv6IsPrivate, hostResolvesPrivate, handleJsonProxy, handleMediaProxy };
 
 export async function onRequest(context) {
   const { request } = context;
@@ -235,7 +237,9 @@ async function handleJsonProxy(targetUrl, request) {
   }
 
   const ct = (resp.headers.get('content-type') || '').toLowerCase();
-  const allowed = ct.includes('json') || ct.includes('text/plain') || ct === '';
+  const essence = ct.split(';')[0].trim();
+  const plain = essence === 'text/plain';
+  const allowed = plain || essence === '' || essence === 'application/json' || /^application\/[a-z0-9.+-]+\+json$/.test(essence);
   if (!allowed) {
     return jsonResponse({ error: 'Upstream content-type not allowed: ' + ct }, 415);
   }
@@ -246,8 +250,10 @@ async function handleJsonProxy(targetUrl, request) {
   }
 
   const headers = new Headers(CORS_HEADERS);
-  headers.set('Content-Type', resp.headers.get('content-type') || 'application/json');
+  headers.set('Content-Type', plain ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8');
   headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Security-Policy', "sandbox; default-src 'none'");
+  headers.set('Content-Disposition', 'attachment');
   return new Response(text, { status: resp.status, headers });
 }
 
@@ -315,6 +321,15 @@ function resolveBlossomBase(serverParam) {
   }
 }
 
+function blossomResponseHeaders(resp) {
+  const headers = new Headers(CORS_HEADERS);
+  const essence = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  headers.set('Content-Type', essence === 'application/json' ? 'application/json' : 'text/plain; charset=utf-8');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Security-Policy', "sandbox; default-src 'none'");
+  return headers;
+}
+
 async function handleBlossomUpload(request, serverParam) {
   if (request.method !== 'PUT' && request.method !== 'POST') {
     return jsonResponse({ error: 'PUT required' }, 405);
@@ -352,11 +367,7 @@ async function handleBlossomUpload(request, serverParam) {
     body: request.body,
   });
 
-  const respHeaders = new Headers(CORS_HEADERS);
-  const respCT = resp.headers.get('content-type');
-  if (respCT) respHeaders.set('Content-Type', respCT);
-
-  return new Response(resp.body, { status: resp.status, headers: respHeaders });
+  return new Response(resp.body, { status: resp.status, headers: blossomResponseHeaders(resp) });
 }
 
 async function handleBlossomMirror(request, serverParam) {
@@ -398,10 +409,7 @@ async function handleBlossomMirror(request, serverParam) {
     body: JSON.stringify({ url: body.url }),
   });
 
-  const respHeaders = new Headers(CORS_HEADERS);
-  const respCT = resp.headers.get('content-type');
-  if (respCT) respHeaders.set('Content-Type', respCT);
-  return new Response(resp.body, { status: resp.status, headers: respHeaders });
+  return new Response(resp.body, { status: resp.status, headers: blossomResponseHeaders(resp) });
 }
 
 // Media Proxy — supports Range requests for video/audio streaming
@@ -470,7 +478,7 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
     return jsonResponse({ error: `Upstream returned ${resp.status}` }, 502);
   }
 
-  const contentType = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const contentType = (resp.headers.get('content-type') || '').split(/[;,]/)[0].trim().toLowerCase();
   const contentRange = resp.headers.get('content-range');
 
   // Reject responses larger than MAX_MEDIA_SIZE (bandwidth/memory amplification)
@@ -491,7 +499,7 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
   }
 
   const headers = new Headers(CORS_HEADERS);
-  headers.set('Content-Type', resp.headers.get('content-type') || 'application/octet-stream');
+  headers.set('Content-Type', contentType || 'application/octet-stream');
   // The proxy is served from the app's own origin, so prevent any proxied
   // body from being interpreted as an executable document (SVG/HTML script,
   // MIME sniffing) when navigated to directly.
@@ -903,6 +911,7 @@ function ipv6IsPrivate(host) {
   const pct = h.indexOf('%');
   if (pct !== -1) h = h.slice(0, pct);
   if (h === '::1' || h === '::' || h === '0:0:0:0:0:0:0:1') return true;
+  if (ipv6Blocked(h)) return true;
   // IPv4-mapped/compat ::ffff:a.b.c.d or ::a.b.c.d
   const mapped = h.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
   if (mapped) {
@@ -956,13 +965,14 @@ async function hostResolvesPrivate(host) {
   const cached = dnsPrivateCache.get(host);
   if (cached && cached.exp > now) return cached.isPrivate;
   let isPrivate = false;
+  let failed = false;
   try {
     const answers = await Promise.all(['A', 'AAAA'].map(async (type) => {
       const resp = await fetch(`${DOH_URL}?name=${encodeURIComponent(host)}&type=${type}`, {
         headers: { Accept: 'application/dns-json' },
         cf: { cacheTtl: 300 },
       });
-      if (!resp.ok) return [];
+      if (!resp.ok) throw new Error('DoH ' + resp.status);
       const data = await resp.json();
       return Array.isArray(data.Answer) ? data.Answer : [];
     }));
@@ -977,8 +987,9 @@ async function hostResolvesPrivate(host) {
       }
     }
   } catch {
-    // fail open (see note above)
+    failed = true;
   }
+  if (failed) return true;
   dnsPrivateCache.set(host, { isPrivate, exp: now + DNS_CACHE_TTL });
   if (dnsPrivateCache.size > 5000) {
     for (const [k, v] of dnsPrivateCache) {

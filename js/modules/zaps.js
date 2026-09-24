@@ -32,9 +32,12 @@ Object.assign(NYM.prototype, {
         if (typeof this._storageApiStream !== 'function') return;
         try {
             const resp = await this._storageApiStream('zap-get', { scope, ids }, false);
-            await this._readNdjsonStream(resp, (ev) => {
+            const evs = [];
+            await this._readNdjsonStream(resp, (ev) => { if (ev) evs.push(ev); });
+            for (const ev of evs) {
+                if (!(await this._verifyRelayEventAsync(ev))) continue;
                 try { this.handleZapReceipt(ev); } catch (_) { }
-            });
+            }
         } catch (_) { }
     },
 
@@ -174,6 +177,9 @@ Object.assign(NYM.prototype, {
             const invoiceData = await invoiceResponse.json();
 
             if (invoiceData.pr) {
+                if (this.parseAmountFromBolt11(invoiceData.pr) !== parseInt(amountSats)) {
+                    throw new Error('Invoice amount does not match the zap');
+                }
                 return {
                     pr: invoiceData.pr,
                     successAction: invoiceData.successAction,

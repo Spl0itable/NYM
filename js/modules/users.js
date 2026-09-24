@@ -477,8 +477,31 @@ Object.assign(NYM.prototype, {
             return blob;
         }
         const custom = this.userAvatars.get(pubkey);
-        if (custom) return custom;
+        if (custom) return this._profileMediaUrl(custom);
         return this.generateAvatarSvg(pubkey);
+    },
+
+    _profileMediaUrl(url) {
+        if (typeof url !== 'string' || !/^https?:/i.test(url)) return url;
+        return this._mediaProxyDown() ? url : this.getProxiedMediaUrl(url);
+    },
+
+    _mediaProxyDown() {
+        return !!this._mediaProxyDownAt && Date.now() - this._mediaProxyDownAt < 5 * 60 * 1000;
+    },
+
+    _fetchProfileMedia(url) {
+        const fetchUrl = this.getProxiedMediaUrl(url);
+        const viaProxy = fetchUrl !== url;
+        const noteDown = (errOrResponse) => {
+            if (viaProxy && this._proxyUnreachable(errOrResponse)) this._mediaProxyDownAt = Date.now();
+        };
+        return this._throttledProxyFetch(fetchUrl, { mode: 'cors' })
+            .then(r => {
+                if (!r.ok) { noteDown(r); throw new Error(r.status); }
+                if (viaProxy) this._mediaProxyDownAt = 0;
+                return r.blob();
+            }, (err) => { noteDown(err); throw err; });
     },
 
     _evictAvatarBlobIfFull() {
@@ -508,9 +531,7 @@ Object.assign(NYM.prototype, {
         const failed = this._avatarFetchFailed.get(pubkey);
         const recentlyFailed = failed && failed.url === url && (Date.now() - failed.at) < 10 * 60 * 1000;
         if (recentlyFailed) return Promise.resolve();
-        const fetchUrl = this.getProxiedMediaUrl(url);
-        const p = this._throttledProxyFetch(fetchUrl, { mode: 'cors' })
-            .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+        const p = this._fetchProfileMedia(url)
             .then(blob => {
                 this._avatarFetchFailed.delete(pubkey);
                 // Revoke old blob URL if avatar changed
@@ -527,8 +548,6 @@ Object.assign(NYM.prototype, {
                 }
             })
             .catch(() => {
-                // Blob fetch failed (CORS, network, etc.) — fall back to raw URL,
-                // but only on the first failure for this URL
                 const repeatFailure = failed && failed.url === url;
                 this._avatarFetchFailed.set(pubkey, { url, at: Date.now() });
                 if (!repeatFailure) this.updateRenderedAvatars(pubkey, url);
@@ -543,9 +562,7 @@ Object.assign(NYM.prototype, {
         if (this.isVerifiedBot(pubkey)) return Promise.resolve();
         if (this.bannerBlobCache.has(pubkey)) return Promise.resolve();
         if (this.bannerBlobInflight.has(pubkey)) return this.bannerBlobInflight.get(pubkey);
-        const fetchUrl = this.getProxiedMediaUrl(url);
-        const p = this._throttledProxyFetch(fetchUrl, { mode: 'cors' })
-            .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+        const p = this._fetchProfileMedia(url)
             .then(blob => {
                 const old = this.bannerBlobCache.get(pubkey);
                 if (old) URL.revokeObjectURL(old);
@@ -562,7 +579,9 @@ Object.assign(NYM.prototype, {
                     this.persistBannerBlob(pubkey, blob, url, ts);
                 }
             })
-            .catch(() => { })
+            .catch(() => {
+                if (this._mediaProxyDown() && typeof this.updateRenderedBanner === 'function') this.updateRenderedBanner(pubkey);
+            })
             .finally(() => { this.bannerBlobInflight.delete(pubkey); });
         this.bannerBlobInflight.set(pubkey, p);
         return p;
@@ -572,7 +591,8 @@ Object.assign(NYM.prototype, {
         if (this.isVerifiedBot(pubkey)) return this.verifiedBot.banner;
         const blob = this.bannerBlobCache.get(pubkey);
         if (blob) return blob;
-        return this.userBanners.get(pubkey) || null;
+        const banner = this.userBanners.get(pubkey) || null;
+        return this._profileMediaUrl(banner);
     },
 
     getBio(pubkey) {
@@ -635,10 +655,10 @@ Object.assign(NYM.prototype, {
                 ['x', hashHex],
                 ['expiration', String(now + 600)]
             ],
-            content: tType === 'mirror' ? 'Mirror blob' : 'Uploading blob with SHA-256 hash',
-            pubkey: this.pubkey
+            content: tType === 'mirror' ? 'Mirror blob' : 'Uploading blob with SHA-256 hash'
         };
-        const signed = await this.signEvent(event);
+        const NT = window.NostrTools;
+        const signed = NT.finalizeEvent(event, NT.generateSecretKey());
         return btoa(JSON.stringify(signed));
     },
 
@@ -889,6 +909,7 @@ Object.assign(NYM.prototype, {
         const safePk = this._safePubkey(pubkey);
         if (!safePk) return;
         if (this.isVerifiedBot(pubkey)) avatarUrl = this.verifiedBot.picture;
+        else avatarUrl = this._profileMediaUrl(avatarUrl);
         if (!this._avatarUpdateQueue) this._avatarUpdateQueue = new Map();
         this._avatarUpdateQueue.set(safePk, { url: avatarUrl, pubkey });
         if (this._avatarUpdateRaf) return;

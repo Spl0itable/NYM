@@ -1628,7 +1628,10 @@ Object.assign(NYM.prototype, {
         if (isOwn) this._applyEarlyReceipt(msg, groupConvKey);
 
         // Update or create group conversation entry
-        this.addGroupConversation(groupId, groupName, memberPubkeys, tsSec * 1000, {
+        const rosterFromSender = isOwn || !grpForRoster
+            || (!grpForRoster.createdBy && grpForRoster.members.filter(pk => pk !== this.pubkey).length === 0)
+            || grpForRoster.members.includes(senderPubkey);
+        this.addGroupConversation(groupId, groupName, rosterFromSender ? memberPubkeys : [], tsSec * 1000, {
             nameAuthoritative: !!grpForRoster && grpForRoster.createdBy === senderPubkey
         });
         const rhTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'rh' && t[1]);

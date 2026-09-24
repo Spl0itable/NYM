@@ -22,6 +22,17 @@ const BOT_ACTIONS = {
   'voucher-keys': 1, 'voucher-issue': 1
 };
 
+export function wsAuthHostOk(auth, reqUrl) {
+  const tags = auth && Array.isArray(auth.tags) ? auth.tags : [];
+  const tag = tags.find((t) => Array.isArray(t) && t[0] === 'u');
+  if (!tag) return true;
+  try {
+    return new URL(String(tag[1])).host === new URL(reqUrl).host;
+  } catch {
+    return false;
+  }
+}
+
 async function forwardResponse(id, resp, send) {
   const status = resp.status || 200;
   const ct = resp.headers.get('Content-Type') || '';
@@ -88,7 +99,8 @@ export async function onRequest(context) {
     if (type === 'AUTH') {
       const auth = msg[1];
       if (!auth || typeof auth.pubkey !== 'string' ||
-        !verifyClientAuth(auth, auth.pubkey, { action: 'api-ws' })) {
+        !verifyClientAuth(auth, auth.pubkey, { action: 'api-ws' }) ||
+        !wsAuthHostOk(auth, reqUrl)) {
         send(['AUTH_ERR', 'Authentication failed']);
         try { server.close(4001, 'auth'); } catch { /* noop */ }
         return;
