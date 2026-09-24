@@ -13,6 +13,8 @@ import {
   codeGet,
   codeDelete
 } from "./_d1.js";
+import { paceBucketTake, paceBucketSettle } from "./_pace.js";
+import { GIFT_TTL_MS, GIFT_MAX_OPEN, GIFT_LIST_MAX, GIFT_SWEEP_MAX, giftTier, giftCode, giftId, giftAmount, giftPublic } from "./_gift.js";
 
 const SATS_PER_CREDIT_DEFAULT = 100;
 const SHOP_CODE_RE = /^NYM-[0-9A-F]{32}$/;
@@ -50,6 +52,7 @@ const GATE_PACE_MS = 1300;
 const GATE_PACE_LIMITED_MS = 4500;
 const GATE_LIMIT_MEMORY_MS = 90000;
 const GATE_MAX_WAIT_MS = 12000;
+const GATE_TOKEN_MAX_WAIT_MS = 30000;
 
 export class NymLedger {
   constructor(state, env) {
@@ -100,10 +103,17 @@ export class NymLedger {
       "CREATE TABLE IF NOT EXISTS gate (id TEXT PRIMARY KEY, next_at INTEGER NOT NULL, limited_at INTEGER NOT NULL);"
     );
     this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS gate_budget (id TEXT PRIMARY KEY, tokens REAL NOT NULL, at INTEGER NOT NULL);"
+    );
+    this.sql.exec(
       "CREATE TABLE IF NOT EXISTS credit_dust (pubkey TEXT NOT NULL, tier TEXT NOT NULL, milli INTEGER NOT NULL, PRIMARY KEY (pubkey, tier));"
     );
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS credit_holds (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, exp INTEGER NOT NULL);"
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS credit_gifts (id TEXT PRIMARY KEY, owner TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, " +
+      "created INTEGER NOT NULL, exp INTEGER NOT NULL, state TEXT NOT NULL, redeemer TEXT, done_at INTEGER);"
     );
   }
 
@@ -158,6 +168,12 @@ export class NymLedger {
       case "progress-read": return this._progressRead(a.key, a.after);
       case "gate-take": return this._gateTake(a);
       case "gate-limited": return this._gateLimited(a);
+      case "gate-settle": return this._gateSettle(a);
+      case "gift-create": return this._giftCreate(a);
+      case "gift-redeem": return this._giftRedeem(a);
+      case "gift-cancel": return this._giftCancel(a);
+      case "gift-list": return this._giftList(a);
+      case "gift-peek": return this._giftPeek(a);
       default: return { error: "unknown op" };
     }
   }
@@ -440,7 +456,49 @@ export class NymLedger {
     let at = row && Number(row.next_at) > now ? Number(row.next_at) : now;
     if (at > now + maxWait) at = now + maxWait;
     this._gateSave(id, at + gap, limitedAt);
-    return { ok: true, waitMs: at - now, gap, limited: recent };
+    const tokenWait = this._gateBudgetTake(id, a, now);
+    const paceWait = at - now;
+    const out = { ok: true, waitMs: Math.max(paceWait, tokenWait), gap, limited: recent };
+    if (tokenWait > 0) out.tokenWaitMs = tokenWait;
+    return out;
+  }
+
+  _gateBudgetRow(id) {
+    const rows = this.sql
+      .exec("SELECT tokens, at FROM gate_budget WHERE id = ? LIMIT 1;", id)
+      .toArray();
+    return rows.length ? { tokens: Number(rows[0].tokens), at: Number(rows[0].at) } : null;
+  }
+
+  _gateBudgetSave(id, state) {
+    this.sql.exec(
+      "INSERT INTO gate_budget (id, tokens, at) VALUES (?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET tokens = excluded.tokens, at = excluded.at;",
+      id,
+      Number(state.tokens) || 0,
+      Math.round(Number(state.at) || Date.now())
+    );
+  }
+
+  _gateBudgetTake(id, a, now) {
+    const tokens = Number(a && a.tokens);
+    const tpm = Number(a && a.tpm);
+    if (!isFinite(tokens) || tokens <= 0 || !isFinite(tpm) || tpm <= 0) return 0;
+    const maxWait = this._gateNum(a && a.tokenMaxWait, GATE_TOKEN_MAX_WAIT_MS, 60000);
+    const taken = paceBucketTake(this._gateBudgetRow(id), now, tokens, tpm, maxWait);
+    this._gateBudgetSave(id, taken.state);
+    return taken.waitMs;
+  }
+
+  _gateSettle(a) {
+    const id = this._gateId(a && a.id);
+    const tpm = Number(a && a.tpm);
+    const delta = Number(a && a.delta);
+    if (!isFinite(tpm) || tpm <= 0 || !isFinite(delta)) return { ok: false };
+    const row = this._gateBudgetRow(id);
+    if (!row) return { ok: true };
+    this._gateBudgetSave(id, paceBucketSettle(row, Date.now(), delta, tpm));
+    return { ok: true };
   }
 
   _gateLimited(a) {
@@ -592,6 +650,155 @@ export class NymLedger {
       transferred: moved, proTransferred: proMoved, target: to,
       sourceBalance: Math.max(0, (source.balance || 0)), targetBalance, targetProBalance
     };
+  }
+
+  _giftRow(id) {
+    const rows = this.sql.exec(
+      "SELECT id, owner, tier, amount, created, exp, state, redeemer, done_at FROM credit_gifts WHERE id = ? LIMIT 1;", id
+    ).toArray();
+    return rows.length ? rows[0] : null;
+  }
+
+  async _giftRefund(row, state, now) {
+    const tier = giftTier(row.tier);
+    const rec = await this._getCredits(row.owner, tier);
+    rec.balance = (rec.balance || 0) + (Number(row.amount) || 0);
+    await this._putCredits(row.owner, rec, tier);
+    this.sql.exec("UPDATE credit_gifts SET state = ?, done_at = ? WHERE id = ? AND state = 'open';", state, now, row.id);
+    return rec.balance;
+  }
+
+  async _giftSweep(owner, now) {
+    const rows = owner
+      ? this.sql.exec(
+        "SELECT id, owner, tier, amount FROM credit_gifts WHERE state = 'open' AND exp <= ? AND owner = ? LIMIT ?;", now, owner, GIFT_SWEEP_MAX
+      ).toArray()
+      : this.sql.exec(
+        "SELECT id, owner, tier, amount FROM credit_gifts WHERE state = 'open' AND exp <= ? LIMIT ?;", now, GIFT_SWEEP_MAX
+      ).toArray();
+    for (const row of rows) await this._giftRefund(row, "expired", now);
+    return rows.length;
+  }
+
+  async _giftCreate(a) {
+    const owner = String(a.owner || "");
+    if (!/^[0-9a-f]{64}$/.test(owner)) return { error: "Invalid pubkey." };
+    const tier = giftTier(a.tier);
+    const code = giftCode(a.code);
+    if (!code) return { error: "Invalid gift code." };
+    const sized = giftAmount(a.amount, tier);
+    if (sized.error) return { error: sized.error };
+    const amount = sized.amount;
+    const now = Date.now();
+    await this._giftSweep(null, now);
+    const id = await giftId(code);
+    const known = this._giftRow(id);
+    if (known) {
+      if (known.owner !== owner || known.tier !== tier || Number(known.amount) !== amount) {
+        return { error: "That gift code is already taken. Try again." };
+      }
+      const same = await this._getCredits(owner, tier);
+      return { ok: true, replayed: true, gift: giftPublic(known, owner), code, balance: same.balance || 0 };
+    }
+    const open = this.sql.exec(
+      "SELECT COUNT(*) AS n FROM credit_gifts WHERE owner = ? AND state = 'open';", owner
+    ).toArray();
+    if (open.length && Number(open[0].n) >= GIFT_MAX_OPEN) {
+      return { error: "You have " + GIFT_MAX_OPEN + " gifts nobody has claimed yet. Cancel one, or wait for one to be claimed, before making another.", tooMany: true };
+    }
+    const rec = await this._getCredits(owner, tier);
+    const held = this._holdsOf(owner, tier, null);
+    const free = (rec.balance || 0) - held;
+    if (free < amount) {
+      return { ok: false, insufficient: true, balance: rec.balance || 0, held, available: Math.max(0, free), required: amount, tier };
+    }
+    rec.balance -= amount;
+    await this._putCredits(owner, rec, tier);
+    this.sql.exec(
+      "INSERT INTO credit_gifts (id, owner, tier, amount, created, exp, state, redeemer, done_at) VALUES (?, ?, ?, ?, ?, ?, 'open', NULL, NULL);",
+      id, owner, tier, amount, now, now + GIFT_TTL_MS
+    );
+    return { ok: true, gift: giftPublic(this._giftRow(id), owner), code, balance: rec.balance };
+  }
+
+  async _giftRedeem(a) {
+    const user = String(a.user || "");
+    if (!/^[0-9a-f]{64}$/.test(user)) return { error: "Invalid pubkey." };
+    const code = giftCode(a.code);
+    if (!code) return { error: "That is not a gift code.", invalid: true };
+    const now = Date.now();
+    const row = this._giftRow(await giftId(code));
+    if (!row) return { error: "No gift has that code.", unknown: true };
+    const tier = giftTier(row.tier);
+    const amount = Number(row.amount) || 0;
+    if (row.state === "redeemed") {
+      if (row.redeemer === user) {
+        const mine = await this._getCredits(user, tier);
+        return { ok: true, replayed: true, credited: amount, tier, balance: mine.balance || 0 };
+      }
+      return { error: "This gift has already been claimed.", claimed: true };
+    }
+    if (row.state === "canceled") return { error: "Whoever made this gift canceled it.", canceled: true };
+    if (row.state === "expired") return { error: "This gift expired and went back to whoever made it.", expired: true };
+    if (Number(row.exp) <= now) {
+      await this._giftRefund(row, "expired", now);
+      return { error: "This gift expired and went back to whoever made it.", expired: true };
+    }
+    if (row.owner === user) {
+      return { error: "This is your own gift. Cancel it to put the credits back instead.", own: true };
+    }
+    const rec = await this._getCredits(user, tier);
+    rec.balance = (rec.balance || 0) + amount;
+    rec.totalPurchased = (rec.totalPurchased || 0) + amount;
+    await this._putCredits(user, rec, tier);
+    this.sql.exec(
+      "UPDATE credit_gifts SET state = 'redeemed', redeemer = ?, done_at = ? WHERE id = ? AND state = 'open';", user, now, row.id
+    );
+    return { ok: true, credited: amount, tier, balance: rec.balance };
+  }
+
+  async _giftCancel(a) {
+    const owner = String(a.owner || "");
+    if (!/^[0-9a-f]{64}$/.test(owner)) return { error: "Invalid pubkey." };
+    let id = String(a.id || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(id)) {
+      const code = giftCode(a.code);
+      if (!code) return { error: "Which gift?" };
+      id = await giftId(code);
+    }
+    const row = this._giftRow(id);
+    if (!row || row.owner !== owner) return { error: "No gift of yours has that code.", unknown: true };
+    const tier = giftTier(row.tier);
+    if (row.state === "redeemed") return { error: "This gift has already been claimed, so it cannot be canceled.", claimed: true };
+    if (row.state !== "open") {
+      const same = await this._getCredits(owner, tier);
+      return { ok: true, replayed: true, refunded: 0, tier, state: row.state, balance: same.balance || 0 };
+    }
+    const now = Date.now();
+    const balance = await this._giftRefund(row, Number(row.exp) <= now ? "expired" : "canceled", now);
+    return { ok: true, refunded: Number(row.amount) || 0, tier, state: this._giftRow(id).state, balance };
+  }
+
+  async _giftList(a) {
+    const owner = String(a.owner || "");
+    if (!/^[0-9a-f]{64}$/.test(owner)) return { error: "Invalid pubkey." };
+    await this._giftSweep(owner, Date.now());
+    const rows = this.sql.exec(
+      "SELECT id, owner, tier, amount, created, exp, state, redeemer, done_at FROM credit_gifts WHERE owner = ? ORDER BY created DESC LIMIT ?;",
+      owner, GIFT_LIST_MAX
+    ).toArray();
+    return { ok: true, gifts: rows.map((r) => giftPublic(r, owner)) };
+  }
+
+  async _giftPeek(a) {
+    const user = String(a.user || "");
+    const code = giftCode(a.code);
+    if (!code) return { error: "That is not a gift code.", invalid: true };
+    const row = this._giftRow(await giftId(code));
+    if (!row) return { error: "No gift has that code.", unknown: true };
+    const view = giftPublic(row, user);
+    if (view.state === "open" && view.expiresAt <= Date.now()) view.state = "expired";
+    return { ok: true, gift: view };
   }
 
   // Atomic spend for the paid-PM flow: re-checks balance under the lock so two
