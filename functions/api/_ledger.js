@@ -48,6 +48,7 @@ const BOT_NOTIFY_MAX_TTL_S = 900;
 const BOT_NOTIFY_PER_OWNER = 8;
 const BOT_NOTIFY_TOKEN_RE = /^[0-9a-f]{64,200}$/;
 const BOT_NOTIFY_CHAT_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const BOT_NOTIFY_WEB_MAX = 1024;
 // Cloudflare documents 300 requests a minute for Workers AI text generation,
 // but only 50 a minute — 20 without prepaid gateway credits — for the frontier
 // models (kimi-k2.6, kimi-k2.7-code, glm-5.2). 900ms was 67 a minute, over that
@@ -327,9 +328,13 @@ export class NymLedger {
     if (typeof key !== "string" || !key || key.length > 256) return { ok: false, error: "bad key" };
     const owner = typeof a.owner === "string" ? a.owner.toLowerCase() : "";
     if (!/^[0-9a-f]{64}$/.test(owner)) return { ok: false, error: "bad owner" };
-    const token = typeof a.token === "string" ? a.token.toLowerCase() : "";
-    if (!BOT_NOTIFY_TOKEN_RE.test(token)) return { ok: false, error: "bad token" };
-    if (a.env !== "production" && a.env !== "sandbox") return { ok: false, error: "bad env" };
+    if (a.env !== "production" && a.env !== "sandbox" && a.env !== "web") return { ok: false, error: "bad env" };
+    const web = a.env === "web";
+    const token = typeof a.token !== "string" ? "" : web ? a.token : a.token.toLowerCase();
+    const tokenOk = web
+      ? token.length <= BOT_NOTIFY_WEB_MAX && /^\{"endpoint":"https:\/\/[^"]+","keys":\{"p256dh":"[A-Za-z0-9_-]+","auth":"[A-Za-z0-9_-]+"\}\}$/.test(token)
+      : BOT_NOTIFY_TOKEN_RE.test(token);
+    if (!tokenOk) return { ok: false, error: "bad token" };
     if (typeof a.chat !== "string" || !BOT_NOTIFY_CHAT_RE.test(a.chat)) return { ok: false, error: "bad chat" };
     const text = typeof a.text === "string" && a.text.trim() ? a.text.trim().slice(0, 80) : null;
     const now = Math.floor(Date.now() / 1000);
