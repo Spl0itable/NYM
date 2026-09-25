@@ -43,6 +43,11 @@ const BOT_RESUME_MAX_BYTES = 512 * 1024;
 const BOT_PROGRESS_TTL_S = 900;
 const BOT_PROGRESS_MAX_STEPS = 120;
 const BOT_PROGRESS_MAX_BYTES = 128 * 1024;
+const BOT_DRAFT_MAX_CHARS = 32000;
+const BOT_NOTIFY_MAX_TTL_S = 900;
+const BOT_NOTIFY_PER_OWNER = 8;
+const BOT_NOTIFY_TOKEN_RE = /^[0-9a-f]{64,200}$/;
+const BOT_NOTIFY_CHAT_RE = /^[A-Za-z0-9_-]{1,64}$/;
 // Cloudflare documents 300 requests a minute for Workers AI text generation,
 // but only 50 a minute — 20 without prepaid gateway credits — for the frontier
 // models (kimi-k2.6, kimi-k2.7-code, glm-5.2). 900ms was 67 a minute, over that
@@ -98,6 +103,12 @@ export class NymLedger {
     // losing it costs a progress line, never an answer.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS bot_progress (id TEXT PRIMARY KEY, steps TEXT NOT NULL, exp INTEGER NOT NULL);"
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bot_draft (id TEXT PRIMARY KEY, text TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, exp INTEGER NOT NULL);"
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS turn_notify (id TEXT PRIMARY KEY, owner TEXT NOT NULL, token TEXT NOT NULL, env TEXT NOT NULL, chat TEXT NOT NULL, text TEXT, exp INTEGER NOT NULL);"
     );
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS gate (id TEXT PRIMARY KEY, next_at INTEGER NOT NULL, limited_at INTEGER NOT NULL);"
@@ -162,10 +173,12 @@ export class NymLedger {
       case "turn-touch": return this._turnTouch(a.key);
       case "turn-abort": return this._turnAbort(a.key);
       case "turn-finish": return this._turnFinish(a.key, a.result);
+      case "notify-put": return this._notifyPut(a);
       case "resume-put": return this._resumePut(a.id, a.owner, a.state);
       case "resume-take": return this._resumeTake(a.id, a.owner);
       case "progress-push": return this._progressPush(a.key, a.step);
-      case "progress-read": return this._progressRead(a.key, a.after);
+      case "progress-read": return this._progressRead(a.key, a.after, a.draftAfter);
+      case "progress-draft": return this._progressDraft(a.key, a.text, a.seq);
       case "gate-take": return this._gateTake(a);
       case "gate-limited": return this._gateLimited(a);
       case "gate-settle": return this._gateSettle(a);
@@ -209,6 +222,7 @@ export class NymLedger {
   // Nymbot turn de-duplication.
   _turnSweep(now) {
     this.sql.exec("DELETE FROM bot_turns WHERE exp < ?;", now);
+    this._notifySweep(now);
   }
 
   _turnRow(key) {
@@ -264,7 +278,8 @@ export class NymLedger {
   _turnAbort(key) {
     if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
     this.sql.exec("DELETE FROM bot_turns WHERE id = ? AND result IS NULL;", key);
-    return { ok: true };
+    this._draftDrop(key);
+    return this._withNotify({ ok: true }, key);
   }
 
   // Read-only probe used while waiting on an in-flight attempt. "gone" means
@@ -287,9 +302,10 @@ export class NymLedger {
     }
     // Never risk the row limit: an unstored result only costs the retry path,
     // it does not break the turn that just succeeded.
+    this._draftDrop(key);
     if (!encoded || encoded.length > BOT_TURN_MAX_RESULT_BYTES) {
       this.sql.exec("DELETE FROM bot_turns WHERE id = ?;", key);
-      return { ok: false, tooLarge: true };
+      return this._withNotify({ ok: false, tooLarge: true }, key);
     }
     const now = Math.floor(Date.now() / 1000);
     this.sql.exec(
@@ -299,7 +315,57 @@ export class NymLedger {
       encoded,
       now + BOT_TURN_RESULT_TTL_S
     );
-    return { ok: true };
+    return this._withNotify({ ok: true }, key);
+  }
+
+  _notifySweep(now) {
+    this.sql.exec("DELETE FROM turn_notify WHERE exp < ?;", now);
+  }
+
+  _notifyPut(a) {
+    const key = a && a.key;
+    if (typeof key !== "string" || !key || key.length > 256) return { ok: false, error: "bad key" };
+    const owner = typeof a.owner === "string" ? a.owner.toLowerCase() : "";
+    if (!/^[0-9a-f]{64}$/.test(owner)) return { ok: false, error: "bad owner" };
+    const token = typeof a.token === "string" ? a.token.toLowerCase() : "";
+    if (!BOT_NOTIFY_TOKEN_RE.test(token)) return { ok: false, error: "bad token" };
+    if (a.env !== "production" && a.env !== "sandbox") return { ok: false, error: "bad env" };
+    if (typeof a.chat !== "string" || !BOT_NOTIFY_CHAT_RE.test(a.chat)) return { ok: false, error: "bad chat" };
+    const text = typeof a.text === "string" && a.text.trim() ? a.text.trim().slice(0, 80) : null;
+    const now = Math.floor(Date.now() / 1000);
+    const ttl = Math.max(1, Math.min(BOT_NOTIFY_MAX_TTL_S, Math.floor(Number(a.ttl) || BOT_NOTIFY_MAX_TTL_S)));
+    const turn = this._turnRow(key);
+    if (turn.bad) return { ok: false, error: "bad key" };
+    if (turn.result) return { ok: true, done: true };
+    const held = this.sql.exec(
+      "SELECT COUNT(*) AS n FROM turn_notify WHERE owner = ? AND id != ?;", owner, key
+    ).toArray();
+    if ((held.length ? Number(held[0].n) || 0 : 0) >= BOT_NOTIFY_PER_OWNER) return { ok: false, capped: true };
+    this.sql.exec(
+      "INSERT INTO turn_notify (id, owner, token, env, chat, text, exp) VALUES (?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, token = excluded.token, env = excluded.env, " +
+      "chat = excluded.chat, text = excluded.text, exp = excluded.exp;",
+      key, owner, token, a.env, a.chat, text, now + ttl
+    );
+    return { ok: true, expiresIn: ttl };
+  }
+
+  _notifyTake(key) {
+    const now = Math.floor(Date.now() / 1000);
+    this._notifySweep(now);
+    const rows = this.sql.exec(
+      "SELECT token, env, chat, text FROM turn_notify WHERE id = ? LIMIT 1;", key
+    ).toArray();
+    if (!rows.length) return null;
+    this.sql.exec("DELETE FROM turn_notify WHERE id = ?;", key);
+    const r = rows[0];
+    return { token: r.token, env: r.env, chat: r.chat, text: r.text || null };
+  }
+
+  _withNotify(out, key) {
+    const notify = this._notifyTake(key);
+    if (notify) out.notify = notify;
+    return out;
   }
 
   // --- resuming a truncated run -------------------------------------------
@@ -392,23 +458,73 @@ export class NymLedger {
     return { ok: true, n: steps.length ? steps[steps.length - 1].n : 0 };
   }
 
-  _progressRead(key, after) {
+  _progressRead(key, after, draftAfter) {
     if (typeof key !== "string" || !key || key.length > 256) return { steps: [] };
     const now = Math.floor(Date.now() / 1000);
     this.sql.exec("DELETE FROM bot_progress WHERE exp < ?;", now);
+    const out = { steps: [] };
+    const draft = this._draftRead(key, now, draftAfter);
+    if (draft) out.draft = draft;
     const rows = this.sql
       .exec("SELECT steps FROM bot_progress WHERE id = ? LIMIT 1;", key)
       .toArray();
-    if (!rows.length) return { steps: [] };
+    if (!rows.length) return out;
     let steps = [];
     try {
       const parsed = JSON.parse(rows[0].steps);
       if (Array.isArray(parsed)) steps = parsed;
     } catch {
-      return { steps: [] };
+      return out;
     }
     const from = Number(after) || 0;
-    return { steps: steps.filter((s) => (s && s.n ? s.n : 0) > from) };
+    out.steps = steps.filter((s) => (s && s.n ? s.n : 0) > from);
+    return out;
+  }
+
+  _progressDraft(key, text, seq) {
+    if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
+    const n = Math.floor(Number(seq));
+    if (!Number.isFinite(n) || n < 1) return { ok: false };
+    const row = this._turnRow(key);
+    if (row.bad || !row.running) {
+      this._draftDrop(key);
+      return { ok: false, closed: true };
+    }
+    let body = typeof text === "string" ? text : "";
+    let cut = false;
+    if (body.length > BOT_DRAFT_MAX_CHARS) {
+      body = body.slice(0, BOT_DRAFT_MAX_CHARS);
+      cut = true;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    this.sql.exec("DELETE FROM bot_draft WHERE exp < ?;", now);
+    const held = this.sql.exec("SELECT seq FROM bot_draft WHERE id = ? LIMIT 1;", key).toArray();
+    if (held.length && Number(held[0].seq) >= n) return { ok: false, stale: true };
+    this.sql.exec(
+      "INSERT INTO bot_draft (id, text, seq, at, exp) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET text = excluded.text, seq = excluded.seq, at = excluded.at, exp = excluded.exp;",
+      key,
+      body,
+      n,
+      Date.now(),
+      now + BOT_PROGRESS_TTL_S
+    );
+    return { ok: true, seq: n, cut };
+  }
+
+  _draftRead(key, now, after) {
+    this.sql.exec("DELETE FROM bot_draft WHERE exp < ?;", now);
+    const rows = this.sql
+      .exec("SELECT text, seq, at FROM bot_draft WHERE id = ? LIMIT 1;", key)
+      .toArray();
+    if (!rows.length) return null;
+    const seq = Number(rows[0].seq) || 0;
+    if (seq <= (Number(after) || 0)) return null;
+    return { text: String(rows[0].text || ""), seq, at: Number(rows[0].at) || 0 };
+  }
+
+  _draftDrop(key) {
+    this.sql.exec("DELETE FROM bot_draft WHERE id = ?;", key);
   }
 
   _gateNum(v, fallback, cap) {

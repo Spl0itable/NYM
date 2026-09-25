@@ -1200,6 +1200,7 @@
   "Start video call": "Видео чакыруны башлау",
   "Starting…": "Башлау...",
   "Stay Connected in Background": "Фонда бәйләнгән хәлдә калу",
+  "Stay Connected in Background Disabled Enabled Keeps relay connections and the Bluetooth mesh running while the app is in the background, so messages arrive without reopening it. Uses more battery and data. Android shows a permanent notification while it is on; iOS limits how long connections can be held, wakes the app about every 20 minutes with an empty push every device gets alike, and, with identity encryption on, catches up only while the device has been unlocked at least once since it was powered on.": "Фонда Bağlanган quite Төпle түгел Төпле\nТөпле реле bağlantаларын һәм Bluetooth mesh торышын приложение фонда булганда да саклап тора, шулай итеп хәбәрләр аны кайта ачарга кирәк булмый безen. Батарея һәм дата күбрәк узады. Android бу функция эшләгә кирәк булганда төแนน уведомление күрсәтә; iOS bağlantаларны нинди вакыткча саклау мөмкинлеген чиклый, һәр аппарат аналогик хәбәр белән һәр 20 минут сайын приложениены уяныша, һәм, хәзерлекны шифрләү күən, блоклау ачылган timescales гына җитә, ул камера күтәрү моменталынан бирән timescales ачылган булса.",
   "Stay connected in background": "Фонда байланышта калырга",
   "Step 1 of 1": "1 нче адым (җилтә 1)",
   "Step {n} of {total}": "{total} адымның {n}-нче адымы",

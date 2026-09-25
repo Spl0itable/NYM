@@ -1200,6 +1200,7 @@
   "Start video call": "Video call bɛ se ka kɛ",
   "Starting…": "A bɛ bɔ...",
   "Stay Connected in Background": "Hakili kɛ dɔgɔn dɔgɔn kɔnɔ k'a bɛ mɔgɔw kɛ nkaɲɛna",
+  "Stay Connected in Background Disabled Enabled Keeps relay connections and the Bluetooth mesh running while the app is in the background, so messages arrive without reopening it. Uses more battery and data. Android shows a permanent notification while it is on; iOS limits how long connections can be held, wakes the app about every 20 minutes with an empty push every device gets alike, and, with identity encryption on, catches up only while the device has been unlocked at least once since it was powered on.": "Ka i kɛ bɛɛ kɛ kɛnɛya la\nKa i n'a fɔ ka kɛ kɛnɛya la dɔgɔtɔya fɛ, ko a bɛ relay koneksiyonw u kɛ kɛnɛya la bɛɛ kɛ kɛnɛya la, n'a fɔ ko app bɛ kɛnɛya la bɛɛ kɛnɛya la, n'a fɔ ko mɛsɛdʒw bɛna dɛmɛ fana n'a fɔ k'a fɔlɔ k'a fɔlɔ. A bɛ batiri ni dɔta (data) bɛɛ fɔ. Android bɛ nɔgɔya kɛ nɔgɔya la n'a fɔ ko a bɛ kɛ; iOS bɛ koneksiyonw nɔgɔya kɛ kɛ kɛnɛya la, a bɛ app dɔn kɛ kɛnɛya la kɔrɔ kɔrɔ kɛ kɛnɛya la n'a fɔ kɛ sɔsɔsɔ kɔrɔ fɛ, mɛsɛdʒ bɛɛ dɔgɔtɔ, ni i ye identity encryption kɛra, a bɛ mɛsɛdʒw dɔn kɛ kɛnɛya la kɛnɛya la fana n'a fɔ ko dɛmɛ (device) bɛ kɛ kɛnɛya la kɛnɛya la kɛnɛya la dɔgɔtɔya la.",
   "Stay connected in background": "Yɛ kɛ ka kura kɛ background kɔnɔ",
   "Step 1 of 1": "Ɲɛkan kɛlɛ kan kɛlɛ kɔrɔ la 1",
   "Step {n} of {total}": "Kɛnɛ {n} {total} la",
