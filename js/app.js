@@ -2813,6 +2813,9 @@ function editNick() {
             : "Reveal this nym's private key and recovery code";
     }
 
+    if (window.NymKeyBackup) window.NymKeyBackup.refresh();
+    if (window.NymPasskeyBackup) window.NymPasskeyBackup.refresh();
+
     document.getElementById('nickEditModal').classList.add('active');
 }
 
@@ -3235,8 +3238,7 @@ async function linkPqRoot() {
         await replacePqRootWith(code, input, status);
         return;
     }
-    const ok = verdict === 'ok' && typeof nym.pqRootLinkWithCode === 'function'
-        && nym.pqRootLinkWithCode(code);
+    const ok = verdict === 'ok' && linkPqRootCode(code);
     if (status) {
         status.textContent = ok
             ? 'Linked. This device can now read your quantum-resistant messages.'
@@ -3244,6 +3246,12 @@ async function linkPqRoot() {
     }
     if (!ok) return;
     input.value = '';
+}
+
+function linkPqRootCode(code) {
+    const ok = typeof nym.pqRootLinkWithCode === 'function'
+        && nym.pqRootLinkWithCode(code);
+    if (!ok) return false;
     refreshPqRootReveal();
     // Republish so peers encapsulate to the root-seeded key from now on.
     if (typeof nym.publishPqAnnouncement === 'function') {
@@ -3255,7 +3263,27 @@ async function linkPqRoot() {
     if (typeof nym.reloadSettingsAfterPqLink === 'function') {
         nym.reloadSettingsAfterPqLink();
     }
+    return true;
 }
+
+function restorePqRootFromBackup(code) {
+    const trimmed = String(code || '').trim();
+    const pubkey = nym.pubkey;
+    return new Promise((resolve) => {
+        const run = () => {
+            if (!trimmed || nym.pubkey !== pubkey) { resolve('skipped'); return; }
+            const current = typeof nym.pqRootCode === 'function' ? nym.pqRootCode() : null;
+            if (current && current === trimmed) { resolve('same'); return; }
+            const verdict = typeof nym.pqRootLinkVerdict === 'function'
+                ? nym.pqRootLinkVerdict(trimmed) : 'invalid';
+            if (verdict !== 'ok') { resolve(verdict); return; }
+            resolve(linkPqRootCode(trimmed) ? 'linked' : 'invalid');
+        };
+        if (typeof nym._pqWhenRootSettles === 'function') nym._pqWhenRootSettles(run);
+        else run();
+    });
+}
+window.restorePqRootFromBackup = restorePqRootFromBackup;
 
 async function replacePqRoot() {
     const input = document.getElementById('pqRootReplaceInput');
@@ -3520,6 +3548,8 @@ function verifyDevNsec() {
 
 async function showSettings() {
     nym.updateRelayStatus();
+    if (window.NymKeyBackup) window.NymKeyBackup.refresh();
+    if (window.NymPasskeyBackup) window.NymPasskeyBackup.refresh();
     const settingsSearchInput = document.getElementById('settingsSearchInput');
     if (settingsSearchInput) settingsSearchInput.value = '';
     window.filterSettings('');
@@ -4704,6 +4734,8 @@ const NYMCHAT_VERSION = 'v3.75.545';
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
+const GOOGLE_WEB_CLIENT_ID = '435441872913-ccmsrqp8nsi3vqm27cptpsld3kqb5i2g.apps.googleusercontent.com';
+
 function runBuildVerification() {
     const statusEl = document.getElementById('aboutBuildStatus');
     if (!statusEl || typeof window.verifyRunningBuild !== 'function') return;
@@ -5102,6 +5134,7 @@ async function checkSavedConnection() {
                     await nym.generateKeypair();
                     nym.nym = savedNick || nym.generateRandomNym();
                     nym.connectionMode = 'ephemeral';
+                    if (typeof nym.pqRootPresetNew === 'function') nym.pqRootPresetNew();
                     // Save the generated keypair for reuse
                     try {
                         const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
@@ -5259,6 +5292,7 @@ async function initializeNym() {
             if (!setupKeypair) {
                 await nym.generateKeypair();
             }
+            if (typeof nym.pqRootPresetNew === 'function') nym.pqRootPresetNew();
             nym.nym = nymInput || nym.generateRandomNym();
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
@@ -5567,6 +5601,16 @@ async function nostrLoginWithNsec() {
         return;
     }
 
+    await nostrLoginApplyKey(nsecInput, secretKey, pubkey);
+}
+
+async function nostrLoginImportKey(privkeyInput) {
+    const secretKey = nym.decodeNsec(privkeyInput);
+    const pubkey = window.NostrTools.getPublicKey(secretKey);
+    await nostrLoginApplyKey(privkeyInput, secretKey, pubkey);
+}
+
+async function nostrLoginApplyKey(nsecInput, secretKey, pubkey) {
     // Store login state (nsec stored so we can sign events and sync settings).
     // Always the canonical nsec, whichever form was pasted — it's what the
     // reveal/copy UI in Settings hands back to the user.

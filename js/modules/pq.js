@@ -8,6 +8,8 @@
     const PQ_TTL_SEC = 7 * 24 * 3600;
     /// How long "this peer has no announcement" is trusted before asking again.
     const PQ_REFETCH_MS = 10 * 60 * 1000;
+    const PQ_RETRY_SOON_MS = 15 * 1000;
+    const PQ_FRESH_KEYLESS_SEC = 10 * 60;
     /// A one-shot lookup gives up after this and the message goes classical.
     const PQ_FETCH_TIMEOUT_MS = 2500;
     /// How long a SEND may wait on a lookup. Shorter than the relay deadline:
@@ -403,7 +405,8 @@
         /// `rowPresent` is the D1 row's existence, independent of whether it
         /// decrypted. A row we cannot read is still proof a root exists, and
         /// generating over it splits the account.
-        pqRootEnsure(record, rowPresent) {
+        pqRootEnsure(record, rowPresent, existingCode) {
+            const preset = existingCode === undefined ? this._pqRootTakePreset() : existingCode;
             // Deliberately pqSupported, not pqCapable: for a signer login the
             // root is what makes it capable, so gating on capability here
             // would be a deadlock — never capable, so never a root.
@@ -463,6 +466,11 @@
                 this._pqRootLocked = true;
                 return 'locked';
             }
+            const given = this._pqRootDecodeCode(preset);
+            if (given && this.pqRootAdopt(given)) {
+                try { localStorage.setItem('nym_pq_root_reveal', 'pending'); } catch (_) { }
+                return 'generated';
+            }
             if (legacy && this.pqRootAdopt(legacy)) {
                 this._pqRootDropLegacy();
                 return 'publish-record';
@@ -474,6 +482,49 @@
             // Surfaced to the user once (spec §9).
             try { localStorage.setItem('nym_pq_root_reveal', 'pending'); } catch (_) { }
             return 'generated';
+        },
+
+        _pqRootDecodeCode(code) {
+            if (typeof code !== 'string' || !code) return null;
+            const NC = window.NymCrypto;
+            try {
+                const bytes = NC.pqRootDecode(code.trim());
+                return NC.pqIsRoot(bytes) ? bytes : null;
+            } catch (_) { return null; }
+        },
+
+        pqRootPresetFor(pubkey, code, fresh) {
+            if (!pubkey || !this._pqRootDecodeCode(code)) return false;
+            this._pqRootPreset = { pubkey, code: code.trim(), fresh: !!fresh };
+            if (pubkey === this.pubkey) this._pqRootApplyPreset();
+            return true;
+        },
+
+        pqRootPresetNew() {
+            if (!this.pubkey || !this.pqSupported() || this._pqThrowawayIdentity()) return null;
+            if (this.pqRoot()) return null;
+            let code;
+            try { code = window.NymCrypto.pqRootEncode(window.NymCrypto.pqGenerateRoot()); } catch (_) { return null; }
+            return this.pqRootPresetFor(this.pubkey, code, true) ? code : null;
+        },
+
+        _pqRootApplyPreset() {
+            const p = this._pqRootPreset;
+            if (!p || !p.fresh || p.pubkey !== this.pubkey) return false;
+            this._pqRootPreset = null;
+            if (this.pqRoot()) return false;
+            const bytes = this._pqRootDecodeCode(p.code);
+            if (!bytes || !this.pqRootAdopt(bytes)) return false;
+            this._pqRootSettled = true;
+            try { localStorage.setItem('nym_pq_root_reveal', 'pending'); } catch (_) { }
+            return true;
+        },
+
+        _pqRootTakePreset() {
+            const p = this._pqRootPreset;
+            if (!p || p.pubkey !== this.pubkey) return null;
+            this._pqRootPreset = null;
+            return p.code;
         },
 
         _pqThrowawayIdentity() {
@@ -528,6 +579,7 @@
                 clearTimeout(this._pqRootWaitTimer);
                 this._pqRootWaitTimer = null;
             }
+            this._pqRootApplyPreset();
             if (this._pqAnnounceTimer) {
                 clearTimeout(this._pqAnnounceTimer);
                 this._pqAnnounceTimer = null;
@@ -1026,7 +1078,10 @@
             // re-queried on every send.
             if (inflight) {
                 if (inflight.promise) return inflight.promise;
-                if (Date.now() - inflight.at < PQ_REFETCH_MS) return Promise.resolve(known || null);
+                const nowSec = Math.floor(Date.now() / 1000);
+                const keylessFresh = !!(known && !known.pk && known.at > 0 && nowSec - known.at < PQ_FRESH_KEYLESS_SEC);
+                const wait = (inflight.miss || keylessFresh) ? PQ_RETRY_SOON_MS : PQ_REFETCH_MS;
+                if (Date.now() - inflight.at < wait) return Promise.resolve(known || null);
             }
 
             // D1 first (see _pqAnnouncementFromD1). Only when it has nothing
@@ -1065,6 +1120,7 @@
             let settle;
             const promise = new Promise((res) => { settle = res; });
             let done = false;
+            let answered = false;
             // Armed by the first EOSE; see the handler below.
             let grace = null;
             const finish = () => {
@@ -1074,7 +1130,7 @@
                 this._subscriptionHandlers.delete(subId);
                 try { this.closeFewRelaysSub(subId); } catch (_) { }
                 if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
-                this._pqFetches.set(pubkey, { at: Date.now() });
+                this._pqFetches.set(pubkey, answered ? { at: Date.now() } : { at: Date.now(), miss: true });
                 settle(this._pqEntry(pubkey));
             };
 
@@ -1089,10 +1145,12 @@
                     // handleEvent ingests it through the same path a pushed
                     // announcement takes; this is only here to stop waiting.
                     if (event && event.kind === 30078 && event.pubkey === pubkey) {
+                        answered = true;
                         try { this.handlePqAnnouncement(event); } catch (_) { }
                         finish();
                     }
                 } else if (type === 'EOSE' && data[0] === subId) {
+                    answered = true;
                     if (this._pqEntry(pubkey)) { finish(); return; }
                     if (grace === null) grace = setTimeout(finish, PQ_EOSE_GRACE_MS);
                 }
@@ -1126,6 +1184,10 @@
         /// our own backend would have to forge secp256k1 to substitute a key.
         async _pqAnnouncementFromD1(pubkey) {
             if (!this._getApiHost || !this._getApiHost()) return null;
+            const fromWorker = await this._pqAnnouncementFromWorker(pubkey);
+            if (fromWorker !== undefined) {
+                return fromWorker ? this._pqAcceptArchived(pubkey, fromWorker) : null;
+            }
             if (typeof this._storageApiStream !== 'function') return null;
             if (typeof this._readNdjsonStream !== 'function') return null;
             let found = null;
@@ -1139,14 +1201,44 @@
                 });
             } catch (_) { return null; }
             if (!found) return null;
+            return this._pqAcceptArchived(pubkey, found);
+        },
+
+        async _pqAnnouncementFromWorker(pubkey) {
+            if (typeof this._edgeFetch !== 'function') return undefined;
+            const apiHost = this._getApiHost();
+            const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+            const timer = ctrl ? setTimeout(() => ctrl.abort(), PQ_FETCH_TIMEOUT_MS) : null;
+            try {
+                const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'pq-key', pubkey }),
+                    ...(ctrl ? { signal: ctrl.signal } : {})
+                });
+                if (!resp || !resp.ok) return undefined;
+                const data = await resp.json();
+                if (!data || typeof data !== 'object' || !('event' in data)) return undefined;
+                const ev = data.event;
+                if (!ev || typeof ev !== 'object') return null;
+                if (ev.kind !== 30078 || ev.pubkey !== pubkey) return null;
+                return ev;
+            } catch (_) {
+                return undefined;
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
+        },
+
+        async _pqAcceptArchived(pubkey, ev) {
             try {
                 const ok = typeof this._verifyRelayEventAsync === 'function'
-                    ? await this._verifyRelayEventAsync(found)
+                    ? await this._verifyRelayEventAsync(ev)
                     : (typeof this._verifyRelayEvent === 'function'
-                        ? this._verifyRelayEvent(found) : false);
+                        ? this._verifyRelayEvent(ev) : false);
                 if (!ok) return null;
             } catch (_) { return null; }
-            try { this.handlePqAnnouncement(found); } catch (_) { return null; }
+            try { this.handlePqAnnouncement(ev); } catch (_) { return null; }
             return this._pqEntry(pubkey);
         },
 

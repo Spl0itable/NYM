@@ -268,7 +268,8 @@ async function run() {
     'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',
     'js/modules/pms.js', 'js/modules/groups.js', 'js/modules/ui-context.js',
     'js/modules/init.js', 'js/modules/build-verify.js', 'js/modules/canary-verify.js',
-    'js/modules/columns.js', 'js/modules/threads.js',
+    'js/modules/columns.js', 'js/modules/threads.js', 'js/modules/key-backup.js',
+    'js/modules/passkey-backup.js',
   ];
   const precache = criticalSources
     .map((rel) => assetMap.get(rel))

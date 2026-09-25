@@ -4106,6 +4106,31 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
+  if (body.action === "pq-key") {
+    var who = typeof body.pubkey === "string" ? body.pubkey.toLowerCase() : "";
+    if (!/^[0-9a-f]{64}$/.test(who)) return json({ error: "Invalid pubkey" }, 400);
+    var pqNow = Math.floor(Date.now() / 1000);
+    var pqFound = null;
+    try {
+      var pqDb = hasD1(env.DB_CHANNELS) ? replica(env.DB_CHANNELS) : null;
+      var pqRows = await pqAnnouncementEventsFromD1(pqDb, who);
+      pqFound = pqRows ? verifiedAnnouncementFrom(pqRows, who) : null;
+    } catch (e) { pqFound = null; }
+    if (who === botPubkey) {
+      var selfPq = botPqSelfFromEnv(env);
+      if (selfPq) {
+        var pqParsed = pqFound ? parsePqAnnouncement(pqFound, pqNow) : null;
+        var pqLive = !!(pqParsed && pqParsed.pk2 && pqParsed.exp > pqNow + 86400 &&
+          sameBytes(pqParsed.pk2, selfPq.kemPk));
+        if (!pqLive) {
+          pqFound = buildBotPqAnnouncement(botPrivkey, botPubkey, selfPq.kemPk, NYMCHAT_VERSION);
+          var pqArchive = archivePqAnnouncementToD1(env, pqFound);
+          try { context.waitUntil(pqArchive); } catch (e) { }
+        }
+      }
+    }
+    return json({ event: pqFound || null });
+  }
   // Public: the ?model picker list. Mirrors what botProCatalog resolves
   // against, so what the apps show is exactly what the worker will charge.
   // Unauthenticated on purpose — it is public catalog data and the picker has
@@ -5655,7 +5680,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "models" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
+  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {

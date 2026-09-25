@@ -1,9 +1,9 @@
 /*
-Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
+Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
 X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
 Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), serial=(), bluetooth=(self), idle-detection=()
 Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
-Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin-allow-popups
 Cross-Origin-Resource-Policy: same-origin

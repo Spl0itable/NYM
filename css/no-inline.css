@@ -10,6 +10,12 @@ html .nm-hidden { display: none; }
 .nm-vault-overlay { z-index: 2147483600; }
 .nm-vault-box { max-width: 420px; }
 .nm-vault-settings-btn { text-align: left; cursor: pointer; }
+.nm-kb-overlay { z-index: 10002; }
+.nm-kb-warning { color: var(--danger); }
+.nm-kb-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.nm-kb-choice { font-family: var(--font-mono, monospace); }
+.nm-kb-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.nm-kb-section { margin-top: 10px; }
 .nm-secondary { color: var(--secondary); }
 .nm-primary { color: var(--primary); }
 .nm-flex1 { flex: 1; }

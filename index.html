@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <!-- Fallback CSP -->
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
+        content="default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Nymchat — open the app</title>
@@ -1331,6 +1331,24 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="form-group nm-hidden" id="keyBackupGroup">
+                    <label class="form-label">Key Backup</label>
+                    <div class="form-hint">Each backup holds your private key and, when this device has it, your post-quantum recovery code. Your key stays yours: the backup is encrypted, and only your PIN or your passkey can unlock it. Back up again after your recovery code changes.</div>
+                    <div class="nm-hidden nm-kb-section" id="googleBackupSettings">
+                        <div class="nm-kb-actions">
+                            <button type="button" class="icon-btn" id="googleBackUpBtn" data-action="googleBackUpKey">Back up to Google</button>
+                            <button type="button" class="icon-btn" id="googleRemoveBackupsBtn" data-action="googleRemoveBackups">Remove backups</button>
+                        </div>
+                        <div class="form-hint">Save an encrypted copy in your Google account, protected by a PIN you choose. Google can't read the copy without your PIN. Restore it on another device with Continue with Google.</div>
+                    </div>
+                    <div class="nm-hidden nm-kb-section" id="passkeyBackupSettings">
+                        <div class="nm-kb-actions">
+                            <button type="button" class="icon-btn" id="passkeyBackUpBtn" data-action="passkeyBackUpKey">Back up with a passkey</button>
+                        </div>
+                        <div class="form-hint">Create a passkey that holds an encrypted backup. Only the passkey can unlock it, and your passkey provider syncs it to your other devices. Restore it with Continue with a passkey.</div>
+                    </div>
+                </div>
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" data-action="randomizeNick">Randomize</button>
@@ -1365,7 +1383,19 @@
                     <button type="button" class="setup-tab active" data-action="switchSetupTab" data-setup-tab="signup">Sign up</button>
                     <button type="button" class="setup-tab" data-action="switchSetupTab" data-setup-tab="login">Login</button>
                 </div>
+                <div id="setupGoogleBackup" class="nm-hidden nm-h-22">
+                    <button type="button" class="send-btn nm-h-23" id="setupGoogleBtn" data-action="continueWithGoogle">Continue with Google</button>
+                    <div class="form-hint nm-h-24">Your key stays yours. Google only stores an encrypted copy, which it can't read without your PIN.</div>
+                </div>
+                <div id="setupPasskeyBackup" class="nm-hidden nm-h-22">
+                    <button type="button" class="send-btn nm-h-23" id="setupPasskeyBtn" data-action="continueWithPasskey">Continue with a passkey</button>
+                    <div class="form-hint nm-h-24">Sign in with a key you backed up with a passkey. The backup is encrypted, and only your passkey can unlock it.</div>
+                </div>
                 <div class="setup-tab-panel" id="setupSignupPanel">
+                <div id="setupPasskeyCreate" class="nm-hidden nm-h-22">
+                    <button type="button" class="send-btn nm-h-23" id="setupPasskeyCreateBtn" data-action="createWithPasskey">Create a new key and back it up with a passkey</button>
+                    <div class="form-hint nm-h-24">Your key stays yours. The backup is encrypted, and only your passkey can unlock it.</div>
+                </div>
                 <div class="form-group" id="nymGroup">
                     <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
@@ -1730,6 +1760,12 @@
                         <label class="form-label">Identity Encryption</label>
                         <button class="form-select nm-vault-settings-btn" id="vaultSettingsBtn" data-action="openVaultSettings">Encrypt identity (nsec) key on this device…</button>
                         <div class="form-hint">Optionally protect your saved identity's (nsec) private key with a password, PIN, passkey, or biometric (Face/Touch ID) so it can't be read from this device without unlocking. Passkeys (synced or hardware security keys) and biometrics use WebAuthn where supported, with password/PIN as the universal fallback.</div>
+                    </div>
+
+                    <div class="form-group nm-hidden" id="keyBackupSettingsLink">
+                        <label class="form-label">Key Backup</label>
+                        <button type="button" class="form-select nm-vault-settings-btn" id="keyBackupSettingsBtn" data-action="openKeyBackupDetails">Back up your key and recovery code…</button>
+                        <div class="form-hint">Back up to Google or with a passkey from View or Edit Nym's Details, next to your nsec and post-quantum recovery code.</div>
                     </div>
 
                     <div class="form-group">
@@ -2675,6 +2711,8 @@
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>
     <script defer src="js/modules/settings.js"></script>
+    <script defer src="js/modules/key-backup.js"></script>
+    <script defer src="js/modules/passkey-backup.js"></script>
     <script defer src="js/modules/build-verify.js"></script>
     <script defer src="js/modules/canary-verify.js"></script>
     <script defer src="js/sw-register.js"></script>

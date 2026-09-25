@@ -196,13 +196,15 @@ Object.assign(NYM.prototype, {
   // platformOnly=true pins it to the built-in biometric authenticator;
   // platformOnly=false ("passkey") lets the OS picker offer synced passkeys and
   // external security keys too.
+  _webauthnRpId() { return location.hostname; },
+
   async _webauthnEnroll(salt, platformOnly) {
     const userId = crypto.getRandomValues(new Uint8Array(16));
     const authenticatorSelection = { userVerification: 'required', residentKey: 'required' };
     if (platformOnly) authenticatorSelection.authenticatorAttachment = 'platform';
     const cred = await navigator.credentials.create({ publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
-      rp: { name: 'Nymchat', id: location.hostname },
+      rp: { name: 'Nymchat', id: this._webauthnRpId() },
       user: { id: userId, name: 'nym-vault', displayName: 'Nymchat Vault' },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
       authenticatorSelection,
