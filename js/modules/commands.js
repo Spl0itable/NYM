@@ -286,9 +286,8 @@ Object.assign(NYM.prototype, {
         };
         // PM-only Nymbot commands — surfaced only inside the Nymbot private chat
         this.botPMCommands = {
-            '?help': { desc: 'Guide to premium, Pro models & git repos (free)' },
+            '?help': { desc: 'Guide to premium, Pro models & credits (free)' },
             '?model': { desc: 'Pick a Pro frontier model (?model off for standard)' },
-            '?git': { desc: 'Connect a git repo to Pro replies (GitHub/GitLab/Gitea)' },
             '?image': { desc: 'Generate an image (--model <name> on Pro; ?image models)' },
             '?speak': { desc: 'Read text aloud as a voice clip' },
             '?buy': { desc: 'Buy Nymbot credits (Standard/Pro switch)' },
@@ -415,9 +414,9 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Deeper completions shown after "?model " / "?git " (and "?git provider ")
-    // in the bot PM. Returns { base, remainder, entries } where base is the
-    // already-typed prefix each completed entry is appended to.
+    // Deeper completions shown after "?model " in the bot PM. Returns
+    // { base, remainder, entries } where base is the already-typed prefix
+    // each completed entry is appended to.
     _botPMSubcommands(cmd, rest) {
         if (cmd === '?model') {
             return {
@@ -426,32 +425,6 @@ Object.assign(NYM.prototype, {
                 entries: (this._botProModels || []).map(m =>
                     [m.key, `${m.label} — ${this._botProPriceLabel(m)}`]
                 ).concat([['off', 'Back to standard multi-model routing']])
-            };
-        }
-        if (cmd === '?git') {
-            const providerArg = /^provider\s+(.*)$/.exec(rest);
-            if (providerArg) {
-                return {
-                    base: `${cmd} provider `,
-                    remainder: providerArg[1],
-                    entries: Object.entries(this._gitProviders || {}).map(([key, p]) =>
-                        [key, `${p.label} — default host ${p.host}; append a custom host for self-hosted`])
-                };
-            }
-            return {
-                base: `${cmd} `,
-                remainder: rest,
-                entries: [
-                    ['provider', 'Choose github, gitlab, or gitea [host]'],
-                    ['token', 'Save your personal access token'],
-                    ['repos', 'List repos the token can access'],
-                    ['repo', 'Select working repo (owner/name [branch])'],
-                    ['branch', 'Set the working branch'],
-                    ['writes on', 'Allow commits, branches & pull requests'],
-                    ['writes off', 'Back to read-only repo access'],
-                    ['off', 'Disconnect the repo (keeps the token)'],
-                    ['disconnect', 'Remove token and repo from this device']
-                ]
             };
         }
         return null;
@@ -466,7 +439,7 @@ Object.assign(NYM.prototype, {
         const needle = input.toLowerCase();
         let matchingCommands = Object.entries(available)
             .filter(([cmd]) => cmd.startsWith(needle) || this.localizeCommandToken(cmd).startsWith(needle));
-        // Once a multi-step command plus a space is typed (e.g. "?git "),
+        // Once a multi-step command plus a space is typed (e.g. "?model "),
         // surface its subcommands so users don't have to memorize them.
         if (inBotPM && matchingCommands.length === 0) {
             const m = /^(\?\S+)\s+(.*)$/.exec(input.toLowerCase());

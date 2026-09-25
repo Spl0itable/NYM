@@ -5524,6 +5524,9 @@ function switchSetupTab(tab) {
     if (loginPanel) loginPanel.classList.toggle('nm-hidden', !isLogin);
     if (signupActions) signupActions.classList.toggle('nm-hidden', isLogin);
     if (signupTos) signupTos.classList.toggle('nm-hidden', isLogin);
+    document.querySelectorAll('#setupModal [data-setup-only]').forEach(el => {
+        el.classList.toggle('setup-tab-off', el.dataset.setupOnly !== (isLogin ? 'login' : 'signup'));
+    });
     if (isLogin) prepareNostrLoginUI();
 }
 

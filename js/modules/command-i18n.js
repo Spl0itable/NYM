@@ -14,7 +14,6 @@ const NYM_CMD_SOURCE = {
     '?changelog': 'change log',
     '?8ball': null,
     '?btc': null,
-    '?git': null,
     '?nostr': null,
 };
 

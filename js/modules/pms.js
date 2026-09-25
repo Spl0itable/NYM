@@ -1904,15 +1904,9 @@ Object.assign(NYM.prototype, {
 
     async sendPM(content, recipientPubkey, options = {}) {
         try {
-            // Bot ?commands are handled entirely on-device: they never need to
-            // reach the worker or relays (and ?git can contain an access
-            // token), so they aren't encrypted, published, shown as message
-            // bubbles, or stored — only their system-message responses appear.
             if (this.isVerifiedBot(recipientPubkey) &&
-                /^\s*\?(github|git|help|commands|balance|buy|clear|transfer|gift|model|anon)\b/i.test(content || '')) {
-                const trimmedCmd = String(content).trim();
-                if (/^\?(github|git)\b/i.test(trimmedCmd)) this._handleBotGitCommand(trimmedCmd);
-                else this._handleBotPM(trimmedCmd, null);
+                /^\s*\?(help|commands|balance|buy|clear|transfer|gift|model|anon|git|github)\b/i.test(content || '')) {
+                this._handleBotPM(String(content).trim(), null);
                 return true;
             }
             if (!this.connected) throw new Error('Not connected to relay');
@@ -2045,7 +2039,7 @@ Object.assign(NYM.prototype, {
             'I\'m smarter than the free public-channel bot. I read each message, figure out the type of task (coding, reasoning/math, creative writing, translation, or general chat) and route it to the best AI model for the job — so my answers are sharper.',
             '',
             '<strong>Here\'s how to get the most out of me:</strong>',
-            '• <code>?help</code> — full guide to premium vs Pro, the git repo integration, and every command (free).',
+            '• <code>?help</code> — full guide to premium vs Pro, credits, and every command (free).',
             '• Just type normally — I use our whole conversation as context.',
             '• Start a message with <code>!</code> to get a one-off answer that ignores all earlier chat history (e.g. <code>!what is 2+2</code>).',
             '• Quote-reply any message to ask a follow-up about it — I\'ll see what you\'re replying to.',
@@ -2056,7 +2050,6 @@ Object.assign(NYM.prototype, {
             '• <code>?image &lt;description&gt;</code> — generate a picture. On Pro, add <code>--model &lt;name&gt;</code> to pick a frontier generator (Nano Banana Pro, Imagen 4, FLUX 2, Seedream, GPT Image 2, Grok Imagine, Recraft) — <code>?image models</code> lists them free.',
             '• <code>?speak &lt;text&gt;</code> — get it read aloud as a voice clip.',
             '• Send or link a picture — models that can see will look at the image itself, not just the link.',
-            '• <code>?git</code> — connect a git repo (GitHub, GitLab, Gitea/Codeberg) so Pro replies read your actual code and can even commit, branch, and open PRs — like a chat-based coding agent.',
             '• <code>?transfer @nym#xxxx confirm</code> — move ALL your credits to another pubkey (great for switching nyms).',
             '',
             '<strong>Pricing:</strong> replies are metered on the tokens they actually use and charged in thousandths of a credit, so a short question costs a fraction of one and a long answer more. Coding and reasoning/math cost more per token because they use larger models, and repeated context is billed at a cached rate. Pro replies work the same way on separate Pro credits — the per-million-token rates are in <code>?model</code>. <code>?image</code> costs <strong>5 credits</strong> (2 Pro) and <code>?speak</code> <strong>3 credits</strong> (1 Pro), charged per generation — nothing is charged if it fails. Credits are tied to your nym — save your nsec so you don\'t lose them.',
@@ -2066,10 +2059,9 @@ Object.assign(NYM.prototype, {
     },
 
     // Free, fully client-side guide to the premium chat: standard vs Pro
-    // tiers, the git repo integration, credits, and every ?command.
+    // tiers, credits, and every ?command.
     _displayBotPmHelp() {
         const proModel = this._getBotProModel();
-        const git = this._getGitConfig();
         const std = this._lastBotCredits;
         const pro = this._lastBotProCredits;
         // ?help samples the catalog rather than printing all of it — the live
@@ -2084,7 +2076,6 @@ Object.assign(NYM.prototype, {
         if (typeof std === 'number') statusBits.push(this._creditWord(std, 'standard credit'));
         if (typeof pro === 'number') statusBits.push(this._creditWord(pro, 'Pro credit'));
         statusBits.push(proModel ? `Pro model: ${this.escapeHtml(proModel.label)}` : 'Pro model: off (standard routing)');
-        if (git && git.token && git.repo) statusBits.push(`repo: ${this.escapeHtml(git.repo)}${git.allowWrites ? ' (writes on)' : ' (read-only)'}`);
         this._displayBotInfoMessage([
             '<strong>📖 Nymbot premium guide</strong>',
             `<em>You right now: ${statusBits.join(' · ')}.</em>`,
@@ -2097,16 +2088,11 @@ Object.assign(NYM.prototype, {
             ...modelLines,
             'Pick with <code>?model &lt;name&gt;</code> (e.g. <code>?model claude-opus</code>), back to standard with <code>?model off</code>. Buy Pro credits via <code>?buy</code> → Pro switch.',
             '',
-            '<strong>3. Git repos (Pro)</strong>',
-            'Connect a repository — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg & self-hosted) — and Pro replies become a coding agent over your real code: it lists, reads, and searches files, and with writes enabled it commits to a branch (or directly) and opens pull/merge requests.',
-            'Setup: <code>?git provider github|gitlab|gitea [host]</code> → <code>?git token &lt;pat&gt;</code> → <code>?git repos</code> → <code>?git repo owner/name [branch]</code> → optionally <code>?git writes on</code>. Type <code>?git</code> anytime for status.',
-            'A repo task runs up to 6 model calls, and costs more only because it uses more: every call carries the repository file trees and everything read so far as input. Most of that input is a cache hit after the first call, billed at a tenth of the fresh rate. A worst case is reserved from your balance and only what was used is charged. Your token stays on this device, is never published to relays, and is never stored server-side.',
-            '',
-            '<strong>4. Credits</strong>',
+            '<strong>3. Credits</strong>',
             '<code>?balance</code> shows both balances · <code>?buy</code> purchases over Lightning (Standard/Pro switch) · <code>?gift @nym#xxxx</code> gifts credits · <code>?transfer @nym#xxxx confirm</code> moves your ENTIRE balance (both pools) to another pubkey.',
             'Credits are tied to your nym — save your nsec (sidebar → your nym → Reveal private key) so they survive a new session.',
             '',
-            '<strong>5. Chat tricks</strong>',
+            '<strong>4. Chat tricks</strong>',
             'Start a message with <code>!</code> for a one-off answer that ignores history · <code>?clear</code> wipes the conversation · quote-reply any message to ask a follow-up about it.',
             '',
             'This guide is free — type <code>?help</code> anytime.'
@@ -2176,9 +2162,9 @@ Object.assign(NYM.prototype, {
             '',
             'Right here in our private 1:1 chat is the **premium** tier: it\'s end-to-end encrypted and I route each message to the best AI model for the job (coding, reasoning/math, creative writing, translation, or general chat). These private replies cost **credits**, metered on the tokens each reply uses — a short question costs a fraction of a credit, a long answer more, and the coding and reasoning routes cost more per token because they use bigger models.',
             '',
-            'Want even more power? **Nymbot Pro** lets you pick a specific frontier model — Claude Fable 5, Claude Opus, GPT-5.1, and more — for every reply. Type `?model` to see them; Pro replies use separate Pro credits. Pro can even connect to a git repo (`?git` — GitHub, GitLab, Gitea/Codeberg) to read your code and ship commits or PRs.',
+            'Want even more power? **Nymbot Pro** lets you pick a specific frontier model — Claude Fable 5, Claude Opus, GPT-5.1, and more — for every reply. Type `?model` to see them; Pro replies use separate Pro credits.',
             '',
-            'Type `?buy` to get credits (Standard or Pro) and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them. Type `?help` here anytime for the full free guide to premium, Pro, and the git integration.',
+            'Type `?buy` to get credits (Standard or Pro) and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them. Type `?help` here anytime for the full free guide to premium, Pro, and credits.',
             '',
             'So, what can I help you with?'
         ].join('\n');
@@ -2670,211 +2656,6 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it (${this._botProPriceLabel(picked)}). Type ?model off to switch back.`);
     },
 
-    // Git repo mode (GitHub, GitLab, Gitea/Forgejo incl. Codeberg and
-    // self-hosted): token + repo selection live ONLY in localStorage on this
-    // device. The token is sent to the Nymbot worker with each repo message
-    // (over TLS) but is never stored server-side or put on relays.
-    _gitProviders: {
-        github: { label: 'GitHub', host: 'github.com', tokenHint: 'fine-grained personal access token (github.com → Settings → Developer settings)' },
-        gitlab: { label: 'GitLab', host: 'gitlab.com', tokenHint: 'personal access token with api scope (GitLab → Preferences → Access tokens)' },
-        gitea: { label: 'Gitea/Forgejo', host: 'codeberg.org', tokenHint: 'access token (Settings → Applications)' }
-    },
-
-    _getGitConfig() {
-        try {
-            const raw = window.nymSecretGet('nym_botpm_git');
-            const cfg = raw ? JSON.parse(raw) : null;
-            return cfg && typeof cfg === 'object' ? cfg : null;
-        } catch { return null; }
-    },
-
-    _saveGitConfig(cfg) {
-        try {
-            if (cfg) window.nymSecretSet('nym_botpm_git', JSON.stringify(cfg));
-            else window.nymSecretRemove('nym_botpm_git');
-        } catch { }
-        this._renderBotCreditMeta();
-    },
-
-    _gitTokenValid(cfg, token) {
-        if ((cfg.provider || 'github') === 'github' && (cfg.host || 'github.com') === 'github.com') {
-            return /^(gh[a-z]_|github_pat_)[A-Za-z0-9_]{16,255}$/.test(token || '');
-        }
-        return /^\S{8,255}$/.test(token || '');
-    },
-
-    _gitApiBase(cfg) {
-        const provider = cfg.provider || 'github';
-        const host = cfg.host || this._gitProviders[provider].host;
-        if (provider === 'gitlab') return `https://${host}/api/v4`;
-        if (provider === 'gitea') return `https://${host}/api/v1`;
-        return host === 'github.com' ? 'https://api.github.com' : `https://${host}/api/v3`;
-    },
-
-    async _gitApi(path, cfgOverride) {
-        // cfgOverride lets the connect modal verify a token/repo the user just
-        // typed but hasn't saved yet; without it we use the stored config.
-        const cfg = cfgOverride || this._getGitConfig();
-        if (!cfg || !cfg.token) return { ok: false, status: 0, data: null };
-        try {
-            const headers = { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/json' };
-            if ((cfg.provider || 'github') === 'github') {
-                headers['Accept'] = 'application/vnd.github+json';
-                headers['X-GitHub-Api-Version'] = '2022-11-28';
-            }
-            const resp = await fetch(this._gitApiBase(cfg) + path, { headers });
-            return { ok: resp.ok, status: resp.status, data: await resp.json().catch(() => null) };
-        } catch {
-            return { ok: false, status: 0, data: null };
-        }
-    },
-
-    // Provider-specific shapes for the few client-side calls we make
-    _gitUserPath() { return '/user'; },
-    _gitUserLogin(cfg, data) { return (cfg.provider === 'gitlab' ? data && data.username : data && data.login) || ''; },
-    _gitReposPath(cfg) {
-        if (cfg.provider === 'gitlab') return '/projects?membership=true&per_page=30&order_by=last_activity_at';
-        if (cfg.provider === 'gitea') return '/user/repos?limit=30';
-        return '/user/repos?per_page=30&sort=pushed';
-    },
-    _gitRepoFullName(cfg, r) { return cfg.provider === 'gitlab' ? r.path_with_namespace : r.full_name; },
-    _gitRepoPath(cfg, repo) {
-        return cfg.provider === 'gitlab' ? '/projects/' + encodeURIComponent(repo) : '/repos/' + repo;
-    },
-    _gitRepoRe(cfg) {
-        // GitLab allows nested groups (up to 4 segments); others are owner/name.
-        return cfg.provider === 'gitlab'
-            ? /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+){1,3}$/
-            : /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-    },
-
-    async _handleBotGitCommand(trimmed) {
-        const parts = trimmed.replace(/^\?(github|git)\b/i, '').trim().split(/\s+/).filter(Boolean);
-        const cmd = (parts[0] || 'status').toLowerCase();
-        const cfg = this._getGitConfig() || { provider: 'github', host: 'github.com' };
-        const provInfo = this._gitProviders[cfg.provider || 'github'];
-        const sys = (msg) => this.displaySystemMessage(msg, 'system', { html: true });
-
-        if (cmd === 'provider') {
-            const name = (parts[1] || '').toLowerCase();
-            if (!this._gitProviders[name]) {
-                sys('Usage: <code>?git provider github|gitlab|gitea [host]</code> — e.g. <code>?git provider gitlab</code>, <code>?git provider gitea codeberg.org</code>, or a self-hosted domain like <code>?git provider gitlab git.mycompany.com</code>. Switching providers clears the saved token and repo.');
-                return;
-            }
-            const host = (parts[2] || '').toLowerCase() || this._gitProviders[name].host;
-            if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(host)) { sys('Invalid host name.'); return; }
-            this._saveGitConfig({ provider: name, host });
-            sys(`Provider set to <strong>${this._gitProviders[name].label}</strong> at <strong>${this.escapeHtml(host)}</strong>. Now add a token: <code>?git token &lt;${this._gitProviders[name].tokenHint.split(' (')[0]}&gt;</code>.`);
-            return;
-        }
-
-        if (cmd === 'token') {
-            const token = parts[1] || '';
-            if (!this._gitTokenValid(cfg, token)) {
-                sys(`That doesn't look like a valid ${provInfo.label} token. Create a ${provInfo.tokenHint} scoped to just the repos you want Nymbot to use, then run <code>?git token &lt;token&gt;</code>.`);
-                return;
-            }
-            cfg.token = token;
-            delete cfg.login;
-            this._saveGitConfig(cfg);
-            const who = await this._gitApi(this._gitUserPath());
-            const login = this._gitUserLogin(cfg, who.data);
-            if (who.ok && login) {
-                cfg.login = login;
-                this._saveGitConfig(cfg);
-                sys(`${provInfo.label} token saved for <strong>@${this.escapeHtml(login)}</strong> (stored only on this device). Next: <code>?git repos</code> to list repos, then <code>?git repo owner/name</code>.`);
-            } else {
-                sys(`${provInfo.label} token saved, but it could not be verified` + (who.status ? ` (HTTP ${who.status})` : '') + '. Check that it\'s valid and has repo access.');
-            }
-            return;
-        }
-
-        if (cmd === 'repos') {
-            if (!cfg.token) { sys(`No ${provInfo.label} token yet — run <code>?git token &lt;token&gt;</code> first.`); return; }
-            const res = await this._gitApi(this._gitReposPath(cfg));
-            if (!res.ok || !Array.isArray(res.data)) {
-                sys(`Could not list repos (HTTP ${res.status || '?'}). Check the token with ?git status.`);
-                return;
-            }
-            if (!res.data.length) { sys(`The token can't see any repos. Grant it repository access on ${provInfo.label}.`); return; }
-            const lines = res.data.map(r => `• <code>${this.escapeHtml(this._gitRepoFullName(cfg, r) || '')}</code>${(r.private || r.visibility === 'private') ? ' 🔒' : ''}`);
-            this._displayBotInfoMessage(['Repos this token can access:', ...lines, 'Select one with <code>?git repo owner/name [branch]</code>.'].join('<br>'));
-            return;
-        }
-
-        if (cmd === 'repo') {
-            if (!cfg.token) { sys(`No ${provInfo.label} token yet — run <code>?git token &lt;token&gt;</code> first.`); return; }
-            const repo = (parts[1] || '').trim();
-            if (!this._gitRepoRe(cfg).test(repo)) {
-                sys('Usage: <code>?git repo owner/name [branch]</code> (run <code>?git repos</code> to see what the token can access).');
-                return;
-            }
-            const res = await this._gitApi(this._gitRepoPath(cfg, repo));
-            if (!res.ok || !res.data) {
-                sys(`Can't access <code>${this.escapeHtml(repo)}</code> (HTTP ${res.status || '?'}). Check the name and the token's repo access.`);
-                return;
-            }
-            cfg.repo = this._gitRepoFullName(cfg, res.data) || repo;
-            cfg.branch = (parts[2] && /^[\w./-]{1,100}$/.test(parts[2])) ? parts[2] : '';
-            this._saveGitConfig(cfg);
-            const branchLabel = cfg.branch || `${res.data.default_branch} (default)`;
-            const proModel = this._getBotProModel();
-            sys(`Repo connected: <strong>${this.escapeHtml(cfg.repo)}</strong> on branch <strong>${this.escapeHtml(branchLabel)}</strong>, ${cfg.allowWrites ? 'writes enabled' : 'read-only'}. Every Pro reply now works inside this repo.` +
-                (proModel ? '' : ' ⚠ Pick a Pro model first with <code>?model</code> — repo mode needs one.'));
-            return;
-        }
-
-        if (cmd === 'branch') {
-            if (!cfg.repo) { sys('Select a repo first: <code>?git repo owner/name</code>.'); return; }
-            const branch = (parts[1] || '').trim();
-            if (branch && !/^[\w./-]{1,100}$/.test(branch)) { sys('Invalid branch name.'); return; }
-            cfg.branch = branch;
-            this._saveGitConfig(cfg);
-            sys(branch ? `Working branch set to <strong>${this.escapeHtml(branch)}</strong>.` : 'Working branch reset to the repo default.');
-            return;
-        }
-
-        if (cmd === 'writes') {
-            if (!cfg.repo) { sys('Select a repo first: <code>?git repo owner/name</code>.'); return; }
-            const arg = (parts[1] || '').toLowerCase();
-            if (arg !== 'on' && arg !== 'off') { sys('Usage: <code>?git writes on</code> or <code>?git writes off</code>.'); return; }
-            cfg.allowWrites = arg === 'on';
-            this._saveGitConfig(cfg);
-            sys(cfg.allowWrites
-                ? 'Writes <strong>enabled</strong> — Nymbot can now commit files, create branches, and open pull/merge requests in the connected repo. Make sure the token has content and pull-request write access.'
-                : 'Writes disabled — Nymbot is back to read-only repo access.');
-            return;
-        }
-
-        if (cmd === 'off') {
-            delete cfg.repo;
-            delete cfg.branch;
-            cfg.allowWrites = false;
-            this._saveGitConfig(cfg.token ? cfg : null);
-            sys('Repo disconnected — Pro replies are back to normal chat. The token is still saved; <code>?git disconnect</code> removes it too.');
-            return;
-        }
-
-        if (cmd === 'disconnect') {
-            this._saveGitConfig(null);
-            sys('Git provider disconnected — token and repo selection removed from this device.');
-            return;
-        }
-
-        const proModel = this._getBotProModel();
-        this._displayBotInfoMessage([
-            '<strong>Nymbot × Git</strong> — let Pro replies work inside one of your repos, Claude Code-style: it reads your actual files and, if you allow writes, commits to a branch (or directly) and opens pull/merge requests. Supports GitHub, GitLab, and Gitea/Forgejo (incl. Codeberg and self-hosted).',
-            `Provider: <strong>${provInfo.label}</strong> at <strong>${this.escapeHtml(cfg.host || provInfo.host)}</strong> — change with <code>?git provider github|gitlab|gitea [host]</code>`,
-            `Token: ${cfg.token ? (cfg.login ? `connected as <strong>@${this.escapeHtml(cfg.login)}</strong>` : 'saved') : `not set — <code>?git token &lt;token&gt;</code> (${provInfo.tokenHint})`}`,
-            `Repo: ${cfg.repo ? `<strong>${this.escapeHtml(cfg.repo)}</strong>${cfg.branch ? ` @ ${this.escapeHtml(cfg.branch)}` : ''} (${cfg.allowWrites ? 'writes enabled' : 'read-only'})` : 'none — <code>?git repos</code> then <code>?git repo owner/name</code>'}`,
-            `Pro model: ${proModel ? this.escapeHtml(proModel.label) : 'none — repo mode requires one (<code>?model</code>)'}`,
-            '',
-            'Commands: <code>?git provider …</code> · <code>?git token &lt;pat&gt;</code> · <code>?git repos</code> · <code>?git repo owner/name [branch]</code> · <code>?git branch [name]</code> · <code>?git writes on|off</code> · <code>?git off</code> · <code>?git disconnect</code>',
-            `Pricing: repo tasks run as an agent with up to 6 model calls per message${proModel ? ` (${this.escapeHtml(proModel.label)}: ${this._botProPriceLabel(proModel)})` : ''} — the worst case is reserved from your balance, but you are charged on the tokens actually used, and repeated context is billed at the cached rate.`,
-            'Privacy: the token stays on this device (cleared by Panic Mode), is sent only to the Nymbot worker with each repo message, and is never stored server-side or published to relays. Use a token scoped to just the repos you need — read-only unless you enable writes.'
-        ].join('<br>'));
-    },
-
     // A small inline check mark for the selected model / provider rows.
     _botCheckSvg() {
         return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
@@ -2896,14 +2677,13 @@ Object.assign(NYM.prototype, {
         if (bar) bar.classList.add('nm-hidden');
     },
 
-    // Sync the control bar's tier switch + model/git chip labels with state.
+    // Sync the control bar's tier switch + model chip labels with state.
     // Never toggles visibility (that's _showBotControlBar / _hideBotControlBar),
     // so it's safe to call from _renderBotCreditMeta after any state change.
     _refreshBotControlBar() {
         const bar = document.getElementById('botControlBar');
         if (!bar) return;
         const proModel = this._getBotProModel();
-        const git = this._getGitConfig();
         const isPro = !!proModel;
         bar.querySelectorAll('.bot-tier-btn').forEach(btn => {
             const active = (btn.dataset.tier === 'pro') === isPro;
@@ -2926,21 +2706,6 @@ Object.assign(NYM.prototype, {
             anonBtn.title = anonOn
                 ? 'Anonymous: Nymbot sees a throwaway key, not your nym'
                 : 'Chat from a throwaway key Nymbot cannot link to your nym';
-        }
-        const gitBtn = document.getElementById('botGitBtn');
-        const gitLabel = document.getElementById('botGitBtnLabel');
-        const connected = !!(git && git.token && git.repo);
-        if (gitLabel) {
-            gitLabel.textContent = connected ? git.repo.split('/').pop() : 'Git';
-            // A connected repo name is user content — never localize it; the
-            // "Git" fallback is UI copy that should follow the app language.
-            gitLabel.toggleAttribute('data-no-i18n', connected);
-        }
-        if (gitBtn) {
-            gitBtn.classList.toggle('active', connected);
-            gitBtn.title = connected
-                ? `Connected: ${git.repo}${git.allowWrites ? ' (writes on)' : ' (read-only)'}`
-                : 'Connect a git repo';
         }
     },
 
@@ -3063,143 +2828,6 @@ Object.assign(NYM.prototype, {
         window.closeModal('botModelModal');
     },
 
-    // Git connect modal ------------------------------------------------------
-
-    _setBotGitStatus(msg, kind) {
-        const el = document.getElementById('botGitStatus');
-        if (!el) return;
-        if (!msg) { el.className = 'bot-git-status nm-hidden'; el.textContent = ''; return; }
-        el.className = 'bot-git-status' + (kind ? ' ' + kind : '');
-        if (kind === 'loading') el.innerHTML = '<span class="loader"></span> ' + this.escapeHtml(msg);
-        else el.textContent = msg;
-    },
-
-    openBotGitModal() {
-        const modal = document.getElementById('botGitModal');
-        if (!modal) return;
-        const cfg = this._getGitConfig() || { provider: 'github', host: 'github.com' };
-        const provider = cfg.provider || 'github';
-        this._botGitDraftProvider = provider;
-        document.querySelectorAll('#botGitProviders .bot-git-provider').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.provider === provider);
-        });
-        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
-        set('botGitHost', cfg.host || this._gitProviders[provider].host);
-        set('botGitToken', cfg.token || '');
-        set('botGitRepo', cfg.repo || '');
-        set('botGitBranch', cfg.branch || '');
-        const writes = document.getElementById('botGitWrites');
-        if (writes) writes.checked = !!cfg.allowWrites;
-        const hint = document.getElementById('botGitTokenHint');
-        if (hint) hint.textContent = this._gitProviders[provider].tokenHint;
-        const list = document.getElementById('botGitRepoList');
-        if (list) list.innerHTML = '';
-        const disc = document.getElementById('botGitDisconnectBtn');
-        if (disc) disc.classList.toggle('nm-hidden', !(cfg.token || cfg.repo));
-        if (!this._getBotProModel()) {
-            this._setBotGitStatus('Tip: repo mode needs a Pro model — pick one with the Pro tab first.', 'warn');
-        } else {
-            this._setBotGitStatus('');
-        }
-        modal.classList.add('active');
-    },
-
-    _botGitSetProvider(name) {
-        if (!this._gitProviders[name]) return;
-        this._botGitDraftProvider = name;
-        document.querySelectorAll('#botGitProviders .bot-git-provider').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.provider === name);
-        });
-        const host = document.getElementById('botGitHost');
-        if (host) {
-            const known = Object.values(this._gitProviders).map(p => p.host);
-            const cur = host.value.trim();
-            if (!cur || known.includes(cur)) host.value = this._gitProviders[name].host;
-        }
-        const hint = document.getElementById('botGitTokenHint');
-        if (hint) hint.textContent = this._gitProviders[name].tokenHint;
-        const list = document.getElementById('botGitRepoList');
-        if (list) list.innerHTML = '';
-    },
-
-    _botGitDraftCfg() {
-        const provider = this._botGitDraftProvider || 'github';
-        const provInfo = this._gitProviders[provider];
-        const val = id => (document.getElementById(id)?.value || '').trim();
-        return {
-            provider,
-            provInfo,
-            host: val('botGitHost') || provInfo.host,
-            token: val('botGitToken'),
-            repo: val('botGitRepo'),
-            branch: val('botGitBranch'),
-            allowWrites: !!document.getElementById('botGitWrites')?.checked
-        };
-    },
-
-    async _botGitLoadRepos() {
-        const d = this._botGitDraftCfg();
-        if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d.host)) { this._setBotGitStatus('Invalid host name.', 'warn'); return; }
-        if (!d.token) { this._setBotGitStatus(`Enter your ${d.provInfo.label} token first, then list repos.`, 'warn'); return; }
-        this._setBotGitStatus('Loading repos…', 'loading');
-        const draft = { provider: d.provider, host: d.host, token: d.token };
-        const res = await this._gitApi(this._gitReposPath(draft), draft);
-        if (!res.ok || !Array.isArray(res.data)) {
-            this._setBotGitStatus(`Could not list repos (HTTP ${res.status || '?'}). Check the token and host.`, 'warn');
-            return;
-        }
-        if (!res.data.length) { this._setBotGitStatus(`The token can't see any repos. Grant it repository access on ${d.provInfo.label}.`, 'warn'); return; }
-        const list = document.getElementById('botGitRepoList');
-        if (list) {
-            list.innerHTML = res.data
-                .map(r => this._gitRepoFullName(draft, r))
-                .filter(Boolean)
-                .map(name => `<option value="${this.escapeHtml(name)}"></option>`)
-                .join('');
-        }
-        this._setBotGitStatus(`Loaded ${res.data.length} repo${res.data.length === 1 ? '' : 's'} — start typing in Repository to pick one.`, 'ok');
-    },
-
-    async _botGitConnect() {
-        const d = this._botGitDraftCfg();
-        const provInfo = d.provInfo;
-        if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d.host)) { this._setBotGitStatus('Invalid host name.', 'warn'); return; }
-        const draft = { provider: d.provider, host: d.host };
-        if (!this._gitTokenValid(draft, d.token)) {
-            this._setBotGitStatus(`That doesn't look like a valid ${provInfo.label} token. Create a ${provInfo.tokenHint}.`, 'warn');
-            return;
-        }
-        if (!this._gitRepoRe(draft).test(d.repo)) { this._setBotGitStatus('Repository must be in owner/name form (run “List repos” to see options).', 'warn'); return; }
-        if (d.branch && !/^[\w./-]{1,100}$/.test(d.branch)) { this._setBotGitStatus('Invalid branch name.', 'warn'); return; }
-        this._setBotGitStatus('Verifying token and repo…', 'loading');
-        draft.token = d.token;
-        const who = await this._gitApi(this._gitUserPath(), draft);
-        if (who.ok) { const login = this._gitUserLogin(draft, who.data); if (login) draft.login = login; }
-        const res = await this._gitApi(this._gitRepoPath(draft, d.repo), draft);
-        if (!res.ok || !res.data) {
-            this._setBotGitStatus(`Can't access ${d.repo} (HTTP ${res.status || '?'}). Check the name and the token's repo access.`, 'warn');
-            return;
-        }
-        draft.repo = this._gitRepoFullName(draft, res.data) || d.repo;
-        draft.branch = d.branch;
-        draft.allowWrites = d.allowWrites;
-        this._saveGitConfig(draft);
-        this._refreshBotControlBar();
-        const proModel = this._getBotProModel();
-        const branchLabel = d.branch || `${res.data.default_branch} (default)`;
-        this.displaySystemMessage(`Repo connected: ${draft.repo} on branch ${branchLabel}, ${d.allowWrites ? 'writes enabled' : 'read-only'}. Every Pro reply now works inside this repo.` +
-            (proModel ? '' : ' Pick a Pro model first (Pro tab) — repo mode needs one.'));
-        window.closeModal('botGitModal');
-    },
-
-    _botGitDisconnect() {
-        this._saveGitConfig(null);
-        this._botGitDraftProvider = 'github';
-        this._refreshBotControlBar();
-        this.displaySystemMessage('Git provider disconnected — token and repo selection removed from this device.');
-        window.closeModal('botGitModal');
-    },
-
     // Update the cached Nymbot credit count and the chat-header indicator
     _setBotCreditDisplay(balance) {
         if (typeof balance === 'number') this._lastBotCredits = balance;
@@ -3213,7 +2841,7 @@ Object.assign(NYM.prototype, {
 
     _renderBotCreditMeta() {
         // Keep the header control bar's chips in sync with any state change,
-        // whether it came from the GUI or a ?model / ?git text command.
+        // whether it came from the GUI or a ?model text command.
         this._refreshBotControlBar();
         const el = document.getElementById('botCreditMeta');
         if (!el) return;
@@ -3223,10 +2851,7 @@ Object.assign(NYM.prototype, {
         const anonTag = (typeof this.botAnonEnabled === 'function' && this.botAnonEnabled()) ? 'anonymous · ' : '';
         if (proModel) {
             const proText = typeof pro === 'number' ? this._creditFigure(pro) : '…';
-            let meta = `${anonTag}${proText} Pro credit${pro === 1 ? '' : 's'} · ${proModel.label}`;
-            const git = this._getGitConfig();
-            if (git && git.token && git.repo) meta += ` · ${git.repo.split('/').pop()}`;
-            el.textContent = meta;
+            el.textContent = `${anonTag}${proText} Pro credit${pro === 1 ? '' : 's'} · ${proModel.label}`;
             return;
         }
         if (typeof std !== 'number') return;
@@ -3269,6 +2894,11 @@ Object.assign(NYM.prototype, {
         if (/^\?model\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
             this._handleBotModelCommand(trimmed);
+            return;
+        }
+        if (/^\?(git|github)\b/i.test(trimmed)) {
+            this._markBotPMReceipts('read');
+            this.displaySystemMessage('Repositories are in the Nymbot apps, not in Nymchat. Nothing you typed after ?git was sent. Connect a repository at nymbot.ai.');
             return;
         }
         if (/^\?anon\b/i.test(trimmed)) {
@@ -3327,21 +2957,7 @@ Object.assign(NYM.prototype, {
             }
             const cmdAlias = this.commandAliasHint(content);
             if (cmdAlias) reqExtra.cmdAlias = cmdAlias;
-            if (proModel) {
-                reqExtra.proModel = proModel.key;
-                const git = this._getGitConfig();
-                if (git && git.token && git.repo) {
-                    reqExtra.git = {
-                        provider: git.provider || 'github',
-                        host: git.host || '',
-                        token: git.token,
-                        repo: git.repo,
-                        branch: git.branch || '',
-                        allowWrites: !!git.allowWrites
-                    };
-                }
-            }
-            // Replies (especially Pro models with repo tool calls) can run long.
+            if (proModel) reqExtra.proModel = proModel.key;
             // `pending` means an earlier attempt at this same message is still
             // generating (our socket dropped and this is the HTTP retry): ask
             // again with the same event id to collect that reply, rather than
@@ -3392,9 +3008,7 @@ Object.assign(NYM.prototype, {
                 const replyCost = this._replyCost(data);
                 if (data.pro) this._setBotProCreditDisplay(replyBalance);
                 else this._setBotCreditDisplay(replyBalance);
-                if (data.git && replyCost) {
-                    this.displaySystemMessage(`Repo task used ${this._creditFigure(replyCost)} Pro credit${replyCost === 1 ? '' : 's'}${data.modelCalls > 1 ? ` (${data.modelCalls} model calls)` : ''}. Pro balance: ${this._creditFigure(replyBalance)}.`);
-                } else if (data.pro && replyCost) {
+                if (data.pro && replyCost) {
                     const sel = this._getBotProModel();
                     if (sel && replyCost > (sel.credits || 1)) {
                         this.displaySystemMessage(`Long reply used ${this._creditFigure(replyCost)} Pro credits. Pro balance: ${this._creditFigure(replyBalance)}.`);

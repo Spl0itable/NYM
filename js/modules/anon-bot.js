@@ -804,7 +804,7 @@
             const el = document.getElementById('botAnonStatus');
             if (!el) return;
             el.textContent = text || '';
-            el.className = 'bot-git-status' + (kind ? ' ' + kind : '') + (text ? '' : ' nm-hidden');
+            el.className = 'bot-modal-status' + (kind ? ' ' + kind : '') + (text ? '' : ' nm-hidden');
         },
 
         _renderBotAnonBody() {

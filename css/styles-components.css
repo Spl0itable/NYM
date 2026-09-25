@@ -2745,3 +2745,41 @@ body.light-mode .send-btn.danger:hover:not(:disabled) {
 .app-dialog-copy .pubkey-slideout-copy {
     flex: 0 0 auto;
 }
+
+.setup-brand { margin-bottom: 8px; }
+.setup-brand:not(:has(.setup-brand-row:not(.nm-hidden):not(.setup-tab-off))) { display: none; }
+html .setup-tab-off { display: none; }
+.setup-brand-row { margin-bottom: 12px; }
+.setup-brand-passkey { margin-top: 20px; }
+.setup-brand-or { text-align: center; margin: 28px 0 20px; color: var(--text-dim); font-size: 12px; }
+
+.brand-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 1px solid;
+    border-radius: 999px;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: normal;
+    text-transform: none;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+}
+.brand-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.brand-btn:disabled { opacity: 0.5; cursor: default; }
+.brand-btn-icon { flex: none; width: 20px; height: 20px; }
+.brand-btn-google { background: #131314; border-color: #8E918F; color: #E3E3E3; }
+.brand-btn-google:hover:not(:disabled) { background: #202124; }
+.brand-btn-passkey { background: var(--bg-tertiary); border-color: #8E918F; color: #E3E3E3; }
+.brand-btn-passkey:hover:not(:disabled) { background: var(--bg-secondary); }
+body.light-mode .brand-btn-google,
+body.light-mode .brand-btn-passkey { background: #FFFFFF; border-color: #747775; color: #1F1F1F; }
+body.light-mode .brand-btn-google:hover:not(:disabled),
+body.light-mode .brand-btn-passkey:hover:not(:disabled) { background: #F8F9FA; }

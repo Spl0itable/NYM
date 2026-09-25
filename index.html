@@ -753,10 +753,6 @@
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path></svg>
                     <span class="bot-ctrl-label" id="botModelBtnLabel">Auto-routed</span>
                 </button>
-                <button class="bot-ctrl-btn" type="button" id="botGitBtn" data-action="openBotGitModal" title="Connect a git repo">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
-                    <span class="bot-ctrl-label" id="botGitBtnLabel">Git</span>
-                </button>
                 <button class="bot-ctrl-btn" type="button" id="botAnonBtn" data-action="openBotAnonModal" title="Chat from a throwaway key">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
                     <span class="bot-ctrl-label" id="botAnonBtnLabel">Anon</span>
@@ -1383,19 +1379,22 @@
                     <button type="button" class="setup-tab active" data-action="switchSetupTab" data-setup-tab="signup">Sign up</button>
                     <button type="button" class="setup-tab" data-action="switchSetupTab" data-setup-tab="login">Login</button>
                 </div>
-                <div id="setupGoogleBackup" class="nm-hidden nm-h-22">
-                    <button type="button" class="send-btn nm-h-23" id="setupGoogleBtn" data-action="continueWithGoogle">Continue with Google</button>
+                <div class="setup-brand" id="setupBrand">
+                <div id="setupGoogleBackup" class="nm-hidden setup-brand-row">
+                    <button type="button" class="brand-btn brand-btn-google" id="setupGoogleBtn" data-action="continueWithGoogle"><svg class="brand-btn-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg><span>Continue with Google</span></button>
                     <div class="form-hint nm-h-24">Your key stays yours. Google only stores an encrypted copy, which it can't read without your PIN.</div>
                 </div>
-                <div id="setupPasskeyBackup" class="nm-hidden nm-h-22">
-                    <button type="button" class="send-btn nm-h-23" id="setupPasskeyBtn" data-action="continueWithPasskey">Continue with a passkey</button>
+                <div id="setupPasskeyCreate" class="nm-hidden setup-brand-row setup-brand-passkey" data-setup-only="signup">
+                    <button type="button" class="brand-btn brand-btn-passkey" id="setupPasskeyCreateBtn" data-action="createWithPasskey"><svg class="brand-btn-icon" viewBox="0 -960 960 960" aria-hidden="true" focusable="false"><path fill="currentColor" d="M120-160v-112q0-34 17.5-62.5T184-378q62-31 126-46.5T440-440q20 0 40 1.5t40 4.5q-4 58 21 109.5t73 84.5v80H120ZM760-40l-60-60v-186q-44-13-72-49.5T600-420q0-58 41-99t99-41q58 0 99 41t41 99q0 45-25.5 80T790-290l50 50-60 60 60 60-80 80ZM440-480q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47Zm300-80q17 0 28.5-11.5T780-600q0-17-11.5-28.5T740-640q-17 0-28.5 11.5T700-600q0 17 11.5 28.5T740-560Z"/></svg><span>Sign up with a passkey</span></button>
+                    <div class="form-hint nm-h-24">Your new key is backed up with a passkey. The backup is encrypted, and only your passkey can unlock it.</div>
+                </div>
+                <div id="setupPasskeyBackup" class="nm-hidden setup-brand-row setup-brand-passkey setup-tab-off" data-setup-only="login">
+                    <button type="button" class="brand-btn brand-btn-passkey" id="setupPasskeyBtn" data-action="continueWithPasskey"><svg class="brand-btn-icon" viewBox="0 -960 960 960" aria-hidden="true" focusable="false"><path fill="currentColor" d="M120-160v-112q0-34 17.5-62.5T184-378q62-31 126-46.5T440-440q20 0 40 1.5t40 4.5q-4 58 21 109.5t73 84.5v80H120ZM760-40l-60-60v-186q-44-13-72-49.5T600-420q0-58 41-99t99-41q58 0 99 41t41 99q0 45-25.5 80T790-290l50 50-60 60 60 60-80 80ZM440-480q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47Zm300-80q17 0 28.5-11.5T780-600q0-17-11.5-28.5T740-640q-17 0-28.5 11.5T700-600q0 17 11.5 28.5T740-560Z"/></svg><span>Continue with a passkey</span></button>
                     <div class="form-hint nm-h-24">Sign in with a key you backed up with a passkey. The backup is encrypted, and only your passkey can unlock it.</div>
                 </div>
-                <div class="setup-tab-panel" id="setupSignupPanel">
-                <div id="setupPasskeyCreate" class="nm-hidden nm-h-22">
-                    <button type="button" class="send-btn nm-h-23" id="setupPasskeyCreateBtn" data-action="createWithPasskey">Create a new key and back it up with a passkey</button>
-                    <div class="form-hint nm-h-24">Your key stays yours. The backup is encrypted, and only your passkey can unlock it.</div>
+                <div class="setup-brand-or">or</div>
                 </div>
+                <div class="setup-tab-panel" id="setupSignupPanel">
                 <div class="form-group" id="nymGroup">
                     <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
@@ -2419,65 +2418,14 @@
         </div>
     </div>
 
-    <!-- Nymbot Connect Git Repo Modal -->
-    <div class="modal" id="botGitModal">
-        <div class="modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="botGitModal">✕</button>
-            <div class="modal-header">Connect Git Repo</div>
-            <p class="bot-git-intro">Pro replies can read your code and, with writes on, commit, branch, and open pull/merge requests — Claude Code-style. Your access token is stored only on this device (Panic Mode wipes it) and sent to the Nymbot worker per request — never stored server-side or published to relays.</p>
-            <div class="form-group">
-                <label class="form-label">Provider</label>
-                <div class="bot-git-providers" id="botGitProviders">
-                    <button class="bot-git-provider" type="button" data-action="botGitSetProvider" data-provider="github" data-no-i18n>GitHub</button>
-                    <button class="bot-git-provider" type="button" data-action="botGitSetProvider" data-provider="gitlab" data-no-i18n>GitLab</button>
-                    <button class="bot-git-provider" type="button" data-action="botGitSetProvider" data-provider="gitea" data-no-i18n>Gitea/Forgejo</button>
-                </div>
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="botGitHost">Host</label>
-                <input type="text" class="form-input" id="botGitHost" placeholder="github.com" autocomplete="off" autocapitalize="off" spellcheck="false">
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="botGitToken">Personal access token</label>
-                <input type="password" class="form-input" id="botGitToken" placeholder="ghp_… / glpat-… / token" autocomplete="off" autocapitalize="off" spellcheck="false">
-                <div class="form-hint" id="botGitTokenHint"></div>
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="botGitRepo">Repository</label>
-                <input type="text" class="form-input" id="botGitRepo" placeholder="owner/repo" list="botGitRepoList" autocomplete="off" autocapitalize="off" spellcheck="false">
-                <datalist id="botGitRepoList"></datalist>
-                <button class="bot-git-load-repos" type="button" data-action="botGitLoadRepos">List repos this token can access</button>
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="botGitBranch">Branch <span class="bot-git-optional">(optional)</span></label>
-                <input type="text" class="form-input" id="botGitBranch" placeholder="default branch" autocomplete="off" autocapitalize="off" spellcheck="false">
-            </div>
-            <div class="form-group bot-git-writes-row">
-                <div class="bot-git-writes-text">
-                    <div class="bot-git-writes-title">Allow writes</div>
-                    <div class="form-hint">commit, create branches, open pull/merge requests</div>
-                </div>
-                <label class="nym-switch">
-                    <input type="checkbox" id="botGitWrites">
-                    <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
-                </label>
-            </div>
-            <div class="bot-git-status nm-hidden" id="botGitStatus"></div>
-            <div class="modal-actions">
-                <button class="icon-btn bot-git-disconnect nm-hidden" id="botGitDisconnectBtn" data-action="botGitDisconnect">Disconnect</button>
-                <button class="send-btn" id="botGitConnectBtn" data-action="botGitConnect">Connect</button>
-            </div>
-        </div>
-    </div>
-
     <div class="modal" id="botAnonModal">
         <div class="modal-content">
             <button class="modal-close" data-action="closeModal" data-modal-id="botAnonModal">✕</button>
             <div class="modal-header">Anonymous Nymbot Chat</div>
-            <p class="bot-git-intro">Your premium chat is already end-to-end encrypted, but Nymbot still sees which pubkey is talking to it. Turn this on and every message, and every reply, travels under a throwaway key generated on this device — the same trick group chats use. Nymbot bills that key, answers it, and never learns your nym. Credits move across as blind vouchers Nymbot signs without seeing, so its own records cannot link the two.</p>
-            <div class="form-group bot-git-writes-row">
-                <div class="bot-git-writes-text">
-                    <div class="bot-git-writes-title">Anonymous mode</div>
+            <p class="bot-modal-intro">Your premium chat is already end-to-end encrypted, but Nymbot still sees which pubkey is talking to it. Turn this on and every message, and every reply, travels under a throwaway key generated on this device — the same trick group chats use. Nymbot bills that key, answers it, and never learns your nym. Credits move across as blind vouchers Nymbot signs without seeing, so its own records cannot link the two.</p>
+            <div class="form-group bot-toggle-row">
+                <div class="bot-toggle-text">
+                    <div class="bot-toggle-title">Anonymous mode</div>
                     <div class="form-hint">Send this chat from a throwaway key</div>
                 </div>
                 <label class="nym-switch">
@@ -2508,7 +2456,7 @@
                     <button class="icon-btn" type="button" data-action="botAnonRotate">New throwaway key</button>
                 </div>
             </div>
-            <div class="bot-git-status nm-hidden" id="botAnonStatus"></div>
+            <div class="bot-modal-status nm-hidden" id="botAnonStatus"></div>
         </div>
     </div>
 

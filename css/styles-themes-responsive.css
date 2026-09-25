@@ -624,8 +624,7 @@ body.light-mode .icon-btn {
 
 body.light-mode .bot-ctrl-btn,
 body.light-mode .bot-model-row,
-body.light-mode .bot-git-provider,
-body.light-mode .bot-git-status {
+body.light-mode .bot-modal-status {
     border-color: rgba(0, 0, 0, 0.1);
     background: rgba(0, 0, 0, 0.03);
 }
@@ -647,11 +646,7 @@ body.light-mode .bot-model-row.selected {
     background: rgb(from var(--primary) r g b / 0.1);
 }
 
-body.light-mode .bot-git-provider.active {
-    background: rgb(from var(--primary) r g b / 0.12);
-}
-
-body.light-mode .bot-git-status.warn {
+body.light-mode .bot-modal-status.warn {
     background: rgb(from var(--warning) r g b / 0.12);
 }
 
