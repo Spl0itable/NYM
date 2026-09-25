@@ -106,7 +106,9 @@ void main() {
     nymVouchSpamGateEnabled = true;
     addTearDown(() => nymVouchSpamGateEnabled = prev);
 
-    final n = AppStateNotifier()..goLive('self', 'me#0001');
+    final n = AppStateNotifier()
+      ..goLive('self', 'me#0001')
+      ..setProxyMode(false);
     n.switchView(const ChatView.channel('room'));
     // Backfill path: ingest straight into the store (no trust observation).
     n.ingestEvent(_chanMsg('room', now, pubkey: 'stranger_pk'));

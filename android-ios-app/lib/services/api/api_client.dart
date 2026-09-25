@@ -13,6 +13,7 @@ import '../../models/nostr_event.dart';
 import '../nostr/event_signer.dart';
 import '../relay/relay_stats.dart';
 import 'api_config.dart';
+import 'proxy_reachability.dart';
 
 /// Factory that opens a [WebSocketChannel] to the `/api` socket. Overridable in
 /// tests so no real socket is opened (mirrors `WebSocketChannelFactory` in
@@ -25,7 +26,8 @@ typedef ApiSocketFactory = WebSocketChannel Function(Uri url);
 /// `NymchatApp/<ver>` UA (same gate the relay sockets pass).
 WebSocketChannel defaultApiSocketFactory(Uri url) => IOWebSocketChannel.connect(
       url,
-      headers: {'User-Agent': ApiConfig.userAgent},
+      headers: ApiConfig.socketHeadersFor(url),
+      customClient: ApiConfig.socketClient(),
     );
 
 /// Default Giphy API key (PWA `this.giphyApiKey`, app.js:679). Mirrors the
@@ -574,6 +576,14 @@ class _Pending {
 /// Every request carries the `isNymchatClient` UA header
 /// ([ApiConfig.userAgent]). Construction performs NO network — calls are lazy.
 /// The `http.Client` is injectable for tests.
+const String kOwnMediaApex = 'nymchat.app';
+
+bool isOwnMediaUrl(String url) {
+  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+  if (host.isEmpty) return false;
+  return host == kOwnMediaApex || host.endsWith('.$kOwnMediaApex');
+}
+
 class ApiClient {
   ApiClient({
     http.Client? client,
@@ -1080,11 +1090,7 @@ class ApiClient {
   ///
   /// The worker passes through GET and POST (any other method is coerced to
   /// GET, proxy.js:195), forwards the request `Content-Type` + body on POST,
-  /// and returns the upstream body + status. Like the PWA, the direct fetch of
-  /// [targetUrl] happens ONLY when the proxied request itself fails at the
-  /// transport level — a non-2xx proxied response is returned as-is (the
-  /// upstream status rides through). The direct fallback deliberately omits
-  /// the Nymchat headers (a third-party host shouldn't see the app UA).
+  /// and returns the upstream body + status.
   Future<http.Response> proxiedJsonFetch(
     String targetUrl, {
     String method = 'GET',
@@ -1095,20 +1101,24 @@ class ApiClient {
         method == 'POST'
             ? _client.post(uri, headers: headers, body: body)
             : _client.get(uri, headers: headers);
+    Future<http.Response> direct() async => _utf8Response(await run(
+          Uri.parse(targetUrl),
+          contentType != null ? {'Content-Type': contentType} : null,
+        ));
+    if (_baseUrl.isEmpty) return direct();
+    final http.Response res;
     try {
-      final res = await run(
+      res = await run(
         Uri.parse(jsonProxyUrl(targetUrl)),
         _headers({if (contentType != null) 'Content-Type': contentType}),
       );
-      _trackApiData('json',
-          sent: _bodyLen(body), recv: _bodyLen(res.bodyBytes));
-      return _utf8Response(res);
-    } catch (_) {
-      return _utf8Response(await run(
-        Uri.parse(targetUrl),
-        contentType != null ? {'Content-Type': contentType} : null,
-      ));
+    } catch (e) {
+      if (proxyUnreachable(e)) return direct();
+      rethrow;
     }
+    _trackApiData('json', sent: _bodyLen(body), recv: _bodyLen(res.bodyBytes));
+    if (proxyUnreachable(res)) return direct();
+    return _utf8Response(res);
   }
 
   /// GET the geo relay list -> `[{url,lat,lng}]`. Filters out non-finite coords

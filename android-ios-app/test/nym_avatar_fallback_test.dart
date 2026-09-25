@@ -1,10 +1,3 @@
-// A remote kind-0 `picture` avatar must load with the PWA's proxied→raw
-// fallback: NymAvatar renders it through [InlineNetworkImage] with the PROXIED
-// URL as the primary source and the RAW original as a fallback mirror, so an
-// avatar whose host blocks/rate-limits the media proxy still loads directly —
-// the reason many users' avatars render in the PWA but not natively
-// (AVATAR-LOADING). Absent/empty pictures paint the identicon with no fetch.
-
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -37,8 +30,8 @@ Widget _wrap(Widget child) =>
 
 void main() {
   testWidgets(
-      'remote avatar routes through InlineNetworkImage with a raw '
-      'fallback mirror', (tester) async {
+      'remote avatar routes through InlineNetworkImage and never falls '
+      'back to the raw host', (tester) async {
     const rawUrl = 'https://cdn.example/alice.svg';
     await HttpOverrides.runZoned(() async {
       await tester.pumpWidget(_wrap(const NymAvatar(
@@ -58,10 +51,7 @@ void main() {
           reason: 'primary source should be the media-proxy URL');
       expect(img.url.contains(Uri.encodeComponent(rawUrl)), isTrue);
 
-      // …with the RAW original as the fallback mirror tried on proxy failure —
-      // the fix for hosts that block/rate-limit the proxy.
-      expect(img.fallbackUrls, <String>[rawUrl],
-          reason: 'raw direct URL must be the proxied load\'s fallback');
+      expect(img.fallbackUrls, isEmpty);
 
       // Drain the (failing) fetch so no work is left pending.
       await tester.pumpAndSettle(const Duration(seconds: 1));

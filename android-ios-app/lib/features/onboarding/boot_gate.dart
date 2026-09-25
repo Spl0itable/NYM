@@ -15,6 +15,7 @@ import '../i18n/language_select.dart';
 import '../i18n/localization_service.dart';
 import '../identity/setup_modal.dart';
 import '../identity/vault_settings_modal.dart';
+import '../notifications/background_catch_up.dart';
 import 'tutorial_overlay.dart';
 
 /// First-run boot gate (`setup-modal-init.js` + `checkSavedConnection`).
@@ -57,13 +58,8 @@ class _BootGateState extends ConsumerState<BootGate> {
 
   /// Mirrors setup-modal-init.js: needs setup when there is no saved login
   /// method and auto-ephemeral hasn't been opted into.
-  bool _computeNeedsSetup() {
-    final kv = ref.read(keyValueStoreProvider);
-    final hasLogin = kv.getString(StorageKeys.nostrLoginMethod) != null;
-    final autoEphemeral = kv.getString(StorageKeys.autoEphemeral) == 'true' ||
-        kv.getBool(StorageKeys.autoEphemeral, defaultValue: false);
-    return !hasLogin && !autoEphemeral;
-  }
+  bool _computeNeedsSetup() =>
+      !hasChosenIdentity(ref.read(keyValueStoreProvider));
 
   void _onSetupComplete() {
     if (!mounted) return;
@@ -227,10 +223,14 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
     // Either signal opens this: an upgrade that should save its code, or a
     // device that cannot read the account until it pastes one.
     final linkPending = ctrl.pqRootLinkPromptPending;
-    if (!ctrl.pqUpgradeNoticePending && !linkPending) return;
+    final backupPending = ctrl.pqRootBackupPending && ctrl.pqRootHeld;
+    if (!ctrl.pqUpgradeNoticePending && !linkPending && !backupPending) return;
     _pqNoticeShown = true;
     await ctrl.dismissPqUpgradeNotice();
     if (linkPending) await ctrl.dismissPqRootLinkPrompt();
+    if (backupPending && !ctrl.pqRootLinkNeeded) {
+      await ctrl.dismissPqRootBackupNotice();
+    }
     if (!mounted) return;
     final linkNeeded = ctrl.pqRootLinkNeeded;
     if (linkNeeded) {
@@ -285,6 +285,7 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
       copyValue: ctrl.pqRootCode,
       copyLabel: tr('Copy code'),
       copiedMessage: tr('Post-quantum recovery code copied'),
+      secret: true,
     );
   }
 

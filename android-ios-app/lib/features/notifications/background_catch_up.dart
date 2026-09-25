@@ -1,3 +1,6 @@
+import '../../core/constants/storage_keys.dart';
+import '../../services/storage/key_value_store.dart';
+
 /// How far back a background catch-up is allowed to raise notifications.
 ///
 /// Matches the bell history's own window (`notifications.js:135`): nothing
@@ -61,4 +64,11 @@ bool silentForAlert({
   }
   if (historical) return true;
   return nowMs - tsMs > liveWindowMs;
+}
+
+bool hasChosenIdentity(KeyValueStore kv) {
+  final hasLogin = kv.getString(StorageKeys.nostrLoginMethod) != null;
+  final autoEphemeral = kv.getString(StorageKeys.autoEphemeral) == 'true' ||
+      kv.getBool(StorageKeys.autoEphemeral, defaultValue: false);
+  return hasLogin || autoEphemeral;
 }

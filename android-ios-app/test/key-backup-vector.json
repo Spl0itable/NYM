@@ -1,0 +1,54 @@
+{
+  "format": "nym-key-backup-v1",
+  "pbkdf2": {
+    "hash": "SHA-256",
+    "iterations": 600000,
+    "keyBytes": 32,
+    "saltRule": "HMAC-SHA256(key=utf8(context), msg=utf8(accountId))"
+  },
+  "contexts": {
+    "google": "nym-google-backup",
+    "apple": "nym-apple-backup"
+  },
+  "secretKeyHex": "7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a",
+  "pubkeyHex": "17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917",
+  "cases": [
+    {
+      "provider": "google",
+      "accountId": "109876543210987654321",
+      "pin": "2468",
+      "saltHex": "32f1c02facda36ffe6e01b5bade36cb7a8e093e25dd81e1a9eb0afe935e0e496",
+      "keyHex": "8183a017712adb52c5e57f35f9978825fb4dd24fd1123086b11a54c28ccc3af6",
+      "nonceHex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "payload": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABrUvUOROk1VdFMxpHUdOnGsYgmtAMoi/BeUOIoLjq1s7kG4Kzy141YKgiGaNuDt7w8VJWUkMevkXeli7RkgzZsWAoO0fbrbUGo/Gc8TXW4ryfLCIVfIoM0Y8nO5ZybZQoXvg="
+    },
+    {
+      "provider": "apple",
+      "accountId": "001234.abcdef0123456789abcdef0123456789.0123",
+      "pin": "12345678",
+      "saltHex": "1c49efff02ed0e94b48928f7055df1f2be7bc625a6615f0eebc14660580470c1",
+      "keyHex": "72ce9b7d3a576f43016e85fc925c90cdfb045a44b92ab85a78fab7588ba2ad6a",
+      "nonceHex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "payload": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABagjYBfwonPuJLFEKwiWyEo+32ZdxG1vqbJ3U+L3A3Wwj+Q8xFUJxpRcHNDQB7M4W/MuOli/NeOCtTi+fr7n4vr4GWmluiHyN+maxPoIHIY8PrD+QJxGPVddKbFmWSYwRrSE="
+    }
+  ],
+  "bundle": {
+    "rule": "plaintext = JSON {\"v\":1,\"sk\":<64 lowercase hex>,\"pq\":<nympq1 code>} serialized with exactly these keys in this order, no spaces; pq omitted when the account has none. Legacy plaintext of bare 64 hex must still be accepted on restore.",
+    "pqCode": "nympq1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0jqgfzyvjz2f38yqqqqqqqqqqqqqqqqqqqqqqq",
+    "plaintext": "{\"v\":1,\"sk\":\"7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a\",\"pq\":\"nympq1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0jqgfzyvjz2f38yqqqqqqqqqqqqqqqqqqqqqqq\"}",
+    "cases": [
+      {
+        "provider": "google",
+        "keyHex": "8183a017712adb52c5e57f35f9978825fb4dd24fd1123086b11a54c28ccc3af6",
+        "nonceHex": "0000000000000000000000000000000000000000000000000000000000000003",
+        "payload": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADXMGlEQ4DTxLAcT2oiBDYQ4tAUp5uAllq02fZJZb2dtAqDSkqzKKshNdeQBXq+Syg8G23Z+ACEZkjG+XvrhUjtzL4WCXm+QnzKkteAn2S0Ab8+El/0DcNHeWKw/EzqEi32t98JGerKp5obDoY5Or1a1AsCCdcY+uws+fzH0rK4bM2pXDSS/uZZh/Gdun6cP7qCAEJXDo9Jt3nYhMyEacYNyArEik1ybAJdUb3VcfmvhJaAO6+sZYuMHZBP9pmlOnmTLUe+LPPr/YAS38wUi8/vxjcKdzyr+q1glGHUKdQJfGqGg=="
+      },
+      {
+        "provider": "apple",
+        "keyHex": "72ce9b7d3a576f43016e85fc925c90cdfb045a44b92ab85a78fab7588ba2ad6a",
+        "nonceHex": "0000000000000000000000000000000000000000000000000000000000000003",
+        "payload": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADsX6jHkgsWuSThLJMEoPYvki92u7DuIQMCHXxL3kq9lWpxBCGAgWMWLE0/bHZDchCCfxsabOndFjtXbBcDrHPwwdXPcIeKuhmnoWWQgN3oandbx1lmQIr/zPXScQ6als2UbI1vp1lOdwth+cubAOOuIvnwoERAzQ+boOm4BSy9Vwpa3ltECqcxzCHZ+Ni1XX7sQOyI+OI6wC9k3GqDtXhgi8UkcWfNdFeoW5TQjyQzmb84Z/093nkU3lhHxZILNUH0nscrhK34aul+Q20FLGRUxym2LLpyARM87gvWDj9bT+0FQ=="
+      }
+    ]
+  }
+}

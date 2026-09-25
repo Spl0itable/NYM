@@ -28,6 +28,8 @@ class KeyValueStore {
 
   bool contains(String key) => _prefs.containsKey(key);
 
+  Set<String> get keys => _prefs.getKeys();
+
   /// PWA semantics: `localStorage.getItem(k) === 'true'`.
   bool getBool(String key, {bool defaultValue = false}) {
     final v = _prefs.getString(key);

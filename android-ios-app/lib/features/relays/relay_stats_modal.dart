@@ -118,6 +118,9 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     // Per-relay connection status (url → connected), typed getter; empty before
     // boot → the relay list shows the real "No relays connected" empty state.
     final relayStatus = ref.read(nostrControllerProvider).relayConnectionStatus;
+    final proxyMode = ref.watch(appStateProvider.select((s) => s.proxyMode));
+    final fallbackActive =
+        ref.read(nostrControllerProvider).isProxyFallbackActive;
 
     return Center(
       child: Material(
@@ -194,6 +197,12 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            _ConnectionModeLine(
+                              connected: connected,
+                              proxyMode: proxyMode,
+                              fallbackActive: fallbackActive,
+                            ),
+                            const SizedBox(height: 12),
                             _Cards(connected: connected, stats: stats),
                             const SizedBox(height: 14),
                             _ThroughputSection(
@@ -272,6 +281,85 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
 // =============================================================================
 // Summary cards (.relay-stats-cards / .relay-stat-card)
 // =============================================================================
+
+class _ConnectionModeLine extends StatelessWidget {
+  const _ConnectionModeLine({
+    required this.connected,
+    required this.proxyMode,
+    required this.fallbackActive,
+  });
+
+  final int connected;
+  final bool proxyMode;
+  final bool fallbackActive;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final String value;
+    final String hint;
+    if (proxyMode) {
+      value = tr('Proxy');
+      hint = tr('Relay pool proxy: one multiplexed connection, relays only '
+          'see the proxy, spam filtering applies.');
+    } else if (connected > 0 || fallbackActive) {
+      value = tr('Direct');
+      hint = fallbackActive
+          ? tr('Direct relay connections: the proxy was unreachable, so the '
+              'app talks to relays itself and will switch back when it '
+              'recovers.')
+          : tr('Direct relay connections: the app talks to each relay '
+              'itself.');
+    } else {
+      value = tr('Connecting...');
+      hint = '';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: NymRadius.rsm,
+        border: Border.all(color: c.glassBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                tr('Connection').toUpperCase(),
+                style: TextStyle(
+                  color: c.textDim,
+                  fontSize: 9,
+                  letterSpacing: 0.4,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                value,
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+          if (hint.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              hint,
+              style: TextStyle(color: c.textDim, fontSize: 11, height: 1.35),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 class _Cards extends StatelessWidget {
   const _Cards({required this.connected, required this.stats});

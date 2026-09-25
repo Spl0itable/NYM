@@ -57,6 +57,16 @@ const String kNymbotPubkey =
 /// single Nymbot; kept as a set to match the PWA shape and `_isPubkeyGated`.
 const Set<String> kVerifiedBotPubkeys = {kNymbotPubkey};
 
+const String kNymbotAvatarAsset = 'assets/images/nymbot-icon.png';
+const String kNymbotBannerAsset = 'assets/images/nymbot-banner.png';
+
+UserProfile pinVerifiedBotMedia(String pubkey, UserProfile p) {
+  if (!kVerifiedBotPubkeys.contains(pubkey)) return p;
+  p.picture = kNymbotAvatarAsset;
+  p.banner = kNymbotBannerAsset;
+  return p;
+}
+
 /// The seeded verified-bot [User]. The PWA's `getEffectiveUserStatus` is ONE
 /// central function whose bot override (`verifiedBotPubkeys.has(pubkey) →
 /// 'online'`, users.js:1112) every status render inherits automatically; the
@@ -91,17 +101,12 @@ const Set<String> kTrustRootPubkeys = {
 };
 
 /// Master switch for the web-of-trust SPAM GATE (the [AppState.isMessageFiltered]
-/// → [AppState.isSpamGated] visibility cut). HELD OFF until two prerequisites
-/// land, or it would hide legitimate messages:
-///   1. Flutter must mine the NIP-13 PoW floor on channel SENDS (it currently
-///      does not — `minePow` is never called), so Flutter-origin messages count
-///      as a Nymchat-client self-attestation the way every PWA message does;
-///      otherwise the gate hides them. (Off-thread PoW mining is part of the
-///      isolate-offload work.)
-///   2. The trust graph must persist + rebuild from D1, so a fresh session isn't
-///      gating off an almost-empty graph.
-/// The trust graph still OBSERVES / PUBLISHES / INGESTS vouches live regardless;
-/// only the message-hiding is gated behind this flag (default off).
+/// → [AppState.isSpamGated] visibility cut), which hid a stranger's messages
+/// until they had posted twice, carried the NIP-13 PoW floor or were vouched.
+/// Off everywhere now: the relay-pool spam engine reviews every message, and
+/// the gate hid first-time posters on any device whose trust graph was still
+/// empty. The trust graph still OBSERVES / PUBLISHES / INGESTS vouches; only
+/// the message-hiding sits behind this flag, which nothing turns on.
 bool nymVouchSpamGateEnabled = false;
 
 /// Live mirror of the heuristic CONTENT spam filter flags (PWA
@@ -150,7 +155,8 @@ String appAttestAuthority = '';
 
 /// Whether [pubkey] clears the current [appVerifiedFilter]. Our own messages,
 /// friends and Nymbot always pass: the filter is aimed at strangers.
-bool passesVerifiedFilter(String pubkey, {
+bool passesVerifiedFilter(
+  String pubkey, {
   required String selfPubkey,
   required Set<String> friends,
 }) {
@@ -275,6 +281,7 @@ class AppState {
     required this.unreadCounts,
     required this.view,
     this.connectedRelays = 0,
+    this.proxyMode = true,
     this.displayRev = 0,
     Map<String, int>? typing,
     Map<String, Poll>? polls,
@@ -286,6 +293,7 @@ class AppState {
     Map<String, List<int>>? geohashD1Activity,
     Set<String>? friends,
     Set<String>? blockedUsers,
+    Map<String, int>? autoMutedUsers,
     Set<String>? blockedKeywords,
     Set<String>? nymchatPubkeys,
     Set<String>? nymchatVouches,
@@ -300,6 +308,7 @@ class AppState {
         geohashD1Activity = geohashD1Activity ?? <String, List<int>>{},
         friends = friends ?? <String>{},
         blockedUsers = blockedUsers ?? <String>{},
+        autoMutedUsers = autoMutedUsers ?? <String, int>{},
         blockedKeywords = blockedKeywords ?? <String>{},
         nymchatPubkeys = nymchatPubkeys ?? <String>{},
         nymchatVouches = nymchatVouches ?? <String>{},
@@ -311,6 +320,16 @@ class AppState {
 
   /// Number of relays currently connected (0 = offline).
   final int connectedRelays;
+
+  final bool proxyMode;
+
+  /// Whether the app's own automatic anti-spam heuristics apply. Through the
+  /// relay-pool proxy the pool and the spam engine already filter every
+  /// channel message, so the client-side web-of-trust gate, campaign
+  /// detector, content heuristics and gibberish-nym filter only run in direct
+  /// mode. Explicit user choices (blocks, keywords, filter packs, the PoW
+  /// floor, the verified-app filter) apply in both modes.
+  bool get clientGatesActive => !proxyMode;
 
   /// Monotonic counter bumped whenever something the MESSAGE LIST renders
   /// (messages, edits, deletions, reactions, zaps, polls) changes. Ambient
@@ -377,6 +396,14 @@ class AppState {
   /// Blocked-user pubkeys (`nym_blocked`). users.js `this.blockedUsers`
   /// (toggleBlockUserByPubkey / hideMessagesFromBlockedUser).
   final Set<String> blockedUsers;
+
+  final Map<String, int> autoMutedUsers;
+
+  bool isAutoMuted(String pubkey) {
+    final until = autoMutedUsers[pubkey];
+    if (until == null) return false;
+    return DateTime.now().millisecondsSinceEpoch < until;
+  }
 
   /// Blocked keywords, all lowercased (`nym_blocked_keywords`). users.js
   /// `this.blockedKeywords` (hasBlockedKeyword — matches content OR author nym).
@@ -490,6 +517,7 @@ class AppState {
     // to content filtering — they carry no sender and must always show.
     if (m.isSystemRow) return false;
     if (blockedUsers.contains(m.pubkey)) return true;
+    if (!m.isOwn && clientGatesActive && isAutoMuted(m.pubkey)) return true;
     // Keyword hits hide on BOTH sides: a non-own match, and our OWN message that
     // tripped a blocked keyword (hidden locally though still sent — the PWA's
     // own-message `return`, messages.js:640-641).
@@ -505,7 +533,8 @@ class AppState {
     // Heuristic content spam — incoming-only (own-message spam is surfaced as a
     // self-only system notice instead, see [sendLocal]). Mirrors the `spamHit`
     // term of the PWA's non-own hide branch (messages.js:636,648).
-    if (!m.isOwn &&
+    if (clientGatesActive &&
+        !m.isOwn &&
         SpamFilter.isSpamMessage(m.content,
             enabled: appSpamFilterEnabled,
             aggressive: appSpamFilterAggressive)) {
@@ -514,7 +543,8 @@ class AppState {
     // Web-of-trust spam gate — only applied when explicitly enabled (see
     // [nymVouchSpamGateEnabled]); held off until PoW-on-send + graph persistence
     // exist so it can't hide legitimate messages on a fresh session.
-    if (nymVouchSpamGateEnabled &&
+    if (clientGatesActive &&
+        nymVouchSpamGateEnabled &&
         isSpamGated(m,
             verifiedDeveloper: kVerifiedDeveloperPubkey,
             verifiedBots: kVerifiedBotPubkeys)) {
@@ -541,7 +571,9 @@ class AppState {
     if (m.isSystemRow) return false;
     if (m.isOwn) return false;
     if (blockedUsers.contains(m.pubkey)) return false;
-    if (nymVouchSpamGateEnabled &&
+    if (clientGatesActive && isAutoMuted(m.pubkey)) return false;
+    if (clientGatesActive &&
+        nymVouchSpamGateEnabled &&
         isSpamGated(m,
             verifiedDeveloper: kVerifiedDeveloperPubkey,
             verifiedBots: kVerifiedBotPubkeys)) {
@@ -555,6 +587,7 @@ class AppState {
     String? selfNym,
     ChatView? view,
     int? connectedRelays,
+    bool? proxyMode,
     int? displayRev,
   }) =>
       AppState(
@@ -569,6 +602,7 @@ class AppState {
         unreadCounts: unreadCounts,
         view: view ?? this.view,
         connectedRelays: connectedRelays ?? this.connectedRelays,
+        proxyMode: proxyMode ?? this.proxyMode,
         displayRev: displayRev ?? this.displayRev,
         typing: typing,
         polls: polls,
@@ -580,6 +614,7 @@ class AppState {
         geohashD1Activity: geohashD1Activity,
         friends: friends,
         blockedUsers: blockedUsers,
+        autoMutedUsers: autoMutedUsers,
         blockedKeywords: blockedKeywords,
         nymchatPubkeys: nymchatPubkeys,
         nymchatVouches: nymchatVouches,
@@ -1334,8 +1369,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// key can never find a new home.
   final String _sessionNonce = () {
     final r = Random.secure();
-    return List.generate(4, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0'))
-        .join();
+    return List.generate(
+        4, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }();
 
   int _nextLocalSeq() => _localSeq++;
@@ -1419,8 +1454,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
       nym: 'Nymbot',
       status: UserStatus.online,
       lastSeen: DateTime.now().millisecondsSinceEpoch,
-      profile:
-          UserProfile(picture: 'https://nymchat.app/images/nymbot-icon.png'),
+      profile: UserProfile(
+        picture: kNymbotAvatarAsset,
+        banner: kNymbotBannerAsset,
+      ),
     );
   }
 
@@ -1460,6 +1497,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void setConnectedRelays(int count) {
     if (count == state.connectedRelays) return;
     state = state.copyWith(connectedRelays: count);
+  }
+
+  void setProxyMode(bool proxy) {
+    if (proxy == state.proxyMode) return;
+    state = state.copyWith(proxyMode: proxy);
   }
 
   // ---------------------------------------------------------------------------
@@ -1757,6 +1799,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// window. Set by [NostrController]; null in tests.
   void Function()? onAgedChannelMessage;
 
+  void Function(String pubkey, int untilMs)? onAutoMuted;
+
   Set<String> pruneChannelHistoryWindow() {
     final floor = channelWindowFloorSec();
     final dropped = <String>{};
@@ -2005,15 +2049,21 @@ class AppStateNotifier extends StateNotifier<AppState> {
         validatedPowBits(e.tags, e.id) < appPowFilterBits) {
       return;
     }
-    // Keyed on the payload, not the sender, so rotating keys does not rotate
-    // the limit. Historical replay is exempt: an archive backfill legitimately
-    // delivers the same text many times over.
-    if (!historical &&
+    if (state.clientGatesActive &&
+        e.pubkey != state.selfPubkey &&
+        state.isAutoMuted(e.pubkey)) {
+      return;
+    }
+    if (state.clientGatesActive &&
         e.pubkey != state.selfPubkey &&
         !state.friends.contains(e.pubkey) &&
-        !kVerifiedBotPubkeys.contains(e.pubkey) &&
-        crossContentFlood.isFlooding(e.content)) {
-      return;
+        !kVerifiedBotPubkeys.contains(e.pubkey)) {
+      final verdict = crossContentFlood.check(e.content, e.pubkey,
+          createdAtMs: e.createdAt * 1000);
+      if (verdict.mute) {
+        autoMuteUser(e.pubkey);
+      }
+      if (verdict.flood || verdict.mute) return;
     }
     // An incoming edit (the published/echoed edit event carries
     // `['edit', originalId]`, buildChannelEditTags) rewrites the original in
@@ -2195,7 +2245,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // message stamp an older timestamp over a channel's real newest-activity
     // time, so busy channels sank in the sidebar sort after a backfill. Take the
     // max (mirrors the hydrate paths).
-    if (m.timestamp > (state.channelLastActivity[key] ?? 0)) {
+    final hidden = state.isMessageFiltered(m);
+    if (!hidden && m.timestamp > (state.channelLastActivity[key] ?? 0)) {
       state.channelLastActivity[key] = m.timestamp;
     }
 
@@ -2206,7 +2257,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // `addChannel`'s entry/key shape (registry key is the bare lowercase value).
     final isGeo = (m.geohash ?? '').isNotEmpty;
     final regKey = (isGeo ? m.geohash! : (m.channel ?? '')).toLowerCase();
-    if (regKey.isNotEmpty &&
+    if (!hidden &&
+        regKey.isNotEmpty &&
         !state.blockedChannels.contains(regKey) &&
         !state.hiddenChannels.contains(regKey) &&
         !state.channels.any((c) => c.key == regKey)) {
@@ -2299,8 +2351,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   void _ingestProfile(NostrEvent e) {
-    final p = EventMapper.profile(e);
-    if (p == null) return;
+    final mapped = EventMapper.profile(e);
+    if (mapped == null) return;
+    final p = pinVerifiedBotMedia(e.pubkey, mapped);
     final resolvedName = _kind0DisplayName(p);
     final existing = state.users[e.pubkey];
     var changed = false;
@@ -2496,12 +2549,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // The dedup keys embed the message id, so re-file them too or a later
     // add/remove for the same (emoji, reactor) would compare against nothing
     // and could re-apply out of order.
-    final stale = _reactionLastAction.keys
-        .where((k) => k.startsWith('$oldId:'))
-        .toList();
+    final stale =
+        _reactionLastAction.keys.where((k) => k.startsWith('$oldId:')).toList();
     for (final k in stale) {
       final ts = _reactionLastAction.remove(k);
-      if (ts != null) _reactionLastAction['$newId:${k.substring(oldId.length + 1)}'] = ts;
+      if (ts != null) {
+        _reactionLastAction['$newId:${k.substring(oldId.length + 1)}'] = ts;
+      }
     }
     _recomputeReactionTally(oldId);
     _recomputeReactionTally(newId);
@@ -2688,9 +2742,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Inserts a decrypted PM [m] (kind-14 rumor mapped via [PmLogic.mapPmRumor])
   /// into the `pm-<peer>` store, creating/refreshing the conversation. Dedups
   /// on event id and nymMessageId. Honors [closedPMs] for backlog.
-  void ingestPMMessage(Message m) {
+  bool isKnownEventId(String id) => id.isNotEmpty && _seenIds.contains(id);
+
+  bool ingestPMMessage(Message m) {
     final rawPeer = m.conversationPubkey;
-    if (rawPeer == null) return;
+    if (rawPeer == null) return false;
     // Canonical lowercase hex (mirrors [switchView]): the peer id keys the
     // conversation row, the unread counts, and — for the Nymbot — the
     // `view.id == kNymbotPubkey` BotChatScreen routing, all exact string
@@ -2708,12 +2764,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
         // Persist the re-open so it isn't undone on relaunch (F02).
         onClosedPmsChanged?.call();
       } else {
-        return;
+        return false;
       }
     }
-    if (m.id.isNotEmpty && !_seenIds.add(m.id)) return;
+    if (m.id.isNotEmpty && !_seenIds.add(m.id)) return false;
     // NIP-09: drop deleted PM/group-rumor copies (pms.js:3722-3724).
-    if (suppressDeletedMessage(m)) return;
+    if (suppressDeletedMessage(m)) return false;
 
     final key =
         _canonicalPmStorageKey(m.conversationKey ?? PmLogic.pmStorageKey(peer));
@@ -2795,14 +2851,19 @@ class AppStateNotifier extends StateNotifier<AppState> {
         changed = true;
       }
       if (changed) _scheduleEmit();
-      return;
+      return false;
     }
     if (m.nymMessageId != null && !_seenNymMessageIds.add(m.nymMessageId!)) {
-      return;
+      return false;
+    }
+    if (botThreadForeign(m, list)) {
+      _holdBotThreadOrphan(m);
+      return false;
     }
     m.seq = _nextIngestSeq();
 
     _insertMessageSorted(key, list, m);
+    _adoptBotThreadOrphans(key, list, m);
 
     // Maintain the conversation meta entry. The PWA's `addPMConversation`
     // prefers the users-map nym over the message author on EVERY message
@@ -2861,6 +2922,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _consumePendingEdit(id: m.id, nymMessageId: m.nymMessageId);
     _scheduleEmit();
     onPmMessageIngested?.call(key);
+    return true;
   }
 
   /// Inserts a decrypted group message [m] into the `group-<id>` store.
@@ -2966,12 +3028,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
       if (memberKey.isNotEmpty) u.channels.add(memberKey);
     }
 
-    if (m.timestamp > (state.channelLastActivity[channelKey] ?? 0)) {
+    final hidden = state.isMessageFiltered(m);
+    if (!hidden && m.timestamp > (state.channelLastActivity[channelKey] ?? 0)) {
       state.channelLastActivity[channelKey] = m.timestamp;
     }
 
     final regKey = (m.channel ?? '').toLowerCase();
-    if (regKey.isNotEmpty && !state.channels.any((c) => c.key == regKey)) {
+    if (!hidden &&
+        regKey.isNotEmpty &&
+        !state.channels.any((c) => c.key == regKey)) {
       state.channels.add(ChannelEntry(channel: m.channel!));
     }
 
@@ -3751,7 +3816,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
     // Avatar: an `avatar-update` tag sets (or clears, when empty) the picture
     // (users.js avatar branch). profile.picture is the canonical avatar source.
-    if (hasAvatarTag) {
+    if (hasAvatarTag && !kVerifiedBotPubkeys.contains(pubkey)) {
       if (avatarUrl != null && avatarUrl.isNotEmpty) {
         (u.profile ??= UserProfile()).picture = avatarUrl;
       } else {
@@ -4011,8 +4076,45 @@ class AppStateNotifier extends StateNotifier<AppState> {
   bool blockUser(String pubkey) {
     if (pubkey.isEmpty) return false;
     final added = state.blockedUsers.add(pubkey);
-    if (added) _scheduleEmit();
+    if (added) {
+      _dropSenderInfluence(pubkey);
+      _scheduleEmit();
+    }
     return added;
+  }
+
+  void _dropSenderInfluence(String pubkey) {
+    state.messages.forEach((key, list) {
+      var counted = 0;
+      var senderNewest = 0;
+      var visibleNewest = 0;
+      final unreadKey = key.startsWith('pm-') ? key.substring(3) : key;
+      for (final m in list) {
+        if (m.pubkey == pubkey && !m.isOwn && !m.isSystemRow) {
+          if (m.timestamp > senderNewest) senderNewest = m.timestamp;
+          if (_isUnreadByWatermark(unreadKey, m)) counted++;
+        } else if (m.timestamp > visibleNewest && !state.isMessageFiltered(m)) {
+          visibleNewest = m.timestamp;
+        }
+      }
+      if (senderNewest == 0) return;
+      final unread = state.unreadCounts[unreadKey];
+      if (unread != null && counted > 0) {
+        if (unread > counted) {
+          state.unreadCounts[unreadKey] = unread - counted;
+        } else {
+          state.unreadCounts.remove(unreadKey);
+        }
+      }
+      final activity = state.channelLastActivity[key];
+      if (activity != null && activity <= senderNewest) {
+        if (visibleNewest > 0) {
+          state.channelLastActivity[key] = visibleNewest;
+        } else {
+          state.channelLastActivity.remove(key);
+        }
+      }
+    });
   }
 
   /// Unblocks [pubkey] (users.js `unblockByPubkey`).
@@ -4020,6 +4122,38 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final removed = state.blockedUsers.remove(pubkey);
     if (removed) _scheduleEmit();
     return removed;
+  }
+
+  static const Duration autoMuteDuration = Duration(hours: 24);
+
+  bool autoMuteUser(String pubkey, {DateTime? now}) {
+    if (pubkey.isEmpty || pubkey == state.selfPubkey) return false;
+    if (state.friends.contains(pubkey) ||
+        kVerifiedBotPubkeys.contains(pubkey)) {
+      return false;
+    }
+    final t = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final fresh = !state.isAutoMuted(pubkey);
+    final until = t + autoMuteDuration.inMilliseconds;
+    state.autoMutedUsers[pubkey] = until;
+    if (!fresh) return false;
+    _dropSenderInfluence(pubkey);
+    _scheduleEmit();
+    onAutoMuted?.call(pubkey, until);
+    return true;
+  }
+
+  bool clearAutoMute(String pubkey) {
+    final removed = state.autoMutedUsers.remove(pubkey) != null;
+    if (removed) _scheduleEmit();
+    return removed;
+  }
+
+  void hydrateAutoMuted(Map<String, int> entries, {DateTime? now}) {
+    final t = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    entries.forEach((pk, until) {
+      if (pk.isNotEmpty && until > t) state.autoMutedUsers[pk] = until;
+    });
   }
 
   /// Idempotent blocked-user remover (settings "Blocked" list × button). Alias
@@ -4205,6 +4339,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
       deleted = true;
     }
     if (deleted) onDeletedIdsChanged?.call();
+  }
+
+  void retractMessage(String eventId) {
+    if (eventId.isEmpty) return;
+    _applyVerifiedDeletion(eventId);
+    onDeletedIdsChanged?.call();
   }
 
   /// The stored author of the message with [id] (event id or PM/group
@@ -4575,9 +4715,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
       list.add(m);
       _indexMessage(key, m);
       added = true;
-      if (m.timestamp > lastTs) lastTs = m.timestamp;
+      if (m.timestamp > lastTs && !state.isMessageFiltered(m)) {
+        lastTs = m.timestamp;
+      }
     }
     if (added) list.sort(compareMessages);
+    if (added && key.startsWith('pm-')) pruneForeignBotThreads(key);
     // Bound a hydrated public channel to the same retention cap as live ingest,
     // so a large cached history can't reintroduce the unbounded list.
     if (isChannelKey) _capChannelHistory(list);
@@ -4591,10 +4734,73 @@ class AppStateNotifier extends StateNotifier<AppState> {
     return added;
   }
 
+  final Map<String, List<Message>> _botThreadOrphans = <String, List<Message>>{};
+
+  bool holdForeignBotThread(Message m) {
+    final peer = m.conversationPubkey;
+    if (peer == null) return false;
+    final key =
+        _canonicalPmStorageKey(m.conversationKey ?? PmLogic.pmStorageKey(peer));
+    final list = state.messages[key] ?? const <Message>[];
+    if (!botThreadForeign(m, list)) return false;
+    _holdBotThreadOrphan(m);
+    return true;
+  }
+
+  void _holdBotThreadOrphan(Message m) {
+    final root = m.threadRoot;
+    if (root == null || root.isEmpty) return;
+    final held = _botThreadOrphans.putIfAbsent(root, () => <Message>[]);
+    final nymId = m.nymMessageId;
+    if (held.any((e) =>
+        e.id == m.id ||
+        (nymId != null && nymId.isNotEmpty && e.nymMessageId == nymId))) {
+      return;
+    }
+    held.add(m);
+    if (held.length > 50) held.removeRange(0, held.length - 50);
+    if (_botThreadOrphans.length > 500) {
+      _botThreadOrphans.remove(_botThreadOrphans.keys.first);
+    }
+  }
+
+  int _adoptBotThreadOrphans(String key, List<Message> list, Message root) {
+    if (root.threadRoot != null || _botThreadOrphans.isEmpty) return 0;
+    final held = _botThreadOrphans.remove(threadKeyForMessage(root));
+    if (held == null || held.isEmpty) return 0;
+    var added = 0;
+    for (final m in held) {
+      final peer = m.conversationPubkey;
+      if (peer == null) continue;
+      final mine = _canonicalPmStorageKey(
+          m.conversationKey ?? PmLogic.pmStorageKey(peer));
+      if (mine != key) continue;
+      if (list.any((e) => e.id == m.id)) continue;
+      m.seq = _nextIngestSeq();
+      _insertMessageSorted(key, list, m);
+      added++;
+    }
+    if (added > 0) _scheduleEmit();
+    return added;
+  }
+
+  int pruneForeignBotThreads(String key) {
+    final list = state.messages[key];
+    if (list == null || list.isEmpty) return 0;
+    final drop = Set<Message>.identity();
+    for (final m in list) {
+      if (botThreadForeign(m, list)) drop.add(m);
+    }
+    if (drop.isEmpty) return 0;
+    list.removeWhere(drop.contains);
+    return drop.length;
+  }
+
   /// Hydrates cached profiles into the user store (boot from CacheStore).
   void hydrateProfiles(Map<String, UserProfile> profiles) {
     final touched = <String>[];
-    profiles.forEach((pubkey, p) {
+    profiles.forEach((pubkey, hydrated) {
+      final p = pinVerifiedBotMedia(pubkey, hydrated);
       touched.add(pubkey);
       final existing = state.users[pubkey];
       // PWA name chain `name || username || display_name`, 20-char cap
@@ -4957,8 +5163,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
         addSystemMessage(tr(
             'Your message {reason} and was hidden locally. It was still sent.',
             {'reason': reason}));
-      } else if (SpamFilter.isSpamMessage(trimmed,
-          enabled: appSpamFilterEnabled, aggressive: appSpamFilterAggressive)) {
+      } else if (state.clientGatesActive &&
+          SpamFilter.isSpamMessage(trimmed,
+              enabled: appSpamFilterEnabled,
+              aggressive: appSpamFilterAggressive)) {
         // Heuristic spam → the message is NOT hidden from us (own spam is not
         // filtered), but a self-only line explains it was filtered for everyone
         // else, with a "Report false positive" action (messages.js:643-647).
@@ -5021,6 +5229,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     String realId, {
     int? realCreatedAt,
     int? realMs,
+    int? powTarget,
   }) {
     if (realId.isEmpty) return;
     // Register the real id first so even a relay echo that races ahead of this
@@ -5061,6 +5270,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         m.timestamp = realCreatedAt * 1000;
       }
       if (realMs != null && realMs > 0) m.ms = realMs;
+      if (powTarget != null) m.powTarget = powTarget;
       m.optimistic = false;
       _indexMessage(key, m);
       // Carry over a reaction that landed while this row still wore its
@@ -5118,8 +5328,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void markOwnMessagePq(String nymMessageId,
       {bool? pqEncrypted, bool? pqRoot, ({int pq, int total})? coverage}) {
     for (final list in state.messages.values) {
-      final idx = list.indexWhere(
-          (m) => m.isOwn && m.nymMessageId == nymMessageId);
+      final idx =
+          list.indexWhere((m) => m.isOwn && m.nymMessageId == nymMessageId);
       if (idx < 0) continue;
       if (pqEncrypted != null) list[idx].pqEncrypted = pqEncrypted;
       if (pqRoot != null) list[idx].pqRoot = pqRoot;
@@ -5208,7 +5418,8 @@ final usersProvider = Provider<Map<String, User>>((ref) {
   // spamFilterEnabled && spamFilterAggressive — nostr-core.js:944-945). It runs
   // even with empty block sets, so the no-block fast-path is only valid when it
   // cannot fire.
-  final gibberishActive = appSpamFilterEnabled && appSpamFilterAggressive;
+  final gibberishActive =
+      s.clientGatesActive && appSpamFilterEnabled && appSpamFilterAggressive;
   if (s.blockedUsers.isEmpty && s.blockedKeywords.isEmpty && !gibberishActive) {
     // Return a FRESH O(1) view, not the raw `s.users`, so this provider's value
     // identity changes on every `AppState` emit. `_ingestProfile` (and the
@@ -5279,9 +5490,11 @@ List<Message> visibleMessagesFor(AppState s, String storageKey) {
         if (m.threadRoot == null) threadKeyForMessage(m),
     }..remove('');
     visible = visible
-        .where((m) =>
-            m.threadRoot == null || !rootIds.contains(m.threadRoot))
+        .where((m) => m.threadRoot == null || !rootIds.contains(m.threadRoot))
         .toList();
+  }
+  if (visible.any((m) => m.threadRoot != null)) {
+    visible = visible.where((m) => !botThreadForeign(m, list)).toList();
   }
   visible.sort(compareMessages);
   return visible;
@@ -5291,6 +5504,19 @@ List<Message> visibleMessagesFor(AppState s, String storageKey) {
 /// `nymMessageId` for PM/group messages, the event id for channel messages.
 String threadKeyForMessage(Message m) =>
     (m.isPM || m.isGroup) ? (m.nymMessageId ?? m.id) : m.id;
+
+bool botThreadForeign(Message m, List<Message> list) {
+  if (!m.isPM || m.isGroup) return false;
+  final root = m.threadRoot;
+  if (root == null || root.isEmpty) return false;
+  final peer = m.conversationPubkey;
+  if (peer == null || peer.toLowerCase() != kNymbotPubkey) return false;
+  for (final e in list) {
+    if (identical(e, m)) continue;
+    if (e.threadRoot == null && threadKeyForMessage(e) == root) return false;
+  }
+  return true;
+}
 
 /// Reply count per thread root for one conversation store (raw, unfiltered —
 /// counts include replies from senders the viewer later blocked only until

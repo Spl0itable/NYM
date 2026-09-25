@@ -222,7 +222,9 @@ void main() {
       // heuristic (cross-checked against the reference JS isSpamMessage).
       final c = await _container();
       addTearDown(c.dispose);
-      c.read(appStateProvider.notifier).sendLocal('Xq7zkwjpQmbvxz');
+      c.read(appStateProvider.notifier)
+        ..setProxyMode(false)
+        ..sendLocal('Xq7zkwjpQmbvxz');
 
       final msgs = c.read(messagesForCurrentViewProvider);
       // The own spam message is still shown to the sender.
@@ -246,6 +248,7 @@ void main() {
       // a stranger's gibberish message is filtered out of the list.
       final c = await _container();
       addTearDown(c.dispose);
+      c.read(appStateProvider.notifier).setProxyMode(false);
       _seedChannelMessage(c,
           id: 'cleanGm',
           pubkey: _other,

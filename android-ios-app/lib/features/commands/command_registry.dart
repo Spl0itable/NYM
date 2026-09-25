@@ -388,7 +388,7 @@ const List<CommandSpec> kCommandSpecs = [
 // We DERIVE the rows from the real bot-command catalog (`kBotCommands` in
 // features/nymbot/bot_commands.dart) rather than duplicating the list. The
 // public channel palette excludes the "Credits (private Nymbot chat)" group
-// (`?balance/?buy/?model/?git/?gift/?transfer`) — those are PM-only and live in
+// (`?balance/?buy/?model/?gift/?transfer`) — those are PM-only and live in
 // the bot's private chat (`botPMCommands`), not the public `?` palette.
 
 /// One selectable row of the public `?` bot-command palette: the command token

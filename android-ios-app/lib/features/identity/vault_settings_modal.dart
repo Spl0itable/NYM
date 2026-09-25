@@ -1,11 +1,7 @@
-import 'dart:convert';
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:local_auth/local_auth.dart';
 
 import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
@@ -13,6 +9,7 @@ import '../../services/storage/secure_store.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../i18n/i18n.dart';
+import 'biometric_secret_store.dart';
 import 'identity_vault.dart';
 import 'modal_chrome.dart';
 
@@ -57,14 +54,9 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   }
 
   Future<void> _checkBiometric() async {
-    try {
-      final auth = LocalAuthentication();
-      final supported =
-          await auth.isDeviceSupported() && await auth.canCheckBiometrics;
-      if (mounted) setState(() => _bioAvailable = supported);
-    } catch (_) {
-      // Biometric probing unavailable (tests / desktop) — leave disabled.
-    }
+    final supported =
+        await ref.read(identityVaultProvider).biometricAvailable();
+    if (mounted) setState(() => _bioAvailable = supported);
   }
 
   @override
@@ -113,6 +105,16 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
               {'method': vault.method}),
           style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
         ),
+        if (vault.method == 'biometric' && !vault.biometricProtected) ...[
+          const SizedBox(height: 12),
+          Text(
+            tr("This device can't keep the biometric key in its secure "
+                'hardware, so the biometric check here only guards the app '
+                'screen. Turn encryption off and on again with a password or '
+                'PIN for stronger protection.'),
+            style: TextStyle(color: c.textDim, fontSize: 11),
+          ),
+        ],
         if (_error != null) ...[
           const SizedBox(height: 8),
           Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
@@ -227,10 +229,22 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
         ] else
           Padding(
             padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              tr("You'll be asked for your biometric to unlock the app on next "
-                  'launch.'),
-              style: TextStyle(color: c.textDim, fontSize: 11),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  tr("You'll be asked for your biometric to unlock the app on "
+                      'next launch.'),
+                  style: TextStyle(color: c.textDim, fontSize: 11),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  tr('The key is tied to the fingerprints or face enrolled '
+                      'now. If they change, this device erases it and you will '
+                      'need your saved nsec to get back in.'),
+                  style: TextStyle(color: c.textDim, fontSize: 11),
+                ),
+              ],
             ),
           ),
         if (_error != null) ...[
@@ -269,19 +283,8 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
 
   Future<void> _enable(IdentityVault vault) async {
     setState(() => _error = null);
-    String password;
-    if (_method == 'biometric') {
-      // Authenticate once; derive the vault key from a stable device secret.
-      // TODO(verify): the PWA derives the key from a WebAuthn PRF output. On
-      // native there is no PRF; here we gate enabling behind a biometric prompt
-      // and derive from a generated device secret stored in secure storage.
-      final ok = await _biometricAuth();
-      if (!ok) {
-        setState(() => _error = tr('Biometric authentication failed.'));
-        return;
-      }
-      password = await _deviceBiometricSecret();
-    } else {
+    String password = '';
+    if (_method != 'biometric') {
       if (_pw.text.length < 4) {
         setState(() => _error = tr('Use at least 4 characters.'));
         return;
@@ -299,8 +302,11 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       // 'password'`, key-vault.js:180). So a PIN persists as `'password'`, never
       // the literal `'pin'`. (Mirrored at the call site since identity_vault is
       // shared core — see CROSS_FILE_NEEDS for the in-engine fix.)
-      final storedMethod = _method == 'biometric' ? 'biometric' : 'password';
-      await vault.enable(method: storedMethod, password: password);
+      if (_method == 'biometric') {
+        await vault.enableBiometric();
+      } else {
+        await vault.enable(method: 'password', password: password);
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
       // PWA uses a modal `_vaultAlert`, not a transient toast (key-vault.js:599).
@@ -310,6 +316,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
             'on next launch.'),
       );
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
         _error = e.toString();
@@ -319,16 +326,8 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
 
   Future<void> _disable(IdentityVault vault) async {
     setState(() => _error = null);
-    String password;
-    if (vault.method == 'biometric') {
-      // Passkey/biometric: fresh authenticator challenge (`_vaultReauth`).
-      final ok = await _biometricAuth();
-      if (!ok) {
-        setState(() => _error = tr('Biometric authentication failed.'));
-        return;
-      }
-      password = await _deviceBiometricSecret();
-    } else {
+    String password = '';
+    if (vault.method != 'biometric') {
       // Password/PIN: a separate "Confirm it's you" prompt before turning off,
       // matching the PWA's `_vaultReauth` (key-vault.js:479-498) instead of an
       // inline field. Verify the factor, then disable only on success.
@@ -351,46 +350,24 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     }
     setState(() => _busy = true);
     try {
-      await vault.disable(password);
+      if (vault.method == 'biometric') {
+        await vault.disableBiometric();
+      } else {
+        await vault.disable(password);
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
       // PWA modal `_vaultAlert` "Encryption turned off." (key-vault.js:527).
       await showAppAlert(context, tr('Encryption turned off.'));
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = tr('Re-authentication failed. Encryption was not turned off.');
+        _error = e is BiometricVaultException
+            ? e.message
+            : tr('Re-authentication failed. Encryption was not turned off.');
       });
     }
-  }
-
-  Future<bool> _biometricAuth() async {
-    try {
-      final auth = LocalAuthentication();
-      return await auth.authenticate(
-        localizedReason: tr('Unlock your Nymchat identity'),
-        options: const AuthenticationOptions(biometricOnly: true),
-      );
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// A stable per-device secret used as the PBKDF2 password for the biometric
-  /// factor, stored in secure storage (behind the biometric gate).
-  Future<String> _deviceBiometricSecret() async {
-    final secure = SecureStore();
-    const key = 'nym_vault_bio_secret';
-    var s = await secure.get(key);
-    if (s == null) {
-      // 32 bytes from a CSPRNG — never time-derived, so the biometric factor
-      // has full entropy (the WebAuthn-PRF equivalent on native).
-      final rng = Random.secure();
-      final bytes = List<int>.generate(32, (_) => rng.nextInt(256));
-      s = base64.encode(bytes);
-      await secure.set(key, s);
-    }
-    return s;
   }
 }
 

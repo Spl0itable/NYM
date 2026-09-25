@@ -53,7 +53,7 @@ final RegExp _emojiRe =
 /// ending at the caret and pick the nearest trigger.
 /// [botPM] is true inside the private chat with the verified Nymbot. There the
 /// `?` palette carries the PM command set, which DOES have multi-step
-/// subcommands (`?model <name>`, `?git provider <host>`) — so the palette must
+/// subcommands (`?model <name>`) — so the palette must
 /// stay live past a space, matching the PWA's line-level `value.startsWith('?')`
 /// (commands.js:436-468, `showBotCommandPalette` with `inBotPM`).
 TriggerMatch detectTrigger(String text, {int? caret, bool botPM = false}) {
@@ -75,7 +75,7 @@ TriggerMatch detectTrigger(String text, {int? caret, bool botPM = false}) {
   //  * PUBLIC channel set: no subcommands, so once a space is typed the `?cmd `
   //    prefix matches nothing and the palette hides — fire only while still on
   //    the command token.
-  //  * BOT PM set: `?model`/`?git` have deeper completions surfaced AFTER a
+  //  * BOT PM set: `?model` has deeper completions surfaced AFTER a
   //    space (`_botPMSubcommands`), so keep firing for the whole `?…` line.
   if (before.startsWith('?') && (botPM || !before.contains(' '))) {
     return TriggerMatch(TriggerKind.botCommand, before, 0);

@@ -27,6 +27,71 @@ const String pqRootWrapPasskey = 'passkey';
 /// material: treat it exactly as the nsec is treated.
 String pqRootToCode(Uint8List root) => encodeNymPq(root);
 
+const String pqRootLegacySlot = 'legacy';
+
+final RegExp _pubkeyHex = RegExp(r'^[0-9a-f]{64}$');
+
+class PqRootStore {
+  const PqRootStore({
+    this.byPubkey = const {},
+    this.legacy,
+    this.unreadable = false,
+  });
+
+  final Map<String, String> byPubkey;
+  final String? legacy;
+  final bool unreadable;
+
+  bool get isEmpty => byPubkey.isEmpty && legacy == null;
+
+  String? codeFor(String? pubkey) => pubkey == null ? null : byPubkey[pubkey];
+
+  PqRootStore withCode(String pubkey, String code, {bool dropLegacy = false}) =>
+      PqRootStore(
+        byPubkey: {...byPubkey, pubkey: code},
+        legacy: dropLegacy ? null : legacy,
+        unreadable: false,
+      );
+
+  PqRootStore withoutLegacy() =>
+      PqRootStore(byPubkey: byPubkey, legacy: null, unreadable: unreadable);
+
+  String? encode() {
+    if (isEmpty) return null;
+    final out = <String, String>{...byPubkey};
+    if (legacy != null) out[pqRootLegacySlot] = legacy!;
+    return jsonEncode(out);
+  }
+
+  static PqRootStore parse(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return const PqRootStore();
+    final s = raw.trim();
+    if (s.startsWith('{')) {
+      try {
+        final decoded = jsonDecode(s);
+        if (decoded is! Map) return const PqRootStore(unreadable: true);
+        final by = <String, String>{};
+        String? legacy;
+        for (final e in decoded.entries) {
+          final k = e.key.toString();
+          final v = e.value;
+          if (v is! String || v.isEmpty) continue;
+          if (k == pqRootLegacySlot) {
+            legacy = v;
+          } else if (_pubkeyHex.hasMatch(k)) {
+            by[k] = v;
+          }
+        }
+        return PqRootStore(byPubkey: by, legacy: legacy);
+      } catch (_) {
+        return const PqRootStore(unreadable: true);
+      }
+    }
+    if (pqRootFromCode(s) == null) return const PqRootStore(unreadable: true);
+    return PqRootStore(legacy: s);
+  }
+}
+
 /// Parses a pasted `nympq1…` code, or null on a wrong HRP, bad checksum or
 /// wrong length. Adopting a wrong root is worse than adopting none.
 Uint8List? pqRootFromCode(String code) {
@@ -255,12 +320,14 @@ PqRootAction pqRootDecide({
   required bool holdRoot,
   bool throwawayKeypair = false,
   bool recordMatchesHeldRoot = true,
+  bool recordReadable = true,
 }) {
   // A keypair that is regenerated every launch has nothing to carry forward.
   if (throwawayKeypair) return PqRootAction.wait;
   // A read that did not complete proves nothing either way.
   if (!recordLoadSucceeded) return PqRootAction.wait;
   if (recordPresent) {
+    if (!recordReadable) return PqRootAction.awaitLink;
     // Holding *a* root is not holding *this account's* root. A stale one from
     // a reset identity opens nothing the record points at, so it is the §6.3
     // case exactly as an empty device is.
@@ -270,4 +337,19 @@ PqRootAction pqRootDecide({
   // No record. Ours has not landed yet, or there is none to land.
   if (holdRoot) return PqRootAction.publishRecord;
   return PqRootAction.generate;
+}
+
+enum PqRootSeed { none, pending, generate }
+
+PqRootSeed pqRootSeedForKey({
+  required bool holdRoot,
+  required bool localKey,
+  required bool throwawayKeypair,
+  required bool pendingForThisKey,
+  required bool freshKey,
+}) {
+  if (holdRoot || !localKey || throwawayKeypair) return PqRootSeed.none;
+  if (pendingForThisKey) return PqRootSeed.pending;
+  if (freshKey) return PqRootSeed.generate;
+  return PqRootSeed.none;
 }

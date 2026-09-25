@@ -131,12 +131,23 @@ class CacheStore {
   /// random 64-hex one on first use. The passphrase never leaves the device:
   /// it is not synced and is destroyed with the keystore on panic wipe, which
   /// renders any surviving database file undecryptable ciphertext.
-  Future<String> _databasePassword(SecureStore secure) async {
+  Future<String> _databasePassword(SecureStore secure, String path) async {
     final existing = await secure.get(_dbKeyName);
     if (existing != null && existing.isNotEmpty) return existing;
+    await dropUnreadable(path);
     final minted = keys.bytesToHex(keys.randomBytes(32));
     await secure.set(_dbKeyName, minted);
     return minted;
+  }
+
+  Future<void> dropUnreadable(String path) async {
+    if (!await File(path).exists() || await _isPlaintextDb(path)) return;
+    for (final suffix in ['', '-wal', '-shm', '-journal']) {
+      try {
+        final f = File('$path$suffix');
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
   }
 
   /// True when the file at [path] is a plaintext SQLite database (SQLCipher
@@ -209,7 +220,7 @@ class CacheStore {
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, _dbName);
     _path = path;
-    final password = await _databasePassword(SecureStore());
+    final password = await _databasePassword(SecureStore(), path);
     await _migratePlaintextIfNeeded(path, password);
     if (await _isPlaintextDb(path)) {
       // Migration failed and left the plaintext original — open it as-is so

@@ -139,6 +139,8 @@ class MeshService {
   /// the bridge so the private halves are persisted; null in tests.
   void Function(String encoded)? onPrekeysChanged;
 
+  bool Function()? prekeysReady;
+
   /// Completed [ping] probes, for the mesh diagnostics panel.
   Stream<MeshPingResult> get onPingResult => _pingResults.stream;
   final _pingResults = StreamController<MeshPingResult>.broadcast();
@@ -1298,6 +1300,7 @@ class MeshService {
     // ends ([CourierStore.mayDeposit]), so the bundle could not deliver
     // anything — it would only be one more thing the epoch broadcasts.
     if (isGhostMode?.call() ?? false) return false;
+    if (!(prekeysReady?.call() ?? true)) return false;
     if (await prekeys.replenish()) {
       onPrekeysChanged?.call(prekeys.encode());
     }

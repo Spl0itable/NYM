@@ -44,6 +44,7 @@ class StorageKeys {
   static const vaultSalt = 'nym_vault_salt';
   static const vaultCred = 'nym_vault_cred';
   static const vaultCheck = 'nym_vault_check';
+  static const vaultBioProtected = 'nym_vault_bio_protected';
   static const encryptAtRestPref = 'nym_encrypt_at_rest_pref';
   static const encryptAtRestPromptDismissed =
       'nym_encrypt_at_rest_prompt_dismissed';
@@ -81,6 +82,7 @@ class StorageKeys {
   /// notification; iOS: the declared background modes plus a background-task
   /// window). Off by default — it costs battery.
   static const backgroundConnectivity = 'nym_background_connectivity';
+  static const heartbeatToken = 'nym_heartbeat_token';
   static const meshEnabled = 'nym_mesh_enabled';
 
   /// Ghost Mode on/off. Device-local on purpose: it is not part of the synced
@@ -166,6 +168,7 @@ class StorageKeys {
 
   // Social / blocks
   static const blocked = 'nym_blocked';
+  static const autoMuted = 'nym_auto_muted';
   static const friends = 'nym_friends';
   static const blockedKeywords = 'nym_blocked_keywords';
 
@@ -178,9 +181,12 @@ class StorageKeys {
   // PMs / groups
   static const closedPms = 'nym_closed_pms';
   static const closedPmTimes = 'nym_closed_pm_times';
+  static const leftGroups = 'nym_left_groups';
   static const leftGroupTimes = 'nym_left_group_times';
   static String lastPmSyncFor(String pubkey) => 'nym_last_pm_sync_$pubkey';
   static const pendingGroupInvite = 'nym_pending_group_invite';
+  static const groupStorePrefix = 'nym_groups_';
+  static String groupStoreFor(String pubkey) => '$groupStorePrefix$pubkey';
 
   /// The mesh sender outbox: sends the Bluetooth mesh carried because the
   /// internet route was down, replayed to Nostr when relays return.
@@ -193,6 +199,13 @@ class StorageKeys {
   /// This device's one-time mesh prekeys (private halves). Persisted so mail
   /// sealed to a key we published before a restart can still be opened.
   static const meshPrekeys = 'nym_mesh_prekeys';
+
+  static const sealedPrefs = [
+    leftGroups,
+    leftGroupTimes,
+    meshGossipArchive,
+    meshPrekeys,
+  ];
 
   // Notifications / sync
   static const notificationsEnabled = 'nym_notifications_enabled';
@@ -212,7 +225,6 @@ class StorageKeys {
   static const botpmWelcomed = 'nym_botpm_welcomed';
   static const botpmClearedAt = 'nym_botpm_cleared_at';
   static const botpmProModel = 'nym_botpm_pro_model';
-  static const botpmGit = 'nym_botpm_git';
   static const purchasesCache = 'nym_purchases_cache';
   static const activeStyle = 'nym_active_style';
   static const activeFlair = 'nym_active_flair';

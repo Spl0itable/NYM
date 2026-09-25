@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -416,7 +417,8 @@ void main() {
       expect(res.detectedLanguage, 'en');
       // UA gate header present.
       expect(captured.headers['User-Agent'], ApiConfig.userAgent);
-      expect(captured.headers['User-Agent'], startsWith('NymchatApp/'));
+      expect(captured.headers['User-Agent'], startsWith('Dart/'));
+      expect(captured.headers['User-Agent'], contains(', NymchatApp/'));
       final body = jsonDecode(captured.body) as Map<String, dynamic>;
       expect(body['text'], 'hello');
       expect(body['target'], 'es');
@@ -475,7 +477,11 @@ void main() {
           'wss://${ApiConfig.apiHost}/api/relay-pool');
       expect(
           ApiConfig.proxyBaseUrl(), 'https://${ApiConfig.apiHost}/api/proxy');
-      expect(ApiConfig.userAgent, matches(RegExp(r'^NymchatApp/')));
+      expect(ApiConfig.userAgent,
+          matches(RegExp(r'^Dart/\S+ \(dart:io\), NymchatApp/\d')));
+      expect(ApiConfig.userAgent, endsWith(ApiConfig.appUserAgent));
+      expect(ApiConfig.dartUserAgent, HttpClient().userAgent);
+      expect(ApiConfig.socketClient().userAgent, isNull);
     });
   });
 

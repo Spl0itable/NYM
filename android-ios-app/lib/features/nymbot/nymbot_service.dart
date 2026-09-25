@@ -44,8 +44,7 @@ class NymbotService {
   /// shop.js:142). The `pm` action overrides with [_pmTimeout].
   static const Duration _defaultTimeout = Duration(seconds: 45);
 
-  /// "Replies (especially Pro models with repo tool calls) can run long" —
-  /// `_botMoneyRequest('pm', …, { timeout: 180000 })` (pms.js:2469-2470).
+  /// `_botMoneyRequest('pm', …, { timeout: 180000 })` (pms.js).
   static const Duration _pmTimeout = Duration(seconds: 180);
 
   /// WS-first transport seam: runs one raw ledger [action] over the app's ONE
@@ -183,12 +182,11 @@ class NymbotService {
   /// the client first gift-wraps the user's message (kind 1059 to the bot),
   /// publishes it, then sends only the published wrap's [eventId] (400
   /// `"Missing message event id"` without it). [fresh] mirrors the PWA's
-  /// `!`-prefixed one-off flag; [proModel] pins a Pro frontier model; [git]
-  /// enables repo mode (only on Pro replies, pms.js:2455-2466). Waits up to
-  /// 180s (`{ timeout: 180000 }`, pms.js:2470) on both transports.
+  /// `!`-prefixed one-off flag; [proModel] pins a Pro frontier model. Waits up
+  /// to 180s (`{ timeout: 180000 }`, pms.js) on both transports.
   ///
   /// Returns the decoded response map: `{event, selfEvent, balance, cost,
-  /// taskType, pro, proModel, git, modelCalls, lowBalance}` where
+  /// taskType, pro, proModel, modelCalls, lowBalance}` where
   /// `event`/`selfEvent` are **gift-wrapped kind-1059 replies** the caller must
   /// publish to relays and NIP-44-unwrap to display (pms.js:2489-2497). There
   /// is no plaintext `reply` field.
@@ -203,7 +201,6 @@ class NymbotService {
     Future<Map<String, dynamic>?> Function()? auth,
     String? proModel,
     bool fresh = false,
-    GitConfig? git,
     Map<String, String>? cmdAlias,
     Map<String, dynamic>? pqAnnouncement,
     bool anon = false,
@@ -212,7 +209,6 @@ class NymbotService {
       'eventId': eventId,
       'fresh': fresh,
       if (proModel != null) 'proModel': proModel,
-      if (git != null) 'git': git.toWire(),
       // Lets the worker read a command the user typed in their own language.
       if (cmdAlias != null) 'cmdAlias': cmdAlias,
       // Our own signed nym-pq announcement, so the worker seals its reply
@@ -465,116 +461,6 @@ class NymbotService {
     _throwOnStatus(res);
     return res.data;
   }
-
-  // ===========================================================================
-  // Git provider APIs (client-side, PAT never leaves the device except to the
-  // provider itself) — ports of the PWA's `_gitApi*` helpers (pms.js:2159-2222)
-  // used by the in-chat `?git token/repos/repo` flows.
-  // ===========================================================================
-
-  /// Whether [token] plausibly matches the provider's PAT shape
-  /// (`_gitTokenValid`, pms.js:2177-2182): github.com enforces the
-  /// `ghp_/gho_/…/github_pat_` prefixes; everything else takes any 8-255 char
-  /// non-space token.
-  static bool gitTokenValid(GitConfig cfg, String token) {
-    if (cfg.provider == GitProvider.github && cfg.host == 'github.com') {
-      return RegExp(r'^(gh[a-z]_|github_pat_)[A-Za-z0-9_]{16,255}$')
-          .hasMatch(token);
-    }
-    return RegExp(r'^\S{8,255}$').hasMatch(token);
-  }
-
-  /// The provider's REST base (`_gitApiBase`, pms.js:2184-2190).
-  static String gitApiBase(GitConfig cfg) {
-    final host = cfg.host.isNotEmpty ? cfg.host : cfg.provider.defaultHost;
-    switch (cfg.provider) {
-      case GitProvider.gitlab:
-        return 'https://$host/api/v4';
-      case GitProvider.gitea:
-        return 'https://$host/api/v1';
-      case GitProvider.github:
-        return host == 'github.com'
-            ? 'https://api.github.com'
-            : 'https://$host/api/v3';
-    }
-  }
-
-  /// One authenticated GET against the provider API (`_gitApi`,
-  /// pms.js:2192-2206). Returns `(ok, status, data)`; network errors become
-  /// `(false, 0, null)` like the PWA.
-  Future<({bool ok, int status, Object? data})> gitApi(
-      GitConfig cfg, String path) async {
-    if (!cfg.hasToken) return (ok: false, status: 0, data: null);
-    try {
-      final headers = <String, String>{
-        'Authorization': 'Bearer ${cfg.token}',
-        'Accept': 'application/json',
-      };
-      if (cfg.provider == GitProvider.github) {
-        headers['Accept'] = 'application/vnd.github+json';
-        headers['X-GitHub-Api-Version'] = '2022-11-28';
-      }
-      final res = await _client.get(Uri.parse(gitApiBase(cfg) + path),
-          headers: headers);
-      Object? data;
-      try {
-        data = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));
-      } catch (_) {
-        data = null;
-      }
-      return (
-        ok: res.statusCode >= 200 && res.statusCode < 300,
-        status: res.statusCode,
-        data: data,
-      );
-    } catch (_) {
-      return (ok: false, status: 0, data: null);
-    }
-  }
-
-  /// `_gitUserPath` (pms.js:2209).
-  static String gitUserPath() => '/user';
-
-  /// `_gitUserLogin` (pms.js:2210): GitLab exposes `username`, the rest `login`.
-  static String gitUserLogin(GitConfig cfg, Object? data) {
-    if (data is! Map) return '';
-    final v =
-        cfg.provider == GitProvider.gitlab ? data['username'] : data['login'];
-    return v?.toString() ?? '';
-  }
-
-  /// `_gitReposPath` (pms.js:2211-2215).
-  static String gitReposPath(GitConfig cfg) {
-    switch (cfg.provider) {
-      case GitProvider.gitlab:
-        return '/projects?membership=true&per_page=30&order_by=last_activity_at';
-      case GitProvider.gitea:
-        return '/user/repos?limit=30';
-      case GitProvider.github:
-        return '/user/repos?per_page=30&sort=pushed';
-    }
-  }
-
-  /// `_gitRepoFullName` (pms.js:2216).
-  static String gitRepoFullName(GitConfig cfg, Object? repo) {
-    if (repo is! Map) return '';
-    final v = cfg.provider == GitProvider.gitlab
-        ? repo['path_with_namespace']
-        : repo['full_name'];
-    return v?.toString() ?? '';
-  }
-
-  /// `_gitRepoPath` (pms.js:2217-2219).
-  static String gitRepoPath(GitConfig cfg, String repo) =>
-      cfg.provider == GitProvider.gitlab
-          ? '/projects/${Uri.encodeComponent(repo)}'
-          : '/repos/$repo';
-
-  /// `_gitRepoRe` (pms.js:2220-2225): GitLab allows nested groups (up to 4
-  /// segments); the others are `owner/name`.
-  static RegExp gitRepoRe(GitConfig cfg) => cfg.provider == GitProvider.gitlab
-      ? RegExp(r'^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+){1,3}$')
-      : RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$');
 
   // ===========================================================================
   // Auth (shared NIP-98 kind-27235, same builder as the shop)

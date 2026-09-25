@@ -1,0 +1,32 @@
+{
+  "format": "nym-passkey-backup-v1",
+  "prfSaltRule": "SHA-256(utf8(\"nym-key-backup-v1\"))",
+  "prfSaltHex": "a7dd4467b0df3815b762e8e61cb9ea104286a377be809fc475f87910c4c674c2",
+  "hkdf": "HKDF-SHA256(ikm=prfOutput, salt=empty, info=utf8(label), L=32)",
+  "labels": {
+    "enc": "nym-passkey-enc",
+    "locator": "nym-passkey-locator"
+  },
+  "event": {
+    "kind": 30078,
+    "dTag": "nym-key-backup",
+    "author": "locator pubkey",
+    "content": "NIP-44 v2 payload"
+  },
+  "largeBlob": {
+    "content": "utf8 of the same bundle JSON {\"v\":1,\"sk\":...,\"pq\":...}"
+  },
+  "prfOutputHex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "encKeyHex": "92299774740418b8900ac2f98cc4b0f99748c1fa7bc566a90967e4d82081021e",
+  "locatorSecretHex": "2e0d1b0227fe0c474b4533804871257a1923abf41f2789a0259b67c706aca758",
+  "locatorPubkeyHex": "2b3e07ce0621c3cb8e5a05d5b04ff89e87a9a2d4f7b4404118ee8a2c7cc4b75b",
+  "secretKeyHex": "7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a",
+  "nonceHex": "0000000000000000000000000000000000000000000000000000000000000002",
+  "payload": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACj0HZIznV15z8NfEKDrnFy5Fyz4Ne7YweDXc+rkPUqFKSMe4zVV1vp6oekYArtr9EVAnwwLRjJICsIMrCtd4/js6lAWN/3DctqkiY4ef0n8QTjf2lkJ4Ps2BWsJ7+9SrflwM=",
+  "bundle": {
+    "plaintext": "{\"v\":1,\"sk\":\"7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a\",\"pq\":\"nympq1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0jqgfzyvjz2f38yqqqqqqqqqqqqqqqqqqqqqqq\"}",
+    "nonceHex": "0000000000000000000000000000000000000000000000000000000000000004",
+    "payload": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAESqDuUFHfWJuFSYzhXElAebZ8BeKkb9Y/UvS/H2+gZxt1eGxtmaWM9KDQKL3Sur5RBkdQHOz68j3paUbrxx/Eh4as4+bV8k+qqIg1OQIJR7wgxSd1DGINSJGokOQVQG5+b9WZskiIZ/5QrZC520dDEJ4VaewY2IxSYQwTIXyX/Lth8IigTcctcfgtLJtBudkiMzssNgw2wim8Q40QTsGYVtvSvmR5J16snUTBf/P6KhCPRFR6OpUwNwHaGphoWitQMGPIjpB3A/6Nz+bbQaeRm7fry5uB4euXv7OvjwqR+1dLOA==",
+    "largeBlob": "{\"v\":1,\"sk\":\"7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a\",\"pq\":\"nympq1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0jqgfzyvjz2f38yqqqqqqqqqqqqqqqqqqqqqqq\"}"
+  }
+}

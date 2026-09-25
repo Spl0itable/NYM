@@ -188,8 +188,11 @@ class IdentityService {
     );
   }
 
+  bool generatedFreshKey = false;
+
   /// Loads the persisted ephemeral identity or creates a new one.
   Future<Identity> bootEphemeral({Map<String, String>? unlockedSecrets}) async {
+    generatedFreshKey = false;
     final randomPerSession =
         _kv.getBool(StorageKeys.randomKeypairPerSession, defaultValue: false);
     final savedNick = _kv.getString(StorageKeys.autoEphemeralNick);
@@ -215,6 +218,7 @@ class IdentityService {
     // Generate a fresh keypair.
     final sk = generatePrivateKey();
     final pubkey = getPublicKeyHex(sk);
+    generatedFreshKey = true;
     final nym = (!randomPerSession && savedNick != null && savedNick.isNotEmpty)
         ? savedNick
         : _nymGen.generate(pubkey, style: nickStyle);

@@ -1,7 +1,7 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 3.75.545+306
+version: 3.75.545+342
 
 environment:
   sdk: ^3.6.0
@@ -81,6 +81,8 @@ dependencies:
 
   # Auth / biometrics
   local_auth: ^2.3.0
+  google_sign_in: ^7.2.0
+  sign_in_with_apple: ^7.0.1
 
   # UI helpers
   flutter_svg: ^2.0.10+1
@@ -96,11 +98,6 @@ dependencies:
   collection: ^1.18.0
   uuid: ^4.5.1
 
-  # Legacy WebView shell (kept during native migration)
-  webview_flutter: any
-  webview_flutter_android: ^4.0.0
-  webview_flutter_wkwebview: ^3.0.0
-  webview_flutter_web: any
   bluetooth_low_energy: ^6.1.0
 
 dev_dependencies:

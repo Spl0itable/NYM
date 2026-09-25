@@ -32,6 +32,20 @@ void main() {
     return n;
   }
 
+  test('the swap carries the committed proof-of-work target', () {
+    final n = fresh();
+    final echo = n.sendLocal('mined')!;
+    expect(echo.powTarget, isNull);
+    n.replaceOptimistic(echo.id, 'realid9',
+        realCreatedAt: echo.createdAt, powTarget: 16);
+    final own = n.state.messages['#room']!.singleWhere((m) => m.id == 'realid9');
+    expect(own.powTarget, 16);
+    final restored = Message.fromJson(own.toJson());
+    expect(restored.powTarget, 16, reason: 'it survives the message cache');
+    expect(Message.fromJson(echo.toJson()..remove('powTarget')).powTarget,
+        isNull);
+  });
+
   test('echo BEFORE replaceOptimistic → single bubble (merge loop path)', () {
     final n = fresh();
     final echo = n.sendLocal('hello')!;

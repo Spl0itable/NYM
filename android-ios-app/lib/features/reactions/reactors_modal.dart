@@ -7,6 +7,7 @@ import '../../state/app_state.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
+import '../../widgets/anchored_popup.dart';
 
 /// One reactor row in the reactor-list popup.
 class ReactorEntry {
@@ -255,22 +256,11 @@ void showReactorsModal(
   String? title,
 }) {
   final overlay = Overlay.of(context, rootOverlay: true);
-  final size = MediaQuery.of(context).size;
-  const modalW = 240.0;
   late OverlayEntry entry;
 
   void close() {
     if (entry.mounted) entry.remove();
   }
-
-  // Horizontal: align left edge with badge, clamp to viewport.
-  double left = anchorRect.left;
-  if (left + modalW > size.width - 10) left = size.width - modalW - 10;
-  if (left < 10) left = 10;
-
-  // Vertical: prefer above the badge, fall back to below.
-  final spaceAbove = anchorRect.top;
-  final preferAbove = spaceAbove > 270;
 
   entry = OverlayEntry(
     builder: (ctx) => Stack(
@@ -282,10 +272,8 @@ void showReactorsModal(
             onTap: close,
           ),
         ),
-        Positioned(
-          left: left,
-          top: preferAbove ? null : anchorRect.bottom + 6,
-          bottom: preferAbove ? (size.height - anchorRect.top + 6) : null,
+        AnchoredPopup(
+          anchor: anchorRect,
           child: ReactorsModal(
             emoji: emoji,
             reactors: reactors,

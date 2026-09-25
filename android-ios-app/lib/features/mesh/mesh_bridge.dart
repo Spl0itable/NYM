@@ -14,11 +14,9 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../features/pms/pm_logic.dart' show ReceiptInfo;
 import '../../models/channel.dart';
@@ -32,6 +30,7 @@ import '../../services/mesh/noise/noise_crypto.dart';
 import '../../services/mesh/protocol/mesh_profile.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../state/settings_provider.dart';
+import '../identity/panic_wipe.dart';
 import 'ghost_mode.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -39,6 +38,9 @@ import 'mesh_controller.dart';
 import 'mesh_diagnostics.dart';
 import 'mesh_outbox.dart';
 import '../../services/mesh/protocol/nostr_carrier_packet.dart';
+import '../../services/storage/at_rest_cipher.dart';
+import '../../services/storage/mesh_file_store.dart';
+import '../../services/storage/sealed_key_value.dart';
 
 /// The bare storage key of the mesh "Nearby" public channel (renders as
 /// `#mesh` — an ordinary channel in the sidebar's Channels list).
@@ -76,11 +78,14 @@ class MeshBridge {
     required Ref ref,
     required MeshService service,
     required String Function() selfNym,
+    AtRestCipher? cipher,
   })  : _ref = ref,
         _service = service,
-        _selfNym = selfNym;
+        _selfNym = selfNym,
+        _cipher = cipher;
 
   final Ref _ref;
+  final AtRestCipher? _cipher;
   final MeshService _service;
   final String Function() _selfNym;
 
@@ -169,42 +174,85 @@ class MeshBridge {
     return peerIdForPubkey(view.id) == null;
   }
 
-  /// Restores the public history this device carries, and keeps it written.
-  ///
-  /// This is what makes a phone a town crier rather than a live relay: walk
-  /// between two mesh partitions, or relaunch hours later, and the backlog is
-  /// still there to hand to whoever missed it. Contents are signed public
-  /// broadcasts, already visible to anyone who was in radio range, so they are
-  /// stored as-is — nothing private ever reaches this store.
-  void _restoreGossipArchive() {
+  SealedKeyValue? _sealedStore;
+  bool _gossipLocked = false;
+  bool _prekeysLocked = false;
+  bool _retryingLocked = false;
+
+  SealedKeyValue get _sealed {
     final kv = _ref.read(keyValueStoreProvider);
+    final existing = _sealedStore;
+    if (existing != null && identical(existing.kv, kv)) return existing;
+    return _sealedStore = SealedKeyValue(kv,
+        cipher: _cipher, blocked: () => PanicWipe.inProgress);
+  }
+
+  Future<void> _restoreGossipArchive() async {
     try {
-      _service.gossip
-          .decodeArchive(kv.getString(StorageKeys.meshGossipArchive));
+      final read = await _sealed.readDetailed(StorageKeys.meshGossipArchive);
+      _gossipLocked = read.locked;
+      _service.gossip.decodeArchive(read.value);
     } catch (_) {}
     _service.onGossipArchiveChanged = (archive) {
+      if (_gossipLocked) {
+        unawaited(_retryLockedStores());
+        return;
+      }
       try {
-        kv.setString(StorageKeys.meshGossipArchive, archive);
+        _sealed.write(StorageKeys.meshGossipArchive, archive);
       } catch (_) {}
     };
   }
 
-  /// Restores this device's one-time prekeys and keeps them written.
-  ///
-  /// The private halves MUST survive a restart: a sender who picked up our
-  /// published bundle before we closed will have sealed mail to one of those
-  /// keys, and a courier may hand it over hours later. Losing them turns
-  /// forward secrecy into lost mail.
-  void _restorePrekeys() {
-    final kv = _ref.read(keyValueStoreProvider);
+  Future<void> _restorePrekeys() async {
     try {
-      _service.prekeys.decode(kv.getString(StorageKeys.meshPrekeys));
-    } catch (_) {}
+      final read = await _sealed.readDetailed(StorageKeys.meshPrekeys);
+      _prekeysLocked = read.locked;
+      _service.prekeys.decode(read.value);
+    } catch (_) {
+      _prekeysLocked = true;
+      _service.prekeys.clear();
+    }
+    _service.prekeysReady = () {
+      if (_prekeysLocked) unawaited(_retryLockedStores());
+      return !_prekeysLocked;
+    };
     _service.onPrekeysChanged = (encoded) {
+      if (_prekeysLocked) {
+        unawaited(_retryLockedStores());
+        return;
+      }
       try {
-        kv.setString(StorageKeys.meshPrekeys, encoded);
+        _sealed.write(StorageKeys.meshPrekeys, encoded);
       } catch (_) {}
     };
+  }
+
+  Future<void> _retryLockedStores() async {
+    if (_retryingLocked || !(_gossipLocked || _prekeysLocked)) return;
+    _retryingLocked = true;
+    try {
+      if (_gossipLocked) {
+        final read = await _sealed.readDetailed(StorageKeys.meshGossipArchive);
+        if (!read.locked) {
+          _service.gossip.decodeArchive(read.value);
+          _gossipLocked = false;
+          _sealed.write(
+              StorageKeys.meshGossipArchive, _service.gossip.encodeArchive());
+        }
+      }
+      if (_prekeysLocked) {
+        final read = await _sealed.readDetailed(StorageKeys.meshPrekeys);
+        if (!read.locked) {
+          _service.prekeys.decode(read.value);
+          _prekeysLocked = false;
+          unawaited(_service.publishPrekeyBundle());
+        }
+      }
+    } catch (_) {
+    } finally {
+      _retryingLocked = false;
+    }
   }
 
   /// A gateway asked us to publish an event, or rebroadcast one it heard.
@@ -252,9 +300,9 @@ class MeshBridge {
 
   ProviderSubscription<ChatView>? _viewSub;
 
-  void start() {
+  Future<void> start() async {
     _loadGhostPins();
-    _restoreGossipArchive();
+    await _restoreGossipArchive();
     // The courier gates need to know about ghosting, and only the bridge holds
     // that state. Wiring them here keeps the refusal rules ([CourierStore.
     // mayDeposit]) in one place rather than duplicated inside the radio layer.
@@ -263,7 +311,7 @@ class MeshBridge {
       final pubkey = _pubkeyForNoiseKey(staticKeyHex);
       return pubkey != null && _ghostPinnedPms.contains(pubkey.toLowerCase());
     };
-    _restorePrekeys();
+    await _restorePrekeys();
     _service.onNostrCarrier = _onNostrCarrier;
     MeshService.debugLog = MeshDiagnostics.instance.log;
     _subs.add(_service.peersStream.listen(_onPeers));
@@ -404,6 +452,7 @@ class MeshBridge {
   // ---- Inbound -------------------------------------------------------------
 
   void _onPeers(List<MeshPeer> peers) {
+    if (_prekeysLocked || _gossipLocked) unawaited(_retryLockedStores());
     for (final p in peers) {
       final pubkey = pubkeyForPeer(p);
       _pubkeyByPeerId[p.peerID] = pubkey;
@@ -1075,20 +1124,8 @@ class MeshBridge {
 
   // ---- Disk ----------------------------------------------------------------
 
-  Future<String?> _saveFile(String fileName, Uint8List bytes) async {
-    try {
-      final dir = Directory(
-          '${(await getApplicationDocumentsDirectory()).path}/mesh_files');
-      if (!dir.existsSync()) dir.createSync(recursive: true);
-      final stamp = DateTime.now().microsecondsSinceEpoch;
-      final safe = fileName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-      final path = '${dir.path}/${stamp}_$safe';
-      await File(path).writeAsBytes(bytes, flush: true);
-      return path;
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<String?> _saveFile(String fileName, Uint8List bytes) =>
+      MeshFileStore.instance.save(fileName, bytes);
 }
 
 /// Exposes a peer's rich profile to the bridge/registry (avatar bytes) — reused

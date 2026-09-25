@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/nym_theme.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/commands/command_i18n.dart';
+import 'features/groups/group_invite_confirm.dart';
 import 'features/i18n/i18n.dart';
 import 'features/i18n/localization_service.dart';
 import 'features/mesh/mesh_controller.dart';
@@ -14,10 +15,12 @@ import 'features/notifications/notification_route_target.dart';
 import 'features/notifications/notification_routing.dart';
 import 'features/onboarding/boot_gate.dart';
 import 'features/share/share_intake.dart';
+import 'models/group.dart';
 import 'services/notification_service.dart';
 import 'services/platform/background_connectivity.dart';
 import 'services/platform/background_refresh.dart';
 import 'services/platform/deep_link_target.dart';
+import 'services/platform/heartbeat.dart';
 import 'services/platform/deep_links.dart';
 import 'state/app_state.dart';
 import 'state/nostr_controller.dart';
@@ -49,7 +52,10 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   /// only chance a suspended app gets to notice what arrived and notify about
   /// it. No-op on Android, where the foreground service keeps the socket open
   /// and events arrive live.
-  final BackgroundRefreshService _backgroundRefresh = BackgroundRefreshService();
+  final BackgroundRefreshService _backgroundRefresh =
+      BackgroundRefreshService();
+
+  HeartbeatService? _heartbeat;
 
   /// Lets sign-out clear any dialogs/modals pushed above the boot gate. The
   /// remount (keyed [BootGate]) replaces the gate's content, but pushed routes
@@ -77,10 +83,20 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     if (!mounted) return;
     final controller = ref.read(nostrControllerProvider);
 
+    // iOS background catch-up. Registered whether or not notifications are on
+    // right now, so switching them on later needs no relaunch; the catch-up
+    // itself re-checks the setting before doing anything.
+    _backgroundRefresh.start(
+      () => ref.read(nostrControllerProvider).runBackgroundCatchUp(),
+    );
+
+    _startHeartbeat();
+
     // 1) Deep links: cold-start + streamed `app_links` URLs.
     DeepLinkService? deepLinks;
     try {
-      deepLinks = DeepLinkService(NostrControllerDeepLinkTarget(controller));
+      deepLinks = DeepLinkService(NostrControllerDeepLinkTarget(controller,
+          confirmInvite: _confirmGroupInvite));
       _deepLinks = deepLinks;
       await deepLinks.start();
     } catch (e) {
@@ -108,12 +124,6 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       if (ref.read(settingsProvider).notificationsEnabled) {
         unawaited(notifications.ensurePermission());
       }
-      // iOS background catch-up. Registered whether or not notifications are on
-      // right now, so switching them on later needs no relaunch; the catch-up
-      // itself re-checks the setting before doing anything.
-      _backgroundRefresh.start(
-        () => ref.read(nostrControllerProvider).runBackgroundCatchUp(),
-      );
     } catch (e) {
       debugPrint('[Platform] notifications skipped: $e');
     }
@@ -152,9 +162,37 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     }
   }
 
+  Future<bool> _confirmGroupInvite(GroupInviteToken token) async {
+    final navContext = _navKey.currentContext;
+    if (navContext == null || !navContext.mounted) return false;
+    return confirmGroupInviteJoin(navContext, token);
+  }
+
+  void _startHeartbeat() {
+    if (!HeartbeatService.isSupported) return;
+    try {
+      final heartbeat = HeartbeatService(kv: ref.read(keyValueStoreProvider));
+      _heartbeat = heartbeat;
+      if (ref.read(settingsProvider).backgroundConnectivity) {
+        _setHeartbeat(true);
+      }
+    } catch (e) {
+      debugPrint('[Platform] heartbeat skipped: ${e.runtimeType}');
+    }
+  }
+
+  void _setHeartbeat(bool on) {
+    final heartbeat = _heartbeat;
+    if (heartbeat == null) return;
+    unawaited(heartbeat.setEnabled(on).catchError((Object e) {
+      debugPrint('[Platform] heartbeat ${on ? 'on' : 'off'} failed: ${e.runtimeType}');
+    }));
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _heartbeat?.dispose();
     _payloadSub?.cancel();
     _deepLinks?.dispose();
     _shareIntake?.dispose();
@@ -178,6 +216,10 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       try {
         ref.read(nostrControllerProvider).onAppResumed();
       } catch (_) {}
+      final heartbeat = _heartbeat;
+      if (heartbeat != null) {
+        unawaited(heartbeat.resume().catchError((Object _) {}));
+      }
       return;
     }
 
@@ -288,6 +330,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       settingsProvider.select((s) => s.backgroundConnectivity),
       (_, next) {
         if (!next) unawaited(_backgroundConnectivity.stop());
+        _setHeartbeat(next);
       },
     );
     // Notifications off: stop asking iOS for catch-up windows there is nothing

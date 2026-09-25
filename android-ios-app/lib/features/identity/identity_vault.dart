@@ -5,8 +5,10 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
 import '../../core/constants/storage_keys.dart';
+import '../../services/platform/background_refresh.dart';
 import '../../services/storage/key_value_store.dart';
 import '../../services/storage/secure_store.dart';
+import 'biometric_secret_store.dart';
 
 /// The subset of [SecureStore] the vault uses. Declared as an interface so the
 /// real [SecureStore] (which matches structurally) can be passed in production
@@ -42,10 +44,17 @@ class SecureStoreAdapter implements SecureStoreLike {
 ///
 /// Blob format matches the PWA exactly: `enc:v1:<b64(iv)>:<b64(ciphertext)>`.
 class IdentityVault {
-  IdentityVault(this._kv, this._secure);
+  IdentityVault(this._kv, this._secure,
+      {bool? escrow, BiometricSecretStore? biometric})
+      : _escrow = escrow ?? BackgroundRefreshService.isSupported,
+        _biometric = biometric ?? PlatformBiometricSecretStore();
 
   final KeyValueStore _kv;
   final SecureStoreLike _secure;
+  final bool _escrow;
+  final BiometricSecretStore _biometric;
+
+  static const String bioSecretName = 'nym_vault_bio_secret';
 
   static const int _iterations = 310000;
   static const String _checkPlaintext = 'nymchat-vault-ok';
@@ -197,6 +206,7 @@ class IdentityVault {
   static const String _bgKeyName = 'nym_vault_bg_key';
 
   Future<void> _escrowBackgroundKey(SecretKey key) async {
+    if (!_escrow) return clearBackgroundKey();
     try {
       final bytes = await key.extractBytes();
       await _secure.set(_bgKeyName, base64.encode(bytes));
@@ -332,11 +342,142 @@ class IdentityVault {
   /// escape hatch). Mirrors `resetVault`.
   Future<void> reset() async {
     _sessionKey = null;
+    final wasBiometric = method == 'biometric';
     await clearBackgroundKey();
     for (final name in vaultKeys) {
       await _secure.remove(name);
     }
     await _clearMeta();
+    if (wasBiometric) await _dropBiometricSecrets();
+  }
+
+  bool get biometricProtected => _kv.getBool(StorageKeys.vaultBioProtected);
+
+  Future<bool> biometricAvailable() async {
+    try {
+      return await _biometric.isAvailable();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> enableBiometric() async {
+    if (isEnabled) throw StateError('Encryption is already enabled.');
+    if (!await biometricAvailable()) {
+      throw const BiometricVaultException(BiometricVaultFailure.unavailable);
+    }
+    final secret = base64.encode(_randomBytes(32));
+    try {
+      await _biometric.write(secret);
+      final back = await _biometric.read();
+      if (back != secret) {
+        throw const BiometricVaultException(BiometricVaultFailure.verifyFailed);
+      }
+    } catch (e) {
+      await _dropProtectedSecret();
+      if (e is BiometricCanceled) {
+        throw const BiometricVaultException(BiometricVaultFailure.canceled);
+      }
+      if (e is BiometricVaultException) rethrow;
+      if (e is BiometricStoreError && e.code == 'unavailable') {
+        throw const BiometricVaultException(BiometricVaultFailure.unavailable);
+      }
+      throw const BiometricVaultException(BiometricVaultFailure.verifyFailed);
+    }
+    await _kv.setBool(StorageKeys.vaultBioProtected, true);
+    try {
+      await enable(method: 'biometric', password: secret);
+    } catch (_) {
+      await _kv.remove(StorageKeys.vaultBioProtected);
+      rethrow;
+    }
+    await _dropPlainSecret();
+  }
+
+  Future<Map<String, String>> unlockBiometric() async {
+    if (!isEnabled) return {};
+    final plain = biometricProtected ? null : await _secure.get(bioSecretName);
+    if (plain == null || plain.isEmpty) {
+      final out = await unlock(await _readProtectedSecret());
+      if (!biometricProtected) {
+        await _kv.setBool(StorageKeys.vaultBioProtected, true);
+      }
+      await _dropPlainSecret();
+      return out;
+    }
+    return _unlockAndMigrate(plain);
+  }
+
+  Future<void> disableBiometric() async {
+    if (!isEnabled) return;
+    final plain = biometricProtected ? null : await _secure.get(bioSecretName);
+    final String secret;
+    if (plain == null || plain.isEmpty) {
+      secret = await _readProtectedSecret();
+    } else {
+      if (!await _biometric.confirmPresence()) {
+        throw const BiometricVaultException(BiometricVaultFailure.canceled);
+      }
+      secret = plain;
+    }
+    await disable(secret);
+    await _dropBiometricSecrets();
+  }
+
+  Future<Map<String, String>> _unlockAndMigrate(String plain) async {
+    if (await biometricAvailable()) {
+      String? back;
+      try {
+        await _biometric.write(plain);
+        back = await _biometric.read();
+      } on BiometricCanceled {
+        throw const BiometricVaultException(BiometricVaultFailure.canceled);
+      } catch (_) {
+        back = null;
+      }
+      if (back == plain) {
+        final out = await unlock(plain);
+        await _kv.setBool(StorageKeys.vaultBioProtected, true);
+        await _dropPlainSecret();
+        return out;
+      }
+    }
+    if (!await _biometric.confirmPresence()) {
+      throw const BiometricVaultException(BiometricVaultFailure.canceled);
+    }
+    return unlock(plain);
+  }
+
+  Future<String> _readProtectedSecret() async {
+    final String? secret;
+    try {
+      secret = await _biometric.read();
+    } on BiometricCanceled {
+      throw const BiometricVaultException(BiometricVaultFailure.canceled);
+    } catch (_) {
+      throw const BiometricVaultException(BiometricVaultFailure.failed);
+    }
+    if (secret == null || secret.isEmpty) {
+      throw const BiometricVaultException(BiometricVaultFailure.invalidated);
+    }
+    return secret;
+  }
+
+  Future<void> _dropBiometricSecrets() async {
+    await _dropProtectedSecret();
+    await _dropPlainSecret();
+  }
+
+  Future<void> _dropProtectedSecret() async {
+    try {
+      await _biometric.delete();
+    } catch (_) {}
+  }
+
+  Future<void> _dropPlainSecret() async {
+    try {
+      await _secure.remove(bioSecretName);
+    } catch (_) {}
   }
 
   /// Vault-aware secret write — the PWA's `secretSet` (key-vault.js:38-48).
@@ -355,6 +496,7 @@ class IdentityVault {
   }
 
   Future<void> _clearMeta() async {
+    await _kv.remove(StorageKeys.vaultBioProtected);
     await _kv.remove(StorageKeys.vaultEnabled);
     await _kv.remove(StorageKeys.vaultSalt);
     await _kv.remove(StorageKeys.vaultMethod);

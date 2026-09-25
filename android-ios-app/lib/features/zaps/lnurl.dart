@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../../models/nostr_event.dart';
 import '../../services/api/api_client.dart';
+import 'zap_logic.dart';
 
 /// Pure helpers + lazy HTTP for the LNURL-pay zap flow (zaps.js
 /// `fetchLightningInvoice`, lines 95-162). No network is touched until
@@ -120,6 +121,10 @@ class Lnurl {
       final pr = data['pr'] as String?;
       if (pr == null || pr.isEmpty) {
         throw const LnurlException('No payment request in response');
+      }
+      if (ZapLogic.parseAmountFromBolt11(pr) != amountSats) {
+        throw const LnurlException(
+            'The invoice is not for the amount you chose');
       }
       return LnInvoice(
         pr: pr,

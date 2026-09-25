@@ -87,13 +87,23 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
   }
 
   Future<void> _fetchArchived() async {
-    final ev = await ref.read(nostrControllerProvider).archivedEvent(widget.eventId);
+    final controller = ref.read(nostrControllerProvider);
+    var ev = await controller.archivedEvent(widget.eventId);
+    var source = 'NYMCHAT ARCHIVE';
+    if (ev == null) {
+      ev = await controller.relayEvent(widget.eventId);
+      source = 'RELAY LOOKUP';
+    }
     if (!mounted) return;
     setState(() {
       _looking = false;
       if (ev != null) {
         _event = ev;
-        _relays = const ['NYMCHAT ARCHIVE'];
+        final rec = eventProvenance.of(ev.id);
+        _relays = rec != null && rec.relays.isNotEmpty
+            ? List<String>.from(rec.relays)
+            : [source];
+        _firstSeen ??= rec?.firstSeen;
       }
     });
   }

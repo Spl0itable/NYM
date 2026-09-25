@@ -14,6 +14,8 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/nym_colors.dart';
 import '../../i18n/i18n.dart';
 import '../../../core/utils/safe_url.dart';
+import 'media_source.dart';
+import 'message_content.dart' show proxiedMedia;
 
 /// `--radius-sm` (`styles-core.css:87`).
 const double _kAudioRadius = 12;
@@ -30,7 +32,6 @@ class AudioMessage extends StatefulWidget {
     this.maxWidth = _kAudioMaxWidth,
   });
 
-  /// Directly-playable URL (the formatter has already proxied it).
   final String url;
 
   /// Basename shown on the download link; falls back to a generic label.
@@ -49,6 +50,7 @@ class _AudioMessageState extends State<AudioMessage> {
   bool _playing = false;
   bool _loading = false;
   bool _failed = false;
+  String? _source;
 
   @override
   void dispose() {
@@ -94,8 +96,11 @@ class _AudioMessageState extends State<AudioMessage> {
     try {
       if (_position > Duration.zero && _position < _duration) {
         await p.resume();
+      } else if (_source != null) {
+        await p.play(UrlSource(_source!));
       } else {
-        await p.play(UrlSource(widget.url));
+        _source = await openMediaSource([widget.url], (u) => _tryPlay(p, u));
+        if (_source == null && mounted) setState(() => _failed = true);
       }
     } catch (_) {
       // Unsupported codec or an unreachable source: keep the download route
@@ -103,6 +108,15 @@ class _AudioMessageState extends State<AudioMessage> {
       if (mounted) setState(() => _failed = true);
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<bool> _tryPlay(AudioPlayer p, String url) async {
+    try {
+      await p.play(UrlSource(url));
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -116,7 +130,7 @@ class _AudioMessageState extends State<AudioMessage> {
   }
 
   void _open() {
-    launchSafeUrl(widget.url);
+    launchSafeUrl(_source ?? proxiedMedia(widget.url));
   }
 
   static String _clock(Duration d) {

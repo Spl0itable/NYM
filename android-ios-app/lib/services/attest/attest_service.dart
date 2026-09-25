@@ -30,10 +30,12 @@ class AttestService {
     http.Client? client,
     MethodChannel? channel,
     String? host,
+    String? platform,
   })  : _kv = kv,
         _client = client ?? http.Client(),
         _channel = channel ?? const MethodChannel(channelName),
-        _host = host ?? ApiConfig.apiHost;
+        _host = host ?? ApiConfig.apiHost,
+        _platform = platform ?? Platform.operatingSystem;
 
   /// The tier the server named, defaulting to the weakest reading. An
   /// unknown name is a server newer than this build, and treating it as
@@ -71,12 +73,19 @@ class AttestService {
   final http.Client _client;
   final MethodChannel _channel;
   final String _host;
+  final String _platform;
 
   Future<void>? _inFlight;
   DateTime? _nextTry;
 
   String? _badge;
   AttestTier? _tier;
+
+  String? lastError;
+  String? lastPlatformRefusal;
+  DateTime? lastAttemptAt;
+
+  Future<void>? get inFlight => _inFlight;
 
   /// The badge to attach to outgoing channel messages, or null when this
   /// install has not enrolled (or its enrollment lapsed).
@@ -154,44 +163,33 @@ class AttestService {
   Future<void> _enroll(EventSigner signer) async {
     try {
       final pubkey = signer.pubkey;
-      final issued = await _challenge(pubkey);
+      var issued = await _challenge(pubkey);
       if (issued == null) throw StateError('no challenge');
-      final challenge = issued['challenge'] as String;
 
-      final proof = await _platformProof(challenge);
-      if (proof == null) throw StateError('no platform proof');
+      final platformProof = await _platformProof(issued['challenge'] as String);
+      Map<String, dynamic>? res;
+      if (platformProof != null) {
+        try {
+          res = await _enrollWith(signer, issued, platformProof,
+              mine: platformProof['platform'] == 'android');
+          lastPlatformRefusal = null;
+        } on EnrollRefused catch (e) {
+          if (!e.platformRefusal) rethrow;
+          lastPlatformRefusal = e.describe();
+          issued = await _challenge(pubkey);
+          if (issued == null) throw StateError('no challenge');
+        }
+      }
+      if (res == null) {
+        final web = await _webProof(issued);
+        if (web == null) throw StateError('no proof');
+        res = await _enrollWith(signer, issued, web, mine: true);
+      }
 
-      // Mined unconditionally rather than only when the server turns out to
-      // need it. A build Play did not distribute — the Zapstore APK — cannot
-      // be Play-recognized, and the server falls that back to the same work
-      // the web app pays. Deciding here would mean detecting the install
-      // source or enrolling twice; this costs a few seconds in an isolate,
-      // once per badge term, with nothing waiting on it.
-      final powBits = (issued['powBits'] as num?)?.toInt() ?? 0;
-
-      final auth = await Nip98Auth.buildSigned(
-        action: 'attest-enroll',
-        url: _url(),
-        signer: signer,
-        sensitive: true,
-        powBits: powBits,
-        extraTags: [
-          ['challenge', challenge]
-        ],
-      );
-      if (auth == null) throw StateError('auth signing failed');
-
-      final res = await _post(<String, dynamic>{
-        'action': 'enroll',
-        'pubkey': pubkey,
-        'challenge': challenge,
-        'auth': auth,
-        ...proof,
-      });
-      final badge = res?['badge'] as String?;
+      final badge = res['badge'] as String?;
       if (badge == null || badge.isEmpty) throw StateError('no badge');
 
-      final authority = res?['authority'] as String?;
+      final authority = res['authority'] as String?;
       if (pinnedAuthority.length != 64 &&
           authority != null &&
           authority.length == 64) {
@@ -199,28 +197,72 @@ class AttestService {
       }
 
       _badge = badge;
-      _tier = _tierFromName(res?['tier'] as String?);
+      _tier = _tierFromName(res['tier'] as String?);
       _kv.setString(
         StorageKeys.attestBadge,
         jsonEncode({
           'pubkey': pubkey,
           'badge': badge,
-          'tier': res?['tier'] ?? 'origin',
-          'expiresAt': (res?['expiresAt'] as num?)?.toInt() ?? 0,
+          'tier': res['tier'] ?? 'origin',
+          'expiresAt': (res['expiresAt'] as num?)?.toInt() ?? 0,
         }),
       );
       _nextTry = null;
-    } catch (_) {
+      lastError = null;
+    } on EnrollRefused catch (e) {
+      lastError = e.describe();
       _nextTry = DateTime.now().add(retryAfter);
+    } catch (e) {
+      lastError = e is StateError ? e.message : e.toString();
+      _nextTry = DateTime.now().add(retryAfter);
+    } finally {
+      lastAttemptAt = DateTime.now();
     }
   }
 
+  Future<Map<String, dynamic>> _enrollWith(
+    EventSigner signer,
+    Map<String, dynamic> issued,
+    Map<String, dynamic> proof, {
+    required bool mine,
+  }) async {
+    final challenge = issued['challenge'] as String;
+    final powBits = mine ? ((issued['powBits'] as num?)?.toInt() ?? 0) : 0;
+    final auth = await Nip98Auth.buildSigned(
+      action: 'attest-enroll',
+      url: _url(),
+      signer: signer,
+      sensitive: true,
+      powBits: powBits,
+      extraTags: [
+        ['challenge', challenge]
+      ],
+    );
+    if (auth == null) throw StateError('auth signing failed');
+    final reply = await _post(<String, dynamic>{
+      'action': 'enroll',
+      'pubkey': signer.pubkey,
+      'challenge': challenge,
+      'auth': auth,
+      ...proof,
+    });
+    final body = reply.body;
+    if (reply.ok && body != null && body['error'] == null) return body;
+    throw EnrollRefused(
+      reply.status,
+      (body?['error'] as String?) ?? 'HTTP ${reply.status}',
+      body?['reason'] as String?,
+    );
+  }
+
   Future<Map<String, dynamic>?> _challenge(String pubkey) async {
-    final res = await _post(<String, dynamic>{
+    final reply = await _post(<String, dynamic>{
       'action': 'challenge',
       'pubkey': pubkey,
     });
-    return (res?['challenge'] as String?) == null ? null : res;
+    final body = reply.body;
+    if (!reply.ok || body == null || body['error'] != null) return null;
+    return body['challenge'] is String ? body : null;
   }
 
   /// Asks the native side for a platform proof over [challenge]. Returns the
@@ -234,13 +276,19 @@ class AttestService {
         <String, dynamic>{'challenge': challenge},
       );
       if (result == null) return null;
-      if (Platform.isIOS) {
+      final reason = result['reason'];
+      if (reason is String && reason.isNotEmpty) {
+        lastPlatformRefusal =
+            _platform == 'android' ? 'play-integrity: $reason' : reason;
+        return null;
+      }
+      if (_platform == 'ios') {
         final keyId = result['keyId'] as String?;
         final attestation = result['attestation'] as String?;
         if (keyId == null || attestation == null) return null;
         return {'platform': 'ios', 'keyId': keyId, 'attestation': attestation};
       }
-      if (Platform.isAndroid) {
+      if (_platform == 'android') {
         final token = result['token'] as String?;
         if (token == null) return null;
         return {'platform': 'android', 'token': token};
@@ -253,9 +301,48 @@ class AttestService {
     }
   }
 
+  /// The build-proof enrollment: the web app's only path, and the fallback
+  /// for a native install that could not produce a platform proof. It still
+  /// names the platform it runs on — a phone that failed Play Integrity is
+  /// an Android install, not a browser — and says why the platform proof
+  /// was not accepted, so the server can record the reason.
+  Future<Map<String, dynamic>?> _webProof(Map<String, dynamic> issued) async {
+    final probe = issued['buildProbe'];
+    if (probe is! List || probe.isEmpty) return null;
+    final files = await _buildManifestFiles();
+    if (files == null) return null;
+    final build = <String, String>{};
+    for (final path in probe) {
+      final hash = path is String ? files[path] : null;
+      if (hash is! String) return null;
+      build[path as String] = hash;
+    }
+    final native = _platform == 'ios' || _platform == 'android';
+    return {
+      'platform': native ? _platform : 'web',
+      'build': build,
+      if (native) 'refusal': lastPlatformRefusal ?? 'no-platform-proof',
+    };
+  }
+
+  Future<Map<String, dynamic>?> _buildManifestFiles() async {
+    try {
+      final resp = await _client.get(
+        Uri.parse('https://$_host/build-manifest.json'),
+        headers: ApiConfig.defaultHeaders,
+      );
+      if (resp.statusCode != 200) return null;
+      final decoded = jsonDecode(resp.body);
+      final files = decoded is Map ? decoded['files'] : null;
+      return files is Map ? Map<String, dynamic>.from(files) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String _url() => 'https://$_host/api/attest';
 
-  Future<Map<String, dynamic>?> _post(Map<String, dynamic> body) async {
+  Future<_ApiReply> _post(Map<String, dynamic> body) async {
     final resp = await _client.post(
       Uri.parse(_url()),
       headers: {
@@ -264,12 +351,34 @@ class AttestService {
       },
       body: jsonEncode(body),
     );
-    if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
-    final decoded = jsonDecode(resp.body);
-    if (decoded is! Map) return null;
-    final map = Map<String, dynamic>.from(decoded);
-    return map['error'] == null ? map : null;
+    Map<String, dynamic>? map;
+    try {
+      final decoded = jsonDecode(resp.body);
+      if (decoded is Map) map = Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return _ApiReply(resp.statusCode, map);
   }
+}
+
+class _ApiReply {
+  const _ApiReply(this.status, this.body);
+  final int status;
+  final Map<String, dynamic>? body;
+  bool get ok => status >= 200 && status < 300;
+}
+
+class EnrollRefused implements Exception {
+  EnrollRefused(this.status, this.error, this.reason);
+  final int status;
+  final String error;
+  final String? reason;
+
+  bool get platformRefusal => status == 403 && error == 'Attestation failed';
+
+  String describe() => reason == null ? error : '$error ($reason)';
+
+  @override
+  String toString() => describe();
 }
 
 /// Everyone whose badge this session has verified, and what it proved.

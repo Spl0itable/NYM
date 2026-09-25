@@ -25,6 +25,7 @@ import '../shop/cosmetics.dart';
 import '../shop/shop_widgets.dart';
 import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
+import '../../widgets/anchored_popup.dart';
 
 /// An inline poll message (`displayPollMessage`, `polls.js:187-371`). The PWA
 /// renders a poll as a FULL `.message` row: `.message-time` (clickable full
@@ -671,9 +672,6 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
     if (box == null || !box.hasSize) return;
     final rect = box.localToGlobal(Offset.zero) & box.size;
     final overlay = Overlay.of(context);
-    final screen = MediaQuery.of(context).size;
-    final right = (screen.width - rect.right).clamp(4.0, double.infinity);
-    final above = rect.top > 110;
     final entry = OverlayEntry(
       builder: (ctx) {
         final c = ctx.nym;
@@ -686,10 +684,9 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
                 onPanStart: (_) => _closePopup(),
               ),
             ),
-            Positioned(
-              right: right,
-              top: above ? null : rect.bottom + 6,
-              bottom: above ? screen.height - rect.top + 6 : null,
+            AnchoredPopup(
+              anchor: rect,
+              align: PopupAlign.end,
               child: Material(
                 type: MaterialType.transparency,
                 child: Container(
@@ -1075,30 +1072,11 @@ void showPollVotersModal(
   required void Function(String pubkey) onOpenPM,
 }) {
   final overlay = Overlay.of(context, rootOverlay: true);
-  final screen = MediaQuery.of(context).size;
-  const modalW = 240.0;
   late OverlayEntry entry;
 
   void close() {
     if (entry.mounted) entry.remove();
   }
-
-  // Horizontal: `left = rect.left`, clamped to [10, innerWidth - width - 10]
-  // (polls.js:498-505).
-  double left = anchorRect.left;
-  if (left + modalW > screen.width - 10) left = screen.width - modalW - 10;
-  if (left < 10) left = 10;
-
-  // Vertical: the PWA measures the rendered modal and opens above when
-  // `spaceAbove > height + 10` (polls.js:506-511); estimate the height from
-  // the row count (header ~43px + ~30px rows, list capped at 320px).
-  final shownRows = poll.votes.length > _kPollVotersMaxRows
-      ? _kPollVotersMaxRows
-      : poll.votes.length;
-  final overflowRows = poll.votes.length > _kPollVotersMaxRows ? 1 : 0;
-  final estHeight =
-      43 + (8 + shownRows * 30 + overflowRows * 33).clamp(0, 320).toDouble();
-  final openAbove = anchorRect.top > estHeight + 10;
 
   entry = OverlayEntry(
     builder: (ctx) => Stack(
@@ -1110,10 +1088,8 @@ void showPollVotersModal(
             onTap: close,
           ),
         ),
-        Positioned(
-          left: left,
-          top: openAbove ? null : anchorRect.bottom + 6,
-          bottom: openAbove ? screen.height - anchorRect.top + 6 : null,
+        AnchoredPopup(
+          anchor: anchorRect,
           child: _PollVotersModal(
             poll: poll,
             selfPubkey: selfPubkey,

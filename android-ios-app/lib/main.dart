@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 
 import 'app.dart';
@@ -10,18 +11,12 @@ import 'features/identity/vault_settings_modal.dart' show identityVaultProvider;
 import 'features/identity/vault_boot_unlock.dart';
 import 'services/platform/background_refresh.dart';
 import 'services/storage/key_value_store.dart';
-import 'state/app_state.dart';
+import 'services/storage/secure_store.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // The web-of-trust spam gate is safe to enable now that channel sends carry
-  // the NIP-13 PoW floor (so Nymchat-client messages self-attest) and the trust
-  // graph persists across launches. Enabled in the real app only — widget tests
-  // leave it off by default.
-  nymVouchSpamGateEnabled = true;
 
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
@@ -33,6 +28,7 @@ Future<void> main() async {
   // emulator/device is offline) so they don’t terminate the app.
   await runZonedGuarded(() async {
     // Open the key/value store (mirrors the PWA's synchronous localStorage).
+    await SecureStore.settleInstall(await SharedPreferences.getInstance());
     final kv = await KeyValueStore.open();
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -76,6 +72,8 @@ class _BootUnlockGate extends ConsumerStatefulWidget {
 
 class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
   late bool _unlocked;
+  bool _wakeUnlocked = false;
+  final GlobalKey _appKey = GlobalKey();
 
   /// Claims the background-refresh channel while locked; `app.dart` re-claims
   /// it with its own handler once the app tree mounts.
@@ -90,9 +88,8 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
     if (_unlocked) {
       // No vault: boot the identity + relays now (was main()'s fire-and-forget).
       _bootController();
-    } else {
-      _armBackgroundWake();
     }
+    _armBackgroundWake();
   }
 
   /// A locked process boots nothing — the app tree below this gate never
@@ -117,14 +114,15 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
             await ref.read(identityVaultProvider).unlockForBackgroundWake();
         // No escrow (or a stale one): nothing can run. Returning ends the
         // window promptly, which is what keeps iOS granting more of them.
-        if (secrets == null) return;
-        if (!mounted) return;
+        if (secrets == null) return false;
+        if (!mounted) return false;
+        _wakeUnlocked = true;
         _onUnlocked(secrets);
         // Let the freshly-mounted app finish wiring up before the catch-up
         // runs against it.
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
-      await ref.read(nostrControllerProvider).runBackgroundCatchUp();
+      return ref.read(nostrControllerProvider).runBackgroundCatchUp();
     });
   }
 
@@ -147,9 +145,25 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
     setState(() => _unlocked = true);
   }
 
+  Future<void> _onWakeForget() async {
+    try {
+      await ref.read(nostrControllerProvider).signOut();
+    } finally {
+      if (mounted) setState(() => _wakeUnlocked = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_unlocked) return const NymchatApp();
+    if (_unlocked) {
+      final app = KeyedSubtree(key: _appKey, child: const NymchatApp());
+      if (!_wakeUnlocked) return app;
+      return VaultLockedApp(app: app, lock: _unlockScreen(resumed: true));
+    }
+    return _unlockScreen();
+  }
+
+  Widget _unlockScreen({bool resumed = false}) {
     // The unlock screen needs the theme too; wrap it in a minimal MaterialApp
     // so it matches the app's appearance (the PWA applies the saved color mode
     // before showing the unlock modal). Reuses the same color provider the
@@ -160,8 +174,10 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
       debugShowCheckedModeBanner: false,
       theme: buildNymThemeData(colors),
       home: VaultBootUnlock(
-        onUnlocked: _onUnlocked,
-        onForget: _onForget,
+        onUnlocked: resumed
+            ? (_) => setState(() => _wakeUnlocked = false)
+            : _onUnlocked,
+        onForget: resumed ? () => unawaited(_onWakeForget()) : _onForget,
       ),
     );
   }

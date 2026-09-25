@@ -19,6 +19,7 @@ import '../../features/mesh/mesh_diagnostics.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
 import '../nym_icons.dart';
+import 'list_anchor.dart';
 import 'message_row.dart';
 import 'message_skeleton.dart';
 import 'typing_indicator.dart';
@@ -73,6 +74,32 @@ class MessageListScroller {
   bool canScrollTo(String messageId) =>
       _indexById.containsKey(messageId) && (_controller?.isAttached ?? false);
 
+  int _scrollCount = 0;
+  int _inFlight = 0;
+
+  int get scrollCount => _scrollCount;
+
+  bool get animating => _inFlight > 0;
+
+  Future<void> animateTo({
+    required int index,
+    double alignment = 0,
+    Duration duration = NymMotion.transition,
+    Curve curve = NymMotion.curve,
+  }) {
+    final controller = _controller;
+    if (controller == null || !controller.isAttached) return Future.value();
+    _scrollCount++;
+    _inFlight++;
+    return controller
+        .scrollTo(
+            index: index,
+            alignment: alignment,
+            duration: duration,
+            curve: curve)
+        .whenComplete(() => _inFlight--);
+  }
+
   /// Smooth-scrolls the list so [messageId] sits ~centered (PWA `block:'center'`).
   /// No-ops when the message isn't in the loaded set or the list isn't attached
   /// (the PWA likewise bails — "Original message is not available" — when the
@@ -83,7 +110,7 @@ class MessageListScroller {
     if (index == null || controller == null || !controller.isAttached) {
       return false;
     }
-    controller.scrollTo(
+    animateTo(
       index: index,
       // Leading-edge fraction of the viewport — ~0.4 lands the message a little
       // above center, the closest analog to `scrollIntoView({block:'center'})`.
@@ -157,9 +184,16 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   /// The conversation the cache belongs to; a view switch clears it.
   String? _unitCacheViewKey;
 
+  final AnchoredUnits _anchors = AnchoredUnits();
+  late final ListAnchorKeeper _keeper =
+      ListAnchorKeeper(controller: _itemScrollController, units: _anchors);
+  Map<int, String> _unitByIndex = const {};
+  _UnitsBuild? _units;
+  int _seenScrolls = 0;
+  bool _listBuilt = false;
+
   /// Cached widget for one render unit, with the inputs it was built from.
-  bool _sameEntries(
-      List<MessageGroupEntry> a, List<MessageGroupEntry> b) {
+  bool _sameEntries(List<MessageGroupEntry> a, List<MessageGroupEntry> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (!identical(a[i].message, b[i].message) ||
@@ -185,9 +219,14 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   Map<int, String> _idByIndex = const {};
 
   @override
+  void deactivate() {
+    _saveAnchorIfThreadTookOver();
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
-    _saveAnchorIfThreadTookOver();
     super.dispose();
   }
 
@@ -217,8 +256,156 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       // Already at the newest message: there is nothing to restore, and
       // pinning it would fight the autoscroll.
       if (nearest!.index == 0 && nearest.itemLeadingEdge >= -0.01) return;
-      scroller.rememberAnchor(id, nearest.itemLeadingEdge);
+      final unit = _unitByIndex[nearest.index];
+      var alignment = (unit == null ? null : _anchors.edgeOf(unit)) ??
+          nearest.itemLeadingEdge;
+      if (nearest.index == 0 && _viewportHeight > 0) {
+        alignment -= _bottomInset / _viewportHeight;
+      }
+      scroller.rememberAnchor(id, alignment);
     } catch (_) {}
+  }
+
+  static const double _bottomInset = 16;
+
+  void _keepAnchor() {
+    if (!mounted ||
+        !_listBuilt ||
+        !_itemScrollController.isAttached ||
+        _viewportHeight <= 0) {
+      return;
+    }
+    final app = ref.read(appStateProvider);
+    if (app.view.storageKey != _viewKey) return;
+    final scroller = ref.read(messageListScrollerProvider(_viewKey));
+    if (scroller.scrollCount != _seenScrolls) {
+      _seenScrolls = scroller.scrollCount;
+      _keeper.reset();
+    }
+    if (scroller.animating) return;
+    final settings = ref.read(settingsProvider);
+    final built = _unitsFor(
+      ref.read(messagesForCurrentViewProvider),
+      ref.read(pollsForCurrentViewProvider),
+      ref.read(reactionsProvider),
+      settings.useBubbles,
+      '@${_baseNym(app.selfNym)}',
+    );
+    final positions = _positionsListener.itemPositions.value;
+    ItemPosition? newest;
+    for (final p in positions) {
+      if (p.index == 0) {
+        newest = p;
+        break;
+      }
+    }
+    final follow = newest != null &&
+        _bottomInset - newest.itemLeadingEdge * _viewportHeight <= 150;
+    final oldUnits = _unitByIndex;
+    _keeper.keep(
+      positions: positions,
+      unitAt: (index) => oldUnits[index],
+      indexOf: (unit) => built.indexByUnit[unit],
+      viewportHeight: _viewportHeight,
+      bottomInset: _bottomInset,
+      follow: follow,
+    );
+  }
+
+  _UnitsBuild _unitsFor(
+    List<Message> messages,
+    List<Poll> polls,
+    Map<String, List<MessageReaction>> reactions,
+    bool useBubbles,
+    String mentionToken,
+  ) {
+    final cached = _units;
+    if (cached != null &&
+        identical(cached.messages, messages) &&
+        identical(cached.polls, polls) &&
+        identical(cached.reactions, reactions) &&
+        cached.useBubbles == useBubbles &&
+        cached.mentionToken == mentionToken) {
+      return cached;
+    }
+
+    // Merge messages + polls into one chronological list (oldest first), each
+    // message carrying its resolved reactions + mention flag. The fast probe
+    // mirrors the PWA gates: `.mentioned` never applies to self or PM/group
+    // rows (else-if class chain, messages.js:686-692), and `isMentioned`
+    // bails while the self nym is unknown (messages.js:400) — a bare '@'
+    // token at boot must not flag every '@'-containing message.
+    final merged = <_ListEntry>[
+      for (final m in messages)
+        _MsgEntry(MessageGroupEntry(
+          message: m,
+          reactions: reactions[m.id] ?? const [],
+          mentioned: mentionToken.length > 1 &&
+              !m.isOwn &&
+              !m.isPM &&
+              m.content.contains(mentionToken),
+        )),
+      for (final p in polls) _PollEntry(p),
+    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    // Fold consecutive same-author bubble messages into render groups (the PWA's
+    // `.message-group`), so the group's single avatar can span and glide over the
+    // whole run. The fold runs over the MERGED order, so an interleaved poll — or
+    // a system / `/me` row — correctly breaks a same-author run (PWA
+    // `_rewrapBubbleGroups` resets the current group on any non-message or poll).
+    // Polls render standalone; in IRC mode `_groupsWith` is gated off so every
+    // message is its own (bare) group.
+    final units = <_RenderUnit>[];
+    for (final e in merged) {
+      if (e is _PollEntry) {
+        units.add(_PollUnit(e.poll));
+        continue;
+      }
+      final entry = (e as _MsgEntry).entry;
+      final last = units.isNotEmpty ? units.last : null;
+      if (useBubbles &&
+          last is _GroupUnit &&
+          _groupsWith(last.entries.last.message, entry.message)) {
+        last.entries.add(entry);
+      } else {
+        units.add(_GroupUnit([entry]));
+      }
+    }
+
+    // Publish a message-id → reversed-render-index map so the blockquote tap can
+    // jump to a quoted source message (`ScrollablePositionedList.scrollTo`). The
+    // reversed list uses index 0 = newest at the bottom, so a unit at forward
+    // position `f` lives at reversed index `units.length - 1 - f`; every message
+    // inside a group maps to that same unit index.
+    final indexById = <String, int>{};
+    final indexByUnit = <String, int>{};
+    final unitByIndex = <int, String>{};
+    for (var f = 0; f < units.length; f++) {
+      final unit = units[f];
+      final revIndex = units.length - 1 - f;
+      final String unitId;
+      if (unit is _GroupUnit) {
+        for (final entry in unit.entries) {
+          indexById[entry.message.id] = revIndex;
+        }
+        unitId = 'group_${unit.entries.first.message.id}';
+      } else {
+        unitId = 'poll_${(unit as _PollUnit).poll.id}';
+      }
+      indexByUnit[unitId] = revIndex;
+      unitByIndex[revIndex] = unitId;
+    }
+    return _units = _UnitsBuild(
+      messages: messages,
+      polls: polls,
+      reactions: reactions,
+      useBubbles: useBubbles,
+      mentionToken: mentionToken,
+      units: units,
+      indexById: indexById,
+      indexByUnit: indexByUnit,
+      unitByIndex: unitByIndex,
+    );
   }
 
   /// Recomputes [_showScrollButton] from the visible item positions — the
@@ -256,12 +443,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   /// reversed list), mirroring the PWA `scrollToBottom()` (`app.js:2142`).
   void _scrollToBottom() {
     if (!_itemScrollController.isAttached) return;
-    _itemScrollController.scrollTo(
-      index: 0,
-      alignment: 0,
-      duration: NymMotion.transition,
-      curve: NymMotion.curve,
-    );
+    ref
+        .read(messageListScrollerProvider(_viewKey))
+        .animateTo(index: 0, alignment: 0);
   }
 
   @override
@@ -278,6 +462,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final messages = ref.watch(messagesForCurrentViewProvider);
     final reactions = ref.watch(reactionsProvider);
     final polls = ref.watch(pollsForCurrentViewProvider);
+    ref.listen(messagesForCurrentViewProvider, (_, __) => _keepAnchor());
+    ref.listen(pollsForCurrentViewProvider, (_, __) => _keepAnchor());
 
     // The unit-widget reuse cache is per conversation; a switch drops it (a
     // different view's units share no keys, so keeping them only leaks).
@@ -314,6 +500,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         : const Color(0x26000000); // black @ 0.15
 
     if (messages.isEmpty && polls.isEmpty) {
+      _listBuilt = false;
       // DIAGNOSTIC: the widget is about to render the empty note. Record what
       // the WIDGET sees for this view's store, so a "bridge stored N but the
       // widget's store for the same key shows M" mismatch is captured from the
@@ -354,69 +541,14 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       );
     }
 
-    final mentionToken = '@${_baseNym(selfNym)}';
-
-    // Merge messages + polls into one chronological list (oldest first), each
-    // message carrying its resolved reactions + mention flag. The fast probe
-    // mirrors the PWA gates: `.mentioned` never applies to self or PM/group
-    // rows (else-if class chain, messages.js:686-692), and `isMentioned`
-    // bails while the self nym is unknown (messages.js:400) — a bare '@'
-    // token at boot must not flag every '@'-containing message.
-    final merged = <_ListEntry>[
-      for (final m in messages)
-        _MsgEntry(MessageGroupEntry(
-          message: m,
-          reactions: reactions[m.id] ?? const [],
-          mentioned: mentionToken.length > 1 &&
-              !m.isOwn &&
-              !m.isPM &&
-              m.content.contains(mentionToken),
-        )),
-      for (final p in polls) _PollEntry(p),
-    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-
-    // Fold consecutive same-author bubble messages into render groups (the PWA's
-    // `.message-group`), so the group's single avatar can span and glide over the
-    // whole run. The fold runs over the MERGED order, so an interleaved poll — or
-    // a system / `/me` row — correctly breaks a same-author run (PWA
-    // `_rewrapBubbleGroups` resets the current group on any non-message or poll).
-    // Polls render standalone; in IRC mode `_groupsWith` is gated off so every
-    // message is its own (bare) group.
-    final units = <_RenderUnit>[];
-    for (final e in merged) {
-      if (e is _PollEntry) {
-        units.add(_PollUnit(e.poll));
-        continue;
-      }
-      final entry = (e as _MsgEntry).entry;
-      final last = units.isNotEmpty ? units.last : null;
-      if (settings.useBubbles &&
-          last is _GroupUnit &&
-          _groupsWith(last.entries.last.message, entry.message)) {
-        last.entries.add(entry);
-      } else {
-        units.add(_GroupUnit([entry]));
-      }
-    }
-
-    // Publish a message-id → reversed-render-index map so the blockquote tap can
-    // jump to a quoted source message (`ScrollablePositionedList.scrollTo`). The
-    // reversed list uses index 0 = newest at the bottom, so a unit at forward
-    // position `f` lives at reversed index `units.length - 1 - f`; every message
-    // inside a group maps to that same unit index.
-    final indexById = <String, int>{};
-    for (var f = 0; f < units.length; f++) {
-      final unit = units[f];
-      if (unit is _GroupUnit) {
-        final revIndex = units.length - 1 - f;
-        for (final entry in unit.entries) {
-          indexById[entry.message.id] = revIndex;
-        }
-      }
-    }
+    final built = _unitsFor(messages, polls, reactions, settings.useBubbles,
+        '@${_baseNym(selfNym)}');
+    final units = built.units;
+    final indexById = built.indexById;
     final scroller = ref.read(messageListScrollerProvider(view.storageKey));
     scroller.bind(_itemScrollController, indexById);
     _idByIndex = {for (final e in indexById.entries) e.value: e.key};
+    _unitByIndex = built.unitByIndex;
     if (!_restoreDone) {
       // Only the first build can act on it: initialScrollIndex is read once,
       // when the list first lays out.
@@ -426,8 +558,19 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       // Switched conversation without remounting; whatever this view had
       // remembered is from an older visit.
       scroller.forgetAnchor();
+      _keeper.reset();
     }
     _viewKey = view.storageKey;
+    final restore = _restore;
+    if (!_listBuilt) {
+      _listBuilt = true;
+      _seenScrolls = scroller.scrollCount;
+      _keeper.reset(
+        target: restore?.index ?? 0,
+        anchorUnit: restore == null ? null : built.unitByIndex[restore.index],
+      );
+    }
+    _restore = null;
 
     // Reversed list: index 0 = newest at the bottom; the typing row is pinned
     // below the newest message, above the composer (`.typing-indicator`).
@@ -436,8 +579,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     // Swipe/drag-scroll the messages to dismiss the soft keyboard (01-B3): the
     // ScrollablePositionedList has no `keyboardDismissBehavior`, so unfocus on an
     // active user-drag while the keyboard is up (chat_pane handles tap-out).
-    return NotificationListener<ScrollUpdateNotification>(
-      onNotification: _dismissKeyboardOnDrag,
+    return NotificationListener<ScrollNotification>(
+      onNotification: _onScroll,
       child: ColoredBox(
         color: containerColor,
         child: Column(
@@ -459,8 +602,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         itemPositionsListener: _positionsListener,
                         reverse: true,
                         // Where the list was when a thread took its place.
-                        initialScrollIndex: _restore?.index ?? 0,
-                        initialAlignment: _restore?.alignment ?? 0,
+                        initialScrollIndex: restore?.index ?? 0,
+                        initialAlignment: restore?.alignment ?? 0,
                         padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
                         // Channel views carry one extra unit ABOVE the oldest
                         // message: the `.channel-history-limit` pill ("You've
@@ -496,15 +639,13 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                           // background. Keying by the group's LEAD message id (stable
                           // as messages append to the group) pins each unit's element
                           // so the snap-in plays exactly once per bubble.
-                          final Key unitKey;
+                          final unitId = built.unitByIndex[revIndex]!;
+                          final Key unitKey = ValueKey(unitId);
                           if (unit is _PollUnit) {
                             child =
                                 PollCard(poll: unit.poll, settings: settings);
-                            unitKey = ValueKey('poll_${unit.poll.id}');
                           } else {
                             final group = unit as _GroupUnit;
-                            unitKey = ValueKey(
-                                'group_${group.entries.first.message.id}');
                             // Reuse the identical widget instance when the
                             // group's inputs are unchanged (see
                             // [_unitWidgetCache]) so this row's subtree is
@@ -549,7 +690,11 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                             child: Padding(
                               padding: EdgeInsets.only(
                                   top: (forward > 0 || isChannel) ? 3 : 0),
-                              child: child,
+                              child: AnchoredUnit(
+                                id: unitId,
+                                units: _anchors,
+                                child: child,
+                              ),
                             ),
                           );
                         },
@@ -586,6 +731,16 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   bool _dismissKeyboardOnDrag(ScrollUpdateNotification n) {
     if (n.dragDetails != null && MediaQuery.of(context).viewInsets.bottom > 0) {
       FocusManager.instance.primaryFocus?.unfocus();
+    }
+    return false;
+  }
+
+  bool _onScroll(ScrollNotification n) {
+    _keeper.observe(n);
+    if (n is ScrollUpdateNotification) _dismissKeyboardOnDrag(n);
+    if (n is ScrollEndNotification && _keeper.pending && !_keeper.retargeting) {
+      _keeper.pending = false;
+      _keepAnchor();
     }
     return false;
   }
@@ -780,6 +935,30 @@ class _CachedUnitWidget {
   final List<MessageGroupEntry> entries;
   final Settings settings;
   final Widget widget;
+}
+
+class _UnitsBuild {
+  _UnitsBuild({
+    required this.messages,
+    required this.polls,
+    required this.reactions,
+    required this.useBubbles,
+    required this.mentionToken,
+    required this.units,
+    required this.indexById,
+    required this.indexByUnit,
+    required this.unitByIndex,
+  });
+
+  final List<Message> messages;
+  final List<Poll> polls;
+  final Map<String, List<MessageReaction>> reactions;
+  final bool useBubbles;
+  final String mentionToken;
+  final List<_RenderUnit> units;
+  final Map<String, int> indexById;
+  final Map<String, int> indexByUnit;
+  final Map<int, String> unitByIndex;
 }
 
 /// `.scroll-to-bottom-btn` (`styles-chat.css:9-43`): a 40×40 round glass FAB

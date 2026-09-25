@@ -1,14 +1,8 @@
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        // AGP 8.5.1+ for automatic 16 KB page-size support
-        classpath 'com.android.tools.build:gradle:8.7.3'
-        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.0'
-    }
-}
+// NOTE: Plugin versions are declared once in settings.gradle via the plugins {}
+// DSL (AGP 8.11.1 / Kotlin 2.2.20). A legacy `buildscript { classpath ... }`
+// block used to live here pinning AGP 8.7.3, which silently won and made the
+// effective toolchain older than declared — AGP 8.7 has no built-in support for
+// compileSdk 36 (Android 16). It has been removed intentionally; do not re-add.
 
 allprojects {
     repositories {
@@ -31,18 +25,20 @@ subprojects { project ->
     // Apply to Android app modules
     project.plugins.withId("com.android.application") {
         project.android {
-            compileSdkVersion 36
+            compileSdk = 36
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_17
                 targetCompatibility = JavaVersion.VERSION_17
             }
         }
     }
-    
-    // Apply to Android library modules (including Flutter plugins)
+
+    // Apply to Android library modules (including Flutter plugins).
+    // Many plugins still declare compileSdk 33/34; forcing 36 keeps every
+    // module on the Android 16 platform so resource linking stays consistent.
     project.plugins.withId("com.android.library") {
         project.android {
-            compileSdkVersion 36
+            compileSdk = 36
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_17
                 targetCompatibility = JavaVersion.VERSION_17

@@ -105,7 +105,7 @@ void main() {
       // Channel Activity
       'who', 'summarize', 'top', 'last', 'seen',
       // Credits (private Nymbot chat)
-      'balance', 'buy', 'model', 'git', 'gift', 'transfer',
+      'balance', 'buy', 'model', 'gift', 'transfer',
       // Info
       'help', 'about', 'nostr', 'changelog',
     ];
@@ -122,7 +122,6 @@ void main() {
         'balance',
         'buy',
         'model',
-        'git',
         'gift',
         'transfer'
       ]) {
@@ -312,35 +311,20 @@ void main() {
     });
   });
 
-  group('GitConfig wire', () {
-    test('serialises provider + token + repo + allowWrites', () {
-      const cfg = GitConfig(
-        provider: GitProvider.github,
-        host: 'github.com',
-        token: 'ghp_secret',
-        repo: 'owner/repo',
-        branch: 'main',
-        allowWrites: true,
-      );
-      final w = cfg.toWire();
-      expect(w['provider'], 'github');
-      expect(w['token'], 'ghp_secret');
-      expect(w['repo'], 'owner/repo');
-      expect(w['branch'], 'main');
-      expect(w['allowWrites'], isTrue);
+  group('repositories are not part of the Nymchat bot chat', () {
+    test('?git is neither a command nor completed', () {
+      expect(lookupBotCommand('git'), isNull);
+      expect(kBotPMCommands.map((c) => c.name), isNot(contains('?git')));
+      expect(filterBotPMCommands('?git'), isEmpty);
+      expect(filterBotPMCommands('?git '), isEmpty);
+      expect(botPMSubcommands('?git'), isNull);
     });
 
-    test('always sends the branch key — empty string when unset', () {
-      // Byte-parity with the PWA's `branch: git.branch || ''` (pms.js:2464):
-      // the key is always present on the wire, '' meaning "provider default".
-      const cfg = GitConfig(
-        provider: GitProvider.gitea,
-        host: 'codeberg.org',
-        token: 't',
-        repo: 'o/r',
-      );
-      expect(cfg.toWire()['branch'], '');
-      expect(GitProvider.gitea.defaultHost, 'codeberg.org');
+    test('?git is caught on the device so a pasted token is never sent', () {
+      expect(botPMCommandRe.hasMatch('?git token ghp_x'), isTrue);
+      expect(botPMCommandRe.hasMatch('?github token ghp_x'), isTrue);
+      expect(botPMCommandRe.hasMatch('?gitlab'), isFalse);
+      expect(botPMCommandRe.hasMatch('?model off'), isTrue);
     });
   });
 }

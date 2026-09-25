@@ -70,7 +70,7 @@ void main() {
     });
 
     test('proper nouns are never translated', () {
-      for (final token in ['?btc', '?git', '?nostr', '?8ball']) {
+      for (final token in ['?btc', '?nostr', '?8ball']) {
         expect(commandSourcePhrase(token), isNull);
       }
       expect(commandSourcePhrases(), isNot(contains('btc')));
@@ -99,7 +99,6 @@ void main() {
       expect(localizedCommandToken('/pm'), '/mensajeprivado');
       expect(localizedCommandToken('?joke'), '?chiste');
       expect(localizedCommandToken('?btc'), '?btc');
-      expect(localizedCommandToken('?git'), '?git');
 
       // Localized names resolve, and so do the originals.
       expect(resolveCommandToken('/unirse'), '/join');

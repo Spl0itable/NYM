@@ -1375,7 +1375,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   }
 
   /// The `#botCreditMeta` text (`_renderBotCreditMeta`, pms.js:2361-2380):
-  /// Pro pinned → `'<n> Pro credit(s) · <model> [· <repoName>]'`; otherwise the
+  /// Pro pinned → `'<n> Pro credit(s) · <model>'`; otherwise the
   /// standard count (`'<n> credit(s) left'`, or both pools when Pro credits
   /// exist). 'checking credits…' until the first balance lands; a failed check
   /// with no cached count settles on 'credits unavailable'
@@ -1389,12 +1389,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       final proCredits = pro == 1
           ? tr('{n} Pro credit', {'n': proText})
           : tr('{n} Pro credits', {'n': proText});
-      var meta = '$proCredits · ${proModel.label}';
-      final git = state.git;
-      if (git != null && git.hasRepo) {
-        meta += ' · ${git.repo.split('/').last}';
-      }
-      return meta;
+      return '$proCredits · ${proModel.label}';
     }
     if (!state.balanceKnown) {
       return state.balanceUnavailable

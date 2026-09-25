@@ -67,7 +67,8 @@ void main() {
     final n = AppStateNotifier()
       ..goLive(
           '0000000000000000000000000000000000000000000000000000000000000001',
-          'me#0001');
+          'me#0001')
+      ..setProxyMode(false);
 
     const peer =
         'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210';

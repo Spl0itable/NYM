@@ -35,7 +35,7 @@ void main() {
     final kv = await _kv();
     final secure = _MemSecure();
     await secure.set('nym_session_nsec', 'the-secret');
-    final vault = IdentityVault(kv, secure);
+    final vault = IdentityVault(kv, secure, escrow: true);
 
     await vault.enable(method: 'password', password: 'hunter2');
     final woken = await vault.unlockForBackgroundWake();
@@ -47,7 +47,7 @@ void main() {
     final kv = await _kv();
     final secure = _MemSecure();
     await secure.set('nym_session_nsec', 'the-secret');
-    final vault = IdentityVault(kv, secure);
+    final vault = IdentityVault(kv, secure, escrow: true);
     await vault.enable(method: 'password', password: 'hunter2');
 
     await vault.clearBackgroundKey();
@@ -60,7 +60,7 @@ void main() {
     // one — or a panic would leave the vault key behind on the device.
     final kv = await _kv();
     final secure = _MemSecure();
-    final vault = IdentityVault(kv, secure);
+    final vault = IdentityVault(kv, secure, escrow: true);
     await vault.enable(method: 'password', password: 'hunter2');
 
     expect(secure.map.containsKey('nym_vault_bg_key'), isTrue,
@@ -74,7 +74,7 @@ void main() {
     final kv = await _kv();
     final secure = _MemSecure();
     await secure.set('nym_session_nsec', 'the-secret');
-    final vault = IdentityVault(kv, secure);
+    final vault = IdentityVault(kv, secure, escrow: true);
     await vault.enable(method: 'password', password: 'hunter2');
 
     await vault.disable('hunter2');
@@ -84,7 +84,7 @@ void main() {
   test('resetting the vault clears the escrow', () async {
     final kv = await _kv();
     final secure = _MemSecure();
-    final vault = IdentityVault(kv, secure);
+    final vault = IdentityVault(kv, secure, escrow: true);
     await vault.enable(method: 'password', password: 'hunter2');
 
     await vault.reset();
@@ -94,7 +94,7 @@ void main() {
   test('a stale escrow from a changed factor is refused and dropped', () async {
     final kv = await _kv();
     final secure = _MemSecure();
-    final vault = IdentityVault(kv, secure);
+    final vault = IdentityVault(kv, secure, escrow: true);
     await vault.enable(method: 'password', password: 'hunter2');
 
     // Re-key the vault under a different factor, leaving the old escrow behind.

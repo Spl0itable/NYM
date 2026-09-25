@@ -18,7 +18,7 @@ String? proxiedAvatarUrl(String? url) {
   final lower = url.toLowerCase();
   if (lower.startsWith('data:') || lower.startsWith('blob:')) return url;
   if (!lower.startsWith('http://') && !lower.startsWith('https://')) return url;
-  if (url.contains('/api/proxy?')) return url;
+  if (isOwnMediaUrl(url)) return url;
   return _avatarApi.mediaProxyUrl(url);
 }
 
@@ -148,22 +148,12 @@ class _NymAvatarState extends State<NymAvatar> {
     final proxied = proxiedAvatarUrl(widget.imageUrl);
     final fallback = _identicon(context);
     if (proxied == null) return fallback;
-    // The RAW original URL, tried directly when the proxied load fails — the
-    // PWA's proxied-blob→raw-URL fallback (`cacheAvatarImage`, users.js:983).
-    // Only meaningful when we actually proxied something (an http(s) URL that
-    // isn't already a proxy link); for a pass-through data:/blob:/relative URL
-    // `proxied == imageUrl`, so there's no distinct raw mirror to add.
-    final raw = widget.imageUrl;
-    final fallbackUrls = <String>[
-      if (raw != null && raw.isNotEmpty && raw != proxied) raw,
-    ];
     return ClipOval(
       child: SizedBox(
         width: widget.size,
         height: widget.size,
         child: InlineNetworkImage(
           url: proxied,
-          fallbackUrls: fallbackUrls,
           width: widget.size,
           height: widget.size,
           fit: BoxFit.cover,

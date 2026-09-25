@@ -14,7 +14,8 @@ import '../../features/groups/group_logic.dart'
     show kPmDepositQueueMax, kPmDepositFlushMs, kPmDepositFlushJitterMs,
         kPmDepositBacklogMs, kPmDepositBatchMin, kPmDepositBatchMax;
 import '../../core/crypto/pq.dart' as pq;
-import '../../features/identity/pq_registry.dart' show pqSelfCandidates;
+import '../../features/identity/pq_registry.dart'
+    show pqRootCandidates, pqSelfCandidates;
 import '../../features/identity/pq_root.dart';
 import '../nostr/event_signer.dart';
 import '../storage/key_value_store.dart';
@@ -335,9 +336,9 @@ class StorageSync {
       // Closed-PM / left-group read state (settings.js:146-149; the PWA's
       // lazyStoredSet/Map keys, app.js:751-754).
       flat['closedPMs'] = _kvJsonList(kv, StorageKeys.closedPms);
-      flat['leftGroups'] = _kvJsonList(kv, 'nym_left_groups');
+      flat['leftGroups'] = const <dynamic>[];
       flat['closedPMTimes'] = _kvJsonMap(kv, StorageKeys.closedPmTimes);
-      flat['leftGroupTimes'] = _kvJsonMap(kv, StorageKeys.leftGroupTimes);
+      flat['leftGroupTimes'] = <String, dynamic>{};
       // Lightning address is cached per-pubkey (`nym_lightning_address_<pk>`,
       // zaps.js:234); the PWA syncs `this.lightningAddress` (null when unset).
       // Falls back to the global key, the same order the boot read uses
@@ -1041,6 +1042,9 @@ class StorageSync {
   /// either the hashed column or the bare routing name.
   void _notePqRootColumns(Map<dynamic, dynamic> cats) {
     _pqRootLoadSucceeded = true;
+    _pqRootRowPresent = false;
+    _pqRootRowHybrid = false;
+    _lastInboundPqRoot = null;
     final hashed = d1Category(pqRootCategory);
     for (final k in cats.keys) {
       final name = k.toString();
@@ -1050,9 +1054,20 @@ class StorageSync {
       final blob = entry['blob'];
       if (blob is String && blob.isNotEmpty) {
         _pqRootRowPresent = true;
+        _pqRootRowHybrid = pq.isPqPayload(blob) || pq.isPq2Payload(blob);
         return;
       }
     }
+  }
+
+  bool _pqRootRowHybrid = false;
+
+  bool get pqRootRowHybrid => _pqRootRowHybrid;
+
+  bool get pqRootRowUnreadable {
+    if (!_pqRootRowPresent) return false;
+    final rec = pqRootRecord;
+    return rec == null || !rec.isValid;
   }
 
   /// Publishes the root record. Forced classical: sealing this row to a key
@@ -1066,6 +1081,7 @@ class StorageSync {
     if (ok) {
       _lastInboundPqRoot = record.toJson();
       _pqRootRowPresent = true;
+      _pqRootRowHybrid = false;
     }
     return ok;
   }
@@ -2301,6 +2317,15 @@ class StorageSync {
     return events;
   }
 
+  Future<Map<String, dynamic>?> pqKey(String pubkey) async {
+    final res = await _api.botAction({'action': 'pq-key', 'pubkey': pubkey});
+    if (!res.containsKey('event')) {
+      throw ApiException('pq-key', 200, 'missing event');
+    }
+    final ev = res['event'];
+    return ev is Map ? Map<String, dynamic>.from(ev) : null;
+  }
+
   /// Purges a NIP-09-deleted channel message from the D1 archive
   /// (`channel-delete`, storage.js:1123-1150). A PUBLIC call — the signed
   /// kind-5 [deletionEvent] IS the authorization (the worker verifies its
@@ -2665,15 +2690,26 @@ class StorageSync {
     final root = await _pqRoot();
     if (_pqSelfKeys.isNotEmpty) return _pqSelfKeys;
     final signer = _signer;
-    if (signer is! LocalSigner) return const [];
     final cached = _derivedPqSelfKeys;
     if (cached != null) return cached;
+    final epoch = _pqEpochProvider?.call() ?? 0;
     try {
+      if (signer is! LocalSigner) {
+        if (root == null) return const [];
+        return _derivedPqSelfKeys = pqRootCandidates(root, epoch);
+      }
       return _derivedPqSelfKeys =
-          pqSelfCandidates(signer.privkey, 0, root: root);
+          pqSelfCandidates(signer.privkey, epoch, root: root);
     } catch (_) {
       return const [];
     }
+  }
+
+  int Function()? _pqEpochProvider;
+
+  void setPqEpochProvider(int Function() provider) {
+    _pqEpochProvider = provider;
+    _derivedPqSelfKeys = null;
   }
 
   /// Reads the identity's root secret, once per instance. Null means the

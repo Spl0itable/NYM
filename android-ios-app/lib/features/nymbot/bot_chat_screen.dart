@@ -61,8 +61,7 @@ import 'nymbot_providers.dart';
 ///
 /// Premium features kept on top of the canonical chat (intentional additions):
 ///   * the Standard / Pro tier switch + `?model` picker sheet,
-///   * `?balance` / `?buy` (shared credits modal),
-///   * the `?git` connect modal (typed `?git …` subcommands run in-chat).
+///   * `?balance` / `?buy` (shared credits modal).
 class BotChatScreen extends ConsumerStatefulWidget {
   const BotChatScreen({super.key, this.onOpenSidebar});
 
@@ -172,16 +171,12 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
           // Pinned Pro model → its brand label; otherwise the "Auto-routed"
           // UI copy (pms.js `_refreshBotControlBar`, model chip).
           modelLabel: state.proModel?.label ?? tr('Auto-routed'),
-          // Git chip → connected repo's short name, else the "Git" fallback.
-          gitConnected: state.git?.hasRepo ?? false,
-          gitLabel: _gitChipLabel(state),
           colors: c,
           onTapStandard: () =>
               ref.read(botChatControllerProvider.notifier).setModelDirect(null),
           // Both the Pro pill and the model chip open the picker (botSetTier
           // 'pro' + openBotModelModal, pms.js:2419/2438).
           onTapModel: () => _showModelPicker(context),
-          onTapGit: () => _showGitConnect(context),
           onTapBuy: () => _showBuy(context),
           anonOn: state.anonEnabled,
           onTapAnon: () => _showAnon(context),
@@ -222,16 +217,6 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     );
   }
 
-  /// The Git chip label: a connected repo's short name (last path segment),
-  /// else the localizable "Git" fallback — `_refreshBotControlBar`'s
-  /// `git.repo.split('/').pop()` (pms.js:2404).
-  String _gitChipLabel(BotChatState state) {
-    final repo = state.git?.repo;
-    if (repo == null || repo.isEmpty) return tr('Git');
-    final tail = repo.split('/').last;
-    return tail.isEmpty ? tr('Git') : tail;
-  }
-
   // ---------------------------------------------------------------------------
   // Message list — the canonical `.messages-container` pipeline
   // ---------------------------------------------------------------------------
@@ -260,6 +245,13 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       msgs = [
         for (final m in msgs)
           if (m.threadRoot == null || !rootIds.contains(m.threadRoot)) m,
+      ];
+    }
+    if (msgs.any((m) => m.threadRoot != null)) {
+      final all = msgs;
+      msgs = [
+        for (final m in all)
+          if (!botThreadForeign(m, all)) m,
       ];
     }
 
@@ -403,22 +395,6 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       ),
     );
   }
-
-  void _showGitConnect(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _colors(context).bgSecondary,
-      builder: (_) => _GitConnectModal(
-        colors: _colors(context),
-        existing: ref.read(botChatControllerProvider).git,
-        onConnect: (cfg) =>
-            ref.read(botChatControllerProvider.notifier).connectGit(cfg),
-        onDisconnect: () =>
-            ref.read(botChatControllerProvider.notifier).disconnectGit(),
-      ),
-    );
-  }
 }
 
 // =============================================================================
@@ -489,7 +465,7 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
 // =============================================================================
 // Premium Nymbot control bar (`.bot-control-bar`, styles-chat.css:1270-1382 /
 // index.html:680-697). A single glass strip under the header holding the tier
-// switch (Standard / Pro), the auto-routed/model chip, the git chip and the
+// switch (Standard / Pro), the auto-routed/model chip and the
 // buy chip — the PWA's unified control row that replaced the old header action
 // icons. Labels + active states track `_refreshBotControlBar` (pms.js:2381).
 // =============================================================================
@@ -500,15 +476,6 @@ const String _kSvgSparkle =
     'stroke-linecap="round" stroke-linejoin="round">'
     '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21'
     'l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>';
-
-/// Feather git-branch glyph for the git chip (index.html:688 `#botGitBtn`).
-const String _kSvgGitBranch =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-    'stroke-linecap="round" stroke-linejoin="round">'
-    '<line x1="6" y1="3" x2="6" y2="15"/>'
-    '<circle cx="18" cy="6" r="3"/>'
-    '<circle cx="6" cy="18" r="3"/>'
-    '<path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 
 /// Feather lightning-bolt polygon for the buy chip (index.html:692 `#botBuyBtn`).
 const String _kSvgAnon =
@@ -526,12 +493,9 @@ class _BotControlBar extends StatelessWidget {
   const _BotControlBar({
     required this.isPro,
     required this.modelLabel,
-    required this.gitConnected,
-    required this.gitLabel,
     required this.colors,
     required this.onTapStandard,
     required this.onTapModel,
-    required this.onTapGit,
     required this.onTapBuy,
     required this.anonOn,
     required this.onTapAnon,
@@ -539,12 +503,9 @@ class _BotControlBar extends StatelessWidget {
 
   final bool isPro;
   final String modelLabel;
-  final bool gitConnected;
-  final String gitLabel;
   final NymColors colors;
   final VoidCallback onTapStandard;
   final VoidCallback onTapModel;
-  final VoidCallback onTapGit;
   final VoidCallback onTapBuy;
   final bool anonOn;
   final VoidCallback onTapAnon;
@@ -557,7 +518,7 @@ class _BotControlBar extends StatelessWidget {
     final gap = compact ? 6.0 : 8.0;
     final labelMax = compact ? 96.0 : 150.0;
 
-    // The left cluster (tier switch + model + git) scrolls horizontally when it
+    // The left cluster (tier switch + model + anon) scrolls horizontally when it
     // can't fit — the PWA's `overflow-x: auto` — while the Buy chip stays pinned
     // to the trailing edge (its `margin-left: auto`), the premium CTA always in
     // reach even on the narrowest phone.
@@ -577,16 +538,6 @@ class _BotControlBar extends StatelessWidget {
             colors: c,
             compact: compact,
             onTap: onTapModel,
-          ),
-          SizedBox(width: gap),
-          _CtrlButton(
-            svg: _kSvgGitBranch,
-            label: gitLabel,
-            active: gitConnected,
-            labelMaxWidth: labelMax,
-            colors: c,
-            compact: compact,
-            onTap: onTapGit,
           ),
           SizedBox(width: gap),
           _CtrlButton(
@@ -758,7 +709,7 @@ class _CtrlButtonState extends State<_CtrlButton> {
             children: [
               NymSvgIcon(widget.svg, size: 15, color: fg),
               const SizedBox(width: 6),
-              // `.bot-ctrl-label`: clamp + ellipsis so a long model / repo name
+              // `.bot-ctrl-label`: clamp + ellipsis so a long model name
               // can't blow out the bar.
               ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: widget.labelMaxWidth),
@@ -1052,7 +1003,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
     );
-    // Re-filter so a multi-step command (e.g. `?git `) immediately surfaces its
+    // Re-filter so a multi-step command (e.g. `?model `) immediately surfaces its
     // subcommands; a leaf command just hides the palette.
     _onTextChanged();
     _focus.requestFocus();
@@ -2867,10 +2818,6 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
   }
 }
 
-// =============================================================================
-// Git connect modal (provider + PAT + repo/branch) — premium surface
-// =============================================================================
-
 class _AnonModal extends ConsumerStatefulWidget {
   const _AnonModal({required this.colors});
 
@@ -3091,200 +3038,6 @@ class _AnonModalState extends ConsumerState<_AnonModal> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _GitConnectModal extends StatefulWidget {
-  const _GitConnectModal({
-    required this.colors,
-    required this.existing,
-    required this.onConnect,
-    required this.onDisconnect,
-  });
-
-  final NymColors colors;
-  final GitConfig? existing;
-  final ValueChanged<GitConfig> onConnect;
-  final VoidCallback onDisconnect;
-
-  @override
-  State<_GitConnectModal> createState() => _GitConnectModalState();
-}
-
-class _GitConnectModalState extends State<_GitConnectModal> {
-  late GitProvider _provider;
-  late final TextEditingController _host;
-  late final TextEditingController _token;
-  late final TextEditingController _repo;
-  late final TextEditingController _branch;
-  late bool _allowWrites;
-
-  @override
-  void initState() {
-    super.initState();
-    final e = widget.existing;
-    _provider = e?.provider ?? GitProvider.github;
-    _host = TextEditingController(text: e?.host ?? _provider.defaultHost);
-    _token = TextEditingController(text: e?.token ?? '');
-    _repo = TextEditingController(text: e?.repo ?? '');
-    _branch = TextEditingController(text: e?.branch ?? '');
-    _allowWrites = e?.allowWrites ?? false;
-  }
-
-  @override
-  void dispose() {
-    _host.dispose();
-    _token.dispose();
-    _repo.dispose();
-    _branch.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.colors;
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 20,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(tr('Connect a git repo'),
-                style: TextStyle(
-                    color: c.textBright,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 4),
-            Text(
-              tr('Pro replies can read your code and, with writes on, commit, '
-                  'branch, and open PRs. Your access token is stored only on this '
-                  'device (Panic Mode wipes it) and sent per request — never stored '
-                  'server-side.'),
-              style: TextStyle(color: c.textDim, fontSize: 12, height: 1.4),
-            ),
-            const SizedBox(height: 16),
-            // Provider selector.
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final p in GitProvider.values)
-                  ChoiceChip(
-                    label: Text(p.label),
-                    selected: _provider == p,
-                    onSelected: (_) => setState(() {
-                      _provider = p;
-                      _host.text = p.defaultHost;
-                    }),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            _field(_host, tr('Host'), 'github.com', c),
-            const SizedBox(height: 10),
-            _field(_token, tr('Personal access token (PAT)'),
-                'ghp_… / glpat-… ', c,
-                obscure: true),
-            const SizedBox(height: 10),
-            _field(_repo, tr('Repository'), 'owner/repo', c),
-            const SizedBox(height: 10),
-            _field(_branch, tr('Branch (optional)'), 'main', c),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _allowWrites,
-              thumbColor: WidgetStateProperty.resolveWith((states) {
-                if (states.contains(WidgetState.selected)) return c.primary;
-                return null;
-              }),
-              title: Text(tr('Allow writes'),
-                  style: TextStyle(color: c.text, fontSize: 14)),
-              subtitle: Text(
-                  tr('commit, create branches, open pull/merge requests'),
-                  style: TextStyle(color: c.textDim, fontSize: 11)),
-              onChanged: (v) => setState(() => _allowWrites = v),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                if (widget.existing != null)
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        widget.onDisconnect();
-                        Navigator.pop(context);
-                      },
-                      child: Text(tr('Disconnect')),
-                    ),
-                  ),
-                if (widget.existing != null) const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _canConnect ? _connect : null,
-                    child: Text(tr('Connect')),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  bool get _canConnect =>
-      _token.text.trim().isNotEmpty && _repo.text.trim().isNotEmpty;
-
-  void _connect() {
-    widget.onConnect(GitConfig(
-      provider: _provider,
-      host:
-          _host.text.trim().isEmpty ? _provider.defaultHost : _host.text.trim(),
-      token: _token.text.trim(),
-      repo: _repo.text.trim(),
-      branch: _branch.text.trim().isEmpty ? null : _branch.text.trim(),
-      allowWrites: _allowWrites,
-    ));
-    Navigator.pop(context);
-  }
-
-  Widget _field(
-      TextEditingController ctrl, String label, String hint, NymColors c,
-      {bool obscure = false}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(color: c.textDim, fontSize: 12)),
-        const SizedBox(height: 4),
-        TextField(
-          controller: ctrl,
-          obscureText: obscure,
-          style: TextStyle(color: c.inputText, fontSize: 14),
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: TextStyle(color: c.textDim),
-            isDense: true,
-            filled: true,
-            fillColor: c.bgTertiary,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: c.border),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: c.border),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

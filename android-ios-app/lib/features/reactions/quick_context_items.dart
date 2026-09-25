@@ -10,6 +10,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
+import '../../widgets/context_menu/report_modal.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../i18n/i18n.dart';
 import 'quick_react_popup.dart';
@@ -130,7 +131,44 @@ List<QuickContextItem> buildQuickContextItems(
     ));
   }
 
+  if (!isSelf && pubkey.isNotEmpty) {
+    items.add(QuickContextItem(
+      label: tr('Report'),
+      svg: ctxActionSvg(CtxAction.report),
+      color: QuickContextItemColor.report,
+      onTap: () => _report(context, ref, message, fullNym),
+    ));
+    items.add(QuickContextItem(
+      label: app.isUserBlocked(pubkey) ? tr('Unblock User') : tr('Block User'),
+      svg: ctxActionSvg(CtxAction.block),
+      color: QuickContextItemColor.danger,
+      onTap: () => controller.toggleBlockUser(pubkey),
+    ));
+  }
+
   return items;
+}
+
+Future<void> _report(
+  BuildContext context,
+  WidgetRef ref,
+  Message message,
+  String fullNym,
+) async {
+  final controller = ref.read(nostrControllerProvider);
+  await ReportModal.show(
+    context,
+    targetNym: fullNym,
+    hasMessage: message.id.isNotEmpty,
+    onSubmit: (type, details, reportMessage) {
+      controller.submitReport(
+        pubkey: message.pubkey,
+        messageId: reportMessage ? message.id : null,
+        type: type,
+        details: details,
+      );
+    },
+  );
 }
 
 Future<void> _zap(

@@ -8,9 +8,9 @@ import 'package:flutter/services.dart';
 /// can notice, while suspended, that something arrived.
 ///
 /// iOS suspends a backgrounded app within seconds and will not wake it for
-/// network data — that is what APNs exists for, and Nymchat deliberately has no
-/// APNs registration, because a push provider would learn who is messaging
-/// whom. `BGTaskScheduler` is the alternative the system does offer: it grants
+/// network data — that is what APNs exists for, and Nymchat uses APNs only for
+/// a content-free heartbeat sent to every device alike, because a push per
+/// message would tell the provider who is messaging whom. `BGTaskScheduler` is the alternative the system does offer: it grants
 /// the app a short run at a time of ITS choosing, typically minutes to hours
 /// after the fact and influenced by how often the user opens the app. That is
 /// not real-time and cannot be made so; it turns "nothing until you next open
@@ -24,13 +24,17 @@ import 'package:flutter/services.dart';
 /// finished. Every call self-guards, so a platform without the native half
 /// (Android, tests, desktop) simply does nothing.
 class BackgroundRefreshService {
-  BackgroundRefreshService({MethodChannel? channel})
-      : _channel = channel ?? const MethodChannel(channelName);
+  BackgroundRefreshService({MethodChannel? channel, bool? supported})
+      : _channel = channel ?? const MethodChannel(channelName),
+        _supported = supported ?? isSupported;
 
   /// Shared with `AppDelegate.swift`.
   static const String channelName = 'app.nymchat/background_refresh';
 
   final MethodChannel _channel;
+  final bool _supported;
+
+  static const Duration runBudget = Duration(seconds: 23);
 
   /// Only iOS schedules background refreshes.
   static bool get isSupported {
@@ -50,17 +54,20 @@ class BackgroundRefreshService {
   /// reporting the task complete, so it must finish promptly — iOS kills the
   /// app if a task overruns its budget, and repeatedly overrunning teaches the
   /// scheduler to grant fewer windows.
-  void start(Future<void> Function() onRefresh) {
-    if (!isSupported || _started) return;
+  void start(
+    Future<bool> Function() onRefresh, {
+    Duration budget = runBudget,
+  }) {
+    if (!_supported || _started) return;
     _started = true;
     _channel.setMethodCallHandler((call) async {
       if (call.method != 'runRefresh') return null;
       try {
-        await onRefresh();
+        return await onRefresh().timeout(budget);
       } catch (e) {
-        debugPrint('[BackgroundRefresh] catch-up failed: $e');
+        debugPrint('[BackgroundRefresh] catch-up failed: ${e.runtimeType}');
+        throw PlatformException(code: 'failed');
       }
-      return null;
     });
   }
 
@@ -73,7 +80,7 @@ class BackgroundRefreshService {
   Future<void> schedule({
     Duration earliest = const Duration(minutes: 15),
   }) async {
-    if (!isSupported) return;
+    if (!_supported) return;
     try {
       await _channel.invokeMethod<void>('schedule', {
         'earliestSeconds': earliest.inSeconds,
@@ -88,7 +95,7 @@ class BackgroundRefreshService {
   /// Drops any pending request — used when notifications are turned off, so the
   /// app stops asking for windows it has no use for.
   Future<void> cancel() async {
-    if (!isSupported) return;
+    if (!_supported) return;
     try {
       await _channel.invokeMethod<void>('cancel');
     } on MissingPluginException {

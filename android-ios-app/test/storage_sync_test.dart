@@ -610,20 +610,18 @@ void main() {
     });
 
     test('batches at most 100 pubkeys per request', () async {
-      List<dynamic>? sentPubkeys;
+      final batches = <List<dynamic>>[];
       final sync = _syncWith(
-        (b) => sentPubkeys = b['pubkeys'] as List<dynamic>,
+        (b) => batches.add(b['pubkeys'] as List<dynamic>),
         respond: (_) => (200, '', {'Content-Type': 'application/x-ndjson'}),
       );
-      // 150 distinct valid hex pubkeys; only the first 100 go in the batch
-      // (PWA `toFetch.slice(0, 100)`, nostr-core.js:236).
       final many = List<String>.generate(
         150,
         (i) => i.toRadixString(16).padLeft(64, '0'),
       );
       await sync.profileGet(many);
-      expect(sentPubkeys, isNotNull);
-      expect(sentPubkeys!.length, 100);
+      expect(batches.map((b) => b.length).toList(), [100, 50]);
+      expect(batches.expand((b) => b).toSet().length, 150);
     });
 
     test('profile-set mirrors the signed kind-0 with auth', () async {

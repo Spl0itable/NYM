@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+
+import '../../services/attest/attest_badge.dart';
 import 'package:flutter/services.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,6 +41,9 @@ import '../translate/auto_translate.dart' show autoTranslateTargetFor;
 import '../messages/format/message_content.dart' show InlineEmojiText;
 import '../identity/modal_chrome.dart';
 import '../identity/vault_settings_modal.dart';
+import '../identity/key_backup/key_backup_actions.dart';
+import '../identity/key_backup/key_backup_store.dart';
+import '../identity/nick_edit_modal.dart';
 import '../../widgets/wallpaper/wallpaper_cache.dart';
 import '../../services/filter/filter_packs.dart';
 import 'settings_helpers.dart';
@@ -577,6 +582,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   // --- Chrome ---------------------------------------------------------------
+
+  String _attestReadout() {
+    final attest = ref.read(nostrControllerProvider).attest;
+    final tier = attest?.tier;
+    final lines = <String>[
+      switch (tier) {
+        AttestTier.attested => tr('Badge: attested (hardware proof)'),
+        AttestTier.challenged => tr('Badge: challenged (proof of work)'),
+        AttestTier.origin => tr('Badge: origin'),
+        null => tr('Badge: none'),
+      },
+    ];
+    final refused = attest?.lastPlatformRefusal;
+    if (refused != null) {
+      lines.add(tr('Platform proof refused: {reason}', {'reason': refused}));
+    }
+    final err = attest?.lastError;
+    if (err != null) {
+      lines.add(tr('Last enrollment failed: {reason}', {'reason': err}));
+    } else if (attest?.lastAttemptAt == null && tier == null) {
+      lines.add(tr('Enrollment has not run yet'));
+    }
+    return lines.join('\n');
+  }
 
   Widget _header(NymColors c) {
     // `.modal-header`: a full-width title with a 1px glass bottom rule
@@ -1598,6 +1627,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: 'friends', label: tr('Disabled (for friends only)')),
       (value: 'false', label: tr('Disabled (show all images)')),
     ];
+    final canBackUpKey = canShowKeyBackup(ref);
+    final backupHint = '${keyBackupHint(passkeyOnly: ref.watch(keyBackupStoresProvider).isEmpty)} '
+        '${tr('The backup options are in View or Edit Nym\u2019s Details, '
+            'beside your private key and recovery code.')}';
     return [
       _GroupSpec(
         text: tr('Identity Encryption Encrypt identity (nsec) key on this '
@@ -1621,6 +1654,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
+      if (canBackUpKey)
+        _GroupSpec(
+          text: '${tr('Cloud Key Backup')} $backupHint',
+          child: FormGroup(
+            label: tr('Cloud Key Backup'),
+            hint: backupHint,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: NymOutlineButton(
+                key: const Key('keyBackupOpenDetails'),
+                label: tr("View or Edit Nym's Details"),
+                onPressed: () => NickEditModal.open(context),
+              ),
+            ),
+          ),
+        ),
       // The hidden hardcore warning is part of the group's textContent even
       // when collapsed away in the PWA, so it's always searchable.
       _GroupSpec(
@@ -1693,6 +1742,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: _draftVerified,
             items: verifiedItems,
             onChanged: (v) => setState(() => _draftVerified = v),
+          ),
+        ),
+      ),
+      _GroupSpec(
+        text: tr('This Device {status} What this install proved to the '
+            'attestation service. Other people running the filter above see '
+            'your messages only when a badge is here.',
+            {'status': _attestReadout()}),
+        child: FormGroup(
+          label: tr('This Device'),
+          hint: tr('What this install proved to the attestation service. '
+              'Other people running the filter above see your messages only '
+              'when a badge is here.'),
+          child: Text(
+            _attestReadout(),
+            style: TextStyle(color: context.nym.textDim, fontSize: 12),
           ),
         ),
       ),
@@ -2816,8 +2881,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'connections and the Bluetooth mesh running while the app is in '
               'the background, so messages arrive without reopening it. Uses more '
               'battery and data. Android shows a permanent notification while it '
-              'is on; iOS limits how long connections can be held and, with '
-              'identity encryption on, catches up only while the device has '
+              'is on; iOS limits how long connections can be held, wakes the app '
+              'about every 20 minutes with an empty push every device gets '
+              'alike, and, with identity encryption on, catches up only while the device has '
               'been unlocked at least once since it was powered on.'),
           child: FormGroup(
             label: tr('Stay Connected in Background'),
@@ -2825,7 +2891,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'while the app is in the background, so messages arrive '
                 'without reopening it. Uses more battery and data. Android shows a '
                 'permanent notification while it is on; iOS limits how long '
-                'connections can be held and, with identity encryption on, '
+                'connections can be held, wakes the app about every 20 '
+                'minutes with an empty push every device gets alike, and, '
+                'with identity encryption on, '
                 'catches up only while the device has been unlocked at least '
                 'once since it was powered on.'),
             // Save-gated like its Data & Backup siblings (09-M1): the platform
@@ -3947,7 +4015,9 @@ class _PqDiagnosticsState extends ConsumerState<_PqDiagnostics> {
     final text = _text;
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
+      child: Material(
+        type: MaterialType.transparency,
+        child: ExpansionTile(
         tilePadding: EdgeInsets.zero,
         childrenPadding: EdgeInsets.zero,
         title: Text(tr('Post-quantum diagnostics'),
@@ -3982,6 +4052,7 @@ class _PqDiagnosticsState extends ConsumerState<_PqDiagnostics> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

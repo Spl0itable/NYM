@@ -335,7 +335,8 @@ void main() {
       final container = ProviderContainer();
       addTearDown(container.dispose);
       final notifier = container.read(appStateProvider.notifier)
-        ..goLive('selfpk', 'me#0001');
+        ..goLive('selfpk', 'me#0001')
+        ..setProxyMode(false);
       // Interior-caps gibberish handle. setUserPresence appends a #suffix
       // (getNymFromPubkey), so the stored nym is `aAbBcCdDeE#beef`; the provider
       // strips the suffix before the gibberish check (the PWA stores the bare

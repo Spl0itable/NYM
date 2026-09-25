@@ -14,6 +14,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/mesh/mesh_controller.dart';
+import '../../features/messages/inline_network_image.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/zaps/zap_modal.dart';
@@ -534,16 +535,25 @@ class ContextMenuPanel extends ConsumerWidget {
               child: _ExpandableProfileImage(
                 imageUrl: bannerUrl,
                 onClose: onClose,
-                child: CachedNetworkImage(
-                  imageUrl: bannerUrl,
-                  fit: BoxFit.cover,
-                  // Profile banners are frequently multi-MB photos; decode at
-                  // the ~menu-width 140px strip (the fullscreen expand loads
-                  // its own full-res copy).
-                  memCacheWidth:
-                      (480 * MediaQuery.devicePixelRatioOf(context)).ceil(),
-                  errorWidget: (_, __, ___) => const SizedBox.shrink(),
-                ),
+                child: isAssetImageUrl(bannerUrl)
+                    ? Image.asset(
+                        bannerUrl,
+                        fit: BoxFit.cover,
+                        cacheWidth:
+                            (480 * MediaQuery.devicePixelRatioOf(context))
+                                .ceil(),
+                      )
+                    : CachedNetworkImage(
+                        imageUrl: bannerUrl,
+                        fit: BoxFit.cover,
+                        // Profile banners are frequently multi-MB photos;
+                        // decode at the ~menu-width 140px strip (the
+                        // fullscreen expand loads its own full-res copy).
+                        memCacheWidth:
+                            (480 * MediaQuery.devicePixelRatioOf(context))
+                                .ceil(),
+                        errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                      ),
               ),
             ),
             bannerHeader,
@@ -1281,11 +1291,13 @@ class _ProfileImageViewer extends StatelessWidget {
             child: InteractiveViewer(
               minScale: 1,
               maxScale: 4,
-              child: CachedNetworkImage(
-                imageUrl: url,
-                fit: BoxFit.contain,
-                errorWidget: (_, __, ___) => const SizedBox.shrink(),
-              ),
+              child: isAssetImageUrl(url)
+                  ? Image.asset(url, fit: BoxFit.contain)
+                  : CachedNetworkImage(
+                      imageUrl: url,
+                      fit: BoxFit.contain,
+                      errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                    ),
             ),
           ),
           Positioned(

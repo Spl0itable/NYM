@@ -26,11 +26,11 @@ import '../../../state/nostr_controller.dart';
 import '../../../state/settings_provider.dart';
 import '../../../widgets/chat/messages_list.dart'
     show MessageListScroller, messageListScrollerProvider;
-import '../../../widgets/common/app_dialog.dart';
 import '../../../widgets/common/nym_avatar.dart';
 import '../../../widgets/context_menu/context_menu_actions.dart';
 import '../../../widgets/context_menu/context_menu_panel.dart';
 import '../../commands/command_handler.dart' show resolveTarget;
+import '../../groups/group_invite_confirm.dart';
 import '../../i18n/i18n.dart';
 import '../../nymbot/nymbot_threads.dart' show threadChainFor;
 import '../../shop/cosmetics.dart';
@@ -60,8 +60,7 @@ String proxiedMedia(String url, {bool emoji = false}) {
   final lower = url.toLowerCase();
   if (lower.startsWith('data:') || lower.startsWith('blob:')) return url;
   if (!lower.startsWith('http://') && !lower.startsWith('https://')) return url;
-  // Already proxied (e.g. nym_format pre-proxied via proxyBase) — leave as-is.
-  if (url.contains('/api/proxy?')) return url;
+  if (isOwnMediaUrl(url)) return url;
   return _proxyApi.mediaProxyUrl(url, emoji: emoji);
 }
 
@@ -911,13 +910,7 @@ class _InviteChip extends ConsumerWidget {
     final parsed = parseGroupInvite(token);
     if (parsed == null) return;
     final controller = ref.read(nostrControllerProvider);
-    final ok = await showAppConfirm(
-      context,
-      tr('Join "{name}"? A join request will be sent to a group member.',
-          {'name': name}),
-      title: tr('Join Group'),
-      okLabel: tr('Join'),
-    );
+    final ok = await confirmGroupInviteJoin(context, parsed);
     if (!ok) return;
     await controller.joinGroupViaInvite(parsed);
   }
@@ -3387,7 +3380,8 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
                       // that wants native pixels.
                       child: CachedNetworkImage(
                         imageUrl: proxiedMedia(widget.urls[_index]),
-                        httpHeaders: InlineNetworkImage.imageFetchHeaders,
+                        httpHeaders: InlineNetworkImage.imageHeadersFor(
+                            proxiedMedia(widget.urls[_index])),
                         fit: BoxFit.contain,
                         errorWidget: (_, __, ___) => const Icon(
                             Icons.broken_image,

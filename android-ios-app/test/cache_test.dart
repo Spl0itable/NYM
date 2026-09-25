@@ -52,7 +52,7 @@ void main() {
       final loaded = await store.loadChannelMessages('#nymchat');
       expect(loaded.length, 3);
       expect(loaded.map((m) => m.id), ['a', 'b', 'c']);
-      expect(loaded[1].createdAt, _base + 20);
+      expect(loaded[1].createdAt, msgs[1].createdAt);
       expect(loaded[2].content, 'body c');
       await store.close();
     });

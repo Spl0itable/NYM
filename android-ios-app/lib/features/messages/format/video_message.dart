@@ -20,14 +20,15 @@ import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
 import '../../i18n/i18n.dart';
 import '../../../core/utils/safe_url.dart';
+import 'media_source.dart';
+import 'message_content.dart' show proxiedMedia;
 
 /// `--radius-sm` (`styles-core.css:87`).
 const double _kVideoRadius = 12;
 
 /// An inline, tap-to-play video tile backed by [VideoPlayerController].
 ///
-/// [url] should already be a directly-playable media URL (the formatter proxies
-/// it). [maxSize] caps both dimensions (300 for a single video, 220 for a gallery
+/// [maxSize] caps both dimensions (300 for a single video, 220 for a gallery
 /// cell). Pass [borderRadius] to override the default `--radius-sm` (gallery cells
 /// pass `BorderRadius.zero` and let the grid clip). [bordered] draws the 1px glass
 /// border for the single-video case.
@@ -43,7 +44,7 @@ class VideoMessage extends StatefulWidget {
 
   final String url;
 
-  /// NIP-92 imeta Blossom mirror URLs (already proxied, like [url]) to fall
+  /// NIP-92 imeta Blossom mirror URLs to fall
   /// back to when the primary source fails. Mirrors the PWA's
   /// `_attachMediaFallbacks` video handler (messages.js:1165-1186), which swaps
   /// the `<source>` src to the next `data-media-fallbacks` mirror on `error`
@@ -91,41 +92,44 @@ class _VideoMessageState extends State<VideoMessage> {
   Future<void> _start() async {
     if (_initializing || _controller != null) return;
     setState(() => _initializing = true);
-    // Walk the primary URL then each NIP-92 imeta mirror until one initializes
-    // — the PWA's `_attachMediaFallbacks` `tryNext` (messages.js:1165-1186)
-    // swaps the `<source>` src to the next mirror on `error` and re-loads.
-    for (final candidate in [widget.url, ...widget.fallbackUrls]) {
-      final uri = Uri.tryParse(candidate);
-      if (uri == null) continue;
-      _activeUrl = candidate;
-      final controller = VideoPlayerController.networkUrl(uri);
-      try {
-        await controller.initialize();
-        controller.addListener(_onValue);
-        if (!mounted) {
-          await controller.dispose();
-          return;
-        }
-        setState(() {
-          _controller = controller;
-          _initializing = false;
-        });
-        await controller.play();
-        return;
-      } catch (_) {
-        await controller.dispose();
-        if (!mounted) return;
-      }
-    }
-    if (!mounted) return;
+    final opened = await openMediaSource(
+      [widget.url, ...widget.fallbackUrls],
+      _tryOpen,
+    );
+    if (opened != null || !mounted) return;
     setState(() {
       _initializing = false;
       _failed = true;
     });
   }
 
+  Future<bool> _tryOpen(String candidate) async {
+    final uri = Uri.tryParse(candidate);
+    if (!mounted) return true;
+    if (uri == null) return false;
+    _activeUrl = candidate;
+    final controller = VideoPlayerController.networkUrl(uri);
+    try {
+      await controller.initialize();
+    } catch (_) {
+      await controller.dispose();
+      return false;
+    }
+    if (!mounted) {
+      await controller.dispose();
+      return true;
+    }
+    controller.addListener(_onValue);
+    setState(() {
+      _controller = controller;
+      _initializing = false;
+    });
+    await controller.play();
+    return true;
+  }
+
   Future<void> _openExternally() async {
-    await launchSafeUrl(_activeUrl ?? widget.url);
+    await launchSafeUrl(_activeUrl ?? proxiedMedia(widget.url));
   }
 
   void _togglePlayback() {

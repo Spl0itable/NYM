@@ -6,7 +6,7 @@
 /// `pmMessages` (pms.js:1291-1339) — so the bot thread renders through the same
 /// message pipeline as every other PM (sidebar row, unread counts, receipts,
 /// reactions, system messages, typing indicator). [BotChatController] is the
-/// port of the PWA's `_handleBotPM` / `_handleBotGitCommand` /
+/// port of the PWA's `_handleBotPM` /
 /// `_handleBotModelCommand` / `_handleBotTransferCommand` engine (pms.js).
 library;
 
@@ -17,8 +17,10 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/constants/event_kinds.dart';
 import '../../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../../core/crypto/gift_wrap.dart' as giftwrap;
+import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../models/nostr_event.dart';
@@ -77,11 +79,10 @@ String stripNymbotMention(String text) =>
 bool _isSpace(String ch) => ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 
 /// The bot-PM control commands that are handled entirely ON-DEVICE — they are
-/// never encrypted, published to relays, shown as message bubbles, or stored
-/// (`?git` can carry an access token). A 1:1 port of the interception regex in
-/// the PWA's `sendPM` (pms.js:1584-1591).
+/// never encrypted, published to relays, shown as message bubbles, or stored.
+/// A 1:1 port of the interception regex in the PWA's `sendPM`.
 final RegExp botPMCommandRe = RegExp(
-    r'^\s*\?(github|git|help|commands|balance|buy|clear|transfer|gift|model|anon)\b',
+    r'^\s*\?(help|commands|balance|buy|clear|transfer|gift|model|anon|git|github)\b',
     caseSensitive: false);
 
 // =============================================================================
@@ -146,7 +147,6 @@ final botAnonRequestProvider =
 class BotChatState {
   const BotChatState({
     this.proModel,
-    this.git,
     this.balance = BotBalance.empty,
     this.balanceKnown = false,
     this.balanceUnavailable = false,
@@ -159,9 +159,6 @@ class BotChatState {
 
   /// The pinned Pro model (`?model <name>`), or null for standard routing.
   final ProModel? proModel;
-
-  /// Connected git provider config (`?git`), or null when never configured.
-  final GitConfig? git;
 
   final BotBalance balance;
 
@@ -197,7 +194,6 @@ class BotChatState {
 
   BotChatState copyWith({
     Object? proModel = _sentinel,
-    Object? git = _sentinel,
     BotBalance? balance,
     bool? balanceKnown,
     bool? balanceUnavailable,
@@ -211,7 +207,6 @@ class BotChatState {
         proModel: identical(proModel, _sentinel)
             ? this.proModel
             : proModel as ProModel?,
-        git: identical(git, _sentinel) ? this.git : git as GitConfig?,
         balance: balance ?? this.balance,
         balanceKnown: balanceKnown ?? this.balanceKnown,
         balanceUnavailable: balanceUnavailable ?? this.balanceUnavailable,
@@ -229,9 +224,7 @@ class BotChatState {
 
 /// Engine for the private Nymbot chat — the native `_handleBotPM` (pms.js:2393).
 ///
-/// Owns the pinned Pro model, the git config (PAT on-device only, persisted in
-/// prefs like the PWA's `nym_botpm_git` localStorage blob), the credit balance,
-/// and the command/reply flows. Messages are read from / written into the
+/// Owns the pinned Pro model, the credit balance, and the command/reply flows. Messages are read from / written into the
 /// canonical PM store so the conversation persists in shared state, surfaces in
 /// the sidebar, and renders through the canonical chat widgets.
 ///
@@ -304,7 +297,6 @@ class BotChatController extends StateNotifier<BotChatState> {
   // --- Persistence (the PWA's nym_botpm_* localStorage keys) ----------------
 
   static const _kProModelPref = 'nym_botpm_pro_model';
-  static const _kGitPref = 'nym_botpm_git';
   static const _kClearedAtPref = 'nym_botpm_cleared_at';
   static const _kWelcomedPref = 'nym_botpm_welcomed';
   static const _kAnonPref = 'nym_botanon_enabled';
@@ -323,14 +315,6 @@ class BotChatController extends StateNotifier<BotChatState> {
       // Unknown for now: hold the key so the listener above can resolve it
       // once the live catalog loads.
       _pendingModelKey = (model == null && modelKey.isNotEmpty) ? modelKey : '';
-      GitConfig? git;
-      final rawGit = p.getString(_kGitPref);
-      if (rawGit != null && rawGit.isNotEmpty) {
-        try {
-          git = GitConfig.fromJson(
-              (jsonDecode(rawGit) as Map).cast<String, dynamic>());
-        } catch (_) {}
-      }
       final clearedAt = int.tryParse(p.getString(_kClearedAtPref) ?? '') ?? 0;
       if (p.getString(_kAnonPref) == 'true') anon.setEnabled(true);
       // Monotonic: a synced remote marker ([applySyncedMarkers]) may have
@@ -338,7 +322,6 @@ class BotChatController extends StateNotifier<BotChatState> {
       // value.
       state = state.copyWith(
           proModel: model,
-          git: git,
           clearedAtSec:
               clearedAt > state.clearedAtSec ? clearedAt : state.clearedAtSec);
       // A cache restore may have landed before the watermark hydrated — drop
@@ -369,12 +352,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     unawaited(_prefs.then((p) => model == null
         ? p.remove(_kProModelPref)
         : p.setString(_kProModelPref, model.key)));
-  }
-
-  void _persistGit(GitConfig? git) {
-    unawaited(_prefs.then((p) => git == null
-        ? p.remove(_kGitPref)
-        : p.setString(_kGitPref, jsonEncode(git.toJson()))));
   }
 
   void _setClearedAt(int sec) {
@@ -714,7 +691,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       // A non-empty conversation re-renders exclusively from the persisted
       // store on every open (`loadPMMessages`, pms.js:3040-3086) — all
       // transient `_displayBotInfoMessage` DOM (welcome, `?help` guide,
-      // `?balance`/`?git` cards) is dropped on a conversation switch.
+      // `?balance` cards) is dropped on a conversation switch.
       if (state.infoMessages.isNotEmpty) {
         state = state.copyWith(infoMessages: const <Message>[]);
       }
@@ -786,24 +763,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     _persistProModel(model);
   }
 
-  /// Connects a git repo (the premium connect modal). The PAT lives only in
-  /// [GitConfig.token] + prefs here — wiped by [wipeOnPanic].
-  void connectGit(GitConfig config) {
-    state = state.copyWith(git: config);
-    _persistGit(config);
-  }
-
-  void disconnectGit() {
-    state = state.copyWith(git: null);
-    _persistGit(null);
-  }
-
-  /// Panic Mode hook: wipe the on-device PAT + git config.
-  void wipeOnPanic() {
-    state = state.copyWith(git: null);
-    _persistGit(null);
-  }
-
   void setBalance(BotBalance b) => state =
       state.copyWith(balance: b, balanceKnown: true, balanceUnavailable: false);
 
@@ -836,6 +795,11 @@ class BotChatController extends StateNotifier<BotChatState> {
       handleModelCommand(trimmed);
       return;
     }
+    if (RegExp(r'^\?(git|github)\b', caseSensitive: false).hasMatch(trimmed)) {
+      _system('Repositories are in the Nymbot apps, not in Nymchat. Nothing '
+          'you typed after ?git was sent. Connect a repository at nymbot.ai.');
+      return;
+    }
     if (RegExp(r'^\?anon\b', caseSensitive: false).hasMatch(trimmed)) {
       _ref.read(botAnonRequestProvider.notifier).request();
       return;
@@ -850,10 +814,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     if (RegExp(r'^\?gift\b', caseSensitive: false).hasMatch(trimmed)) {
       _handleGiftCommand(trimmed);
-      return;
-    }
-    if (RegExp(r'^\?(github|git)\b', caseSensitive: false).hasMatch(trimmed)) {
-      await handleGitCommand(trimmed);
       return;
     }
   }
@@ -1063,6 +1023,12 @@ class BotChatController extends StateNotifier<BotChatState> {
     return null;
   }
 
+  static bool fromBot(NostrEvent seal, Map<String, dynamic> rumor) =>
+      seal.kind == EventKind.seal &&
+      seal.pubkey == kNymbotPubkey &&
+      rumor['pubkey'] == seal.pubkey &&
+      schnorr.verifyEvent(seal);
+
   List<giftwrap.UnwrapCandidate> anonUnwrapCandidates(NostrEvent wrap) {
     String? pTag;
     for (final t in wrap.tags) {
@@ -1109,6 +1075,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       final unwrapped = await giftwrap.unwrapGiftWrap(wrap, candidates);
       if (unwrapped == null || !mounted) return;
       final rumor = unwrapped.rumor;
+      if (!fromBot(unwrapped.seal, rumor)) return;
       final msg = PmLogic.mapPmRumor(
         rumor: rumor,
         wrapId: wrap.id,
@@ -1188,7 +1155,6 @@ class BotChatController extends StateNotifier<BotChatState> {
       // (pms.js:2450 `isFresh`); the published wrap keeps the full text.
       final fresh = RegExp(r'^\s*!\s*\S').hasMatch(m.content);
       final pro = state.proModel;
-      final git = state.git;
       Map<String, dynamic>? pqAnnouncement;
       if (anonId != null) {
         pqAnnouncement = anon.announcement();
@@ -1209,9 +1175,6 @@ class BotChatController extends StateNotifier<BotChatState> {
         auth: () => anonId != null ? anon.authFor('pm') : _authFor('pm'),
         proModel: pro?.key,
         fresh: fresh,
-        // Repo mode rides only on Pro replies with a connected repo
-        // (pms.js:2455-2466).
-        git: (pro != null && git != null && git.hasRepo) ? git : null,
         cmdAlias: commandAliasHint(m.content),
         pqAnnouncement: pqAnnouncement,
       );
@@ -1244,12 +1207,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         // Cost notices for heavy replies (pms.js:2499-2512).
         final cost = (data['costCredits'] as num?)?.toDouble()
             ?? (data['cost'] as num?)?.toDouble() ?? 0;
-        if (data['git'] == true && cost > 0) {
-          final calls = (data['modelCalls'] as num?)?.toInt() ?? 0;
-          _system('Repo task used ${creditFigure(cost)} Pro credit${cost == 1 ? '' : 's'}'
-              '${calls > 1 ? ' ($calls model calls)' : ''}. '
-              'Pro balance: ${creditFigure(balance)}.');
-        } else if (isPro && cost > 0) {
+        if (isPro && cost > 0) {
           final sel = state.proModel;
           if (sel != null && cost > sel.baseCredits) {
             _system('Long reply used ${creditFigure(cost)} Pro credits. '
@@ -1558,7 +1516,6 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   void _displayBotPmHelp() {
     final proModel = state.proModel;
-    final git = state.git;
     // ?help lists a sample rather than the whole live catalog, which can run
     // to dozens of models.
     final allModels = _catalog.models;
@@ -1578,10 +1535,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     statusBits.add(proModel != null
         ? 'Pro model: ${proModel.label}'
         : 'Pro model: off (standard routing)');
-    if (git != null && git.hasRepo) {
-      statusBits.add(
-          'repo: ${git.repo}${git.allowWrites ? ' (writes on)' : ' (read-only)'}');
-    }
     _displayBotInfoMessage(
         [
           '**📖 Nymbot premium guide**',
@@ -1596,16 +1549,11 @@ class BotChatController extends StateNotifier<BotChatState> {
           ...modelLines,
           'Pick with `?model <name>` (e.g. `?model claude-opus`), back to standard with `?model off`. Buy Pro credits via `?buy` → Pro switch.',
           '',
-          '**3. Git repos (Pro)**',
-          'Connect a repository — GitHub, GitLab, or Gitea/Forgejo (incl. Codeberg & self-hosted) — and Pro replies become a coding agent over your real code: it lists, reads, and searches files, and with writes enabled it commits to a branch (or directly) and opens pull/merge requests.',
-          'Setup: `?git provider github|gitlab|gitea [host]` → `?git token <pat>` → `?git repos` → `?git repo owner/name [branch]` → optionally `?git writes on`. Type `?git` anytime for status.',
-          "Repo tasks use up to 6 model calls, each at the model's Pro credit price — only calls actually used are charged. Your token stays on this device, is never published to relays, and is never stored server-side.",
-          '',
-          '**4. Credits**',
+          '**3. Credits**',
           '`?balance` shows both balances · `?buy` purchases over Lightning (Standard/Pro switch) · `?gift @nym#xxxx` gifts credits · `?transfer @nym#xxxx confirm` moves your ENTIRE balance (both pools) to another pubkey.',
           'Credits are tied to your nym — save your nsec (sidebar → your nym → Reveal private key) so they survive a new session.',
           '',
-          '**5. Chat tricks**',
+          '**4. Chat tricks**',
           'Start a message with `!` for a one-off answer that ignores history · `?clear` wipes the conversation · quote-reply any message to ask a follow-up about it.',
           '',
           'This guide is free — type `?help` anytime.',
@@ -1745,231 +1693,6 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
     }
     return null;
-  }
-
-  // --- ?git (pms.js `_handleBotGitCommand`, :2224-2348) -----------------------
-
-  Future<void> handleGitCommand(String trimmed) async {
-    final parts = trimmed
-        .replaceFirst(RegExp(r'^\?(github|git)\b', caseSensitive: false), '')
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((p) => p.isNotEmpty)
-        .toList();
-    final cmd = (parts.isNotEmpty ? parts[0] : 'status').toLowerCase();
-    var cfg = state.git ??
-        const GitConfig(provider: GitProvider.github, host: 'github.com');
-    final provInfo = cfg.provider;
-
-    if (cmd == 'provider') {
-      final name = (parts.length > 1 ? parts[1] : '').toLowerCase();
-      GitProvider? provider;
-      for (final p in GitProvider.values) {
-        if (p.wire == name) provider = p;
-      }
-      if (provider == null) {
-        _system('Usage: ?git provider github|gitlab|gitea [host] — e.g. '
-            '?git provider gitlab, ?git provider gitea codeberg.org, or a '
-            'self-hosted domain like ?git provider gitlab git.mycompany.com. '
-            'Switching providers clears the saved token and repo.');
-        return;
-      }
-      var host = (parts.length > 2 ? parts[2] : '').toLowerCase();
-      if (host.isEmpty) host = provider.defaultHost;
-      if (!RegExp(r'^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$').hasMatch(host)) {
-        _system('Invalid host name.');
-        return;
-      }
-      // Switching providers clears the saved token and repo (fresh config).
-      connectGit(GitConfig(provider: provider, host: host));
-      _system('Provider set to ${provider.label} at $host. Now add a token: '
-          '?git token <${provider.tokenHint.split(' (').first}>.');
-      return;
-    }
-
-    if (cmd == 'token') {
-      final token = parts.length > 1 ? parts[1] : '';
-      if (!NymbotService.gitTokenValid(cfg, token)) {
-        _system("That doesn't look like a valid ${provInfo.label} token. "
-            'Create a ${provInfo.tokenHint} scoped to just the repos you want '
-            'Nymbot to use, then run ?git token <token>.');
-        return;
-      }
-      cfg = cfg.copyWith(token: token, login: null);
-      connectGit(cfg);
-      final who = await _service.gitApi(cfg, NymbotService.gitUserPath());
-      final login = NymbotService.gitUserLogin(cfg, who.data);
-      if (who.ok && login.isNotEmpty) {
-        cfg = cfg.copyWith(login: login);
-        connectGit(cfg);
-        _system('${provInfo.label} token saved for @$login (stored only on '
-            'this device). Next: ?git repos to list repos, then '
-            '?git repo owner/name.');
-      } else {
-        _system('${provInfo.label} token saved, but it could not be verified'
-            '${who.status != 0 ? ' (HTTP ${who.status})' : ''}. Check that '
-            "it's valid and has repo access.");
-      }
-      return;
-    }
-
-    if (cmd == 'repos') {
-      if (!cfg.hasToken) {
-        _system(
-            'No ${provInfo.label} token yet — run ?git token <token> first.');
-        return;
-      }
-      final res = await _service.gitApi(cfg, NymbotService.gitReposPath(cfg));
-      final data = res.data;
-      if (!res.ok || data is! List) {
-        _system('Could not list repos (HTTP '
-            '${res.status != 0 ? res.status : '?'}). Check the token with '
-            '?git status.');
-        return;
-      }
-      if (data.isEmpty) {
-        _system("The token can't see any repos. Grant it repository access "
-            'on ${provInfo.label}.');
-        return;
-      }
-      final lines = [
-        for (final r in data)
-          '• `${NymbotService.gitRepoFullName(cfg, r)}`'
-              '${(r is Map && (r['private'] == true || r['visibility'] == 'private')) ? ' 🔒' : ''}',
-      ];
-      _displayBotInfoMessage([
-        'Repos this token can access:',
-        ...lines,
-        'Select one with `?git repo owner/name [branch]`.',
-      ].join('\n'));
-      return;
-    }
-
-    if (cmd == 'repo') {
-      if (!cfg.hasToken) {
-        _system(
-            'No ${provInfo.label} token yet — run ?git token <token> first.');
-        return;
-      }
-      final repo = (parts.length > 1 ? parts[1] : '').trim();
-      if (!NymbotService.gitRepoRe(cfg).hasMatch(repo)) {
-        _system('Usage: ?git repo owner/name [branch] (run ?git repos to see '
-            'what the token can access).');
-        return;
-      }
-      final res =
-          await _service.gitApi(cfg, NymbotService.gitRepoPath(cfg, repo));
-      if (!res.ok || res.data == null) {
-        _system("Can't access $repo (HTTP "
-            "${res.status != 0 ? res.status : '?'}). Check the name and the "
-            "token's repo access.");
-        return;
-      }
-      final fullName = NymbotService.gitRepoFullName(cfg, res.data);
-      final branchArg = parts.length > 2 ? parts[2] : '';
-      final branchOk = branchArg.isNotEmpty &&
-          RegExp(r'^[\w./-]{1,100}$').hasMatch(branchArg);
-      cfg = cfg.copyWith(
-        repo: fullName.isNotEmpty ? fullName : repo,
-        branch: branchOk ? branchArg : null,
-      );
-      connectGit(cfg);
-      final defaultBranch =
-          (res.data is Map) ? (res.data as Map)['default_branch'] : null;
-      final branchLabel =
-          branchOk ? branchArg : '${defaultBranch ?? 'default'} (default)';
-      _system('Repo connected: ${cfg.repo} on branch $branchLabel, '
-          '${cfg.allowWrites ? 'writes enabled' : 'read-only'}. Every Pro '
-          'reply now works inside this repo.'
-          '${state.proModel == null ? ' ⚠ Pick a Pro model first with ?model — repo mode needs one.' : ''}');
-      return;
-    }
-
-    if (cmd == 'branch') {
-      if (!cfg.hasRepo) {
-        _system('Select a repo first: ?git repo owner/name.');
-        return;
-      }
-      final branch = (parts.length > 1 ? parts[1] : '').trim();
-      if (branch.isNotEmpty && !RegExp(r'^[\w./-]{1,100}$').hasMatch(branch)) {
-        _system('Invalid branch name.');
-        return;
-      }
-      cfg = cfg.copyWith(branch: branch.isEmpty ? null : branch);
-      connectGit(cfg);
-      _system(branch.isNotEmpty
-          ? 'Working branch set to $branch.'
-          : 'Working branch reset to the repo default.');
-      return;
-    }
-
-    if (cmd == 'writes') {
-      if (!cfg.hasRepo) {
-        _system('Select a repo first: ?git repo owner/name.');
-        return;
-      }
-      final arg = (parts.length > 1 ? parts[1] : '').toLowerCase();
-      if (arg != 'on' && arg != 'off') {
-        _system('Usage: ?git writes on or ?git writes off.');
-        return;
-      }
-      cfg = cfg.copyWith(allowWrites: arg == 'on');
-      connectGit(cfg);
-      _system(cfg.allowWrites
-          ? 'Writes enabled — Nymbot can now commit files, create branches, '
-              'and open pull/merge requests in the connected repo. Make sure '
-              'the token has content and pull-request write access.'
-          : 'Writes disabled — Nymbot is back to read-only repo access.');
-      return;
-    }
-
-    if (cmd == 'off') {
-      cfg = cfg.copyWith(repo: '', branch: null, allowWrites: false);
-      if (cfg.hasToken) {
-        connectGit(cfg);
-      } else {
-        disconnectGit();
-      }
-      _system('Repo disconnected — Pro replies are back to normal chat. The '
-          'token is still saved; ?git disconnect removes it too.');
-      return;
-    }
-
-    if (cmd == 'disconnect') {
-      disconnectGit();
-      _system('Git provider disconnected — token and repo selection removed '
-          'from this device.');
-      return;
-    }
-
-    // Bare `?git` (or unknown subcommand) → the status card (pms.js:2339-2348).
-    final proModel = state.proModel;
-    _displayBotInfoMessage([
-      '**Nymbot × Git** — let Pro replies work inside one of your repos, '
-          'Claude Code-style: it reads your actual files and, if you allow '
-          'writes, commits to a branch (or directly) and opens pull/merge '
-          'requests. Supports GitHub, GitLab, and Gitea/Forgejo (incl. '
-          'Codeberg and self-hosted).',
-      'Provider: **${provInfo.label}** at '
-          '**${cfg.host.isNotEmpty ? cfg.host : provInfo.defaultHost}** — '
-          'change with `?git provider github|gitlab|gitea [host]`',
-      'Token: ${cfg.hasToken ? (cfg.login != null ? 'connected as **@${cfg.login}**' : 'saved') : 'not set — `?git token <token>` (${provInfo.tokenHint})'}',
-      'Repo: ${cfg.hasRepo ? '**${cfg.repo}**${cfg.branch != null && cfg.branch!.isNotEmpty ? ' @ ${cfg.branch}' : ''} (${cfg.allowWrites ? 'writes enabled' : 'read-only'})' : 'none — `?git repos` then `?git repo owner/name`'}',
-      'Pro model: ${proModel != null ? proModel.label : 'none — repo mode requires one (`?model`)'}',
-      '',
-      'Commands: `?git provider …` · `?git token <pat>` · `?git repos` · '
-          '`?git repo owner/name [branch]` · `?git branch [name]` · '
-          '`?git writes on|off` · `?git off` · `?git disconnect`',
-      'Pricing: repo tasks run as an agent with up to 6 model calls per '
-          'message${proModel != null ? ' (${proModel.label}: ${_price(proModel)} per call)' : ''} '
-          "— the worst case is reserved from your balance, but you're only "
-          'charged for the calls and reply length actually used.',
-      'Privacy: the token stays on this device (cleared by Panic Mode), is '
-          'sent only to the Nymbot worker with each repo message, and is '
-          'never stored server-side or published to relays. Use a token '
-          'scoped to just the repos you need — read-only unless you enable '
-          'writes.',
-    ].join('\n'));
   }
 
   // --- Purchases ----------------------------------------------------------------
@@ -2212,7 +1935,7 @@ const String botWelcomeText =
     "I'm smarter than the free public-channel bot. I read each message, figure out the type of task (coding, reasoning/math, creative writing, translation, or general chat) and route it to the best AI model for the job — so my answers are sharper.\n"
     '\n'
     "**Here's how to get the most out of me:**\n"
-    '• `?help` — full guide to premium vs Pro, the git repo integration, and every command (free).\n'
+    '• `?help` — full guide to premium vs Pro, credits, and every command (free).\n'
     '• Just type normally — I use our whole conversation as context.\n'
     '• Start a message with `!` to get a one-off answer that ignores all earlier chat history (e.g. `!what is 2+2`).\n'
     "• Quote-reply any message to ask a follow-up about it — I'll see what you're replying to.\n"
@@ -2223,7 +1946,6 @@ const String botWelcomeText =
     '• `?image <description>` — generate a picture. On Pro, add `--model <name>` to pick a frontier generator (Nano Banana Pro, Imagen 4, FLUX 2, Seedream, GPT Image 2, Grok Imagine, Recraft) — `?image models` lists them free.\n'
     '• `?speak <text>` — get it read aloud as a voice clip.\n'
     '• Send or link a picture — models that can see will look at the image itself, not just the link.\n'
-    '• `?git` — connect a git repo (GitHub, GitLab, Gitea/Codeberg) so Pro replies read your actual code and can even commit, branch, and open PRs — like a chat-based coding agent.\n'
     '• `?transfer @nym#xxxx confirm` — move ALL your credits to another pubkey (great for switching nyms).\n'
     '\n'
     "**Pricing:** general chat, creative writing, and translation replies cost **1 credit**. Coding and reasoning/math replies cost **2 credits** (they use larger models). Pro replies start at **1–2 Pro credits** and scale with reply length (each model's range is in `?model`). `?image` costs **5 credits** (2 Pro) and `?speak` **3 credits** (1 Pro), charged per generation — nothing is charged if it fails. Credits are tied to your nym — save your nsec so you don't lose them.\n"
@@ -2239,8 +1961,8 @@ const String botFirstContactText =
     '\n'
     "Right here in our private 1:1 chat is the **premium** tier: it's end-to-end encrypted and I route each message to the best AI model for the job (coding, reasoning/math, creative writing, translation, or general chat). These private replies cost **credits** — general chat, creative writing, and translation cost 1 credit each; coding and reasoning/math cost 2 credits each.\n"
     '\n'
-    'Want even more power? **Nymbot Pro** lets you pick a specific frontier model — Claude Fable 5, Claude Opus, GPT-5.1, and more — for every reply. Type `?model` to see them; Pro replies use separate Pro credits. Pro can even connect to a git repo (`?git` — GitHub, GitLab, Gitea/Codeberg) to read your code and ship commits or PRs.\n'
+    'Want even more power? **Nymbot Pro** lets you pick a specific frontier model — Claude Fable 5, Claude Opus, GPT-5.1, and more — for every reply. Type `?model` to see them; Pro replies use separate Pro credits.\n'
     '\n'
-    'Type `?buy` to get credits (Standard or Pro) and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them. Type `?help` here anytime for the full free guide to premium, Pro, and the git integration.\n'
+    'Type `?buy` to get credits (Standard or Pro) and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them. Type `?help` here anytime for the full free guide to premium, Pro, and credits.\n'
     '\n'
     'So, what can I help you with?';

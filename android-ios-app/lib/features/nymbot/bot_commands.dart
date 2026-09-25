@@ -57,7 +57,7 @@ class BotCommand {
   final List<String> aliases;
 
   /// True for the "Credits (private Nymbot chat)" group — these operate on the
-  /// paid 1:1 chat (balance/buy/model/git/gift/transfer) rather than a channel.
+  /// paid 1:1 chat (balance/buy/model/gift/transfer) rather than a channel.
   final bool creditCommand;
 
   /// True when the command produces a free, local guide and never bills credits
@@ -224,15 +224,6 @@ const List<BotCommand> kBotCommands = [
     usage: '?model [name|off]',
     description:
         'Pick a Pro frontier model for replies, or switch back to standard routing',
-    creditCommand: true,
-  ),
-  BotCommand(
-    name: 'git',
-    group: BotCommandGroup.credits,
-    usage: '?git',
-    description:
-        'Connect a git repo (GitHub/GitLab/Gitea) so Pro replies can read the '
-        'code and optionally commit, branch, and open PRs',
     creditCommand: true,
   ),
   BotCommand(

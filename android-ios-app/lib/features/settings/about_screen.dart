@@ -14,6 +14,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/theme/nym_theme.dart' show kMonoFont;
 import '../../models/nostr_event.dart';
+import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
@@ -143,10 +144,15 @@ String _verifyCanarySig(Map<String, dynamic> doc) {
   }
 }
 
+Future<http.Response> fetchCanaryDocument({ApiClient? api}) =>
+    (api ?? _canaryApi).proxiedJsonFetch(_kCanaryUrl);
+
+final _canaryApi = ApiClient();
+
 /// Fetches + verifies the published canary (`run()`, canary-verify.js:20-44).
 /// Throws on network/HTTP errors (→ the 'Unavailable offline' state).
 Future<_CanaryResult> _fetchCanary() async {
-  final res = await http.get(Uri.parse(_kCanaryUrl));
+  final res = await fetchCanaryDocument();
   if (res.statusCode == 404) return const _CanaryResult(state: 'gone');
   if (res.statusCode < 200 || res.statusCode >= 300) {
     throw Exception('http ${res.statusCode}');

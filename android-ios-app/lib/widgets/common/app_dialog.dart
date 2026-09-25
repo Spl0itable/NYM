@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/utils/secret_screen.dart';
 import '../../features/i18n/i18n.dart';
 import '../../state/settings_provider.dart';
 import 'keyboard_inset_dialog.dart';
@@ -105,6 +106,7 @@ Future<void> showAppAlert(
   String? copyValue,
   String? copyLabel,
   String? copiedMessage,
+  bool secret = false,
 }) {
   return showDialog<void>(
     context: context,
@@ -117,6 +119,7 @@ Future<void> showAppAlert(
       copyValue: copyValue,
       copyLabel: copyLabel,
       copiedMessage: copiedMessage,
+      secret: secret,
     ),
   );
 }
@@ -188,6 +191,7 @@ class _AppDialog extends StatefulWidget {
     this.copyValue,
     this.copyLabel,
     this.copiedMessage,
+    this.secret = false,
   });
 
   final String message;
@@ -205,6 +209,7 @@ class _AppDialog extends StatefulWidget {
   final String? copyValue;
   final String? copyLabel;
   final String? copiedMessage;
+  final bool secret;
 
   @override
   State<_AppDialog> createState() => _AppDialogState();
@@ -392,7 +397,7 @@ class _AppDialogState extends State<_AppDialog> {
   /// one-tap copy beside it.
   Widget _copyRow(NymColors c) {
     final value = widget.copyValue ?? '';
-    return Padding(
+    final row = Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -418,7 +423,11 @@ class _AppDialogState extends State<_AppDialog> {
           const SizedBox(width: 8),
           TextButton(
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: value));
+              if (widget.secret) {
+                SecretScreen.copy(value);
+              } else {
+                Clipboard.setData(ClipboardData(text: value));
+              }
               final msg = widget.copiedMessage;
               if (msg != null) {
                 ScaffoldMessenger.maybeOf(context)
@@ -437,6 +446,7 @@ class _AppDialogState extends State<_AppDialog> {
         ],
       ),
     );
+    return widget.secret ? SecretGuard(child: row) : row;
   }
 
   Widget _checkboxRow(NymColors c) {

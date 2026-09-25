@@ -13,6 +13,8 @@ class _FakeTarget implements DeepLinkTarget {
   final List<({String channel, String geohash})> channelSwitches = [];
   final List<({String pubkey, String? nym})> pmStarts = [];
   final List<GroupInviteToken> invites = [];
+  final List<GroupInviteToken> confirmations = [];
+  bool confirmResult = true;
 
   @override
   void switchChannel(String channel, {String geohash = ''}) =>
@@ -21,6 +23,12 @@ class _FakeTarget implements DeepLinkTarget {
   @override
   void startPM(String peerPubkey, {String? nym}) =>
       pmStarts.add((pubkey: peerPubkey, nym: nym));
+
+  @override
+  Future<bool> confirmGroupInvite(GroupInviteToken token) async {
+    confirmations.add(token);
+    return confirmResult;
+  }
 
   @override
   Future<void> joinGroupViaInvite(GroupInviteToken token) async =>
@@ -159,15 +167,39 @@ void main() {
       expect(t.channelSwitches.single.channel, 'foo');
     });
 
-    test('group invite → joinGroupViaInvite', () {
+    test('group invite asks for confirmation before joinGroupViaInvite',
+        () async {
       final t = _FakeTarget();
       final link =
           parseNymLink('https://app.nymchat.app/#gjoin=$kValidInviteToken')!;
       final ok = dispatchNymLink(link, t);
       expect(ok, isTrue);
+      await pumpEventQueue();
+      expect(t.confirmations.single.name, 'My Group');
       expect(t.invites.single.groupId, 'a' * 64);
       expect(t.channelSwitches, isEmpty);
       expect(t.pmStarts, isEmpty);
+    });
+
+    test('declined group invite confirmation sends no join request', () async {
+      final t = _FakeTarget()..confirmResult = false;
+      final link =
+          parseNymLink('https://web.nymchat.app/#gjoin=$kValidInviteToken')!;
+      final ok = dispatchNymLink(link, t);
+      expect(ok, isTrue);
+      await pumpEventQueue();
+      expect(t.confirmations, hasLength(1));
+      expect(t.invites, isEmpty);
+    });
+
+    test('confirmAndJoinGroupInvite joins only when confirmed', () async {
+      final invite = parseGroupInvite(kValidInviteToken)!;
+      final declined = _FakeTarget()..confirmResult = false;
+      expect(await confirmAndJoinGroupInvite(declined, invite), isFalse);
+      expect(declined.invites, isEmpty);
+      final accepted = _FakeTarget();
+      expect(await confirmAndJoinGroupInvite(accepted, invite), isTrue);
+      expect(accepted.invites.single.approver, 'b' * 64);
     });
 
     test('group invite with unparseable token does not dispatch', () {
@@ -178,7 +210,7 @@ void main() {
       expect(t.invites, isEmpty);
     });
 
-    test('end-to-end: each parsed type maps to the right call', () {
+    test('end-to-end: each parsed type maps to the right call', () async {
       final cases = <String, void Function(_FakeTarget)>{
         'https://app.nymchat.app/#bitcoin': (t) {
           expect(t.channelSwitches.single.channel, 'bitcoin');
@@ -193,13 +225,14 @@ void main() {
           expect(t.invites, hasLength(1));
         },
       };
-      cases.forEach((url, assertFn) {
+      for (final entry in cases.entries) {
         final t = _FakeTarget();
-        final link = parseNymLink(url);
-        expect(link, isNotNull, reason: url);
+        final link = parseNymLink(entry.key);
+        expect(link, isNotNull, reason: entry.key);
         dispatchNymLink(link!, t);
-        assertFn(t);
-      });
+        await pumpEventQueue();
+        entry.value(t);
+      }
     });
   });
 

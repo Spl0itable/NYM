@@ -303,6 +303,7 @@ class Message {
         'isBot': isBot,
         'thinking': thinking,
         'kind': kind.name,
+        if (powTarget != null) 'powTarget': powTarget,
       };
 
   /// Builds a centered system/action pill row for the conversation flow,
@@ -386,6 +387,7 @@ class Message {
       isBot: j['isBot'] == true,
       thinking: j['thinking'] as String?,
       kind: messageKindFromString(j['kind'] as String?),
+      powTarget: (j['powTarget'] as num?)?.toInt(),
     );
   }
 }

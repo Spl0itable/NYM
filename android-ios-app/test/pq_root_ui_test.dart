@@ -63,6 +63,95 @@ void main() {
     });
   });
 
+  group('a mistaken code can be replaced with the previous one', () {
+    test('the code row offers the replacement', () {
+      expect(modal.contains('_pqRootReplaceRow(c)'), isTrue);
+      expect(modal.contains("tr('Replace with a different code')"), isTrue);
+      expect(modal.contains('_pqRootReplace.dispose()'), isTrue);
+    });
+
+    test('it goes through a confirmation and the controller path', () {
+      final fn = modal.substring(modal.indexOf('Future<void> _replacePqRoot()'));
+      expect(fn.contains('_confirmPqRootReplace()'), isTrue);
+      expect(fn.contains('replacePqRootWithCode'), isTrue);
+      expect(modal.contains('showAppConfirm('), isTrue);
+    });
+
+    test('a mismatched paste in the link box offers the same replacement', () {
+      final fn = modal.substring(modal.indexOf('Future<void> _linkPqRoot()'),
+          modal.indexOf('Widget _nsecRow('));
+      expect(fn.contains("pqRootLinkVerdict(code) == 'mismatch'"), isTrue);
+      expect(fn.contains('replacePqRootWithCode'), isTrue);
+    });
+
+    test('the controller rewrites the account record to the pasted code', () {
+      final fn = controller.substring(
+          controller.indexOf('Future<bool> replacePqRootWithCode('),
+          controller.indexOf('Future<void> _reloadSettingsAfterLink()'));
+      expect(fn.contains('pqRootRecordSet(PqRootRecord.forRoot(root))'), isTrue);
+      expect(fn.contains('publishPqAnnouncement(force: true)'), isTrue);
+      expect(fn.contains('_reloadSettingsAfterLink()'), isTrue);
+    });
+
+    test('linking over a row that did not open repairs the record', () {
+      final fn = controller.substring(
+          controller.indexOf('Future<bool> linkPqRootFromCode('),
+          controller.indexOf('Future<bool> replacePqRootWithCode('));
+      expect(fn.contains('sync.pqRootRowPresent'), isTrue);
+      expect(fn.contains('pqRootRecordSet(PqRootRecord.forRoot(root))'), isTrue);
+    });
+
+    test('and the panel says so instead of asking for a code it will refuse',
+        () {
+      expect(modal.contains('pqRootRowUnreadable'), isTrue);
+    });
+  });
+
+  group('the root follows the identity', () {
+    test('tearing a session down forgets the previous identity\'s root state',
+        () {
+      final fn = controller.substring(
+          controller.indexOf('Future<void> _teardownLiveSession('),
+          controller.indexOf('Future<void> loginWithNsec('));
+      expect(fn.contains('_resetPqRootState();'), isTrue);
+      final reset = controller.substring(
+          controller.indexOf('void _resetPqRootState()'),
+          controller.indexOf('Future<bool> _persistPqRoot('));
+      for (final f in const [
+        '_pqRoot = null',
+        '_pqRootLocked = false',
+        '_pqRootSettled = false',
+        '_pqSelfSignedAnnouncement = null',
+        '_pqDevices = const []',
+      ]) {
+        expect(reset.contains(f), isTrue, reason: f);
+      }
+    });
+
+    test('the stored root is keyed by the identity it belongs to', () {
+      final load = controller.substring(
+          controller.indexOf('Future<Uint8List?> _loadPqRoot('),
+          controller.indexOf('PqRootStore _pqRootStore'));
+      expect(load.contains('PqRootStore.parse(raw)'), isTrue);
+      expect(load.contains('store.codeFor(pubkey)'), isTrue);
+      final persist = controller.substring(
+          controller.indexOf('Future<bool> _persistPqRoot('),
+          controller.indexOf('Future<void> _ensurePqRoot()'));
+      expect(persist.contains('_pqRootStore.withCode(pubkey'), isTrue);
+    });
+
+    test('a row that did not open is never treated as adopted', () {
+      final ensure = controller.substring(
+          controller.indexOf('Future<void> _ensurePqRootLocked('),
+          controller.indexOf('static const List<Duration> _pqRootRetryDelays'));
+      expect(ensure.contains('recordReadable: recordReadable'), isTrue);
+      expect(ensure.contains('if (recordReadable && !matches) _pqRoot = null;'),
+          isTrue);
+      expect(ensure.contains('_schedulePqRootRetry(sync)'), isTrue,
+          reason: 'a signer that was slow to answer must be asked again');
+    });
+  });
+
   group('the record identifies its root', () {
     // A record without a fingerprint reads in the PWA as no record at all, and
     // a device that believes there is no record generates a second root.
@@ -244,8 +333,9 @@ void main() {
 
     test('and a settled answer costs nothing to re-ask', () {
       expect(
-          ctrl.contains(
-              'if (_pqRootSettled && (_pqRoot != null || _pqRootLocked)) return;'),
+          ctrl.contains('if (_pqRootSettled &&\n'
+              '        !_pqRootRecordPending &&\n'
+              '        (_pqRoot != null || _pqRootLocked)) {'),
           isTrue);
     });
 
@@ -273,7 +363,8 @@ void main() {
     });
 
     test('a root that does not match the record is dropped, not announced', () {
-      expect(ctrl.contains('if (!matches) _pqRoot = null;'), isTrue);
+      expect(ctrl.contains('if (recordReadable && !matches) _pqRoot = null;'),
+          isTrue);
     });
   });
 
@@ -348,12 +439,23 @@ void main() {
           reason: 'keyed per account, so switching identities asks again');
     });
 
-    test('and either signal opens the notice', () {
+    test('and any of the three signals opens the notice', () {
       expect(
           gate.contains(
-              'if (!ctrl.pqUpgradeNoticePending && !linkPending) return;'),
+              'if (!ctrl.pqUpgradeNoticePending && !linkPending && !backupPending) return;'),
           isTrue);
       expect(gate.contains('await ctrl.dismissPqRootLinkPrompt();'), isTrue);
+    });
+
+    // A root generated on a device whose tutorial is long past, or that joined
+    // an account with no record, armed a backup notice nothing ever showed.
+    test('a freshly generated code is shown once, whatever brought us here',
+        () {
+      expect(
+          gate.contains(
+              'final backupPending = ctrl.pqRootBackupPending && ctrl.pqRootHeld;'),
+          isTrue);
+      expect(gate.contains('await ctrl.dismissPqRootBackupNotice();'), isTrue);
     });
 
     test('it re-checks after the settings read could have settled', () {

@@ -4,8 +4,11 @@ import 'dart:math';
 import 'package:cryptography/cryptography.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../services/storage/at_rest_cipher.dart';
 import '../../services/storage/cache_store.dart';
+import '../../services/storage/mesh_file_store.dart';
 import '../../services/storage/secure_store.dart';
+import 'biometric_secret_store.dart';
 
 /// Abstractions over the data stores the panic wipe destroys, so tests can
 /// inject fakes and assert they were cleared.
@@ -18,6 +21,10 @@ abstract class PanicSecureStore {
 }
 
 abstract class PanicCacheStore {
+  Future<void> wipe();
+}
+
+abstract class PanicFileStore {
   Future<void> wipe();
 }
 
@@ -67,7 +74,25 @@ class _SecureStoreAdapter implements PanicSecureStore {
   _SecureStoreAdapter(this._store);
   final SecureStore _store;
   @override
-  Future<void> wipe() => _store.wipeAll();
+  Future<void> wipe() async {
+    try {
+      await PlatformBiometricSecretStore().delete();
+    } catch (_) {}
+    await _store.wipeAll();
+  }
+}
+
+class _AtRestFilesAdapter implements PanicFileStore {
+  _AtRestFilesAdapter(this._files, this._cipher);
+  final MeshFileStore _files;
+  final AtRestCipher _cipher;
+  @override
+  Future<void> wipe() async {
+    try {
+      await _files.wipe();
+    } catch (_) {}
+    await _cipher.destroyKey();
+  }
 }
 
 class _CacheStoreAdapter implements PanicCacheStore {
@@ -105,9 +130,11 @@ class PanicWipe {
     required PanicPrefsStore prefs,
     required PanicSecureStore secure,
     required PanicCacheStore cache,
+    PanicFileStore? files,
   })  : _prefs = prefs,
         _secure = secure,
-        _cache = cache;
+        _cache = cache,
+        _files = files;
 
   /// The production wipe wired to the real stores.
   factory PanicWipe.production({
@@ -118,11 +145,14 @@ class PanicWipe {
         prefs: _SharedPrefsAdapter(),
         secure: _SecureStoreAdapter(secure ?? SecureStore()),
         cache: _CacheStoreAdapter(cache ?? CacheStore()),
+        files: _AtRestFilesAdapter(
+            MeshFileStore.instance, AtRestCipher.instance),
       );
 
   final PanicPrefsStore _prefs;
   final PanicSecureStore _secure;
   final PanicCacheStore _cache;
+  final PanicFileStore? _files;
 
   /// True while a panic wipe is destroying the stores (and until
   /// `resetAfterPanic` finishes the teardown). The controller's persistence
@@ -155,6 +185,9 @@ class PanicWipe {
     } catch (_) {}
     try {
       await _cache.wipe();
+    } catch (_) {}
+    try {
+      await _files?.wipe();
     } catch (_) {}
     try {
       onStatus?.call('Purging caches…');

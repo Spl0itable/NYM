@@ -38,7 +38,7 @@ void main() {
     });
 
     for (final entry in _icons.entries) {
-      test('${entry.key}', () async {
+      test(entry.key, () async {
         final bytes = await SvgStringLoader(entry.value).loadBytes(null);
         expect(bytes.lengthInBytes, greaterThan(floor),
             reason: '${entry.key} compiled to nothing drawable — the button '

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/utils/secret_screen.dart';
 import '../i18n/i18n.dart';
 
 /// The element each tutorial step points at (the PWA step `selector`s, see
@@ -728,6 +729,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
       key: Key('${keyPrefix}Row'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (shown) const SecretGuard(),
         Text(
           label.toUpperCase(),
           style: TextStyle(
@@ -766,7 +768,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
                 key: Key('${keyPrefix}Eye'), onTap: onToggle),
             const SizedBox(width: 6),
             _keyBtn(c, tr('Copy'), key: Key('${keyPrefix}Copy'), onTap: () async {
-              await Clipboard.setData(ClipboardData(text: value));
+              await SecretScreen.copy(value);
               if (!mounted) return;
               ScaffoldMessenger.maybeOf(context)
                   ?.showSnackBar(SnackBar(content: Text(copied)));

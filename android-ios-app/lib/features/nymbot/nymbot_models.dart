@@ -558,21 +558,17 @@ class BotPMCommand {
   final String desc;
 }
 
-/// The 10 PM-only commands the PWA shows in the Nymbot private chat, in order
+/// The PM-only commands the PWA shows in the Nymbot private chat, in order
 /// (commands.js `botPMCommands`). NOTE: this is the *PM* set — distinct from the
 /// public-channel `?` commands (`kBotCommands`), which are not wired here.
 const List<BotPMCommand> kBotPMCommands = [
   BotPMCommand(
     name: '?help',
-    desc: 'Guide to premium, Pro models & git repos (free)',
+    desc: 'Guide to premium, Pro models & credits (free)',
   ),
   BotPMCommand(
     name: '?model',
     desc: 'Pick a Pro frontier model (?model off for standard)',
-  ),
-  BotPMCommand(
-    name: '?git',
-    desc: 'Connect a git repo to Pro replies (GitHub/GitLab/Gitea)',
   ),
   BotPMCommand(
     name: '?image',
@@ -604,13 +600,11 @@ const List<BotPMCommand> kBotPMCommands = [
   ),
 ];
 
-/// Deeper completions surfaced after `?model ` / `?git ` (commands.js
-/// `_botPMSubcommands`, :397-434). Returns the rows to show for a base command
-/// once a trailing space has been typed, with each row's full insertion text.
-/// [rest] is the already-typed text after the base command — it selects the
-/// third-level `?git provider <partial>` completions (commands.js:408-416).
+/// Deeper completions surfaced after `?model ` (commands.js
+/// `_botPMSubcommands`). Returns the rows to show for a base command once a
+/// trailing space has been typed, with each row's full insertion text.
 /// Returns null when [cmd] has no subcommands.
-List<BotPMCommand>? botPMSubcommands(String cmd, [String rest = '']) {
+List<BotPMCommand>? botPMSubcommands(String cmd) {
   if (cmd == '?model') {
     return [
       for (final m in kProModels)
@@ -620,51 +614,16 @@ List<BotPMCommand>? botPMSubcommands(String cmd, [String rest = '']) {
           name: '?model off', desc: 'Back to standard multi-model routing'),
     ];
   }
-  if (cmd == '?git') {
-    // Third level: `?git provider <partial>` → the provider rows
-    // (commands.js:409-416 — `${p.label} — default host ${p.host}; append a
-    // custom host for self-hosted`).
-    if (RegExp(r'^provider\s+').hasMatch(rest)) {
-      return [
-        for (final p in GitProvider.values)
-          BotPMCommand(
-            name: '?git provider ${p.wire}',
-            desc:
-                '${p.label} — default host ${p.defaultHost}; append a custom host for self-hosted',
-          ),
-      ];
-    }
-    return const [
-      BotPMCommand(
-          name: '?git provider',
-          desc: 'Choose github, gitlab, or gitea [host]'),
-      BotPMCommand(name: '?git token', desc: 'Save your personal access token'),
-      BotPMCommand(name: '?git repos', desc: 'List repos the token can access'),
-      BotPMCommand(
-          name: '?git repo', desc: 'Select working repo (owner/name [branch])'),
-      BotPMCommand(name: '?git branch', desc: 'Set the working branch'),
-      BotPMCommand(
-          name: '?git writes on',
-          desc: 'Allow commits, branches & pull requests'),
-      BotPMCommand(
-          name: '?git writes off', desc: 'Back to read-only repo access'),
-      BotPMCommand(
-          name: '?git off', desc: 'Disconnect the repo (keeps the token)'),
-      BotPMCommand(
-          name: '?git disconnect',
-          desc: 'Remove token and repo from this device'),
-    ];
-  }
   return null;
 }
 
 /// Filters [kBotPMCommands] (and subcommands) for the `?…` palette given the
 /// current input. Mirrors `showBotCommandPalette` (commands.js:436-468):
 ///  * a bare prefix (`?mo`) filters the 10 base commands by `startsWith`;
-///  * a base command plus a space (`?git `) surfaces its subcommands filtered
+///  * a base command plus a space (`?model `) surfaces its subcommands filtered
 ///    by the remaining text.
 List<BotPMCommand> filterBotPMCommands(String input) {
-  // Preserve a trailing space (it's meaningful: `?git ` → show subcommands),
+  // Preserve a trailing space (it's meaningful: `?model ` → show subcommands),
   // but ignore leading whitespace.
   final needle = input.trimLeft().toLowerCase();
   if (needle.isEmpty || !needle.startsWith('?')) return const [];
@@ -678,13 +637,11 @@ List<BotPMCommand> filterBotPMCommands(String input) {
   }
 
   // `?<cmd> <rest>` → subcommands of <cmd> filtered by <rest> (empty `rest`,
-  // i.e. just-typed trailing space, lists them all). `?git provider <partial>`
-  // drills into the third-level provider rows (commands.js `_botPMSubcommands`
-  // provider branch, :408-416).
+  // i.e. just-typed trailing space, lists them all).
   final sp = needle.indexOf(' ');
   final base = needle.substring(0, sp);
   final rest = needle.substring(sp + 1).trimLeft();
-  final subs = botPMSubcommands(base, rest);
+  final subs = botPMSubcommands(base);
   if (subs == null) return const [];
   return [
     for (final s in subs)
@@ -728,7 +685,6 @@ class BotReply {
     this.balance,
     this.pro = false,
     this.proModel,
-    this.git = false,
     this.lowBalance = false,
   });
 
@@ -742,7 +698,7 @@ class BotReply {
   /// `translation`/`general`/`pro` (worker `taskType`).
   final String? taskType;
 
-  /// Number of model calls made (git agent loop can use up to 6).
+  /// Number of model calls made.
   final int? modelCalls;
 
   /// Output tokens generated by the reply.
@@ -759,9 +715,6 @@ class BotReply {
 
   /// The Pro model key used, when [pro].
   final String? proModel;
-
-  /// True when the reply ran in git/repo mode.
-  final bool git;
 
   /// Worker hint that the balance is now low.
   final bool lowBalance;
@@ -869,136 +822,6 @@ class BotInvoice {
       );
 }
 
-/// Git provider for the `?git` connect flow (spec §11.4).
-enum GitProvider { github, gitlab, gitea }
-
-extension GitProviderWire on GitProvider {
-  String get wire => switch (this) {
-        GitProvider.github => 'github',
-        GitProvider.gitlab => 'gitlab',
-        GitProvider.gitea => 'gitea',
-      };
-
-  /// PWA `_gitProviders[key].label` (pms.js:2153-2157).
-  String get label => switch (this) {
-        GitProvider.github => 'GitHub',
-        GitProvider.gitlab => 'GitLab',
-        GitProvider.gitea => 'Gitea/Forgejo',
-      };
-
-  /// PWA `_gitProviders[key].tokenHint` — the parenthesised how-to that the
-  /// `?git token` usage/system messages embed (pms.js:2153-2157).
-  String get tokenHint => switch (this) {
-        GitProvider.github =>
-          'fine-grained personal access token (github.com → Settings → Developer settings)',
-        GitProvider.gitlab =>
-          'personal access token with api scope (GitLab → Preferences → Access tokens)',
-        GitProvider.gitea => 'access token (Settings → Applications)',
-      };
-
-  /// Default API host for the provider (Gitea defaults to Codeberg).
-  String get defaultHost => switch (this) {
-        GitProvider.github => 'github.com',
-        GitProvider.gitlab => 'gitlab.com',
-        GitProvider.gitea => 'codeberg.org',
-      };
-}
-
-/// On-device git connection config. The [token] (PAT) is stored client-side
-/// only and wiped by Panic Mode — it is sent per request and never persisted
-/// server-side (spec §11.4). Mirrors spec §11.5 `GitConfig` plus the PWA's
-/// progressive `nym_botpm_git` blob (pms.js `_getGitConfig`): the staged
-/// `?git provider` → `?git token` → `?git repo` flow builds it field by field,
-/// so [token] / [repo] may still be empty.
-class GitConfig {
-  const GitConfig({
-    required this.provider,
-    required this.host,
-    this.token = '',
-    this.repo = '',
-    this.branch,
-    this.allowWrites = false,
-    this.login,
-  });
-
-  final GitProvider provider;
-  final String host;
-  final String token; // PAT — on-device only ('' until `?git token`).
-  final String repo; // owner/repo (or group/subgroup/repo on GitLab)
-  final String? branch;
-  final bool allowWrites; // toggled by `?git writes on`.
-
-  /// Verified account login for the saved token (PWA `cfg.login`).
-  final String? login;
-
-  bool get hasToken => token.isNotEmpty;
-  bool get hasRepo => hasToken && repo.isNotEmpty;
-
-  Map<String, dynamic> toWire() => {
-        'provider': provider.wire,
-        'host': host,
-        'token': token,
-        'repo': repo,
-        // Always present — empty string when unset, byte-parity with the PWA's
-        // `branch: git.branch || ''` (pms.js:2464).
-        'branch': branch ?? '',
-        'allowWrites': allowWrites,
-      };
-
-  /// Prefs blob (the PWA's `nym_botpm_git` localStorage JSON).
-  Map<String, dynamic> toJson() => {
-        'provider': provider.wire,
-        'host': host,
-        if (token.isNotEmpty) 'token': token,
-        if (repo.isNotEmpty) 'repo': repo,
-        if (branch != null && branch!.isNotEmpty) 'branch': branch,
-        'allowWrites': allowWrites,
-        if (login != null && login!.isNotEmpty) 'login': login,
-      };
-
-  static GitConfig? fromJson(Map<String, dynamic>? j) {
-    if (j == null) return null;
-    final provider = GitProvider.values.firstWhere(
-      (p) => p.wire == (j['provider'] ?? 'github'),
-      orElse: () => GitProvider.github,
-    );
-    return GitConfig(
-      provider: provider,
-      host: (j['host'] ?? provider.defaultHost).toString(),
-      token: (j['token'] ?? '').toString(),
-      repo: (j['repo'] ?? '').toString(),
-      branch: (j['branch'] as String?)?.isEmpty == true
-          ? null
-          : j['branch'] as String?,
-      allowWrites: j['allowWrites'] == true,
-      login: (j['login'] as String?)?.isEmpty == true
-          ? null
-          : j['login'] as String?,
-    );
-  }
-
-  GitConfig copyWith({
-    GitProvider? provider,
-    String? host,
-    String? token,
-    String? repo,
-    Object? branch = _sentinel,
-    bool? allowWrites,
-    Object? login = _sentinel,
-  }) =>
-      GitConfig(
-        provider: provider ?? this.provider,
-        host: host ?? this.host,
-        token: token ?? this.token,
-        repo: repo ?? this.repo,
-        branch: identical(branch, _sentinel) ? this.branch : branch as String?,
-        allowWrites: allowWrites ?? this.allowWrites,
-        login: identical(login, _sentinel) ? this.login : login as String?,
-      );
-
-  static const Object _sentinel = Object();
-}
-
 double _credits(Object? v) {
   if (v is num) return v.toDouble();
   if (v is String) return double.tryParse(v) ?? 0;
@@ -1027,7 +850,6 @@ BotReply splitReasoning(
   double? balance,
   bool pro = false,
   String? proModel,
-  bool git = false,
   bool lowBalance = false,
 }) {
   final buf = StringBuffer();
@@ -1059,7 +881,6 @@ BotReply splitReasoning(
     balance: balance,
     pro: pro,
     proModel: proModel,
-    git: git,
     lowBalance: lowBalance,
   );
 }

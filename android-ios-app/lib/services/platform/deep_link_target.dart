@@ -7,8 +7,11 @@ import 'deep_links.dart';
 /// link parser (deep_links.dart) never has to import the controller — that lets
 /// the deep-link unit tests compile without pulling in networking/identity.
 class NostrControllerDeepLinkTarget implements DeepLinkTarget {
-  NostrControllerDeepLinkTarget(this._controller);
+  NostrControllerDeepLinkTarget(this._controller,
+      {required Future<bool> Function(GroupInviteToken token) confirmInvite})
+      : _confirmInvite = confirmInvite;
   final NostrController _controller;
+  final Future<bool> Function(GroupInviteToken token) _confirmInvite;
 
   @override
   void switchChannel(String channel, {String geohash = ''}) =>
@@ -17,6 +20,10 @@ class NostrControllerDeepLinkTarget implements DeepLinkTarget {
   @override
   void startPM(String peerPubkey, {String? nym}) =>
       _controller.startPM(peerPubkey, nym: nym);
+
+  @override
+  Future<bool> confirmGroupInvite(GroupInviteToken token) =>
+      _confirmInvite(token);
 
   @override
   Future<void> joinGroupViaInvite(GroupInviteToken token) =>

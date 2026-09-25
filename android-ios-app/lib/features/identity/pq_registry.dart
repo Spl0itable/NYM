@@ -506,6 +506,43 @@ class PqRegistry {
   }
 }
 
+const Duration pqLookupRefetch = Duration(minutes: 10);
+
+const Duration pqLookupRetrySoon = Duration(seconds: 15);
+
+const Duration pqFreshKeyless = Duration(minutes: 10);
+
+class PqLookupLimiter {
+  final Map<String, ({int atMs, bool answered})> _misses = {};
+
+  void record(String pubkey,
+      {required bool found, required bool answered, required int nowMs}) {
+    if (found) {
+      _misses.remove(pubkey);
+    } else {
+      _misses[pubkey] = (atMs: nowMs, answered: answered);
+    }
+  }
+
+  int? missedAt(String pubkey) => _misses[pubkey]?.atMs;
+
+  bool unanswered(String pubkey) => _misses[pubkey]?.answered == false;
+
+  bool due(String pubkey,
+      {required int nowMs, required int announcedAtSec, required bool keyless}) {
+    final miss = _misses[pubkey];
+    if (miss == null) return true;
+    final nowSec = nowMs ~/ 1000;
+    final keylessFresh = keyless &&
+        announcedAtSec > 0 &&
+        nowSec - announcedAtSec < pqFreshKeyless.inSeconds;
+    final wait = (!miss.answered || keylessFresh)
+        ? pqLookupRetrySoon
+        : pqLookupRefetch;
+    return nowMs - miss.atMs >= wait.inMilliseconds;
+  }
+}
+
 /// Why one conversation is sending classical, in one line.
 ///
 /// [PqPmPlan.decide] reaches its verdict through four terms, and every one of
@@ -808,6 +845,18 @@ class PqPmPlan {
 /// With a [root], root-derived epochs come first (new writes use those), then
 /// the nsec-derived ones. The nsec-derived tail is PERMANENT, not a migration
 /// window — spec §4; dropping it is data loss.
+List<({Uint8List kemSk, Uint8List kemPk})> pqRootCandidates(
+  Uint8List root,
+  int epoch,
+) {
+  final out = <({Uint8List kemSk, Uint8List kemPk})>[];
+  for (var e = epoch; e >= 0 && e > epoch - 1 - pqPreviousEpochs; e--) {
+    final kp = pq.pqKeypairFromRoot(root, e);
+    out.add((kemSk: kp.secretKey, kemPk: kp.publicKey));
+  }
+  return out;
+}
+
 List<({Uint8List kemSk, Uint8List kemPk})> pqSelfCandidates(
   Uint8List privkey,
   int epoch, {

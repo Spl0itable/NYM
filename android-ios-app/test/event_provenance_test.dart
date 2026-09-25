@@ -72,6 +72,49 @@ void main() {
     expect(p.of('4' * 64), isNotNull);
   });
 
+  test('only message kinds are held, so chatter cannot evict them', () {
+    final p = EventProvenance(maxEvents: 2);
+    p.record(ev('a' * 64), 'wss://one.example');
+    for (var i = 0; i < 10; i++) {
+      p.record(
+          NostrEvent(
+            id: '$i'.padLeft(64, 'c'),
+            pubkey: 'a' * 64,
+            createdAt: 1,
+            kind: 24420,
+            tags: const [
+              ['d', 'nymchat']
+            ],
+            content: '',
+            sig: '0' * 128,
+          ),
+          'wss://one.example');
+    }
+    expect(p.length, 1);
+    expect(p.of('a' * 64), isNotNull);
+    final named = NostrEvent(
+      id: 'b' * 64,
+      pubkey: 'a' * 64,
+      createdAt: 1,
+      kind: 23333,
+      tags: const [
+        ['d', 'nymchat']
+      ],
+      content: 'x',
+      sig: '0' * 128,
+    );
+    p.record(named, 'wss://one.example');
+    expect(p.of('b' * 64), isNotNull);
+  });
+
+  test('a local record names its source', () {
+    final p = EventProvenance();
+    p.recordLocal(ev('g' * 64), 'THIS CLIENT');
+    expect(p.of('g' * 64)!.relays, ['THIS CLIENT']);
+    p.record(ev('g' * 64), 'wss://one.example');
+    expect(p.of('g' * 64)!.relays, ['THIS CLIENT', 'wss://one.example']);
+  });
+
   test('the relay list per event is bounded', () {
     final p = EventProvenance(maxRelaysPerEvent: 2);
     for (var i = 0; i < 5; i++) {

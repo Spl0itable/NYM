@@ -1,6 +1,8 @@
 // What an iOS BGAppRefresh window is allowed to notify about.
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/features/notifications/background_catch_up.dart';
+import 'package:nym_bar/state/nostr_controller.dart';
 
 void main() {
   const hour = 3600 * 1000;
@@ -108,6 +110,63 @@ void main() {
         ),
         false,
       );
+    });
+  });
+
+  group('awaitBootValue', () {
+    test('a value that appears while booting is returned once it exists', () {
+      fakeAsync((async) {
+        String? value;
+        String? got;
+        var done = false;
+        NostrController.awaitBootValue<String>(
+          () => value,
+          booting: () => true,
+          limit: const Duration(seconds: 12),
+        ).then((v) {
+          got = v;
+          done = true;
+        });
+        async.elapse(const Duration(milliseconds: 350));
+        expect(done, isFalse, reason: 'still waiting for boot');
+        value = 'sync';
+        async.elapse(const Duration(milliseconds: 200));
+        expect(done, isTrue);
+        expect(got, 'sync');
+      });
+    });
+
+    test('a boot that never produces the value gives up at the limit', () {
+      fakeAsync((async) {
+        String? got = 'unset';
+        var done = false;
+        NostrController.awaitBootValue<String>(
+          () => null,
+          booting: () => true,
+          limit: const Duration(seconds: 12),
+        ).then((v) {
+          got = v;
+          done = true;
+        });
+        async.elapse(const Duration(seconds: 11));
+        expect(done, isFalse);
+        async.elapse(const Duration(seconds: 2));
+        expect(done, isTrue);
+        expect(got, isNull);
+      });
+    });
+
+    test('a process that is not booting at all answers at once', () {
+      fakeAsync((async) {
+        var done = false;
+        NostrController.awaitBootValue<String>(
+          () => null,
+          booting: () => false,
+          limit: const Duration(seconds: 12),
+        ).then((_) => done = true);
+        async.flushMicrotasks();
+        expect(done, isTrue, reason: 'nothing to wait for without a boot');
+      });
     });
   });
 }

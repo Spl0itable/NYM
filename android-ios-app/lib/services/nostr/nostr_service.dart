@@ -24,6 +24,7 @@ import '../../models/nostr_event.dart';
 import '../api/api_client.dart';
 import '../api/api_config.dart';
 import '../relay/relay_message.dart';
+import 'event_provenance.dart';
 import '../relay/relay_pool.dart';
 import '../relay/relay_pool_proxy.dart';
 import '../relay/relay_stats.dart';
@@ -206,6 +207,7 @@ class NostrHandlers {
     this.onEvent,
     this.onConnectionChanged,
     this.onGiftWrap,
+    this.onEventRetracted,
   });
 
   /// Every verified inbound event (already signature-checked by the pool).
@@ -214,6 +216,8 @@ class NostrHandlers {
 
   /// A decrypted kind-1059 gift wrap addressed to us.
   final void Function(GiftWrapUnwrapped unwrapped)? onGiftWrap;
+
+  final void Function(String eventId)? onEventRetracted;
 }
 
 /// Owns the relay pool and wires it to the crypto + identity layers. Subscribes
@@ -433,7 +437,29 @@ class NostrService {
   final ApiClient _apiClient;
 
   /// The active transport (current pool after any swap).
-  PoolTransport get pool => _pool;
+  PoolTransport get pool => _quietHeld ? _QuietPool(_pool) : _pool;
+
+  Set<String> _quiet = const <String>{};
+  bool _quietHeld = false;
+  Timer? _quietTimer;
+
+  void _loadQuietList() {
+    Future<void> load() async {
+      try {
+        final d = await _apiClient.storageAction({'action': 'filter-get'});
+        final next = <String>{};
+        for (final k in const ['p', 'e']) {
+          final v = d[k];
+          if (v is List) next.addAll(v.whereType<String>());
+        }
+        _quiet = next;
+        _quietHeld = next.contains(identity.pubkey);
+      } catch (_) {}
+    }
+
+    unawaited(load());
+    _quietTimer ??= Timer.periodic(const Duration(minutes: 10), (_) => load());
+  }
 
   /// Live relay stats for the Network Stats modal, with the persistent /api
   /// "App data" counters folded in. The pool tracks relay traffic + shard info;
@@ -504,6 +530,8 @@ class NostrService {
     _profileAuthors = List<String>.unmodifiable(profileAuthors);
     _pqAuthors = _sanitizeVouchAuthors(pqAuthors);
     _wireProxyFallback();
+    _wireRetract(_pool);
+    _loadQuietList();
     pool.connectAll();
 
     _mainSub = pool.subscribe(_buildCriticalFilters());
@@ -723,7 +751,7 @@ class NostrService {
     // Hybrid post-quantum key announcements.
     //
     // Under D1 this is a live tail only, like every other filter here: history
-    // comes from the archive (`_pqAnnouncementFromD1`) and a discovery miss
+    // comes from the archive (`PqAnnouncementSource`) and a discovery miss
     // additionally fetches the single peer it needs. Asking the relays for one
     // announcement per author made this the one filter that backfilled in
     // proxy-pool mode, on every reconnect and every subscription rebuild.
@@ -883,6 +911,12 @@ class NostrService {
     final p = _pool;
     if (p is RelayPoolProxy) {
       p.onProxyUnreachable = _onProxyUnreachable;
+    }
+  }
+
+  void _wireRetract(PoolTransport p) {
+    if (p is RelayPoolProxy) {
+      p.onEventRetracted = (id) => _handlers?.onEventRetracted?.call(id);
     }
   }
 
@@ -1051,6 +1085,7 @@ class NostrService {
       _pool = restored;
       restored.geoOriginAllows = geoOriginAllowsEvent;
       restored.onProxyUnreachable = _onProxyUnreachable; // future blips
+      _wireRetract(restored);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
         restored.replaySubscription(entry.sub, entry.filters);
@@ -1144,8 +1179,8 @@ class NostrService {
   /// went on messaging each other classically.
   static const Duration pqEoseGrace = Duration(milliseconds: 600);
 
-  Future<void> fetchPqAnnouncement(String pubkey, {bool Function()? found}) async {
-    if (!TrustGraph.isHex64(pubkey)) return;
+  Future<bool> fetchPqAnnouncement(String pubkey, {bool Function()? found}) async {
+    if (!TrustGraph.isHex64(pubkey)) return true;
     final sub = pool.subscribe([
       NostrFilter(
         kinds: [EventKind.appData],
@@ -1177,6 +1212,7 @@ class NostrService {
       await s.cancel();
       sub.close();
     }
+    return sub.answered;
   }
 
   /// Adds ephemeral group pubkeys as additional `#p` gift-wrap subscriptions so
@@ -1206,6 +1242,10 @@ class NostrService {
   /// Routes an inbound verified event: gift wraps are unwrapped + emitted via
   /// [NostrHandlers.onGiftWrap]; everything else flows through [onEvent].
   void _routeInbound(NostrEvent event) {
+    if (_quiet.isNotEmpty &&
+        (_quiet.contains(event.pubkey) || _quiet.contains(event.id))) {
+      return;
+    }
     if (event.kind == EventKind.giftWrap) {
       unawaited(_handleGiftWrap(event));
       return;
@@ -1627,6 +1667,7 @@ class NostrService {
       difficulty,
     );
     final signed = await sig.sign(mined);
+    eventProvenance.recordLocal(signed, 'THIS CLIENT');
     if (buildOnly) return signed;
 
     // Geohash channel messages (kind 20000 with a `g` tag) route through
@@ -2989,6 +3030,8 @@ class NostrService {
 
   Future<void> stop() async {
     _statusTimer?.cancel();
+    _quietTimer?.cancel();
+    _quietTimer = null;
     _criticalResubTimer?.cancel();
     _criticalResubTimer = null;
     stopGeoRelayKeepAlive();
@@ -3036,4 +3079,50 @@ class _AsyncSemaphore {
       _permits++;
     }
   }
+}
+
+class _QuietPool implements PoolTransport {
+  _QuietPool(this._inner);
+
+  final PoolTransport _inner;
+
+  @override
+  void closeSubscription(Subscription sub) => _inner.closeSubscription(sub);
+
+  @override
+  Subscription subscribe(List<NostrFilter> filters, {String? subId}) =>
+      _inner.subscribe(filters, subId: subId);
+
+  @override
+  void connectAll() => _inner.connectAll();
+
+  @override
+  void updateGeoRelays(List<String> geoRelayUrls) =>
+      _inner.updateGeoRelays(geoRelayUrls);
+
+  @override
+  Future<int> publish(NostrEvent event) async => 1;
+
+  @override
+  Future<int> publishDm(NostrEvent event) async => 1;
+
+  @override
+  Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) async =>
+      1;
+
+  @override
+  int get connectedCount => _inner.connectedCount;
+
+  @override
+  Set<String> get connectedRelayUrls => _inner.connectedRelayUrls;
+
+  @override
+  set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) =>
+      _inner.geoOriginAllows = fn;
+
+  @override
+  RelayStats get stats => _inner.stats;
+
+  @override
+  Future<void> disconnectAll() => _inner.disconnectAll();
 }

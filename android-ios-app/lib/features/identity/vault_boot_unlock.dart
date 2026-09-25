@@ -1,12 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:local_auth/local_auth.dart';
 
 import '../../core/theme/nym_colors.dart';
-import '../../services/storage/secure_store.dart';
+import '../../services/storage/at_rest_wipe.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../i18n/i18n.dart';
+import 'biometric_secret_store.dart';
 import 'identity_vault.dart' show SecureStoreLike;
 import 'modal_chrome.dart';
 import 'vault_settings_modal.dart' show identityVaultProvider;
@@ -56,6 +58,22 @@ class VaultBootUnlock extends ConsumerStatefulWidget {
   ConsumerState<VaultBootUnlock> createState() => _VaultBootUnlockState();
 }
 
+class VaultLockedApp extends StatelessWidget {
+  const VaultLockedApp({super.key, required this.app, required this.lock});
+
+  final Widget app;
+  final Widget lock;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+        textDirection: TextDirection.ltr,
+        children: [
+          Offstage(child: TickerMode(enabled: false, child: app)),
+          lock,
+        ],
+      );
+}
+
 class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   final _pw = TextEditingController();
 
@@ -80,29 +98,18 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     setState(() => _busy = true);
     final vault = ref.read(identityVaultProvider);
     try {
-      String password;
+      final Map<String, String> secrets;
       if (_isBiometric) {
-        // TODO(verify): the PWA biometric factor derives the key from a WebAuthn
-        // PRF output; native has no PRF, so (matching VaultSettingsModal's enable
-        // path) we gate on local_auth and derive from a per-device secret. This
-        // is a platform-equivalence choice, not a 1:1 port of the PRF scheme.
-        final ok = await _biometricAuth();
-        if (!ok) throw StateError(tr('Biometric unlock was canceled.'));
-        password = await _deviceBiometricSecret();
+        secrets = await vault.unlockBiometric();
       } else {
-        password = _pw.text;
+        final password = _pw.text;
         // `unlockVault`'s own guard (key-vault.js:257) — like every unlock
         // failure it surfaces through the "Unlock failed" card, not inline.
         if (password.isEmpty) {
           throw StateError(tr('Enter your password or PIN.'));
         }
+        secrets = await vault.unlock(password);
       }
-      // `unlockVault` derives the key, verifies the check token (throws on a
-      // wrong factor) and returns the decrypted secrets. We hand them to the
-      // caller IN MEMORY (the native analog of the PWA's `_vaultMem`) — the
-      // encrypted `enc:v1:` blobs stay in secure storage and are never
-      // re-plaintexted, so unlock is required on every launch.
-      final secrets = await vault.unlock(password);
       if (mounted) widget.onUnlocked(secrets);
     } catch (e) {
       // `unlockVaultAtBoot`'s retry loop: `_vaultErrorModal(e.message ||
@@ -119,13 +126,15 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
 
   /// `e && e.message ? e.message : 'Unlock failed.'` (key-vault.js:344).
   static String _messageOf(Object e) {
-    final m = e is StateError
+    final m = e is BiometricVaultException
         ? e.message
-        : e is FormatException
+        : e is StateError
             ? e.message
-            : e is ArgumentError
-                ? e.message?.toString()
-                : null;
+            : e is FormatException
+                ? e.message
+                : e is ArgumentError
+                    ? e.message?.toString()
+                    : null;
     return (m == null || m.isEmpty) ? tr('Unlock failed.') : m;
   }
 
@@ -140,8 +149,14 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   /// `_forgetIdentityAndReload` — no second confirmation (key-vault.js:345,398),
   /// unlike the prompt's Forget which confirms first.
   Future<void> _forgetFromError() async {
-    await ref.read(identityVaultProvider).reset();
+    await _resetIdentity();
     if (mounted) widget.onForget();
+  }
+
+  Future<void> _resetIdentity() async {
+    final kv = ref.read(keyValueStoreProvider);
+    await ref.read(identityVaultProvider).reset();
+    unawaited(forgetAtRestData(kv));
   }
 
   /// "Forget identity" — confirm, then reset the vault (`resetVault`) and hand
@@ -149,7 +164,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   Future<void> _forget() async {
     final confirmed = await _confirmForget();
     if (!confirmed) return;
-    await ref.read(identityVaultProvider).reset();
+    await _resetIdentity();
     if (mounted) widget.onForget();
   }
 
@@ -165,67 +180,24 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     );
   }
 
-  Future<bool> _biometricAuth() async {
-    try {
-      final auth = LocalAuthentication();
-      return await auth.authenticate(
-        localizedReason: tr('Unlock your Nymchat identity'),
-        options: const AuthenticationOptions(biometricOnly: true),
-      );
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// The per-device biometric secret used as the PBKDF2 password (same key +
-  /// scheme as [VaultSettingsModal], so a biometric-enabled vault unlocks).
-  Future<String> _deviceBiometricSecret() async {
-    final secure = SecureStore();
-    const key = 'nym_vault_bio_secret';
-    final s = await secure.get(key);
-    // If it's missing the vault can't be unlocked biometrically (shouldn't
-    // happen for a vault that was enabled with biometric) — return empty so
-    // unlock fails cleanly into the error path rather than throwing.
-    return s ?? '';
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
     final isBio = _isBiometric;
-    // Boot unlock is a `.modal active nm-vault-overlay` — the `.modal` overlay
-    // over the page `--bg`: glass default rgba(0,0,0,0.7) (styles-chat.css:
-    // 1974); `body.solid-ui .modal { rgba(0,0,0,0.75) }` and
-    // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-    // (styles-themes-responsive.css:1630-1636) — with a floating
-    // `.modal-content nm-vault-box` card (420 max, padding 32).
-    final solidUi = ref.watch(settingsProvider.select((s) => s.solidUi));
-    final overlay = !solidUi
-        ? Colors.black.withValues(alpha: 0.7)
-        : c.isLight
-            ? const Color(0x73000000) // black @ 0.45
-            : const Color(0xBF000000); // black @ 0.75
-    return Scaffold(
-      backgroundColor: Color.alphaBlend(overlay, c.bg),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Material(
-              color: Colors.transparent,
-              child: ModalChrome.box(
-                c,
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: _failMessage != null
-                        ? _errorChildren(c)
-                        : _promptChildren(c, isBio),
-                  ),
-                ),
+    return Material(
+      color: c.bg,
+      child: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 500),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: _failMessage != null
+                    ? _errorChildren(c)
+                    : _promptChildren(c, isBio),
               ),
             ),
           ),

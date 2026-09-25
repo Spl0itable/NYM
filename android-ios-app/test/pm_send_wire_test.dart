@@ -39,6 +39,8 @@ void main() {
     bool proven = false,
     bool knownBitchat = false,
     bool knownNym = false,
+    int? bitchatSeenAtSec,
+    int announcedAtSec = 1000,
     String content = 'hello from nymchat',
     int? expiration,
   }) async {
@@ -64,6 +66,8 @@ void main() {
       provenNymchat: proven,
       knownBitchat: knownBitchat,
       knownNym: knownNym,
+      bitchatSeenAtSec: bitchatSeenAtSec ?? (knownBitchat ? 2000 : 0),
+      announcedAtSec: announcedAtSec,
     );
     final bitchatRumors = <UnsignedEvent>[];
     if (plan.bitchat) {
@@ -151,16 +155,28 @@ void main() {
     // A peer who moved from Nymchat to Bitchat, or who runs both. Their
     // announcement is live and would otherwise silence us for its whole
     // seven-day TTL.
-    test('heard bitchat + live pk2 announcement -> Bitchat + NIP-44', () async {
+    test('heard bitchat + live pk2 announcement -> pq2 alone', () async {
       expect(
           toPeer(await send(
               recipientKemKey: peerKem.publicKey, knownBitchat: true)),
-          ['bitchat->peer', 'nip44->peer']);
+          ['pq2->peer']);
     });
 
     test('heard bitchat + keyless announcement -> Bitchat + NIP-44', () async {
       expect(toPeer(await send(proven: true, knownBitchat: true)),
           ['bitchat->peer', 'nip44->peer']);
+    });
+
+    test('a Bitchat sighting older than the announcement -> NIP-44 alone',
+        () async {
+      expect(
+          toPeer(await send(
+              proven: true, knownBitchat: true, bitchatSeenAtSec: 500)),
+          ['nip44->peer']);
+      expect(
+          toPeer(await send(
+              proven: true, knownBitchat: true, bitchatSeenAtSec: 0)),
+          ['nip44->peer']);
     });
 
     test('a self-copy is archived for our other devices either way', () async {
@@ -224,8 +240,7 @@ void main() {
 
     test('an announced peer we have heard bitchat from still gets a readable wrap',
         () async {
-      final rec = await send(
-          recipientKemKey: peerKem.publicKey, knownBitchat: true);
+      final rec = await send(proven: true, knownBitchat: true);
       final wrap = rec.dmCalls.firstWhere((e) => e.content.startsWith('v2:'));
       final opened = await giftwrap.unwrapGiftWrap(wrap, [
         giftwrap.classicalCandidate(skPeer, bitchat: true),

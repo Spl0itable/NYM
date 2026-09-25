@@ -17,6 +17,8 @@ class EventProvenance {
   /// One event seen on more relays than this is not more informative.
   final int maxRelaysPerEvent;
 
+  static const Set<int> panelKinds = {20000, 23333};
+
   final Map<String, ProvenanceRecord> _byId = <String, ProvenanceRecord>{};
 
   ProvenanceRecord? of(String eventId) => _byId[eventId];
@@ -25,6 +27,7 @@ class EventProvenance {
   /// be deduped away.
   void record(NostrEvent event, String? relayUrl) {
     if (event.id.length != 64) return;
+    if (!panelKinds.contains(event.kind)) return;
     var rec = _byId.remove(event.id);
     if (rec == null) {
       if (_byId.length >= maxEvents) {
@@ -49,6 +52,11 @@ class EventProvenance {
     if (rec.relays.contains(label)) return;
     if (rec.relays.length >= maxRelaysPerEvent) return;
     rec.relays.add(label);
+  }
+
+  void recordLocal(NostrEvent event, String label) {
+    record(event, null);
+    addSource(event.id, label);
   }
 
   void clear() => _byId.clear();

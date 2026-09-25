@@ -5,7 +5,6 @@
 // path lands on the list compiled into the binary rather than an empty picker.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/features/i18n/i18n.dart';
-import 'package:nym_bar/features/nymbot/brand_marks.dart';
 import 'package:nym_bar/features/nymbot/brand_tile.dart';
 import 'package:nym_bar/features/nymbot/nymbot_models.dart';
 

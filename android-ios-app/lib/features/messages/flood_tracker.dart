@@ -184,7 +184,8 @@ class _ContentInfo {
 /// PWA — is likewise scoped to the visible conversation here, which is all the UI
 /// can dim anyway.
 final floodTrackerProvider = Provider<FloodTracker>((ref) {
+  final s = ref.watch(appStateProvider);
+  if (!s.clientGatesActive) return FloodTracker.empty;
   final messages = ref.watch(messagesForCurrentViewProvider);
-  final selfPubkey = ref.watch(appStateProvider).selfPubkey;
-  return FloodTracker.fromMessages(messages, selfPubkey: selfPubkey);
+  return FloodTracker.fromMessages(messages, selfPubkey: s.selfPubkey);
 });

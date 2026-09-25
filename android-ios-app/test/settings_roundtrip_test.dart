@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nym_bar/models/settings.dart';
 import 'package:nym_bar/services/api/storage_sync.dart';
 import 'package:nym_bar/services/storage/key_value_store.dart';
+import 'package:nym_bar/state/app_state.dart';
 import 'package:nym_bar/state/nostr_controller.dart';
 import 'package:nym_bar/state/settings_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -70,10 +71,17 @@ void main() {
     );
   }
 
-  Map<String, dynamic> flatten(Settings s, KeyValueStore kv) {
+  Map<String, dynamic> flatten(
+      Settings s, KeyValueStore kv, ProviderContainer container) {
+    final appState = container.read(appStateProvider.notifier);
     final out = <String, dynamic>{};
-    StorageSync.buildSectionPayloads(s, kv: kv, selfPubkey: selfPubkey)
-        .forEach((_, fields) => out.addAll(fields));
+    StorageSync.buildSectionPayloads(s,
+        kv: kv,
+        selfPubkey: selfPubkey,
+        extras: {
+          'leftGroups': appState.leftGroups.toList(),
+          'leftGroupTimes': Map<String, dynamic>.from(appState.leftGroupTimes),
+        }).forEach((_, fields) => out.addAll(fields));
     return out;
   }
 
@@ -81,7 +89,7 @@ void main() {
     final (probeContainer, probeKv) = await freshContainer();
     // Start from what this client itself publishes, so every value already has
     // the type and shape the apply guards expect.
-    final baseline = flatten(const Settings(), probeKv);
+    final baseline = flatten(const Settings(), probeKv, probeContainer);
     probeContainer.dispose();
 
     final broken = <String>[];
@@ -129,7 +137,8 @@ void main() {
               .applySyncedSettingsForTest({...baseline, key: want, 'v': 2});
           // Some apply paths persist through an unawaited future.
           await Future<void>.delayed(const Duration(milliseconds: 20));
-          final got = flatten(container.read(settingsProvider), kv)[key];
+          final got =
+              flatten(container.read(settingsProvider), kv, container)[key];
           lastGot = got;
           if (_holds(want, got)) {
             survived = true;

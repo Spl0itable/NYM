@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../models/nostr_event.dart';
 import '../../services/api/storage_sync.dart';
+import '../../services/nostr/verified_rows.dart';
 
 /// Ports the PWA's zap-receipt D1 archive (zaps.js:29-93):
 ///
@@ -20,9 +22,14 @@ import '../../services/api/storage_sync.dart';
 /// zapped message id); profile receipts have none (the server keys them on
 /// the recipient pubkey).
 class ZapArchive {
-  ZapArchive(this._sync);
+  ZapArchive(this._sync, {Future<bool> Function(NostrEvent event)? verify})
+      : _verify = verify ?? _verifyInline;
 
   final StorageSync _sync;
+  final Future<bool> Function(NostrEvent event) _verify;
+
+  static Future<bool> _verifyInline(NostrEvent event) async =>
+      schnorr.verifyEvent(event);
 
   /// Session receipt-id dedup (`_zapArchivedIds`, cap 6000 → trim 4000).
   final Set<String> _archivedIds = <String>{};
@@ -116,12 +123,10 @@ class ZapArchive {
   ) async {
     if (_disposed || ids.isEmpty) return;
     final events = await _sync.zapGet(scope, ids);
-    for (final raw in events) {
+    for (final receipt in await verifiedRows(events, _verify)) {
       try {
-        onReceipt(NostrEvent.fromJson(raw));
-      } catch (_) {
-        // Skip a malformed archived receipt.
-      }
+        onReceipt(receipt);
+      } catch (_) {}
     }
   }
 

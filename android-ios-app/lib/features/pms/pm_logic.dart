@@ -4,6 +4,7 @@ import '../../core/constants/event_kinds.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../models/nostr_event.dart';
+import '../../services/nostr/event_mapper.dart';
 import '../p2p/p2p_models.dart';
 
 /// Pure, socket-free logic for NIP-17 private messages: rumor construction,
@@ -109,11 +110,12 @@ class PmLogic {
     // is the ingest layer's job here — this mapper stays socket-free.
     final fileOffer = parseFileOfferTag(tags, senderPubkey);
 
-    // Guard against clock skew: cap at current time so PMs never appear in the
-    // future (pms.js: `tsSec = Math.min(tsSec, nowSec)`).
     final createdAtRaw = (rumor['created_at'] as num?)?.toInt() ?? 0;
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final createdAt = createdAtRaw > nowSec ? nowSec : createdAtRaw;
+    final times = EventMapper.rumorTimes(
+      key: nymMessageId ?? wrapId,
+      createdAtRaw: createdAtRaw,
+      ms: ms,
+    );
 
     final isOwn = senderPubkey == selfPubkey;
     // Pure-mapper fallback: `nym#xxxx` (the PWA's `getNymFromPubkey` default,
@@ -126,9 +128,10 @@ class PmLogic {
       author: author,
       pubkey: senderPubkey,
       content: content,
-      createdAt: createdAt,
+      createdAt: times.createdAt,
       originalCreatedAt: createdAtRaw,
       ms: ms,
+      timestamp: times.timestampMs,
       isOwn: isOwn,
       isPM: true,
       conversationKey: pmStorageKey(peer),

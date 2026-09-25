@@ -140,7 +140,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
     final list = state.messages['#$gh'];
     if (list != null) {
       for (final m in list) {
-        if (m.spamGated) continue;
+        if (m.spamGated || state.isMessageFiltered(m)) continue;
         final ts = m.timestamp;
         if (ts <= 0) continue;
         var ageH = (nowMs - ts) ~/ (3600 * 1000);

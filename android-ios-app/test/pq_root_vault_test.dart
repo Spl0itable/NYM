@@ -30,7 +30,7 @@ Future<(KeyValueStore, _MemSecure, IdentityVault)> _fixture() async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final kv = await KeyValueStore.open();
   final secure = _MemSecure();
-  return (kv, secure, IdentityVault(kv, secure));
+  return (kv, secure, IdentityVault(kv, secure, escrow: true));
 }
 
 void main() {
@@ -123,7 +123,8 @@ void main() {
     await secure.set(SecretKeys.pqRoot, code);
     await vault.enable(method: 'password', password: _passphrase);
 
-    final woken = IdentityVault(await KeyValueStore.open(), secure);
+    final woken =
+        IdentityVault(await KeyValueStore.open(), secure, escrow: true);
     final secrets = await woken.unlockForBackgroundWake();
     expect(secrets?[SecretKeys.pqRoot], code);
   });

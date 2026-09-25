@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/i18n/i18n.dart';
+import '../anchored_popup.dart';
 
 /// Cryptographic-verification state of a sealed (NIP-17/NIP-59) message,
 /// mirroring the PWA's tri-state `senderVerified` (`messages.js:732-757`):
@@ -198,15 +199,10 @@ void showAnchoredInfoPopup(
   final overlay = Overlay.of(context, rootOverlay: true);
   final screen = MediaQuery.of(context).size;
 
-  // `const approxHeight = 170` — prefer above when there's head-room.
-  final above = rect.top > 170 + 20;
   // `left = Math.max(8, Math.min(rect.left, innerWidth - width - 8))` with the
   // popup's `.verification-popup` max-width of 280 (shrunk on tiny screens so
   // the 8px viewport gutters hold).
   final double width = screen.width - 16 < 280 ? screen.width - 16 : 280;
-  double left = rect.left;
-  if (left > screen.width - width - 8) left = screen.width - width - 8;
-  if (left < 8) left = 8;
 
   OverlayEntry? entry;
   void close() {
@@ -228,10 +224,9 @@ void showAnchoredInfoPopup(
               onPanStart: (_) => close(),
             ),
           ),
-          Positioned(
-            left: left,
-            top: above ? null : rect.bottom + 6,
-            bottom: above ? screen.height - rect.top + 6 : null,
+          AnchoredPopup(
+            anchor: rect,
+            margin: 8,
             child: Material(
               type: MaterialType.transparency,
               child: Container(

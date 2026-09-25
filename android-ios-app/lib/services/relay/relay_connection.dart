@@ -60,7 +60,8 @@ typedef WebSocketChannelFactory = WebSocketChannel Function(Uri url);
 WebSocketChannel defaultRelayChannelFactory(Uri url) =>
     IOWebSocketChannel.connect(
       url,
-      headers: {'User-Agent': ApiConfig.userAgent},
+      headers: ApiConfig.socketHeadersFor(url),
+      customClient: ApiConfig.socketClient(),
     );
 
 /// A single relay WebSocket connection with auto-reconnect, subscription

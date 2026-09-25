@@ -372,6 +372,66 @@ void main() {
       });
     });
   });
+
+  group('nostrconnect pairing', () {
+    test('ignores a bare ack and pairs only on the echoed secret', () {
+      fakeAsync((async) {
+        final signerPriv = generatePrivateKey();
+        final signerPub = getPublicKeyHex(signerPriv);
+        final intruderPriv = generatePrivateKey();
+        final intruderPub = getPublicKeyHex(intruderPriv);
+        final socket = FakeSocket();
+        final svc = Nip46Service(
+          kv: FakeKv(),
+          secure: FakeSecure(),
+          socketFactory: (_) => socket,
+        );
+        final uri = svc.startNostrConnect();
+        final secret = Nip46Service.parseConnectionUri(uri).secret!;
+        String? paired;
+        svc.awaitConnect().then((v) => paired = v);
+        async.flushMicrotasks();
+        final clientPub = svc.clientPubkey!;
+
+        _deliverResponse(
+          socket: socket,
+          signerPriv: intruderPriv,
+          signerPub: intruderPub,
+          clientPub: clientPub,
+          subId: _subIdOf(socket),
+          body: {'id': 'x1', 'result': 'ack'},
+        );
+        async.flushMicrotasks();
+        expect(paired, isNull);
+        expect(svc.remotePubkey, isNull);
+        expect(svc.bareAck.value, isTrue);
+
+        _deliverResponse(
+          socket: socket,
+          signerPriv: intruderPriv,
+          signerPub: intruderPub,
+          clientPub: clientPub,
+          subId: _subIdOf(socket),
+          body: {'id': 'x2', 'result': 'wrong'},
+        );
+        async.flushMicrotasks();
+        expect(paired, isNull);
+        expect(svc.remotePubkey, isNull);
+
+        _deliverResponse(
+          socket: socket,
+          signerPriv: signerPriv,
+          signerPub: signerPub,
+          clientPub: clientPub,
+          subId: _subIdOf(socket),
+          body: {'id': 'x3', 'result': secret},
+        );
+        async.flushMicrotasks();
+        expect(paired, signerPub);
+        expect(svc.remotePubkey, signerPub);
+      });
+    });
+  });
 }
 
 // --- helpers ----------------------------------------------------------------

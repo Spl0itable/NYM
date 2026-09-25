@@ -21,6 +21,7 @@ import '../../services/mesh/transport/mesh_transport.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/common/nym_avatar.dart' show proxiedAvatarUrl;
 import 'mesh_bridge.dart';
 import 'mesh_diagnostics.dart';
 
@@ -127,6 +128,8 @@ class MeshUiState {
     return null;
   }
 }
+
+Uri meshProfileImageUri(String url) => Uri.parse(proxiedAvatarUrl(url) ?? url);
 
 /// Owns the [MeshService] lifecycle and the [MeshBridge] that feeds mesh traffic
 /// into the app's normal chat stores. Reacts to the `meshEnabled` setting to
@@ -268,7 +271,7 @@ class MeshController extends StateNotifier<MeshUiState> {
         state = state.copyWith(availability: availability);
       }));
 
-      bridge.start();
+      await bridge.start();
 
       await service.start();
       state = state.copyWith(
@@ -370,8 +373,9 @@ class MeshController extends StateNotifier<MeshUiState> {
   Future<(Uint8List, String?)?> _fetchCapped(String? url, int maxBytes) async {
     if (url == null || url.isEmpty) return null;
     try {
-      final resp =
-          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      final resp = await http
+          .get(meshProfileImageUri(url))
+          .timeout(const Duration(seconds: 10));
       if (resp.statusCode != 200 || resp.bodyBytes.length > maxBytes) {
         return null;
       }

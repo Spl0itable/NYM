@@ -108,7 +108,9 @@ void main() {
   group('AppState.isSpamGated (gating predicate)', () {
     // A live store seeds only the dev/bot roots into the trust graph.
     AppState live() {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       return n.state;
     }
 
@@ -153,7 +155,9 @@ void main() {
 
   group('AppStateNotifier — vouch ingest (rooted web of trust)', () {
     test('a vouch from an UN-rooted author is rejected', () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       final added = n.ingestVouchList(
         authorPubkey: _stranger, // not in nymchatPubkeys
         vouchedPubkeys: [_vouchedA],
@@ -164,7 +168,9 @@ void main() {
 
     test('a vouch from a ROOTED author (dev) adds its pubkeys to the graph',
         () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       final added = n.ingestVouchList(
         authorPubkey: kVerifiedDeveloperPubkey, // a seeded root
         vouchedPubkeys: [_vouchedA, _vouchedB, _self], // self is skipped
@@ -176,7 +182,9 @@ void main() {
     });
 
     test('transitive expansion: a newly-trusted author can then vouch', () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       // Root vouches for A → A becomes trusted.
       n.ingestVouchList(
         authorPubkey: kNymbotPubkey,
@@ -192,7 +200,9 @@ void main() {
     });
 
     test('re-ingesting the same vouch list reports no new additions', () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       n.ingestVouchList(
         authorPubkey: kVerifiedDeveloperPubkey,
         vouchedPubkeys: [_vouchedA],
@@ -205,7 +215,9 @@ void main() {
     });
 
     test('ingesting a vouch reveals the now-trusted sender messages', () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       // A stranger's message is gated.
       expect(n.state.isMessageFiltered(_chanMsg(_vouchedA)), isTrue);
       // The dev root vouches for them → no longer filtered.
@@ -219,7 +231,9 @@ void main() {
 
   group('AppStateNotifier — observe + earned trust', () {
     test('observeNymchatPubkey records into our own vouch list', () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       expect(n.observeNymchatPubkey(_stranger), isTrue);
       expect(n.observeNymchatPubkey(_stranger), isFalse); // dup
       expect(n.observeNymchatPubkey(_self), isFalse); // never self
@@ -227,14 +241,18 @@ void main() {
     });
 
     test('markNymchatPubkey adds to the graph and ungates the sender', () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       expect(n.state.isMessageFiltered(_chanMsg(_stranger)), isTrue);
       expect(n.markNymchatPubkey(_stranger), isTrue);
       expect(n.state.isMessageFiltered(_chanMsg(_stranger)), isFalse);
     });
 
     test('trackPubkeyMessage trusts a sender after >=2 distinct messages', () {
-      final n = AppStateNotifier()..goLive(_self, 'you#1a2b');
+      final n = AppStateNotifier()
+        ..goLive(_self, 'you#1a2b')
+        ..setProxyMode(false);
       // First message: not yet trusted.
       expect(n.trackPubkeyMessage(_stranger, 'evt1'), isFalse);
       expect(n.state.trustedPubkeys.contains(_stranger), isFalse);

@@ -40,8 +40,7 @@ class NativeSchnorr {
     final known = _available;
     if (known != null) return Future<bool>.value(known);
     if (kIsWeb) return Future<bool>.value(_available = false);
-    return _loading ??= coinlib
-        .loadCoinlib()
+    return _loading ??= Future<void>(() => coinlib.loadCoinlib())
         .then<bool>((_) => _available = true)
         .catchError((Object _) => _available = false);
   }

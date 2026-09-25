@@ -306,11 +306,6 @@ class GossipSync {
   }
 
   /// Everything held, as raw packet bytes, for the on-disk archive.
-  ///
-  /// These are signed public broadcasts — already visible to anyone in radio
-  /// range — so they are stored as-is. Nothing private is ever in this store
-  /// ([onPublicPacketSeen] refuses directed packets), which is what makes
-  /// plain persistence the right posture rather than a sealed one.
   String encodeArchive() {
     final rows = <String>[];
     for (final pkt in messages) {

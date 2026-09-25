@@ -855,7 +855,7 @@ class _ComposerState extends ConsumerState<Composer> {
       _botRows = const [];
       _acView = null;
     } else if (trigger.kind == TriggerKind.botCommand) {
-      // In the bot PM, surface the PM command set + `?model `/`?git `
+      // In the bot PM, surface the PM command set + `?model `
       // subcommands (`filterBotPMCommands`, mirrors `showBotCommandPalette`'s
       // `inBotPM` branch, commands.js:441-454); elsewhere the PUBLIC `?` palette
       // filtered by `cmd.startsWith(input)`.
@@ -1060,8 +1060,8 @@ class _ComposerState extends ConsumerState<Composer> {
     // selectCommand inserts `"?<name> "` (cmd.command already carries the `?`)
     // then re-runs the palette (commands.js:494-504): a multi-step `?command`
     // immediately shows its next-level options; anything without deeper options
-    // just hides. In the bot PM we re-evaluate so `?model`/`?git` cascade into
-    // their subcommands; the public set has none, so it stays hidden until a
+    // just hides. In the bot PM we re-evaluate so `?model` cascades into
+    // its subcommands; the public set has none, so it stays hidden until a
     // fresh `?`.
     _controller.value = TextEditingValue(
       text: '${cmd.command} ',

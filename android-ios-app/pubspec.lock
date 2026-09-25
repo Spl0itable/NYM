@@ -618,10 +618,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_cache_manager
-      sha256: "1de7849213b4c73c85aca7e0ac687a9a5d82ccdb594366b9dcc26cb6a2189cd2"
+      sha256: "911f5f56a586634132c54ef8ae3820c727770d141874ee7ea67998d66046a5f3"
       url: "https://pub.dreamflow.cloud"
     source: hosted
-    version: "3.4.2"
+    version: "3.4.3"
   flutter_launcher_icons:
     dependency: "direct dev"
     description:
@@ -832,6 +832,54 @@ packages:
       url: "https://pub.dreamflow.cloud"
     source: hosted
     version: "2.2.0"
+  google_identity_services_web:
+    dependency: transitive
+    description:
+      name: google_identity_services_web
+      sha256: "5d187c46dc59e02646e10fe82665fc3884a9b71bc1c90c2b8b749316d33ee454"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "0.3.3+1"
+  google_sign_in:
+    dependency: "direct main"
+    description:
+      name: google_sign_in
+      sha256: "521031b65853b4409b8213c0387d57edaad7e2a949ce6dea0d8b2afc9cb29763"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "7.2.0"
+  google_sign_in_android:
+    dependency: transitive
+    description:
+      name: google_sign_in_android
+      sha256: "799165f4c0621ed233bccdded4c2e92739bc1fe73e970163b2f7493b301adad3"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "7.2.1"
+  google_sign_in_ios:
+    dependency: transitive
+    description:
+      name: google_sign_in_ios
+      sha256: d9d80f953a244a099a40df1ff6aadc10ee375e6a098bbd5d55be332ce26db18c
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "6.2.1"
+  google_sign_in_platform_interface:
+    dependency: transitive
+    description:
+      name: google_sign_in_platform_interface
+      sha256: "7f59208c42b415a3cca203571128d6f84f885fead2d5b53eb65a9e27f2965bb5"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "3.1.0"
+  google_sign_in_web:
+    dependency: transitive
+    description:
+      name: google_sign_in_web
+      sha256: "2fc1f941e6443b2d6984f4056a727a3eaeab15d8ee99ba7125d79029be75a1da"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "1.1.0"
   graphs:
     dependency: transitive
     description:
@@ -1480,6 +1528,30 @@ packages:
       url: "https://pub.dreamflow.cloud"
     source: hosted
     version: "3.0.0"
+  sign_in_with_apple:
+    dependency: "direct main"
+    description:
+      name: sign_in_with_apple
+      sha256: "8bd875c8e8748272749eb6d25b896f768e7e9d60988446d543fe85a37a2392b8"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "7.0.1"
+  sign_in_with_apple_platform_interface:
+    dependency: transitive
+    description:
+      name: sign_in_with_apple_platform_interface
+      sha256: "981bca52cf3bb9c3ad7ef44aace2d543e5c468bb713fd8dda4275ff76dfa6659"
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "2.0.0"
+  sign_in_with_apple_web:
+    dependency: transitive
+    description:
+      name: sign_in_with_apple_web
+      sha256: f316400827f52cafcf50d00e1a2e8a0abc534ca1264e856a81c5f06bd5b10fed
+      url: "https://pub.dreamflow.cloud"
+    source: hosted
+    version: "3.0.0"
   sky_engine:
     dependency: transitive
     description: flutter
@@ -1853,46 +1925,6 @@ packages:
       url: "https://pub.dreamflow.cloud"
     source: hosted
     version: "1.5.1"
-  webview_flutter:
-    dependency: "direct main"
-    description:
-      name: webview_flutter
-      sha256: a3da219916aba44947d3a5478b1927876a09781174b5a2b67fa5be0555154bf9
-      url: "https://pub.dreamflow.cloud"
-    source: hosted
-    version: "4.13.1"
-  webview_flutter_android:
-    dependency: "direct main"
-    description:
-      name: webview_flutter_android
-      sha256: "9a25f6b4313978ba1c2cda03a242eea17848174912cfb4d2d8ee84a556f248e3"
-      url: "https://pub.dreamflow.cloud"
-    source: hosted
-    version: "4.10.1"
-  webview_flutter_platform_interface:
-    dependency: transitive
-    description:
-      name: webview_flutter_platform_interface
-      sha256: "63d26ee3aca7256a83ccb576a50272edd7cfc80573a4305caa98985feb493ee0"
-      url: "https://pub.dreamflow.cloud"
-    source: hosted
-    version: "2.14.0"
-  webview_flutter_web:
-    dependency: "direct main"
-    description:
-      name: webview_flutter_web
-      sha256: "18a7ccc1c31dd9a5c759a1b7217a2a1e04bd8f65712714a4070bfac19a23ca9e"
-      url: "https://pub.dreamflow.cloud"
-    source: hosted
-    version: "0.2.3+4"
-  webview_flutter_wkwebview:
-    dependency: "direct main"
-    description:
-      name: webview_flutter_wkwebview
-      sha256: fb46db8216131a3e55bcf44040ca808423539bc6732e7ed34fb6d8044e3d512f
-      url: "https://pub.dreamflow.cloud"
-    source: hosted
-    version: "3.23.0"
   win32:
     dependency: transitive
     description:

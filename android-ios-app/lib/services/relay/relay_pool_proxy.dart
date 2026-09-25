@@ -293,6 +293,10 @@ sealed class PoolMessage {
           });
         }
         return PoolStatus(connected, latency);
+      case 'POOL:RETRACT':
+        final retractId = arr.length > 1 ? arr[1]?.toString() ?? '' : '';
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(retractId)) return null;
+        return PoolRetract(retractId, arr.length > 2 ? arr[2]?.toString() : null);
       case 'POOL:RELAY_BAN':
         // ["POOL:RELAY_BAN", relayUrl, reason?] — the proxy permanently dropped
         // this relay (relays.js:2117 `_permanentlyBlacklistRelay`).
@@ -363,6 +367,12 @@ class PoolRelayBan extends PoolMessage {
   final String reason;
 }
 
+class PoolRetract extends PoolMessage {
+  const PoolRetract(this.eventId, this.reason);
+  final String eventId;
+  final String? reason;
+}
+
 /// A single shard's WebSocket to `/api/relay-pool`, with per-shard reconnect
 /// backoff (`_reconnectPoolShard`: min(3000*1.7^n,60000), jitter 0.7–1.0).
 class _ShardSocket {
@@ -375,12 +385,16 @@ class _ShardSocket {
     required this.onMessage,
     required this.onConnected,
     required this.onClosed,
-  });
+    this.confirmTimeout = const Duration(seconds: 12),
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
 
   RelayShard shard;
+  final DateTime Function() _now;
   final String url;
   final WebSocketChannelFactory channelFactory;
   final Random rng;
+  final Duration confirmTimeout;
 
   /// Shared, pool-owned counters. This shard adds its inbound/outbound frame
   /// byte lengths here (mirrors the PWA's per-socket writes to `relayStats`).
@@ -392,9 +406,17 @@ class _ShardSocket {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   Timer? _reconnectTimer;
+  Timer? _confirmTimer;
   int _reconnectAttempt = 0;
   bool _closedByUser = false;
   bool _open = false;
+  bool _settled = true;
+  bool _frameSinceConnect = false;
+
+  int failuresSinceFrame = 0;
+  DateTime? failureStreakStartedAt;
+
+  bool get hasFrameSinceConnect => _frameSinceConnect;
 
   /// Consecutive times this shard's socket closed BEFORE the pool ever confirmed
   /// it was up (no POOL:STATUS / inbound traffic). Drives the proxy's
@@ -415,6 +437,8 @@ class _ShardSocket {
     _closedByUser = false;
     if (_open) return;
     _open = false;
+    _settled = false;
+    _frameSinceConnect = false;
     try {
       final ch = channelFactory(Uri.parse(url));
       _channel = ch;
@@ -432,12 +456,27 @@ class _ShardSocket {
       // proxy, so resetting at listen time pinned reconnects to the ~3s floor
       // forever instead of escalating toward the 60s cap.
       _open = true;
+      _armConfirmTimer();
       send(PoolFrame.relays(shard.relays, shard.dmRelays));
       onConnected(this);
     } catch (e) {
       debugPrint('[RelayPoolProxy] Failed to open shard socket ($url): $e');
       _onDone();
     }
+  }
+
+  void _armConfirmTimer() {
+    _confirmTimer?.cancel();
+    _confirmTimer = Timer(confirmTimeout, () {
+      _confirmTimer = null;
+      if (_closedByUser || !_open || _frameSinceConnect) return;
+      _sub?.cancel();
+      _sub = null;
+      try {
+        _channel?.sink.close();
+      } catch (_) {}
+      _onDone();
+    });
   }
 
   void _onData(dynamic data) {
@@ -455,6 +494,11 @@ class _ShardSocket {
     // backoff so a later drop starts from the floor, while a never-connecting
     // socket keeps escalating (see `connect`).
     _reconnectAttempt = 0;
+    _frameSinceConnect = true;
+    failuresSinceFrame = 0;
+    failureStreakStartedAt = null;
+    _confirmTimer?.cancel();
+    _confirmTimer = null;
     // Any parseable inbound pool frame confirms the proxy endpoint is reachable
     // and speaking the protocol; clear the pre-connect failure streak so a later
     // mid-session blip is treated as a normal reconnect (not a host-unreachable
@@ -468,11 +512,17 @@ class _ShardSocket {
   }
 
   void _onDone() {
+    if (_settled) return;
+    _settled = true;
     _open = false;
     // A close before this socket ever confirmed means the connect attempt failed
     // outright (host lookup / refused / dropped pre-handshake). Count the streak
     // so the proxy can fall back after the PWA's threshold.
     if (!confirmed) failuresBeforeConfirm++;
+    if (!_frameSinceConnect) {
+      if (failuresSinceFrame == 0) failureStreakStartedAt = _now();
+      failuresSinceFrame++;
+    }
     connectedRelays = const [];
     _cleanup();
     onClosed(this);
@@ -481,6 +531,8 @@ class _ShardSocket {
   }
 
   void _cleanup() {
+    _confirmTimer?.cancel();
+    _confirmTimer = null;
     _sub?.cancel();
     _sub = null;
     _channel = null;
@@ -516,8 +568,11 @@ class _ShardSocket {
   Future<void> close() async {
     _closedByUser = true;
     _open = false;
+    _settled = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _confirmTimer?.cancel();
+    _confirmTimer = null;
     await _sub?.cancel();
     _sub = null;
     try {
@@ -548,9 +603,13 @@ class RelayPoolProxy implements PoolTransport {
     this.onProxyUnreachable,
     this.onProxyConnected,
     this.maxPreConnectFailures = 2,
+    this.confirmTimeout = const Duration(seconds: 12),
+    this.postConfirmGrace = const Duration(seconds: 30),
+    DateTime Function()? now,
     this.eoseQuorum = 0.6,
     this.eoseTimeout = const Duration(seconds: 4),
   })  : _verify = verify ?? ((_) async => true),
+        _now = now ?? DateTime.now,
         _allRelays = {...relays},
         _geoRelayUrls = [...?geoRelayUrls],
         _dmRelays = dmRelays ?? RelayConfig.defaultRelays,
@@ -587,9 +646,17 @@ class RelayPoolProxy implements PoolTransport {
   /// [onProxyUnreachable], settable so it stays off the [PoolTransport] interface.
   void Function()? onProxyConnected;
 
+  void Function(String eventId)? onEventRetracted;
+
   /// Consecutive pre-confirm shard-connect failures that trip
   /// [onProxyUnreachable] (PWA threshold: 2).
   final int maxPreConnectFailures;
+
+  final Duration confirmTimeout;
+
+  final Duration postConfirmGrace;
+
+  final DateTime Function() _now;
 
   /// True once any shard has confirmed the proxy endpoint is reachable. Latches:
   /// after this, pre-connect failure counting is disabled forever.
@@ -742,6 +809,8 @@ class RelayPoolProxy implements PoolTransport {
         onMessage: _onShardMessage,
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
+        confirmTimeout: confirmTimeout,
+        now: _now,
       );
       _sockets.add(sock);
       sock.connect();
@@ -760,6 +829,7 @@ class RelayPoolProxy implements PoolTransport {
       max(1, openShardCount),
       eoseQuorum: eoseQuorum,
       eoseTimeout: eoseTimeout,
+      onRejected: (event) => _deduper.forget(copyKey(event)),
     );
     _subscriptions[id] = sub;
     _activeFilters[id] = filters;
@@ -1098,16 +1168,23 @@ class RelayPoolProxy implements PoolTransport {
     // we only watch for the host-unreachable case: a shard that has closed
     // [maxPreConnectFailures] times in a row before the pool EVER confirmed.
     // Mirrors the PWA's 2-consecutive-pool-failure fallback (relays.js:1824).
-    if (_proxyEverConnected || _unreachableFired || _disposed) return;
-    if (sock.failuresBeforeConfirm >= maxPreConnectFailures) {
-      _unreachableFired = true;
-      final cb = onProxyUnreachable;
-      if (cb != null) {
-        debugPrint('[RelayPoolProxy] proxy unreachable after '
-            '${sock.failuresBeforeConfirm} pre-connect failures on '
-            '${sock.shard.id}; falling back to direct relays');
-        cb();
-      }
+    if (_unreachableFired || _disposed) return;
+    final streak = _proxyEverConnected
+        ? sock.failuresSinceFrame
+        : sock.failuresBeforeConfirm;
+    if (streak < maxPreConnectFailures) return;
+    if (_proxyEverConnected) {
+      final since = sock.failureStreakStartedAt;
+      if (since == null || _now().difference(since) < postConfirmGrace) return;
+    }
+    if (_sockets.any((s) => s.isOpen && s.hasFrameSinceConnect)) return;
+    _unreachableFired = true;
+    final cb = onProxyUnreachable;
+    if (cb != null) {
+      debugPrint('[RelayPoolProxy] proxy unreachable after '
+          '$streak consecutive failures on ${sock.shard.id}; '
+          'falling back to direct relays');
+      cb();
     }
   }
 
@@ -1183,7 +1260,7 @@ class RelayPoolProxy implements PoolTransport {
         // relay list.
         eventProvenance.record(event, sourceRelay);
         // Cross-shard dedup: the first shard to deliver an id wins.
-        if (!_deduper.add(event.id)) return;
+        if (!_deduper.add(copyKey(event))) return;
         // Normalize a split-child sub id back to its parent (see [_parentSubId]).
         final eventSubId = _parentSubId(subId);
         // Post-dedup event accounting (relays.js handleRelayMessage:3738-3746):
@@ -1222,7 +1299,7 @@ class RelayPoolProxy implements PoolTransport {
             _banRelay(relayUrl, reason);
           }
           _stampShardLatency(id, sock.shard.id);
-          _subscriptions[id]?.onEose(sock.shard.id);
+          _subscriptions[id]?.onEose(sock.shard.id, closed: true);
         }
       case PoolOk(:final id, :final message, :final relayUrl):
         // Publish ACK; publish() does not await per-relay OK in proxy mode.
@@ -1254,6 +1331,9 @@ class RelayPoolProxy implements PoolTransport {
         // PWA's `_permanentlyBlacklistRelay` effect on the shard layout so any
         // future rebuild excludes it.
         _permanentBlacklist.add(url);
+        break;
+      case PoolRetract(:final eventId):
+        onEventRetracted?.call(eventId);
         break;
       case PoolPing():
         // Keepalive — no PONG; liveness is implicit (relays.js:2112).

@@ -240,7 +240,15 @@ NymLink? parseNymLink(String url) {
 abstract class DeepLinkTarget {
   void switchChannel(String channel, {String geohash});
   void startPM(String peerPubkey, {String? nym});
+  Future<bool> confirmGroupInvite(GroupInviteToken token);
   Future<void> joinGroupViaInvite(GroupInviteToken token);
+}
+
+Future<bool> confirmAndJoinGroupInvite(
+    DeepLinkTarget target, GroupInviteToken invite) async {
+  if (!await target.confirmGroupInvite(invite)) return false;
+  await target.joinGroupViaInvite(invite);
+  return true;
 }
 
 /// Routes a parsed [NymLink] to the right controller call. Pure decision logic
@@ -263,7 +271,7 @@ bool dispatchNymLink(NymLink link, DeepLinkTarget target) {
     case NymLinkKind.groupInvite:
       final invite = link.invite;
       if (invite == null) return false;
-      target.joinGroupViaInvite(invite);
+      unawaited(confirmAndJoinGroupInvite(target, invite));
       return true;
   }
 }

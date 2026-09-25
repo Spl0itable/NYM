@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Each released version corresponds to a tag on
 [github.com/Spl0itable/NYM](https://github.com/Spl0itable/NYM/releases).
 
-## [3.75.545] - 2026-08-26
+## [3.75.543] - 2026-08-26
 
 ### Added
 - Nymbot works inside channel message threads. Opening a thread on one of its

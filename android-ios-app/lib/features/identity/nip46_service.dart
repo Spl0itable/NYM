@@ -317,6 +317,8 @@ class Nip46Service implements Nip46Signer {
   /// Completes once the signer acknowledges `connect` (used by the login flow).
   Completer<String>? _connectCompleter;
 
+  final ValueNotifier<bool> bareAck = ValueNotifier<bool>(false);
+
   // --- public getters -------------------------------------------------------
 
   @override
@@ -426,6 +428,7 @@ class Nip46Service implements Nip46Signer {
     _relayUrl = relay;
     // 16 hex chars == 8 random bytes. Matches the PWA (.slice(0, 16)).
     _secret = bytesToHex(randomBytes(8));
+    bareAck.value = false;
     _remotePubkey = null;
     _userPubkey = null;
     _connected = false;
@@ -453,6 +456,7 @@ class Nip46Service implements Nip46Signer {
     _clientPubkey = getPublicKeyHex(_clientSecretKey!);
     _relayUrl = parsed.relay;
     _secret = parsed.secret;
+    bareAck.value = false;
     _connected = false;
     _userPubkey = null;
 
@@ -663,25 +667,17 @@ class Nip46Service implements Nip46Signer {
         return;
       }
 
-      // Connect ack for the nostrconnect flow (signer initiates, no prior id).
       if (_remotePubkey == null) {
-        _remotePubkey = event.pubkey;
-        // Verify secret if the signer echoed it (PWA parity).
-        if (_secret != null &&
-            result is String &&
-            result != 'ack' &&
-            result != _secret) {
-          // Secret mismatch — treat as failure.
-          _connectCompleter?.completeError(
-            StateError('NIP-46 connection secret mismatch'),
-          );
+        final secret = _secret;
+        if (secret == null || result is! String || result != secret) {
+          if (result == 'ack') bareAck.value = true;
           return;
         }
+        _remotePubkey = event.pubkey;
         _connected = true;
         if (_connectCompleter != null && !_connectCompleter!.isCompleted) {
           _connectCompleter!.complete(event.pubkey);
         }
-        // Fall through so an id-bearing connect response still resolves.
       }
 
       if (id is String) {

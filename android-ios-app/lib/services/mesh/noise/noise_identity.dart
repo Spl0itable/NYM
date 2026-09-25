@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../core/crypto/keys.dart'
     show bytesToHex, hexToBytes, randomBytes;
+import '../../storage/secure_store.dart';
 import 'noise_crypto.dart';
 
 /// The device's long-term mesh identity — a persistent X25519 static key (used
@@ -42,7 +43,7 @@ class NoiseIdentity {
   /// Loads the stored identity, generating and persisting a new one on first
   /// run. [storage] is injectable for tests.
   static Future<NoiseIdentity> loadOrCreate({
-    FlutterSecureStorage storage = const FlutterSecureStorage(),
+    FlutterSecureStorage storage = SecureStore.platform,
   }) async {
     var staticPrivHex = await storage.read(key: _kStaticPriv);
     var signingSeedHex = await storage.read(key: _kSigningSeed);

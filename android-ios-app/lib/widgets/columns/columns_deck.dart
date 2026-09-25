@@ -23,11 +23,14 @@ import '../../features/shop/cosmetics.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
 import '../../models/pm_conversation.dart';
+import '../../models/message.dart';
+import '../../models/settings.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../chat/message_row.dart';
 import '../../features/threads/thread_view.dart' show ThreadView;
+import '../chat/list_anchor.dart';
 import '../chat/messages_list.dart' show messageListScrollerProvider;
 import '../chat/message_skeleton.dart';
 import '../chat/typing_indicator.dart';
@@ -1845,6 +1848,15 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   /// analog of the single view's [messageListScrollerProvider] binding.
   final ItemScrollController _itemScroll = ItemScrollController();
   final ItemPositionsListener _positions = ItemPositionsListener.create();
+  final AnchoredUnits _anchors = AnchoredUnits();
+  late final ListAnchorKeeper _keeper =
+      ListAnchorKeeper(controller: _itemScroll, units: _anchors);
+  Map<int, String> _unitByIndex = const {};
+  _ColumnGroups? _groups;
+  int _seenScrolls = 0;
+  bool _listBuilt = false;
+  ({String unit, double alignment})? _restore;
+  static const double _bottomInset = 10;
 
   /// Column viewport height (captured at build) — converts the normalized item
   /// edges into the PWA's pixel at-bottom / scroll-button thresholds.
@@ -1872,9 +1884,15 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       _lastMessageCount = 0;
       _atBottom = true;
       _showScrollButton = false;
+      _restore = null;
+      _groups = null;
+      _keeper.reset();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (_itemScroll.isAttached) _itemScroll.jumpTo(index: 0);
+        if (_itemScroll.isAttached) {
+          _itemScroll.jumpTo(index: 0);
+          _keeper.reset(target: 0);
+        }
         widget.onAtBottomChanged?.call(true);
       });
     }
@@ -1925,12 +1943,138 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
 
   void _scrollToBottom() {
     if (!_itemScroll.isAttached) return;
-    _itemScroll.scrollTo(
-      index: 0,
-      alignment: 0,
-      duration: NymMotion.transition,
-      curve: NymMotion.curve,
+    ref
+        .read(messageListScrollerProvider(widget.desc.storageKey))
+        .animateTo(index: 0, alignment: 0);
+  }
+
+  List<Message> _messagesNow(AppState app) {
+    var messages = visibleMessagesFor(app, widget.desc.storageKey);
+    if (widget.desc.storageKey == BotChatController.conversationKey) {
+      messages = mergeBotThreadWithInfo(
+          messages, ref.read(botChatControllerProvider).infoMessages);
+    }
+    return messages;
+  }
+
+  _ColumnGroups _groupsFor(
+      AppState app, Settings settings, List<Message> messages) {
+    final mentionToken = '@${_baseNym(app.selfNym)}';
+    final cached = _groups;
+    if (cached != null &&
+        cached.rev == app.displayRev &&
+        cached.count == messages.length &&
+        cached.mentionToken == mentionToken &&
+        cached.useBubbles == settings.useBubbles) {
+      return cached;
+    }
+    final groups = buildMessageGroups(
+      messages,
+      reactions: app.reactions,
+      useBubbles: settings.useBubbles,
+      mentionToken: mentionToken,
     );
+    final indexById = <String, int>{};
+    final indexByUnit = <String, int>{};
+    final unitByIndex = <int, String>{};
+    for (var f = 0; f < groups.length; f++) {
+      final revIndex = groups.length - 1 - f;
+      for (final e in groups[f]) {
+        indexById[e.message.id] = revIndex;
+      }
+      final unit = 'cvgroup_${groups[f].first.message.id}';
+      indexByUnit[unit] = revIndex;
+      unitByIndex[revIndex] = unit;
+    }
+    return _groups = _ColumnGroups(
+      rev: app.displayRev,
+      count: messages.length,
+      mentionToken: mentionToken,
+      useBubbles: settings.useBubbles,
+      groups: groups,
+      indexById: indexById,
+      indexByUnit: indexByUnit,
+      unitByIndex: unitByIndex,
+    );
+  }
+
+  void _keepAnchor() {
+    if (!mounted ||
+        !_listBuilt ||
+        !_itemScroll.isAttached ||
+        _viewportHeight <= 0) {
+      return;
+    }
+    final scroller =
+        ref.read(messageListScrollerProvider(widget.desc.storageKey));
+    if (scroller.scrollCount != _seenScrolls) {
+      _seenScrolls = scroller.scrollCount;
+      _keeper.reset();
+    }
+    if (scroller.animating) return;
+    final app = ref.read(appStateProvider);
+    final built =
+        _groupsFor(app, ref.read(settingsProvider), _messagesNow(app));
+    final positions = _positions.itemPositions.value;
+    ItemPosition? newest;
+    for (final p in positions) {
+      if (p.index == 0) {
+        newest = p;
+        break;
+      }
+    }
+    final follow = newest != null &&
+        _bottomInset - newest.itemLeadingEdge * _viewportHeight < 120;
+    final old = _unitByIndex;
+    _keeper.keep(
+      positions: positions,
+      unitAt: (index) => old[index],
+      indexOf: (unit) => built.indexByUnit[unit],
+      viewportHeight: _viewportHeight,
+      bottomInset: _bottomInset,
+      follow: follow,
+    );
+  }
+
+  void _rememberForThread() {
+    if (!_listBuilt || _viewportHeight <= 0) return;
+    ItemPosition? nearest;
+    for (final p in _positions.itemPositions.value) {
+      if (nearest == null || p.itemLeadingEdge < nearest.itemLeadingEdge) {
+        nearest = p;
+      }
+    }
+    if (nearest == null) return;
+    if (nearest.index == 0 && nearest.itemLeadingEdge >= -0.01) {
+      _restore = null;
+      return;
+    }
+    final unit = _unitByIndex[nearest.index];
+    if (unit == null) return;
+    var alignment = _anchors.edgeOf(unit) ?? nearest.itemLeadingEdge;
+    if (nearest.index == 0) alignment -= _bottomInset / _viewportHeight;
+    _restore = (unit: unit, alignment: alignment);
+  }
+
+  ({int index, double alignment})? _takeRestore(
+      Map<String, int> indexByUnit) {
+    final restore = _restore;
+    _restore = null;
+    if (restore == null) return null;
+    final index = indexByUnit[restore.unit];
+    if (index == null) return null;
+    return (index: index, alignment: restore.alignment);
+  }
+
+  bool _onScroll(ScrollNotification n) {
+    _keeper.observe(n);
+    if (n is ScrollEndNotification &&
+        _keeper.pending &&
+        !_keeper.retargeting) {
+      _keeper.pending = false;
+      _keepAnchor();
+    }
+    return false;
   }
 
   @override
@@ -1939,13 +2083,22 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     final transparent = widget.transparent;
     final mobile = widget.mobile;
     final settings = ref.watch(settingsProvider);
+    ref.listen(appStateProvider.select((s) => s.displayRev),
+        (_, __) => _keepAnchor());
+    ref.listen(activeThreadProvider, (prev, next) {
+      final key = widget.desc.storageKey;
+      if (next != null &&
+          next.view.storageKey == key &&
+          (prev == null || prev.view.storageKey != key)) {
+        _rememberForThread();
+      }
+    });
     // Re-run this column on rendered changes (display revision) and self-nym
     // edits — NOT on every ambient emit (typing/presence), which previously
     // rebuilt and re-grouped EVERY open column. `reactions` rides the same
     // in-place map the single view reads.
     ref.watch(appStateProvider.select((s) => (s.displayRev, s.selfNym)));
     final app = ref.read(appStateProvider);
-    final reactions = app.reactions;
     // Columns render the same FILTERED view as the single chat: the PWA's
     // columns draw via `renderMessagesWithVirtualScroll` → `getFilteredMessages`
     // / `getFilteredPMMessages` (columns.js:510 → messages.js:2934-2949), so
@@ -1977,6 +2130,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _atBottom && _itemScroll.isAttached) {
             _itemScroll.jumpTo(index: 0);
+            _keeper.reset(target: 0);
           }
         });
       }
@@ -1993,6 +2147,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     // `.cv-column.focused` (desktop): primary border + `--shadow-glow`
     // (`0 0 20px primary@0.1`). Mobile resets focused styling to none.
     final showFocus = widget.focused && !mobile;
+    if (threadOpen || messages.isEmpty) _listBuilt = false;
 
     // `.cv-column` chrome. AnimatedContainer because the CSS cross-fades
     // border-color/box-shadow over `var(--transition)` (0.25s cubic-bezier)
@@ -2069,39 +2224,44 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                             // bubble layout (previously a flat row list passed
                             // showAvatar:false, so columns had NO avatars). IRC
                             // layout still renders bare, avatar-less rows.
-                            final groups = buildMessageGroups(
-                              messages,
-                              reactions: reactions,
-                              useBubbles: settings.useBubbles,
-                              mentionToken: '@${_baseNym(app.selfNym)}',
-                            );
-                            // message id → reversed render index, so a quoted
-                            // blockquote tap can jump THIS column to its source.
-                            // Every message in a group shares the group's unit
-                            // index (same as the single view's map).
-                            final indexById = <String, int>{};
-                            for (var f = 0; f < groups.length; f++) {
-                              final revIndex = groups.length - 1 - f;
-                              for (final e in groups[f]) {
-                                indexById[e.message.id] = revIndex;
-                              }
+                            final built =
+                                _groupsFor(app, settings, messages);
+                            final groups = built.groups;
+                            final scroller = ref.read(
+                                messageListScrollerProvider(
+                                    widget.desc.storageKey));
+                            scroller.bind(_itemScroll, built.indexById);
+                            _unitByIndex = built.unitByIndex;
+                            final restore = _listBuilt
+                                ? null
+                                : _takeRestore(built.indexByUnit);
+                            if (!_listBuilt) {
+                              _listBuilt = true;
+                              _seenScrolls = scroller.scrollCount;
+                              _keeper.reset(
+                                target: restore?.index ?? 0,
+                                anchorUnit: restore == null
+                                    ? null
+                                    : built.unitByIndex[restore.index],
+                              );
                             }
-                            ref
-                                .read(messageListScrollerProvider(
-                                    widget.desc.storageKey))
-                                .bind(_itemScroll, indexById);
                             return LayoutBuilder(
                                 builder: (context, constraints) {
                               _viewportHeight = constraints.maxHeight;
-                              return ScrollablePositionedList.builder(
+                              return NotificationListener<ScrollNotification>(
+                                onNotification: _onScroll,
+                                child: ScrollablePositionedList.builder(
                                 itemScrollController: _itemScroll,
                                 itemPositionsListener: _positions,
                                 reverse: true,
+                                initialScrollIndex: restore?.index ?? 0,
+                                initialAlignment: restore?.alignment ?? 0,
                                 padding: const EdgeInsets.all(10),
                                 itemCount: groups.length,
                                 itemBuilder: (context, revIndex) {
                                   final entries =
                                       groups[groups.length - 1 - revIndex];
+                                  final unitId = built.unitByIndex[revIndex]!;
                                   // Per-row raster isolation (see the single-view
                                   // list in messages_list.dart): keeps a repaint
                                   // in one column's row from re-rasterizing every
@@ -2116,9 +2276,11 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                   // semi-transparent grouped bubbles. See the single
                                   // view in messages_list.dart for the full rationale.
                                   return RepaintBoundary(
-                                    key: ValueKey(
-                                        'cvgroup_${entries.first.message.id}'),
-                                    child: MessageGroup(
+                                    key: ValueKey(unitId),
+                                    child: AnchoredUnit(
+                                      id: unitId,
+                                      units: _anchors,
+                                      child: MessageGroup(
                                       entries: entries,
                                       settings: settings,
                                       // `body.columns-mode` message-layout variants
@@ -2132,8 +2294,10 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                       onReactionPicker: (msg) =>
                                           showReactionPicker(context, ref, msg),
                                     ),
+                                    ),
                                   );
                                 },
+                              ),
                               );
                             });
                           }),
@@ -3454,4 +3618,26 @@ class _DashedBorderPainter extends CustomPainter {
       old.radius != radius ||
       old.fill != fill ||
       old.strokeWidth != strokeWidth;
+}
+
+class _ColumnGroups {
+  _ColumnGroups({
+    required this.rev,
+    required this.count,
+    required this.mentionToken,
+    required this.useBubbles,
+    required this.groups,
+    required this.indexById,
+    required this.indexByUnit,
+    required this.unitByIndex,
+  });
+
+  final int rev;
+  final int count;
+  final String mentionToken;
+  final bool useBubbles;
+  final List<List<MessageGroupEntry>> groups;
+  final Map<String, int> indexById;
+  final Map<String, int> indexByUnit;
+  final Map<int, String> unitByIndex;
 }

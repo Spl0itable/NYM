@@ -40,6 +40,7 @@ import '../../models/settings.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../services/storage/mesh_file_store.dart';
 import '../../state/settings_provider.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
@@ -50,6 +51,7 @@ import '../context_menu/context_menu_actions.dart';
 import '../context_menu/context_menu_panel.dart';
 import '../context_menu/interaction_hooks.dart';
 import '../context_menu/profile_badges.dart';
+import '../anchored_popup.dart';
 
 /// Formats a [DateTime] per the user's time-format setting (docs/specs/02 §4).
 String formatTime(DateTime t, String timeFormat) {
@@ -4086,9 +4088,6 @@ class _TimestampTextState extends State<_TimestampText> {
     if (box == null || !box.hasSize) return;
     final rect = box.localToGlobal(Offset.zero) & box.size;
     final overlay = Overlay.of(context);
-    final screen = MediaQuery.of(context).size;
-    final right = (screen.width - rect.right).clamp(4.0, double.infinity);
-    final above = rect.top > 110;
     final entry = OverlayEntry(
       builder: (ctx) {
         final c = ctx.nym;
@@ -4101,10 +4100,9 @@ class _TimestampTextState extends State<_TimestampText> {
                 onPanStart: (_) => _closePopup(),
               ),
             ),
-            Positioned(
-              right: right,
-              top: above ? null : rect.bottom + 6,
-              bottom: above ? screen.height - rect.top + 6 : null,
+            AnchoredPopup(
+              anchor: rect,
+              align: PopupAlign.end,
               child: Material(
                 type: MaterialType.transparency,
                 child: Container(
@@ -5714,7 +5712,7 @@ class _LocalMediaBody extends StatelessWidget {
     if (cached != null) return cached;
     // Soft cap so a long session can't grow the cache unbounded.
     if (_bytesCache.length > 80) _bytesCache.clear();
-    return _bytesCache[path] = XFile(path).readAsBytes();
+    return _bytesCache[path] = MeshFileStore.instance.read(path);
   }
 
   @override
@@ -5807,8 +5805,9 @@ class _LocalMediaBody extends StatelessWidget {
 
   Future<void> _shareFile() async {
     try {
+      final bytes = await _read(path);
       await Share.shareXFiles(
-        [XFile(path, mimeType: mime, name: name)],
+        [XFile.fromData(bytes, mimeType: mime, name: name)],
       );
     } catch (_) {
       // Sharing unavailable (desktop/test) — silently ignore.

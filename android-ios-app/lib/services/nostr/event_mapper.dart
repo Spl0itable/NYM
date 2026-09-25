@@ -81,9 +81,57 @@ class EventMapper {
     final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final clamped = _clampFuture(e, nowMs);
-    return ms > 0
-        ? (ms < clamped.ceilingMs ? ms : clamped.ceilingMs)
-        : clamped.createdAt * 1000;
+    return displayMs(
+      ms: ms,
+      createdAtRaw: e.createdAt,
+      createdAt: clamped.createdAt,
+      ceilingMs: clamped.ceilingMs,
+    );
+  }
+
+  static const int msTagToleranceMs = 60000;
+
+  static int displayMs({
+    required int ms,
+    required int createdAtRaw,
+    required int createdAt,
+    required int ceilingMs,
+  }) {
+    if (ms <= 0 || ms > createdAtRaw * 1000 + msTagToleranceMs) {
+      return createdAt * 1000;
+    }
+    return ms < ceilingMs ? ms : ceilingMs;
+  }
+
+  static ({int createdAt, int timestampMs}) rumorTimes({
+    required String key,
+    required int createdAtRaw,
+    required int ms,
+    int? nowMs,
+  }) {
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    final nowSec = now ~/ 1000;
+    int ceilingMs;
+    int createdAt;
+    if (createdAtRaw <= nowSec + 60) {
+      ceilingMs = now;
+      createdAt = createdAtRaw;
+    } else {
+      final registry = ceilings;
+      ceilingMs = registry != null
+          ? registry.stableCeiling(key, createdAtRaw * 1000, now)
+          : now;
+      createdAt = ceilingMs ~/ 1000;
+    }
+    return (
+      createdAt: createdAt,
+      timestampMs: displayMs(
+        ms: ms,
+        createdAtRaw: createdAtRaw,
+        createdAt: createdAt,
+        ceilingMs: ceilingMs,
+      ),
+    );
   }
 
   /// Maps a channel message event (kind 20000/23333) to a [Message].
@@ -133,8 +181,12 @@ class EventMapper {
     // to opacity 0.2 (the reported bug, seen only in a very busy channel). The `ms`
     // tag rides untouched in the event body, so it recovers the true time. Falls
     // back to `created_at` seconds for non-Nymchat senders that carry no `ms` tag.
-    final effectiveMs =
-        ms > 0 ? (ms < ceilingMs ? ms : ceilingMs) : createdAt * 1000;
+    final effectiveMs = displayMs(
+      ms: ms,
+      createdAtRaw: e.createdAt,
+      createdAt: createdAt,
+      ceilingMs: ceilingMs,
+    );
 
     // A replayed-backlog message (PWA `messageAge > 10000` / [_isHistorical]):
     // older than 10s by its REAL send time. Marking it historical keeps D1/relay
@@ -177,7 +229,7 @@ class EventMapper {
       // tag at all — which is how the timestamp popup tells "no proof-of-work"
       // (another client) from "mined to N bits". The work actually proven is
       // recomputed from the id via [powBitsForId], never trusted from the tag.
-      powTarget: _powTarget(e),
+      powTarget: powTargetOf(e),
     );
   }
 
@@ -206,7 +258,7 @@ class EventMapper {
   /// The difficulty a NIP-13 `nonce` tag commits to, or null when the event
   /// carries no nonce tag. A tag with an unparseable/absent target still means
   /// "mined", so it maps to 0 rather than null.
-  static int? _powTarget(NostrEvent e) {
+  static int? powTargetOf(NostrEvent e) {
     for (final t in e.tags) {
       if (t.isNotEmpty && t[0] == 'nonce') {
         if (t.length < 3) return 0;

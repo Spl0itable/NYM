@@ -87,17 +87,28 @@
 				<string>nymchat</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>google-sign-in</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.435441872913-8lb1h9498kapbl00am68t046it4dv0iu</string>
+			</array>
+		</dict>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<!-- Keep WebRTC audio alive when the app is backgrounded during a call.
 		     Call SIGNALLING rides Nostr, not PushKit, so no `voip` mode: the app
-		     registers no APNs/PushKit token at all, and declaring modes it does
+		     registers no PushKit token at all, and declaring modes it does
 		     not use both misstates the app's behaviour and invites rejection. -->
 		<string>audio</string>
-		<!-- BGAppRefresh windows: with no push provider, this is how a suspended
+		<!-- BGAppRefresh windows: besides the heartbeat push, this is how a suspended
 		     app gets to pull what arrived and raise notifications for it -->
 		<string>fetch</string>
+		<string>remote-notification</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
 	</array>

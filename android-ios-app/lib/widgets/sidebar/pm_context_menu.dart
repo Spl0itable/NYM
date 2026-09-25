@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +12,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../common/app_dialog.dart';
 import '../nym_icons.dart';
+import '../anchored_popup.dart';
 
 /// One entry in a sidebar row's `.quick-context-menu` (sidebar-sections.js
 /// `_buildSidebarMenuItems`).
@@ -138,7 +138,8 @@ class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
         // clamping; a layout delegate gets the same measured size.
         Positioned.fill(
           child: CustomSingleChildLayout(
-            delegate: _QuickMenuLayout(anchor: anchor),
+            delegate: PointPopupLayout(
+                anchor: anchor, insets: popupInsetsOf(context)),
             child: _QuickMenu(animation: animation, items: items),
           ),
         ),
@@ -154,35 +155,6 @@ class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
     Widget child,
   ) =>
       child; // entrance handled inside _QuickMenu via the animation.
-}
-
-/// Places the menu at the press point, clamped on-screen from its MEASURED
-/// size — the PWA math (sidebar-sections.js:128-131):
-/// `left = max(10, min(x, vw - w - 10))`; top only clamps when overflowing the
-/// bottom: `top = max(10, vh - h - 10)`.
-class _QuickMenuLayout extends SingleChildLayoutDelegate {
-  _QuickMenuLayout({required this.anchor});
-
-  final Offset anchor;
-
-  @override
-  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
-      constraints.loosen();
-
-  @override
-  Offset getPositionForChild(Size size, Size childSize) {
-    final left =
-        math.max(10.0, math.min(anchor.dx, size.width - childSize.width - 10));
-    double top = anchor.dy;
-    if (top + childSize.height > size.height - 10) {
-      top = math.max(10.0, size.height - childSize.height - 10);
-    }
-    return Offset(left, top);
-  }
-
-  @override
-  bool shouldRelayout(_QuickMenuLayout oldDelegate) =>
-      oldDelegate.anchor != anchor;
 }
 
 class _QuickMenu extends ConsumerWidget {

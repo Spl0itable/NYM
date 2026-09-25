@@ -51,6 +51,22 @@ void main() {
       expect(proxiedMedia(once), once);
     });
 
+    test('own-host and bundled-asset URLs are never proxied', () {
+      expect(proxiedMedia('https://nymchat.app/images/NYM-banner.png'),
+          'https://nymchat.app/images/NYM-banner.png');
+      expect(proxiedMedia('https://web.nymchat.app/images/x.png'),
+          'https://web.nymchat.app/images/x.png');
+      expect(proxiedMedia('https://nymchat.app.evil.example/x.png'),
+          contains('/api/proxy?url='));
+      expect(proxiedAvatarUrl('https://nymchat.app/images/nymbot-icon.png'),
+          'https://nymchat.app/images/nymbot-icon.png');
+      expect(proxiedAvatarUrl('assets/images/nymbot-icon.png'),
+          'assets/images/nymbot-icon.png');
+      expect(isOwnMediaUrl('https://NYMCHAT.APP/a.png'), isTrue);
+      expect(isOwnMediaUrl('https://cdn.example/a.png'), isFalse);
+      expect(isOwnMediaUrl('assets/images/nymbot-icon.png'), isFalse);
+    });
+
     test('proxiedMedia(emoji) adds &emoji=1', () {
       expect(proxiedMedia('https://cdn.example/e.png', emoji: true),
           contains('emoji=1'));

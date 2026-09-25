@@ -15,6 +15,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
+import '../groups/group_invite_confirm.dart';
 import '../i18n/i18n.dart';
 
 /// A picked recipient: pubkey (64-hex) + a display nym.
@@ -828,14 +829,17 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
 
   /// `_buildGroupInviteSuggestionItem` (pms.js) — a `.pm-suggestion-item` with
   /// the group glyph, the invite's (sanitized) name (or "Group"), and a
-  /// "Join group" suffix. On tap: close the modal, then join via the EXISTING
-  /// `joinGroupViaInvite(token)` (no fakes).
+  /// "Join group" suffix. On tap: confirm, close the modal, then join via the
+  /// EXISTING `joinGroupViaInvite(token)` (no fakes).
   Widget _inviteSuggestionItem(NymColors c, GroupInviteToken token) {
     final name = _sanitizeGroupName(token.name);
     return InkWell(
-      onTap: () {
+      onTap: () async {
+        final controller = ref.read(nostrControllerProvider);
+        final ok = await confirmGroupInviteJoin(context, token);
+        if (!ok || !mounted) return;
         Navigator.of(context).maybePop();
-        ref.read(nostrControllerProvider).joinGroupViaInvite(token);
+        await controller.joinGroupViaInvite(token);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),

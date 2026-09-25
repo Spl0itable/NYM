@@ -1,3 +1,5 @@
+import 'dart:io';
+
 /// Centralized backend API host + headers for the native app.
 ///
 /// The PWA derives its API host from `window.location.host` (`_getApiHost`),
@@ -35,7 +37,28 @@ class ApiConfig {
   /// `_client.js:isNymchatClient` matches `/Nym(?:chat|bot)App\//i`. We send
   /// `NymchatApp/<ver>`; the standalone Nymbot app sends `NymbotApp/<ver>` to
   /// the same worker.
-  static const String userAgent = 'NymchatApp/$appVersion';
+  static const String appUserAgent = 'NymchatApp/$appVersion';
+
+  static final String dartUserAgent = HttpOverrides.runWithHttpOverrides(
+        () => HttpClient().userAgent,
+        _PlainHttpOverrides(),
+      ) ??
+      'Dart (dart:io)';
+
+  static final String userAgent = '$dartUserAgent, $appUserAgent';
+
+  static HttpClient socketClient() => HttpClient()..userAgent = null;
+
+  static bool isOwnHost(String host) {
+    final h = host.toLowerCase();
+    return h == 'nymchat.app' || h.endsWith('.nymchat.app');
+  }
+
+  static String userAgentFor(Uri url) =>
+      isOwnHost(url.host) ? userAgent : dartUserAgent;
+
+  static Map<String, String> socketHeadersFor(Uri url) =>
+      {'User-Agent': userAgentFor(url)};
 
   /// `wss://<host>/api/relay-pool` — the multiplexed relay-pool socket
   /// (`_getRelayPoolUrl`, spec §4.2).
@@ -52,7 +75,7 @@ class ApiConfig {
 
   /// Default headers sent on every backend API request. The UA header is what
   /// satisfies the `isNymchatClient` gate.
-  static Map<String, String> get defaultHeaders => {
-        'User-Agent': userAgent,
-      };
+  static Map<String, String> get defaultHeaders => {'User-Agent': userAgent};
 }
+
+class _PlainHttpOverrides extends HttpOverrides {}

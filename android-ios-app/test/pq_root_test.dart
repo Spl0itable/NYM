@@ -280,6 +280,82 @@ void main() {
       expect(decide(present: true, hold: true, matches: true),
           PqRootAction.ready);
     });
+
+    // A row that is present but did not open says only that a root EXISTS.
+    // Holding some root is not evidence it is that one, so the answer is to
+    // wait for a link, never "ready" and never "republish mine over it".
+    test('a row that did not open → await link, whatever we hold', () {
+      expect(
+          pqRootDecide(
+            recordLoadSucceeded: true,
+            recordPresent: true,
+            recordReadable: false,
+            holdRoot: true,
+            recordMatchesHeldRoot: true,
+          ),
+          PqRootAction.awaitLink);
+      expect(
+          pqRootDecide(
+            recordLoadSucceeded: true,
+            recordPresent: true,
+            recordReadable: false,
+            holdRoot: false,
+          ),
+          PqRootAction.awaitLink);
+    });
+  });
+
+  group('the on-device store is keyed by identity', () {
+    final a = 'a' * 64, b = 'b' * 64;
+    final rootA = pq.pqGenerateRoot(), rootB = pq.pqGenerateRoot();
+
+    test('an empty store holds nothing and encodes to nothing', () {
+      final s = PqRootStore.parse(null);
+      expect(s.isEmpty, isTrue);
+      expect(s.encode(), isNull);
+      expect(PqRootStore.parse('').isEmpty, isTrue);
+    });
+
+    test('two identities keep two roots in the one vault slot', () {
+      final s = const PqRootStore()
+          .withCode(a, pqRootToCode(rootA))
+          .withCode(b, pqRootToCode(rootB));
+      final back = PqRootStore.parse(s.encode());
+      expect(pqRootFromCode(back.codeFor(a)!), rootA);
+      expect(pqRootFromCode(back.codeFor(b)!), rootB);
+      expect(back.codeFor('c' * 64), isNull);
+      expect(back.unreadable, isFalse);
+    });
+
+    test('a bare code from before keying reads as legacy, not as anyone\'s',
+        () {
+      final s = PqRootStore.parse(pqRootToCode(rootA));
+      expect(s.codeFor(a), isNull);
+      expect(s.legacy, pqRootToCode(rootA));
+      expect(s.unreadable, isFalse);
+    });
+
+    test('adopting the legacy code for an identity can drop the bare copy', () {
+      final s = PqRootStore.parse(pqRootToCode(rootA));
+      final kept = s.withCode(a, pqRootToCode(rootA));
+      expect(kept.legacy, isNotNull);
+      final migrated = s.withCode(a, pqRootToCode(rootA), dropLegacy: true);
+      expect(migrated.legacy, isNull);
+      expect(PqRootStore.parse(migrated.encode()).codeFor(a),
+          pqRootToCode(rootA));
+    });
+
+    test('an unreadable slot is reported, not mistaken for an empty one', () {
+      expect(PqRootStore.parse('enc:v1:abc:def').unreadable, isTrue);
+      expect(PqRootStore.parse('{not json').unreadable, isTrue);
+      expect(PqRootStore.parse('[]').unreadable, isTrue);
+    });
+
+    test('unknown keys and non-string values are ignored', () {
+      final s = PqRootStore.parse('{"$a":"${pqRootToCode(rootA)}","x":1,"short":"y"}');
+      expect(s.codeFor(a), pqRootToCode(rootA));
+      expect(s.byPubkey.length, 1);
+    });
   });
 
   // §7: a device that cannot open the root must publish no announcement.

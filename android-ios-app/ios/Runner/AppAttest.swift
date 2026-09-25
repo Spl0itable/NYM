@@ -27,13 +27,14 @@ enum AppAttest {
   /// Produces `["keyId": …, "attestation": …]` for `challenge`, both base64url
   /// with no padding (the form the worker's `base64UrlDecode` expects).
   ///
-  /// Calls back with nil when the device cannot attest — a simulator, an older
-  /// OS, App Attest disabled for this app. Nil is "no proof": the Dart side
-  /// enrolls nothing rather than sending a weaker claim.
+  /// Calls back with `["reason": …]` when the device cannot attest — a
+  /// simulator, an older OS, App Attest disabled for this app, a key Apple
+  /// refused. No proof means the Dart side enrolls as a build-proof install
+  /// and reports the reason, rather than sending a weaker claim.
   static func attest(challenge: String, completion: @escaping ([String: String]?) -> Void) {
     let service = DCAppAttestService.shared
     guard service.isSupported else {
-      completion(nil)
+      completion(["reason": "app-attest-unsupported"])
       return
     }
     // Apple hashes whatever we hand it into the certificate's nonce extension;
@@ -43,7 +44,7 @@ enum AppAttest {
 
     withKeyId(service: service) { keyId in
       guard let keyId else {
-        completion(nil)
+        completion(["reason": "app-attest-no-key"])
         return
       }
       service.attestKey(keyId, clientDataHash: clientDataHash) { attestation, error in
@@ -61,12 +62,12 @@ enum AppAttest {
           UserDefaults.standard.removeObject(forKey: keyIdDefaultsKey)
           generateKey(service: service) { fresh in
             guard let fresh else {
-              completion(nil)
+              completion(["reason": "app-attest-no-key"])
               return
             }
-            service.attestKey(fresh, clientDataHash: clientDataHash) { retryAttestation, _ in
+            service.attestKey(fresh, clientDataHash: clientDataHash) { retryAttestation, retryError in
               guard let retryAttestation else {
-                completion(nil)
+                completion(["reason": describe(retryError)])
                 return
               }
               completion([
@@ -77,9 +78,14 @@ enum AppAttest {
           }
           return
         }
-        completion(nil)
+        completion(["reason": describe(error)])
       }
     }
+  }
+
+  private static func describe(_ error: Error?) -> String {
+    guard let error = error as NSError? else { return "app-attest-failed" }
+    return "app-attest:\(error.domain)(\(error.code))"
   }
 
   private static func withKeyId(

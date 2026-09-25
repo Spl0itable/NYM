@@ -29,10 +29,14 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 
+import '../../services/api/api_config.dart';
+
 import 'pausable_animated_image.dart';
 
 /// True when [url] looks like an SVG (by extension, ignoring any query string),
 /// including the proxied form `…/api/proxy?url=<encoded …/foo.svg>`.
+bool isAssetImageUrl(String url) => url.startsWith('assets/');
+
 bool isSvgUrl(String url) {
   if (url.isEmpty) return false;
   final lower = url.toLowerCase();
@@ -211,6 +215,17 @@ class InlineNetworkImage extends StatefulWidget {
         'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
   };
 
+  static final Map<String, String> apiImageFetchHeaders = {
+    'User-Agent': ApiConfig.userAgent,
+    'Accept':
+        'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+  };
+
+  static Map<String, String> imageHeadersFor(String url) {
+    final host = Uri.tryParse(url)?.host.toLowerCase();
+    return host == ApiConfig.apiHost ? apiImageFetchHeaders : imageFetchHeaders;
+  }
+
   /// Drops [url] from every cache tier — the in-memory decode cache, the
   /// framework [ImageCache], and the on-disk `flutter_cache_manager` store — so
   /// the next request re-fetches it. Called when a user changes their avatar so
@@ -228,7 +243,7 @@ class InlineNetworkImage extends StatefulWidget {
     Uint8List bytes;
     try {
       final resp = await http
-          .get(Uri.parse(url), headers: imageFetchHeaders)
+          .get(Uri.parse(url), headers: imageHeadersFor(url))
           .timeout(const Duration(seconds: 12));
       if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
         assert(() {
@@ -281,7 +296,7 @@ class InlineNetworkImage extends StatefulWidget {
     // compiled picture cached above IS the warm state.
     if (decoded == null || decoded.raster == null) return;
     final completer = Completer<void>();
-    final stream = CachedNetworkImageProvider(url, headers: imageFetchHeaders)
+    final stream = CachedNetworkImageProvider(url, headers: imageHeadersFor(url))
         .resolve(ImageConfiguration.empty);
     late final ImageStreamListener listener;
     void done() {
@@ -432,8 +447,19 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
 
   @override
   Widget build(BuildContext context) {
-    final url = _effectiveUrl;
     final cacheWidth = _decodeCacheWidth(context);
+    if (isAssetImageUrl(_baseUrl)) {
+      return Image.asset(
+        _baseUrl,
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        cacheWidth: cacheWidth,
+        gaplessPlayback: true,
+        errorBuilder: (ctx, _, __) => _fallback(ctx),
+      );
+    }
+    final url = _effectiveUrl;
     // The in-memory http path handles BOTH svg and raster (and never touches the
     // sqflite-backed disk cache). Use it for SVG-looking URLs and whenever the
     // caller opts out of the disk cache ([memoryOnly], i.e. emoji).
@@ -505,7 +531,7 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
       return PausableAnimatedImage(
         image: CachedNetworkImageProvider(
           url,
-          headers: InlineNetworkImage.imageFetchHeaders,
+          headers: InlineNetworkImage.imageHeadersFor(url),
           maxWidth: cacheWidth,
         ),
         visibilityKey: ValueKey('anim-net:$url'),
@@ -518,7 +544,7 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
     }
     return CachedNetworkImage(
       imageUrl: url,
-      httpHeaders: InlineNetworkImage.imageFetchHeaders,
+      httpHeaders: InlineNetworkImage.imageHeadersFor(url),
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
