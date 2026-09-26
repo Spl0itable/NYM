@@ -1973,7 +1973,14 @@ Object.assign(NYM.prototype, {
     // fresh each time (the worker enforces single-use for them); routine
     // actions reuse a short-lived per-action signature so extension/remote
     // signers aren't re-prompted on every write.
-    async _signBotAuth(action, endpoint) {
+    async _authPayloadHash(body) {
+        const canonical = {};
+        for (const k of Object.keys(body || {}).filter((k) => k !== 'auth').sort()) canonical[k] = body[k];
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(canonical)));
+        return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    },
+
+    async _signBotAuth(action, endpoint, payloadHash) {
         endpoint = endpoint || 'bot';
         const apiHost = this._getApiHost();
         const url = apiHost ? `https://${apiHost}/api/${endpoint}` : '';
@@ -1983,10 +1990,10 @@ Object.assign(NYM.prototype, {
             'shop-buy-invoice': 1, 'shop-claim': 1, 'shop-transfer': 1, 'shop-redeem': 1,
             'voucher-issue': 1
         };
-        const sensitive = !!MONEY[action] || action === 'clear-history' || action === 'account-purge';
+        const sensitive = !!MONEY[action] || action === 'clear-history' || action === 'account-purge' || action === 'api-ws';
         const cacheKey = (action || '') + '|' + url;
         if (!(this._botAuthCache instanceof Map)) this._botAuthCache = new Map();
-        if (!sensitive) {
+        if (!sensitive && !payloadHash) {
             const cached = this._botAuthCache.get(cacheKey);
             // Stay well under the worker's 120s window to avoid edge-of-window rejects.
             if (cached && cached.pubkey === this.pubkey && (nowSec - cached.auth.created_at) < 90) {
@@ -1996,6 +2003,7 @@ Object.assign(NYM.prototype, {
         const tags = [['domain', 'nymbot-pm'], ['method', 'POST']];
         if (url) tags.push(['u', url]);
         if (action) tags.push(['action', action]);
+        if (payloadHash) tags.push(['payload', payloadHash]);
         const event = {
             kind: 27235,
             created_at: nowSec,
@@ -2004,7 +2012,7 @@ Object.assign(NYM.prototype, {
             pubkey: this.pubkey
         };
         const auth = await this.signEvent(event);
-        if (!sensitive) this._botAuthCache.set(cacheKey, { pubkey: this.pubkey, auth });
+        if (!sensitive && !payloadHash) this._botAuthCache.set(cacheKey, { pubkey: this.pubkey, auth });
         return auth;
     },
 

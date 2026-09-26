@@ -59,6 +59,10 @@ import { isNymchatClient } from "./_client.js";
 import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
 import { hiddenEventIdsSince, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
 
+function shopKnown(id) {
+  return typeof id === "string" && Object.prototype.hasOwnProperty.call(SHOP_CATALOG, id);
+}
+
 var SHOP_CATALOG = {
   "style-satoshi": { price: 21420, type: "message-style", tier: "legendary" },
   "style-glitch": { price: 10101, type: "message-style" },
@@ -393,8 +397,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "shop-buy-invoice") {
     var itemId = String(body.itemId || "");
+    if (!shopKnown(itemId)) return json({ error: "Unknown shop item." }, 400);
     var cat = SHOP_CATALOG[itemId];
-    if (!cat) return json({ error: "Unknown shop item." }, 400);
     var availErr = shopItemAvailability(cat, Date.now());
     if (availErr) return json({ error: availErr.error }, availErr.status);
     var giftTo = null;
@@ -456,8 +460,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!await invoicePaymentConfirmed(env, pending, body.receipt)) {
       return json({ error: "Payment not confirmed yet." }, 402);
     }
+    if (!shopKnown(pending.itemId)) return json({ error: "Unknown shop item." }, 400);
     var claimCat = SHOP_CATALOG[pending.itemId];
-    if (!claimCat) return json({ error: "Unknown shop item." }, 400);
     var recipient = userPubkey;
     var isGift = false;
     if (pending.recipientPubkey && /^[0-9a-f]{64}$/i.test(pending.recipientPubkey) &&
@@ -487,6 +491,13 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       if (prev && shopClaimVisibleTo(prev, userPubkey)) return json(shopClaimReplay(prev, userPubkey));
       return json({ error: "This payment was already claimed." }, 409);
     }
+    if (claimRes && claimRes.soldOut) {
+      return json({
+        soldOut: true, refunded: claimRes.refunded, balance: claimRes.balance,
+        error: "This limited edition sold out before your payment arrived, so it came back to you as " +
+          claimRes.refunded + " standard Nymbot credit" + (claimRes.refunded === 1 ? "" : "s") + "."
+      }, 409);
+    }
     if (!claimRes || claimRes.error) return json({ error: (claimRes && claimRes.error) || "Claim failed." }, 400);
     var crec = { owned: claimRes.owned, active: claimRes.active };
     var giftEvent = null;
@@ -507,6 +518,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   if (body.action === "shop-transfer") {
     var itemId = String(body.itemId || "");
     var toPubkey = String(body.toPubkey || "").toLowerCase();
+    if (!shopKnown(itemId)) return json({ error: "Unknown shop item." }, 400);
     if (!/^[0-9a-f]{64}$/.test(toPubkey)) return json({ error: "Invalid recipient pubkey." }, 400);
     if (toPubkey === userPubkey) return json({ error: "Cannot transfer to yourself." }, 400);
     // Atomic transfer of the item between two shop records via the ledger DO.
@@ -533,7 +545,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var codeData = await codeGet(env.DB_CODES, code);
     if (!codeData) return json({ error: "Unknown recovery code." }, 404);
     var redeemItem = codeData.itemId;
-    if (!SHOP_CATALOG[redeemItem]) return json({ error: "Unknown shop item." }, 400);
+    if (!shopKnown(redeemItem)) return json({ error: "Unknown shop item." }, 400);
     // Atomic redeem (move item from prevOwner to redeemer) via the ledger DO.
     var redeemRes = await ledgerCall(env, {
       op: "shop-redeem", code: code, itemId: redeemItem, user: userPubkey

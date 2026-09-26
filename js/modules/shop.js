@@ -185,8 +185,8 @@ Object.assign(NYM.prototype, {
                 return await this._apiSocketSend(action, extra, { raw: true, timeout: opts && opts.timeout });
             } catch (_) { /* fall back to HTTP */ }
         }
-        const auth = await this._signBotAuth(action);
-        const body = Object.assign({ action, pubkey: this.pubkey, auth }, extra || {});
+        const body = Object.assign({ action, pubkey: this.pubkey }, extra || {});
+        body.auth = await this._signBotAuth(action, 'bot', await this._authPayloadHash(body));
         const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -212,7 +212,7 @@ Object.assign(NYM.prototype, {
         if (withAuth) {
             if (!this.pubkey) throw new Error('Login required.');
             body.pubkey = this.pubkey;
-            body.auth = await this._signBotAuth(action, 'storage');
+            body.auth = await this._signBotAuth(action, 'storage', await this._authPayloadHash(body));
         }
         const resp = await this._edgeFetch(`https://${apiHost}/api/storage`, {
             method: 'POST',

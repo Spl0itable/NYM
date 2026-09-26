@@ -4,8 +4,10 @@
 import {
   creditsGet,
   creditsPut,
+  creditsPutStatement,
   shopGet,
   shopPut,
+  shopPutStatement,
   invoicePut,
   invoiceDelete,
   invoiceGet,
@@ -163,6 +165,7 @@ export class NymLedger {
       case "dust-peek": return this._dustPeek(a.pubkey);
       case "free-claim": return this._freeClaim(a.pubkey, a.limit, a.net, a.netLimit);
       case "free-peek": return this._freePeek(a.pubkey, a.limit, a.net, a.netLimit);
+      case "free-return": return this._freeReturn(a.pubkey, a.net);
       case "claim-credits": return this._claimCredits(a);
       case "shop-claim": return this._shopClaim(a);
       case "shop-transfer": return this._shopTransfer(a);
@@ -706,15 +709,50 @@ export class NymLedger {
   }
 
   async _getCredits(pk, tier) {
-    return creditsGet(this.env.DB_CREDITS, this._creditKey(pk, tier));
+    return creditsGet(this.env.DB_CREDITS, this._creditKey(pk, tier), true);
   }
 
   async _putCredits(pk, data, tier) {
     await creditsPut(this.env.DB_CREDITS, this._creditKey(pk, tier), data);
   }
 
+  async _putCreditsTogether(writes) {
+    const db = this.env.DB_CREDITS;
+    const stmts = writes.map((w) => creditsPutStatement(db, this._creditKey(w.pk, w.tier), w.data));
+    if (typeof db.batch === "function") {
+      await db.batch(stmts);
+      return;
+    }
+    for (const st of stmts) await st.run();
+  }
+
   async _getShop(pk) {
-    return shopGet(this.env.DB_SHOP, pk);
+    return shopGet(this.env.DB_SHOP, pk, true);
+  }
+
+  async _putShopsTogether(writes) {
+    const db = this.env.DB_SHOP;
+    const stmts = writes.map((w) => shopPutStatement(db, w.pk, w.data));
+    if (typeof db.batch === "function") {
+      await db.batch(stmts);
+      return;
+    }
+    for (const st of stmts) await st.run();
+  }
+
+  _ownsItem(rec, itemId) {
+    return !!(rec && rec.owned && /^[a-z0-9][a-z0-9-]{0,63}$/.test(itemId) &&
+      Object.prototype.hasOwnProperty.call(rec.owned, itemId) && rec.owned[itemId]);
+  }
+
+  _moveDust(from, to, tier, moved) {
+    const src = this._dustOf(from, tier);
+    if (!src) return moved;
+    const total = src + this._dustOf(to, tier);
+    const whole = Math.min(moved, Math.floor(total / 1000));
+    this._setDust(from, tier, 0);
+    this._setDust(to, tier, total - whole * 1000);
+    return moved - whole;
   }
 
   async _putShop(pk, data) {
@@ -749,24 +787,26 @@ export class NymLedger {
     }
     let targetBalance = 0;
     let targetProBalance = 0;
+    const writes = [];
     if (moved > 0) {
       const dest = await this._getCredits(to);
-      dest.balance = (dest.balance || 0) + moved;
-      dest.totalPurchased = (dest.totalPurchased || 0) + moved;
+      const arrives = this._moveDust(from, to, "standard", moved);
+      dest.balance = (dest.balance || 0) + arrives;
+      dest.totalPurchased = (dest.totalPurchased || 0) + arrives;
       source.balance = (source.balance || 0) - moved;
-      await this._putCredits(to, dest);
-      await this._putCredits(from, source);
+      writes.push({ pk: from, data: source }, { pk: to, data: dest });
       targetBalance = dest.balance;
     }
     if (proMoved > 0) {
       const proDest = await this._getCredits(to, "pro");
-      proDest.balance = (proDest.balance || 0) + proMoved;
-      proDest.totalPurchased = (proDest.totalPurchased || 0) + proMoved;
+      const proArrives = this._moveDust(from, to, "pro", proMoved);
+      proDest.balance = (proDest.balance || 0) + proArrives;
+      proDest.totalPurchased = (proDest.totalPurchased || 0) + proArrives;
       proSource.balance = (proSource.balance || 0) - proMoved;
-      await this._putCredits(to, proDest, "pro");
-      await this._putCredits(from, proSource, "pro");
+      writes.push({ pk: from, data: proSource, tier: "pro" }, { pk: to, data: proDest, tier: "pro" });
       targetProBalance = proDest.balance;
     }
+    await this._putCreditsTogether(writes);
     return {
       transferred: moved, proTransferred: proMoved, target: to,
       sourceBalance: Math.max(0, (source.balance || 0)), targetBalance, targetProBalance
@@ -1156,6 +1196,20 @@ export class NymLedger {
     return { ok: true, used: used, limit: cap, left: cap - used, resetsAt: resetsAt };
   }
 
+  _freeReturn(pubkey, net) {
+    if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
+    const at = this._freeRow(pubkey);
+    if (at.used > 0) {
+      this.sql.exec("UPDATE free_usage SET used = ? WHERE pubkey = ? AND day = ?;", at.used - 1, pubkey, at.day);
+    }
+    const nid = this._freeNetId(net);
+    if (nid) {
+      const nAt = this._freeNetRow(nid);
+      if (nAt.used > 0) this.sql.exec("UPDATE free_net SET used = ? WHERE id = ? AND day = ?;", nAt.used - 1, nid, nAt.day);
+    }
+    return { ok: true };
+  }
+
   // Atomic claim of a paid credit invoice. The caller has already verified
   // payment; this gates the grant on a single-use claim id.
   async _claimCredits(a) {
@@ -1226,6 +1280,7 @@ export class NymLedger {
     if (a.edition && Number(a.edition.max) > 0) {
       editionMax = Math.floor(Number(a.edition.max));
       edition = this._allocateEdition(itemId, invoiceId, editionMax);
+      if (!edition) return await this._shopSoldOutRefund(a, invoiceId, itemId, recipient);
     }
 
     const entry = { at: Date.now(), amountSats: Number(a.amountSats) || 0, gift: !!a.gift, code };
@@ -1241,6 +1296,26 @@ export class NymLedger {
     return { itemId, code, recipient, edition: edition ? { n: edition, max: editionMax } : null, owned: crec.owned, active: crec.active };
   }
 
+  async _shopSoldOutRefund(a, invoiceId, itemId, recipient) {
+    const paidBy = String((a.claimData && a.claimData.paidBy) || "").toLowerCase();
+    const refundTo = /^[0-9a-f]{64}$/.test(paidBy) ? paidBy : recipient;
+    const credits = Math.max(0, Math.floor((Number(a.amountSats) || 0) / 10));
+    let balance = null;
+    if (credits > 0) {
+      const rec = await this._getCredits(refundTo);
+      rec.balance = (rec.balance || 0) + credits;
+      rec.totalPurchased = (rec.totalPurchased || 0) + credits;
+      await this._putCredits(refundTo, rec);
+      balance = rec.balance;
+    }
+    try {
+      await invoicePut(this.env.DB_INVOICES, "shop", "claimed", invoiceId,
+        Object.assign({ itemId, pubkey: recipient, soldOut: true, refunded: credits, refundTo, at: Date.now() }, a.claimData || {}));
+    } catch {}
+    try { await invoiceDelete(this.env.DB_INVOICES, "shop", "pending", invoiceId); } catch {}
+    return { soldOut: true, itemId, refunded: credits, refundTo, balance };
+  }
+
   async _shopTransfer(a) {
     const from = String(a.from || "").toLowerCase();
     const to = String(a.to || "").toLowerCase();
@@ -1248,8 +1323,8 @@ export class NymLedger {
     if (!/^[0-9a-f]{64}$/.test(from) || !/^[0-9a-f]{64}$/.test(to)) return { error: "Invalid pubkey." };
     if (from === to) return { error: "Cannot transfer to yourself." };
     const fromRec = await this._getShop(from);
+    if (!this._ownsItem(fromRec, itemId)) return { error: "You do not own this item." };
     const entry = fromRec.owned[itemId];
-    if (!entry) return { error: "You do not own this item." };
     delete fromRec.owned[itemId];
     this._pruneActive(fromRec);
     const toRec = await this._getShop(to);
@@ -1257,8 +1332,7 @@ export class NymLedger {
     toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: newCode, transferredFrom: from };
     // Numbered editions keep their number when traded.
     if (entry.edition) { toRec.owned[itemId].edition = entry.edition; toRec.owned[itemId].editionMax = entry.editionMax || 0; }
-    await this._putShop(from, fromRec);
-    await this._putShop(to, toRec);
+    await this._putShopsTogether([{ pk: from, data: fromRec }, { pk: to, data: toRec }]);
     try { await codePut(this.env.DB_CODES, newCode, itemId, to, Date.now()); } catch {}
     if (entry.code) {
       try { await codeDelete(this.env.DB_CODES, entry.code); } catch {}

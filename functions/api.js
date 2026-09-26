@@ -12,7 +12,8 @@
 
 import { routeStorageAction } from './api/storage.js';
 import { handleBotPMAction, botReleaseStrandedTurn } from './api/bot.js';
-import { verifyClientAuth, getPublicKey } from './api/_shared.js';
+import { verifyClientAuth, getPublicKey, AUTH_REPLAY_TTL_S } from './api/_shared.js';
+import { ledgerCall } from './api/_ledger.js';
 import { isNymchatClient, servedHostAllowed } from './api/_client.js';
 
 // Actions handled by the bot worker (Nymbot PM, credits, invoices, Ledger).
@@ -25,9 +26,19 @@ const BOT_ACTIONS = {
 export function wsAuthHostOk(auth, reqUrl) {
   const tags = auth && Array.isArray(auth.tags) ? auth.tags : [];
   const tag = tags.find((t) => Array.isArray(t) && t[0] === 'u');
-  if (!tag) return true;
+  if (!tag) return false;
   try {
     return new URL(String(tag[1])).host === new URL(reqUrl).host;
+  } catch {
+    return false;
+  }
+}
+
+export async function wsAuthFresh(env, auth) {
+  try {
+    const rp = await ledgerCall(env, { op: 'replay', id: auth && auth.id, ttl: AUTH_REPLAY_TTL_S });
+    if (rp && rp._noLedger) return true;
+    return !!(rp && rp.fresh);
   } catch {
     return false;
   }
@@ -100,7 +111,7 @@ export async function onRequest(context) {
       const auth = msg[1];
       if (!auth || typeof auth.pubkey !== 'string' ||
         !verifyClientAuth(auth, auth.pubkey, { action: 'api-ws' }) ||
-        !wsAuthHostOk(auth, reqUrl)) {
+        !wsAuthHostOk(auth, reqUrl) || !(await wsAuthFresh(env, auth))) {
         send(['AUTH_ERR', 'Authentication failed']);
         try { server.close(4001, 'auth'); } catch { /* noop */ }
         return;

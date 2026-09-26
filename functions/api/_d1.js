@@ -25,7 +25,7 @@ export function blankShop() {
   return { owned: {}, active: blankActive(), updatedAt: 0 };
 }
 
-export async function shopGet(db, pk) {
+export async function shopGet(db, pk, strict) {
   const blank = blankShop();
   if (!hasD1(db)) return blank;
   try {
@@ -38,15 +38,22 @@ export async function shopGet(db, pk) {
     if (!Array.isArray(active.flair)) active.flair = [];
     if (!Array.isArray(active.cosmetics)) active.cosmetics = [];
     return { owned, active, updatedAt: row.updated_at || 0 };
-  } catch (e) { return blank; }
+  } catch (e) {
+    if (strict) throw e;
+    return blank;
+  }
+}
+
+export function shopPutStatement(db, pk, data) {
+  data.updatedAt = Date.now();
+  return db.prepare(
+    "INSERT INTO shop (pubkey, owned, active, updated_at) VALUES (?, ?, ?, ?) " +
+    "ON CONFLICT(pubkey) DO UPDATE SET owned = excluded.owned, active = excluded.active, updated_at = excluded.updated_at"
+  ).bind(pk, JSON.stringify(data.owned || {}), JSON.stringify(data.active || blankActive()), data.updatedAt);
 }
 
 export async function shopPut(db, pk, data) {
-  data.updatedAt = Date.now();
-  await db.prepare(
-    "INSERT INTO shop (pubkey, owned, active, updated_at) VALUES (?, ?, ?, ?) " +
-    "ON CONFLICT(pubkey) DO UPDATE SET owned = excluded.owned, active = excluded.active, updated_at = excluded.updated_at"
-  ).bind(pk, JSON.stringify(data.owned || {}), JSON.stringify(data.active || blankActive()), data.updatedAt).run();
+  await shopPutStatement(db, pk, data).run();
 }
 
 export async function shopGetActiveMany(db, pks) {
@@ -71,7 +78,7 @@ export function blankCredits() {
   return { balance: 0, totalPurchased: 0, totalUsed: 0, rl: [], createdAt: Date.now() };
 }
 
-export async function creditsGet(db, pk) {
+export async function creditsGet(db, pk, strict) {
   const blank = blankCredits();
   if (!hasD1(db)) return blank;
   try {
@@ -87,19 +94,26 @@ export async function creditsGet(db, pk) {
       rl: Array.isArray(rl) ? rl : [],
       createdAt: row.created_at || Date.now()
     };
-  } catch (e) { return blank; }
+  } catch (e) {
+    if (strict) throw e;
+    return blank;
+  }
 }
 
-export async function creditsPut(db, pk, data) {
+export function creditsPutStatement(db, pk, data) {
   data.updatedAt = Date.now();
-  await db.prepare(
+  return db.prepare(
     "INSERT INTO credits (pubkey, balance, total_purchased, total_used, rl, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) " +
     "ON CONFLICT(pubkey) DO UPDATE SET balance = excluded.balance, total_purchased = excluded.total_purchased, " +
     "total_used = excluded.total_used, rl = excluded.rl, updated_at = excluded.updated_at"
   ).bind(
     pk, Math.floor(data.balance || 0), Math.floor(data.totalPurchased || 0), Math.floor(data.totalUsed || 0),
     JSON.stringify(Array.isArray(data.rl) ? data.rl : []), data.createdAt || Date.now(), data.updatedAt
-  ).run();
+  );
+}
+
+export async function creditsPut(db, pk, data) {
+  await creditsPutStatement(db, pk, data).run();
 }
 
 export async function invoiceGet(db, kind, state, id) {

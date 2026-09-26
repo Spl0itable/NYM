@@ -205,7 +205,7 @@
             return event;
         },
 
-        _botAnonSignAuth(action, endpoint, identity) {
+        _botAnonSignAuth(action, endpoint, identity, payloadHash) {
             const id = identity || this.botAnonIdentity();
             if (!id) return null;
             const host = this._getApiHost();
@@ -213,6 +213,7 @@
             const tags = [['domain', 'nymbot-pm'], ['method', 'POST']];
             if (url) tags.push(['u', url]);
             if (action) tags.push(['action', action]);
+            if (payloadHash) tags.push(['payload', payloadHash]);
             return NT().finalizeEvent({
                 kind: 27235,
                 created_at: Math.floor(Date.now() / 1000),
@@ -225,8 +226,8 @@
             const host = this._getApiHost();
             const id = (opts && opts.identity) || this.botAnonIdentity();
             if (!host || !id) return { status: 0, data: {} };
-            const auth = this._botAnonSignAuth(action, endpoint, id);
-            const body = Object.assign({ action, pubkey: id.pk, auth }, extra || {});
+            const body = Object.assign({ action, pubkey: id.pk }, extra || {});
+            body.auth = this._botAnonSignAuth(action, endpoint, id, await this._authPayloadHash(body));
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), (opts && opts.timeout) || 45000);
             try {

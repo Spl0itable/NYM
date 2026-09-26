@@ -2685,6 +2685,13 @@ var AUTH_MAX_AGE_S = 120;
 var AUTH_MAX_FUTURE_S = 60;
 var AUTH_REPLAY_TTL_S = AUTH_MAX_AGE_S + AUTH_MAX_FUTURE_S + 15;
 
+var AUTH_PAYLOAD_REQUIRED = {
+  "transfer-credits": 1,
+  "shop-transfer": 1,
+  "voucher-issue": 1,
+  "gift-create": 1
+};
+
 function verifyClientAuth(auth, expectedPubkey, binding) {
   try {
     if (!auth || typeof auth !== "object") return false;
@@ -2719,6 +2726,7 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
         } catch (e) { return false; }
       }
       var payloadTag = tagVal("payload");
+      if (payloadTag == null && typeof binding.body !== "undefined" && AUTH_PAYLOAD_REQUIRED[binding.action]) return false;
       if (payloadTag != null && typeof binding.body !== "undefined") {
         var expected = authPayloadHashHex(JSON.stringify(canonicalAuthBody(binding.body)));
         if (String(payloadTag).toLowerCase() !== expected) return false;
@@ -2813,14 +2821,79 @@ async function nwcDecrypt(scheme, cfg, convKey, payload) {
   return await nip04Decrypt(cfg.secret, cfg.walletPubkey, payload);
 }
 
-function nwcResultIsPaid(result) {
+var BOLT11_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+function bolt11PaymentHash(bolt11) {
+  var s = String(bolt11 || "").toLowerCase();
+  var sep = s.lastIndexOf("1");
+  if (sep < 1 || s.length - sep < 8) return null;
+  var words = [];
+  for (var i = sep + 1; i < s.length - 6; i++) {
+    var v = BOLT11_CHARSET.indexOf(s[i]);
+    if (v < 0) return null;
+    words.push(v);
+  }
+  var pos = 7;
+  while (pos + 3 <= words.length) {
+    var type = words[pos];
+    var len = words[pos + 1] * 32 + words[pos + 2];
+    var start = pos + 3;
+    if (start + len > words.length) return null;
+    if (type === 1 && len === 52) {
+      var acc = 0, bits = 0, out = [];
+      for (var j = start; j < start + len; j++) {
+        acc = (acc << 5) | words[j];
+        bits += 5;
+        while (bits >= 8) {
+          bits -= 8;
+          out.push((acc >> bits) & 255);
+        }
+        acc &= (1 << bits) - 1;
+      }
+      return out.length >= 32 ? bytesToHex(new Uint8Array(out.slice(0, 32))) : null;
+    }
+    pos = start + len;
+  }
+  return null;
+}
+
+function preimageMatches(preimage, paymentHash) {
+  if (typeof preimage !== "string" || !/^[0-9a-f]{64}$/i.test(preimage) || !paymentHash) return false;
+  try {
+    return bytesToHex(sha256(hexToBytes(preimage.toLowerCase()))) === paymentHash;
+  } catch (e) {
+    return false;
+  }
+}
+
+function nwcResultIsPaid(result, paymentHash) {
   if (!result || typeof result !== "object") return false;
   var state = typeof result.state === "string" ? result.state.toLowerCase() : "";
   if (state) return state === "settled";
   if (Number(result.settled_at) > 0) return true;
-  if (typeof result.preimage === "string" && /^[0-9a-f]{64}$/i.test(result.preimage) &&
-    !/^0+$/.test(result.preimage)) return true;
+  if (preimageMatches(result.preimage, paymentHash)) return true;
   return result.paid === true;
+}
+
+function nwcResultIsFor(parsed, bolt11, paymentHash) {
+  if (!parsed || parsed.result_type !== "lookup_invoice") return false;
+  var r = parsed.result;
+  if (!r || typeof r !== "object") return false;
+  if (paymentHash && typeof r.payment_hash === "string") return r.payment_hash.toLowerCase() === paymentHash;
+  if (typeof r.invoice === "string") return r.invoice.toLowerCase() === String(bolt11).toLowerCase();
+  return false;
+}
+
+function nwcReplyAuthentic(evt, walletPubkey, requestId) {
+  if (!evt || evt.pubkey !== walletPubkey || typeof evt.sig !== "string") return false;
+  try {
+    if (getEventHash(evt) !== evt.id) return false;
+    if (!schnorr.verify(evt.sig, evt.id, evt.pubkey)) return false;
+  } catch (e) {
+    return false;
+  }
+  var tags = Array.isArray(evt.tags) ? evt.tags : [];
+  return tags.some(function (t) { return Array.isArray(t) && t[0] === "e" && t[1] === requestId; });
 }
 
 // Ask the bot wallet directly whether an invoice was paid (NIP-47 lookup_invoice).
@@ -2832,6 +2905,7 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
   if (!cfg || !bolt11) return false;
   var convKey = nip44ConversationKey(cfg.secret, cfg.walletPubkey);
   var clientPubkey = getPublicKey(cfg.secret);
+  var paymentHash = bolt11PaymentHash(bolt11);
   var budget = timeoutMs || 8000;
   return await new Promise(function (resolve) {
     var done = false, ws;
@@ -2840,6 +2914,7 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
     var tried = [];
     var subScheme = {};
     var reqIds = {};
+    var subReq = {};
     var open = 0;
 
     function finish(val) {
@@ -2883,6 +2958,7 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
         if (done) return;
         subScheme[sub] = sch;
         reqIds[reqEvt.id] = sub;
+        subReq[sub] = reqEvt.id;
         open++;
         ws.send(JSON.stringify(["REQ", sub, {
           kinds: [23195], authors: [cfg.walletPubkey], "#e": [reqEvt.id], limit: 1
@@ -2937,13 +3013,14 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
           if (!tried.length) await sendLookup("nip44_v2");
         } else if (data[0] === "EVENT" && subScheme[data[1]] && data[2] && data[2].kind === 23195) {
           var evt = data[2];
-          if (evt.pubkey !== cfg.walletPubkey) return;
+          if (!nwcReplyAuthentic(evt, cfg.walletPubkey, subReq[data[1]])) return;
           var parsed;
           try {
             parsed = JSON.parse(await nwcDecrypt(subScheme[data[1]], cfg, convKey, evt.content));
           } catch (e) { dropSub(data[1]); return; }
-          if (parsed && !parsed.error && nwcResultIsPaid(parsed.result)) { finish(true); return; }
-          finish(false);
+          if (parsed && parsed.error) { finish(false); return; }
+          if (!nwcResultIsFor(parsed, bolt11, paymentHash)) return;
+          finish(nwcResultIsPaid(parsed.result, paymentHash));
         } else if (data[0] === "CLOSED" && subScheme[data[1]]) {
           dropSub(data[1]);
         } else if (data[0] === "OK" && data[2] === false && reqIds[data[1]]) {
@@ -3011,10 +3088,10 @@ function wellFormedText(text) {
   return out;
 }
 
-function sanitizeInput(text) {
+function sanitizeInput(text, max) {
   if (typeof text !== "string") return "";
   // Truncate excessively long inputs
-  text = truncateText(text, 1000);
+  text = truncateText(text, max > 0 ? max : 1000);
   // Strip zero-width and invisible unicode characters used for steganographic injection
   text = text.replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/g, "");
   return wellFormedText(text).trim();
@@ -3128,6 +3205,8 @@ export {
   validateZapReceipt,
   parseNwcUri,
   nwcInvoicePaid,
+  nwcResultIsPaid,
+  bolt11PaymentHash,
   invoicePaymentConfirmed,
   sanitizeInput,
   truncateText,

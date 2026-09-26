@@ -1137,6 +1137,86 @@ function botVisionContent(question, urls) {
   return blocks;
 }
 
+var BOT_INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+var BOT_INLINE_IMAGE_TIMEOUT_MS = 8000;
+var botInlinedMessages = new WeakMap();
+
+async function botImageDataUrl(url) {
+  if (!/^https?:\/\//i.test(url) || isPrivateHostUrl(url)) return null;
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, BOT_INLINE_IMAGE_TIMEOUT_MS);
+  try {
+    var at = url;
+    var resp = null;
+    for (var hop = 0; hop <= 3; hop++) {
+      resp = await fetch(at, { headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "image/*" }, redirect: "manual", signal: controller.signal });
+      if (!(resp.status >= 300 && resp.status < 400)) break;
+      var loc = resp.headers.get("Location");
+      try { if (resp.body && resp.body.cancel) await resp.body.cancel(); } catch (e) { }
+      if (!loc || hop === 3) return null;
+      var next = new URL(loc, at).toString();
+      if (!/^https?:/i.test(next) || isPrivateHostUrl(next)) return null;
+      at = next;
+    }
+    if (!resp.ok || !resp.body) return null;
+    var declared = Number(resp.headers.get("Content-Length")) || 0;
+    if (declared > BOT_INLINE_IMAGE_MAX_BYTES) return null;
+    var reader = resp.body.getReader();
+    var chunks = [];
+    var total = 0;
+    while (true) {
+      var r = await reader.read();
+      if (r.done) break;
+      total += r.value.length;
+      if (total > BOT_INLINE_IMAGE_MAX_BYTES) {
+        try { await reader.cancel(); } catch (e) { }
+        return null;
+      }
+      chunks.push(r.value);
+    }
+    var bytes = new Uint8Array(total);
+    var off = 0;
+    for (var i = 0; i < chunks.length; i++) { bytes.set(chunks[i], off); off += chunks[i].length; }
+    var mime = botSniffImageMime(bytes);
+    if (mime === "image/jpeg" && !(bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) return null;
+    return "data:" + mime + ";base64," + botBase64Encode(bytes);
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function botInlineVisionImages(messages) {
+  if (!Array.isArray(messages)) return messages;
+  if (botInlinedMessages.has(messages)) return botInlinedMessages.get(messages);
+  var urls = {};
+  messages.forEach(function (m) {
+    if (!m || !Array.isArray(m.content)) return;
+    m.content.forEach(function (b) {
+      var u = b && b.type === "image_url" && b.image_url && b.image_url.url;
+      if (typeof u === "string" && /^https?:\/\//i.test(u)) urls[u] = null;
+    });
+  });
+  var list = Object.keys(urls);
+  if (!list.length) return messages;
+  var loaded = await Promise.all(list.map(botImageDataUrl));
+  list.forEach(function (u, i) { urls[u] = loaded[i]; });
+  var out = messages.map(function (m) {
+    if (!m || !Array.isArray(m.content)) return m;
+    return Object.assign({}, m, {
+      content: m.content.map(function (b) {
+        var u = b && b.type === "image_url" && b.image_url && b.image_url.url;
+        if (typeof u !== "string" || !Object.prototype.hasOwnProperty.call(urls, u)) return b;
+        if (urls[u]) return { type: "image_url", image_url: { url: urls[u] } };
+        return { type: "text", text: "(An attached picture could not be loaded, so it is not shown here: " + u + ")" };
+      })
+    });
+  });
+  botInlinedMessages.set(messages, out);
+  return out;
+}
+
 // BUD-02 upload auth: a kind-24242 event signed by the bot, carrying the
 // payload hash, base64'd into an "Authorization: Nostr <event>" header.
 function botBlossomAuth(sha256Hex, privkey, pubkey) {
@@ -1582,15 +1662,30 @@ function proCompatEndpoints(env) {
   return out.filter(function (e) { return e.kind !== "api" || proApiToken(env); });
 }
 
-function proCompatHeaders(env, kind) {
+function proGatewayAuthToken(env) {
+  return env.AI_GATEWAY_TOKEN || proApiToken(env);
+}
+
+function proCompatHeaders(env, kind, model) {
   var headers = { "Content-Type": "application/json" };
+  var token = proApiToken(env);
   if (kind === "api") {
-    var token = proApiToken(env);
     if (token) headers["Authorization"] = "Bearer " + token;
-  } else if (env.AI_GATEWAY_TOKEN) {
-    headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    return headers;
   }
+  var gatewayToken = proGatewayAuthToken(env);
+  if (gatewayToken) headers["cf-aig-authorization"] = "Bearer " + gatewayToken;
+  if (token && /^workers-ai\//.test(String(model || ""))) headers["Authorization"] = "Bearer " + token;
   return headers;
+}
+
+var PRO_ROUTE_AUTH_COOLDOWN_MS = 10 * 60 * 1000;
+var proRouteDownUntil = {};
+
+function proLiveEndpoints(endpoints) {
+  var now = Date.now();
+  var live = endpoints.filter(function (e) { return !(proRouteDownUntil[e.url] > now); });
+  return live.length ? live : endpoints;
 }
 
 function proBindingAvailable(env) {
@@ -1862,6 +1957,7 @@ function proAnthropicNativeUrl(env) {
 // One attempt on one transport. Throws on failure so the runner below can
 // decide whether the next transport is worth trying.
 async function proAttempt(env, step, messages, maxTokens, tools) {
+  if (/^(?:workers-ai\/)?@cf\//.test(String(step.model || ""))) messages = await botInlineVisionImages(messages);
   if (step.kind === "bound") {
     // Anthropic speaks its own request shape even behind the binding — the
     // OpenAI-style body is what loses its content blocks.
@@ -1890,7 +1986,7 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
 
   if (step.kind === "anthropic") {
     var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
-    if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    if (proGatewayAuthToken(env)) nativeHeaders["cf-aig-authorization"] = "Bearer " + proGatewayAuthToken(env);
     if (/fable/.test(step.model) && env.ANTHROPIC_API_KEY) {
       nativeHeaders["cf-aig-zdr"] = "false";
       nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
@@ -1930,14 +2026,18 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
   if (!endpoints.length) {
     throw new Error("Nymbot Pro needs AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_NAME (or AI_GATEWAY_URL) configured on the worker.");
   }
+  endpoints = proLiveEndpoints(endpoints);
   var lastErr = null;
   for (var i = 0; i < endpoints.length; i++) {
     try {
       return await proHttpChat(proSwapApiPath(endpoints[i].url, step.apiPath),
-        proCompatHeaders(env, endpoints[i].kind),
+        proCompatHeaders(env, endpoints[i].kind, step.model),
         Object.assign({ model: step.model }, req));
     } catch (e) {
       lastErr = e;
+      if (e && (e.httpStatus === 401 || e.httpStatus === 403) && endpoints.length > 1) {
+        proRouteDownUntil[endpoints[i].url] = Date.now() + PRO_ROUTE_AUTH_COOLDOWN_MS;
+      }
       if (!proWorthRetrying(e)) throw e;
     }
   }
@@ -2921,6 +3021,8 @@ function splitQuotedReply(raw) {
   return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim(), author: author };
 }
 
+var BOT_PM_TEXT_MAX = 200000;
+
 function parseBotPMRequest(rawMessage) {
   var freshOnly = false;
   var message = String(rawMessage || "");
@@ -2930,8 +3032,8 @@ function parseBotPMRequest(rawMessage) {
     message = message.slice(bang[0].length);
   }
   var split = splitQuotedReply(message);
-  var question = sanitizeInput(split.reply || split.quoted || message);
-  if (!question) question = sanitizeInput(message);
+  var question = sanitizeInput(split.reply || split.quoted || message, BOT_PM_TEXT_MAX);
+  if (!question) question = sanitizeInput(message, BOT_PM_TEXT_MAX);
   return { freshOnly: freshOnly, split: split, question: question };
 }
 
@@ -2956,7 +3058,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     for (var i = 0; i < window.kept.length; i++) {
       var entry = window.kept[i];
       if (!entry || !entry.text) continue;
-      var text = sanitizeInput(entry.text);
+      var text = sanitizeInput(entry.text, BOT_PM_TEXT_MAX);
       if (!text) continue;
       messages.push({ role: entry.isBot ? "assistant" : "user", content: text });
     }
@@ -3044,7 +3146,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     var quotedBy = /nymbot/i.test(split.author)
       ? "something you (Nymbot) said earlier in this conversation"
       : (split.author ? "something the user said earlier in this conversation" : "an earlier message in this conversation");
-    messages.push({ role: "user", content: "--- QUOTED MESSAGE (read-only context — this is " + quotedBy + ", and the user's newest message below is a direct reply to it) ---\n" + sanitizeInput(split.quoted) + "\n--- END QUOTED MESSAGE ---\nUse the quoted text to understand what the user's reply is referring to." });
+    messages.push({ role: "user", content: "--- QUOTED MESSAGE (read-only context — this is " + quotedBy + ", and the user's newest message below is a direct reply to it) ---\n" + sanitizeInput(split.quoted, BOT_PM_TEXT_MAX) + "\n--- END QUOTED MESSAGE ---\nUse the quoted text to understand what the user's reply is referring to." });
     messages.push({ role: "assistant", content: "Understood." });
   }
 
@@ -3729,11 +3831,19 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // empty balance, so nobody who has paid is quietly moved onto it.
     var freeTurn = false;
     var freeState = null;
+    var freeNet = null;
+    var freeReturned = false;
+    var freeGiveBack = async function () {
+      if (!freeTurn || freeReturned) return;
+      freeReturned = true;
+      try { await ledgerCall(env, { op: "free-return", pubkey: userPubkey, net: freeNet }); } catch (e) { }
+    };
     if (!proModel && record.balance <= 0) {
+      freeNet = await botFreeNetId(context.request, env);
       var claim = await ledgerCall(env, {
         op: "free-claim", pubkey: userPubkey, limit: BOT_FREE_DAILY,
         // Counted per address as well as per key, at the same cap.
-        net: await botFreeNetId(context.request, env), netLimit: BOT_FREE_NET_DAILY
+        net: freeNet, netLimit: BOT_FREE_NET_DAILY
       });
       if (claim && claim.ok) {
         freeTurn = true;
@@ -3817,6 +3927,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     };
     var turnFail = async function (obj, status) {
       await turnRelease();
+      await freeGiveBack();
       return json(obj, status);
     };
     var turnDone = async function (obj, status) {
@@ -3856,7 +3967,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     };
 
     var wrapClaimed = await turnAcquire(botTurnKey(userPubkey, currentId));
-    if (wrapClaimed) return wrapClaimed;
+    if (wrapClaimed) {
+      await freeGiveBack();
+      return wrapClaimed;
+    }
 
     // Progress is advisory: every write is best-effort and a failure never
     // touches the answer. Defined here rather than beside the first routing
@@ -3924,7 +4038,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (currentUnwrapped.author !== userPubkey) {
       return await turnFail({ error: "Message author does not match the authenticated user." }, 403);
     }
-    var message = sanitizeInput(currentUnwrapped.rumor.content || "");
+    var message = sanitizeInput(currentUnwrapped.rumor.content || "", BOT_PM_TEXT_MAX);
     // Put the pieces back. Every part must open, must be authored by the same
     // user and must carry the same message id as the one that arrived — a
     // question assembled from someone else's events would be a question the
@@ -3948,7 +4062,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         pieces.push({ at: rumorPartIndex(pu.rumor) || (qi + 1), text: String(pu.rumor.content || "") });
       }
       pieces.sort(function (a, b) { return a.at - b.at; });
-      message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""));
+      message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""), BOT_PM_TEXT_MAX);
     }
     if (!message) return await turnFail({ error: "Empty message" }, 400);
     // Every event the question traveled in, so the next turn replays the
@@ -3964,6 +4078,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         // Another wrap of this same message owns the turn; drop the claim on
         // ours so its own resends go straight to that answer.
         await turnRelease();
+        await freeGiveBack();
         return msgClaimed;
       }
     }

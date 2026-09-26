@@ -581,9 +581,10 @@ export function spamTransports(env, model) {
   const m = model || DEFAULT_SPAM_MODEL;
   const bound = !!(env && env.AI && typeof env.AI.run === "function");
   const gw = env ? gatewayUrl(env) : null;
+  const token = env ? (env.CF_API_TOKEN || env.AI_GATEWAY_API_TOKEN) : "";
   if (m.startsWith("@cf/")) {
     if (bound) out.push({ kind: "bound", model: m });
-    if (gw) out.push({ kind: "gateway", model: "workers-ai/" + m, url: gw });
+    if (gw && token) out.push({ kind: "gateway", model: "workers-ai/" + m, url: gw });
   } else {
     if (gw) out.push({ kind: "gateway", model: m, url: gw });
     if (bound) out.push({ kind: "bound", model: DEFAULT_SPAM_MODEL });
@@ -614,8 +615,9 @@ async function callTransport(env, t, rawMessages) {
     return messageText(res);
   }
   const headers = { "Content-Type": "application/json" };
-  if (env.AI_GATEWAY_TOKEN) headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
   const token = env.CF_API_TOKEN || env.AI_GATEWAY_API_TOKEN;
+  const gatewayToken = env.AI_GATEWAY_TOKEN || token;
+  if (gatewayToken) headers["cf-aig-authorization"] = "Bearer " + gatewayToken;
   if (token) headers["Authorization"] = "Bearer " + token;
   const res = await fetch(t.url, { method: "POST", headers, body: JSON.stringify({ model: t.model, messages, max_tokens: 300, temperature: 0 }) });
   const raw = await res.text();
