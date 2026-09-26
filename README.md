@@ -349,8 +349,8 @@ See the [releases page](https://github.com/Spl0itable/NYM/releases) for each upd
 
 If you choose to use Nymchat on 21 Million LLC operated infrastructure and domain (nymchat.app), your use is subject to the below Terms of Service and Privacy Policy.
 
-- [Terms of Service](https://web.nymchat.app/static/tos)
-- [Privacy Policy](https://web.nymchat.app/static/pp)
+- [Terms of Service](https://nymchat.app/terms/)
+- [Privacy Policy](https://nymchat.app/privacy/)
 
 ## Contact
 
@@ -358,6 +358,6 @@ Created and operated by [21 Million LLC](https://nostrservices.com). Lead develo
 
 ## License
 
-Copyright 21 Million LLC
+Copyright © 21 Million LLC
 
 Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the [LICENSE](LICENSE) file for details. https://www.gnu.org/licenses/agpl-3.0.html
