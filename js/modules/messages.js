@@ -1138,7 +1138,8 @@ Object.assign(NYM.prototype, {
             let messageContentHtml;
             if (message.isFileOffer && message.fileOffer) {
                 const offer = message.fileOffer;
-                const fileCategory = this.getFileTypeCategory(offer.name, offer.type);
+                const safeOfferId = this.escapeHtml(offer.offerId);
+                const fileCategory = this.getFileTypeCategory(String(offer.name || ''), typeof offer.type === 'string' ? offer.type : '');
                 const isOwnOffer = message.isOwn;
                 const isUnseeded = this.p2pUnseededOffers.has(offer.offerId) || (isOwnOffer && !this.p2pPendingFiles.has(offer.offerId) && !this.torrentSeeds.has(offer.offerId));
                 const isTorrent = !!offer.magnetURI;
@@ -1157,7 +1158,7 @@ Object.assign(NYM.prototype, {
                             <div class="file-offer-seeding">
                                 <div class="file-offer-seeding-dot"></div>
                                 <span>Seeding - available for download</span>
-                                <button class="file-offer-stop-btn" data-action="stopSeeding" data-offer-id="${offer.offerId}" title="Stop seeding">Stop</button>
+                                <button class="file-offer-stop-btn" data-action="stopSeeding" data-offer-id="${safeOfferId}" title="Stop seeding">Stop</button>
                             </div>
                         `;
                     }
@@ -1172,22 +1173,22 @@ Object.assign(NYM.prototype, {
                     statusHtml = `
                         <div class="file-offer-actions">
                             ${isTorrent ? `
-                                <button class="file-offer-btn torrent-btn" data-action="downloadTorrent" data-offer-id="${offer.offerId}">Download (Torrent)</button>
+                                <button class="file-offer-btn torrent-btn" data-action="downloadTorrent" data-offer-id="${safeOfferId}">Download (Torrent)</button>
                             ` : `
-                                <button class="file-offer-btn" data-action="requestP2PFile" data-offer-id="${offer.offerId}">Download</button>
+                                <button class="file-offer-btn" data-action="requestP2PFile" data-offer-id="${safeOfferId}">Download</button>
                             `}
                         </div>
-                        <div class="file-offer-progress nm-hidden" id="progress-${offer.offerId}">
+                        <div class="file-offer-progress nm-hidden" id="progress-${safeOfferId}">
                             <div class="file-offer-progress-bar">
-                                <div class="file-offer-progress-fill" id="progress-fill-${offer.offerId}"></div>
+                                <div class="file-offer-progress-fill" id="progress-fill-${safeOfferId}"></div>
                             </div>
-                            <div class="file-offer-progress-text" id="progress-text-${offer.offerId}">Connecting...</div>
+                            <div class="file-offer-progress-text" id="progress-text-${safeOfferId}">Connecting...</div>
                         </div>
                     `;
                 }
 
                 messageContentHtml = `
-                    <div class="file-offer${isTorrent ? ' torrent' : ''}" data-offer-id="${offer.offerId}">
+                    <div class="file-offer${isTorrent ? ' torrent' : ''}" data-offer-id="${safeOfferId}">
                         <div class="file-offer-header">
                             <div class="file-offer-icon ${fileCategory}">
                                 <svg viewBox="0 0 24 24" stroke-width="2">
@@ -1347,13 +1348,11 @@ Object.assign(NYM.prototype, {
 
         // Put back a translation the user asked for by hand. A fresh render
         // rebuilds the row without its `.message-translation`, and nothing
-        // re-issues a manual translation the way auto-translate re-queues
-        // itself — so without this the user's translation just disappeared.
+        // re-issues a manual translation, so without this the user's
+        // translation just disappeared.
         if (typeof this._reapplyManualTranslation === 'function') this._reapplyManualTranslation(messageEl);
 
-        // Auto-translate on-screen messages that aren't already in the user's
-        // translation language (gated by the auto-translate settings).
-        if (typeof this._maybeAutoTranslate === 'function') this._maybeAutoTranslate(messageEl, message);
+        if (typeof this._maybeTranslateBotWelcomePM === 'function') this._maybeTranslateBotWelcomePM(messageEl, message);
 
         if (!this._bulkAppending && !message.isHistorical &&
             this._isBubbleGroupedWithPrev(messageEl) &&
@@ -3453,8 +3452,6 @@ Object.assign(NYM.prototype, {
                 });
             }
         }
-        // The cached fragment is inserted without going through displayMessage,
-        // so trigger auto-translate over the restored messages here.
         if (typeof this.retranslateVisibleMessages === 'function') this.retranslateVisibleMessages();
         return true;
     },

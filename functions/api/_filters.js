@@ -243,12 +243,13 @@ export async function noteReport(env, ev, source) {
     const groupKey = targetEvent ? "e:" + targetEvent : "p:" + resolvedPubkey;
     let raw = null;
     try { raw = JSON.stringify(ev); if (raw.length > 16384) raw = null; } catch (_) { raw = null; }
-    await db.prepare(
+    const res = await db.prepare(
       "INSERT OR IGNORE INTO reports (id, reporter, target_pubkey, target_event, report_type, content, created_at, received_at, source, " +
       "channel, target_kind, target_json, status, group_key, raw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
     ).bind(ev.id.toLowerCase(), reporter, resolvedPubkey, targetEvent, type, content, ev.created_at || 0, now, source || null,
       channel, targetKind, targetJson, groupKey, raw).run();
-    return true;
+    const changes = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 1;
+    return changes > 0;
   } catch (e) {
     return false;
   }

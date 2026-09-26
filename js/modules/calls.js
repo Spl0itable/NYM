@@ -1164,7 +1164,7 @@ Object.assign(NYM.prototype, {
 
     _onCallReaction(sender, data) {
         const ac = this.activeCall;
-        if (!ac || ac.callId !== data.callId || !data.emoji) return;
+        if (!ac || ac.callId !== data.callId || !this.isValidReactionEmoji(data.emoji)) return;
         if (data.emojiTags && typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(data.emojiTags);
         this._showFlyReaction(String(data.emoji), null, sender);
     },
@@ -1523,7 +1523,7 @@ Object.assign(NYM.prototype, {
             if (cm && this.customEmojis && this.customEmojis.has(cm[1])) {
                 return `<button class="quick-react-emoji" data-emoji=":${this.escapeHtml(cm[1])}:">${this.renderCustomEmojiImg(cm[1])}</button>`;
             }
-            return `<button class="quick-react-emoji" data-emoji="${this.escapeHtml(emoji)}">${emoji}</button>`;
+            return `<button class="quick-react-emoji" data-emoji="${this.escapeHtml(emoji)}">${this.escapeHtml(emoji)}</button>`;
         }).join('')
             + `<button class="quick-react-expand" data-qr="more" title="More reactions"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6 L8 10 L12 6"/></svg></button>`
             + (!isSelf && pubkey ? `<button class="quick-react-expand" data-qr="menu" title="User options"><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="8" cy="13" r="1.4"/></svg></button>` : '');
@@ -1654,7 +1654,7 @@ Object.assign(NYM.prototype, {
 
     _onCallChatReaction(sender, data) {
         const ac = this.activeCall;
-        if (!ac || ac.callId !== data.callId || !data.mid || !data.emoji) return;
+        if (!ac || ac.callId !== data.callId || !data.mid || !this.isValidReactionEmoji(data.emoji)) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
         if (data.emojiTags && typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(data.emojiTags);
         const map = ac.chatReactions[data.mid] || (ac.chatReactions[data.mid] = {});

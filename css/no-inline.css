@@ -189,7 +189,6 @@ html .nm-hidden { display: none; }
 .nym-i18n-bg-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nym-i18n-bg-spinner { flex: none; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--glass-border); border-top-color: var(--primary); animation: nym-i18n-spin 0.8s linear infinite; }
 @keyframes nym-i18n-spin { to { transform: rotate(360deg); } }
-.message-translation.auto { border-left-color: var(--secondary, var(--primary)); }
 .message-autotr-footer { width: 100%; margin-top: 3px; font-size: 0.8em; }
 .autotr-toggle { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 2px; color: var(--text-dim); cursor: pointer; font-size: inherit; font-family: inherit; font-weight: 500; border-radius: var(--radius-xs); }
 .autotr-toggle:hover { color: var(--primary); }
@@ -197,10 +196,6 @@ html .nm-hidden { display: none; }
 .autotr-original { display: none; margin-top: 2px; padding: 6px 10px; background: rgba(255,255,255,0.04); border-left: 3px solid var(--text-dim); border-radius: 0 var(--radius-xs) var(--radius-xs) 0; color: var(--text-dim); line-height: 1.4; }
 .autotr-original.expanded { display: block; }
 .autotr-original-label { opacity: 0.7; font-size: 0.9em; }
-.auto-translate-scope { display: flex; flex-direction: column; gap: 8px; }
-.auto-translate-scope-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.auto-translate-scope-row > span { font-size: 0.9em; color: var(--text-dim); }
-.auto-translate-scope-row > select { max-width: 140px; }
 
 /* zaps.js */
 .nm-zap-1 { display: inline-block; padding: 20px; border: 5px solid white; background: white; color: black; text-align: center; border-radius: 10px; }

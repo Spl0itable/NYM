@@ -415,6 +415,7 @@ Object.assign(NYM.prototype, {
                     lastModEventId: group.lastModEventId || null,
                     modTsByTarget: group.modTsByTarget || {},
                     modSeenIds: Array.isArray(group.modSeenIds) ? group.modSeenIds.slice(-100) : [],
+                    modDeletedIds: Array.isArray(group.modDeletedIds) ? group.modDeletedIds.slice(-500) : [],
                     shareHistory: group.shareHistory === true,
                     historyReceived: group.historyReceived === true,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
@@ -871,6 +872,7 @@ Object.assign(NYM.prototype, {
                         if (group.lastModEventId) g.lastModEventId = group.lastModEventId;
                         if (group.modTsByTarget && typeof group.modTsByTarget === 'object') g.modTsByTarget = { ...group.modTsByTarget };
                         if (Array.isArray(group.modSeenIds)) g.modSeenIds = [...group.modSeenIds];
+                        if (Array.isArray(group.modDeletedIds)) g.modDeletedIds = group.modDeletedIds.filter(id => typeof id === 'string').slice(-500);
                         if (group.shareHistory === true) g.shareHistory = true;
                         if (group.historyReceived === true) g.historyReceived = true;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
@@ -892,7 +894,7 @@ Object.assign(NYM.prototype, {
             if (Array.isArray(extra)) {
                 for (const it of extra.slice(0, 64)) {
                     if (!it || typeof it !== 'object') continue;
-                    if (!/^[0-9a-f]{64}$/i.test(it.e || '') || typeof it.c !== 'string' || !it.c) continue;
+                    if (!/^[0-9a-f]{64}$/i.test(it.e || '') || !this.isValidReactionEmoji(it.c)) continue;
                     this._applyGroupReaction(rumor, senderPubkey, it.e, it.c, it.a === 'remove');
                 }
             }
@@ -902,7 +904,7 @@ Object.assign(NYM.prototype, {
     },
 
     _applyGroupReaction(rumor, senderPubkey, messageId, emoji, isRemoval) {
-        if (!emoji) return;
+        if (!this.isValidReactionEmoji(emoji)) return;
 
         // Timestamp-based dedup for out-of-order delivery
         const actionKey = `${messageId}:${emoji}:${senderPubkey}`;
@@ -1487,16 +1489,14 @@ Object.assign(NYM.prototype, {
             const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
             if (!eTag) return;
             const targetMessageId = eTag[1];
-            const targetAuthorTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'target_pubkey' && t[1]);
-            const targetAuthor = targetAuthorTag ? targetAuthorTag[1] : null;
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (!this._canModerate(groupId, senderPubkey)) return;
-            if (!this._isGroupOwner(groupId, senderPubkey) && targetAuthor
-                && !this._outranks(groupId, senderPubkey, targetAuthor)) return;
-            // Mods can't delete the owner's messages
-            if (!isOwnerSender && targetAuthor && grp.createdBy === targetAuthor) return;
-            this._applyGroupMessageDeletion(groupId, targetMessageId);
+            const targetMsg = this._findGroupMessage(groupId, targetMessageId);
+            if (!targetMsg || !targetMsg.pubkey) return;
+            const targetAuthor = targetMsg.pubkey;
+            if (!this._canModDeleteGroupMessage(groupId, senderPubkey, targetAuthor)) return;
+            if (!this._applyGroupMessageDeletion(groupId, targetMessageId)) return;
             this._appendModLog(grp, { type: 'delete-message', actor: senderPubkey, target: targetAuthor, messageId: targetMessageId });
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
@@ -1541,6 +1541,7 @@ Object.assign(NYM.prototype, {
         }
 
         const nymMsgId = this.getNymMessageId(rumor);
+        if (this._isGroupModDeleted(groupId, event.id, nymMsgId)) return;
 
         // Content dedup for dual-wrap scenarios
         let dupGroupMsg = null;
@@ -1982,6 +1983,7 @@ Object.assign(NYM.prototype, {
             if (!/^[0-9a-f]{64}$/i.test(e.x || '')) continue;
             if (existingIds.has(e.x)) continue;
             if (this.deletedEventIds && this.deletedEventIds.has(e.x)) continue;
+            if (this._isGroupModDeleted(groupId, e.x)) continue;
             const ts = Math.min(Math.floor(e.t || 0) || 0, Math.floor(Date.now() / 1000));
             if (ts <= 0) continue;
             existingIds.add(e.x);
@@ -3218,19 +3220,18 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Only the group owner, an admin or a moderator can delete messages.');
             return;
         }
-        if (!this._isGroupOwner(groupId, this.pubkey)
-            && !this._outranks(groupId, this.pubkey, authorPubkey)) {
+        if (!messageId) return;
+        const msg = this._findGroupMessage(groupId, messageId);
+        if (!msg || !msg.pubkey) return;
+        authorPubkey = msg.pubkey;
+        if (!this._canModDeleteGroupMessage(groupId, this.pubkey, authorPubkey)) {
             this.displaySystemMessage("You can't delete messages from someone at or above your own role.");
             return;
         }
-        if (!messageId) return;
 
         // Resolve to the nymMessageId — that's the only id that's stable across
         // recipients, since each one has a different gift-wrap event id.
-        const groupConvKey = this.getGroupConversationKey(groupId);
-        const list = this.pmMessages.get(groupConvKey) || [];
-        const msg = list.find(m => m.id === messageId || m.nymMessageId === messageId);
-        const sharedId = (msg && msg.nymMessageId) || messageId;
+        const sharedId = msg.nymMessageId || msg.id;
 
         const actorName = this.getNymFromPubkey(this.pubkey);
         const authorName = authorPubkey ? this.getNymFromPubkey(authorPubkey) : 'a member';
@@ -3256,38 +3257,57 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(content);
     },
 
-    // Local-only: drop a message from group state and remove from DOM.
-    // The DOM bubble's data-message-id is the message's nymMessageId for group
-    // messages (see messages.js), but moderation rumors may carry the gift-wrap
-    // event id. Look up by either, then derive the actual DOM id from the
-    // stored message so the right node is removed.
+    _findGroupMessage(groupId, messageId) {
+        if (!groupId || typeof messageId !== 'string' || !messageId) return null;
+        const list = this.pmMessages.get(this.getGroupConversationKey(groupId));
+        if (!Array.isArray(list)) return null;
+        return list.find(m => m && (!m.groupId || m.groupId === groupId) && (m.id === messageId || m.nymMessageId === messageId)) || null;
+    },
+
+    _canModDeleteGroupMessage(groupId, actorPubkey, targetPubkey) {
+        if (!actorPubkey || !targetPubkey) return false;
+        if (!this._canModerate(groupId, actorPubkey)) return false;
+        if (this._isGroupOwner(groupId, actorPubkey)) return true;
+        if (this._isGroupOwner(groupId, targetPubkey)) return false;
+        return this._outranks(groupId, actorPubkey, targetPubkey);
+    },
+
+    _isGroupModDeleted(groupId, ...ids) {
+        const grp = this.groupConversations.get(groupId);
+        if (!grp || !Array.isArray(grp.modDeletedIds) || grp.modDeletedIds.length === 0) return false;
+        return ids.some(id => id && grp.modDeletedIds.includes(id));
+    },
+
     _applyGroupMessageDeletion(groupId, messageId) {
-        if (!messageId) return;
+        if (!messageId) return null;
         const groupConvKey = this.getGroupConversationKey(groupId);
         const list = this.pmMessages.get(groupConvKey);
-        let domId = messageId;
-        if (list) {
-            const idx = list.findIndex(m => m.id === messageId || m.nymMessageId === messageId);
-            if (idx !== -1) {
-                const msg = list[idx];
-                domId = msg.nymMessageId || msg.id;
-                if (this.deletedEventIds && this.deletedEventIds.add) {
-                    if (msg.id) this.deletedEventIds.add(msg.id);
-                    if (msg.nymMessageId) this.deletedEventIds.add(msg.nymMessageId);
-                    if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
-                }
-                list.splice(idx, 1);
-                this.channelDOMCache.delete(groupConvKey);
-                if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
-                if (typeof this.refreshUnreadCount === 'function') this.refreshUnreadCount(groupConvKey);
-            } else if (this.deletedEventIds && this.deletedEventIds.add) {
-                // Not in our local list yet — remember so a late-arriving copy stays gone.
-                this.deletedEventIds.add(messageId);
-                if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+        if (!Array.isArray(list)) return null;
+        const idx = list.findIndex(m => m && (!m.groupId || m.groupId === groupId) && (m.id === messageId || m.nymMessageId === messageId));
+        if (idx === -1) return null;
+        const msg = list[idx];
+        list.splice(idx, 1);
+        const grp = this.groupConversations.get(groupId);
+        if (grp) {
+            if (!Array.isArray(grp.modDeletedIds)) grp.modDeletedIds = [];
+            for (const id of [msg.id, msg.nymMessageId]) {
+                if (id && !grp.modDeletedIds.includes(id)) grp.modDeletedIds.push(id);
+            }
+            if (grp.modDeletedIds.length > 500) grp.modDeletedIds = grp.modDeletedIds.slice(-500);
+        }
+        this.channelDOMCache.delete(groupConvKey);
+        if (typeof this.persistPMMessages === 'function') this.persistPMMessages(groupConvKey);
+        if (typeof this.refreshUnreadCount === 'function') this.refreshUnreadCount(groupConvKey);
+        if (typeof document !== 'undefined' && document.querySelectorAll) {
+            const domIds = [...new Set([msg.nymMessageId, msg.id].filter(Boolean))];
+            for (const domId of domIds) {
+                const sel = `[data-message-id="${(typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(domId) : domId}"]`;
+                document.querySelectorAll(sel).forEach(el => {
+                    if (el.dataset && el.dataset.groupId === groupId) el.remove();
+                });
             }
         }
-        const el = document.querySelector(`[data-message-id="${domId}"]`);
-        if (el) el.remove();
+        return msg;
     },
 
     // Add or update a group entry in the PM sidebar list

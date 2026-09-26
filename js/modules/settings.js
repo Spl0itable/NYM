@@ -16,7 +16,6 @@ const NYM_SETTINGS_SECTION_KEYS = {
         'acceptCalls', 'showStatus', 'powDifficulty', 'appVerifiedFilter', 'filterPacks',
         'encryptAtRestPreferred'],
     messaging: ['groupChatPMOnlyMode', 'threadsEnabled', 'translateLanguage', 'translateFavoriteLanguages',
-        'autoTranslate', 'autoTranslateChannels', 'autoTranslatePMs', 'autoTranslateGroups',
         'emojiPackFavorites', 'emojiCategoryFavorites', 'favoriteGifs', 'recentEmojis',
         'gesturesEnabled', 'swipeLeftAction', 'swipeRightAction', 'swipeThreshold',
         'swipeReactEmoji', 'notificationsEnabled', 'groupNotifyMentionsOnly',
@@ -153,14 +152,10 @@ Object.assign(NYM.prototype, {
             translateLanguage: this.settings.translateLanguage || '',
             translateFavoriteLanguages: this._getTranslateFavorites(),
             uiLanguage: this.settings.uiLanguage || '',
-            autoTranslate: !!this.settings.autoTranslate,
-            autoTranslateChannels: this.settings.autoTranslateChannels !== false,
-            autoTranslatePMs: this.settings.autoTranslatePMs !== false,
-            autoTranslateGroups: this.settings.autoTranslateGroups !== false,
             emojiPackFavorites: this._getEmojiPackFavorites(),
             emojiCategoryFavorites: this._getDefaultCategoryFavorites(),
             ...(this._getFavoriteGifs().length ? { favoriteGifs: this._getFavoriteGifs().slice(0, 100) } : {}),
-            recentEmojis: Array.isArray(this.recentEmojis) ? this.recentEmojis.slice(0, 24) : [],
+            recentEmojis: this.sanitizeRecentEmojis(this.recentEmojis),
             gesturesEnabled: this.settings.gesturesEnabled !== false,
             swipeLeftAction: this.settings.swipeLeftAction || 'quote',
             swipeRightAction: this.settings.swipeRightAction || 'translate',
@@ -1828,6 +1823,9 @@ Object.assign(NYM.prototype, {
     },
 
     loadSettings() {
+        for (const k of ['nym_auto_translate', 'nym_auto_translate_channels', 'nym_auto_translate_pms', 'nym_auto_translate_groups']) {
+            try { localStorage.removeItem(k); } catch (_) { }
+        }
         let pinnedLandingChannel;
         try {
             const saved = localStorage.getItem('nym_pinned_landing_channel');
@@ -1875,10 +1873,6 @@ Object.assign(NYM.prototype, {
             threadsEnabled: localStorage.getItem('nym_threads_enabled') !== 'false',
             translateLanguage: localStorage.getItem('nym_translate_language') || '',
             uiLanguage: localStorage.getItem('nym_ui_language') || '',
-            autoTranslate: localStorage.getItem('nym_auto_translate') === 'true',
-            autoTranslateChannels: localStorage.getItem('nym_auto_translate_channels') !== 'false',
-            autoTranslatePMs: localStorage.getItem('nym_auto_translate_pms') !== 'false',
-            autoTranslateGroups: localStorage.getItem('nym_auto_translate_groups') !== 'false',
             gesturesEnabled: localStorage.getItem('nym_gestures_enabled') !== 'false',
             swipeLeftAction: localStorage.getItem('nym_swipe_left_action') || 'quote',
             swipeRightAction: localStorage.getItem('nym_swipe_right_action') || 'translate',

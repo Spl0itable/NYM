@@ -768,8 +768,8 @@ Object.assign(NYM.prototype, {
     },
 
     // When the user picks an app (UI) language, adopt it as the message
-    // "Translation Language" too, so message translation / auto-translate is
-    // ready to go in the same language. English UI ('') maps to 'en'.
+    // "Translation Language" too, so message translation is ready to go in
+    // the same language. English UI ('') maps to 'en'.
     _syncTranslateLanguageToUi(code) {
         const target = (!code || code === 'en') ? 'en' : code;
         if (this.settings) this.settings.translateLanguage = target;
@@ -777,7 +777,6 @@ Object.assign(NYM.prototype, {
         if (typeof this.populateTranslateLanguageSelect === 'function') this.populateTranslateLanguageSelect();
         const sel = document.getElementById('translateLanguageSelect');
         if (sel) sel.value = target;
-        // If auto-translate is on, re-run it against the new target language.
         if (typeof this.retranslateVisibleMessages === 'function') this.retranslateVisibleMessages();
     },
 

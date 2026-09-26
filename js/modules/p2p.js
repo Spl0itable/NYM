@@ -1,5 +1,8 @@
 // p2p.js - Peer-to-peer file sharing: WebRTC data channels, WebTorrent, transfers UI
 
+const _RX_P2P_OFFER_ID = /^[0-9a-f]{16}-[0-9a-z]{1,12}$/;
+const _RX_P2P_MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
+
 Object.assign(NYM.prototype, {
 
     P2P_MAX_FILE_SIZE: 2 * 1024 * 1024 * 1024,
@@ -66,7 +69,7 @@ Object.assign(NYM.prototype, {
     handleP2PFileStatusEvent(event) {
         try {
             const data = JSON.parse(event.content);
-            if (data.status === 'unseeded' && data.offerId) {
+            if (data.status === 'unseeded' && this.isValidOfferId(data.offerId)) {
                 this.p2pUnseededOffers.add(data.offerId);
                 // Update UI to show file is no longer available
                 this.updateFileOfferUI(data.offerId, 'unseeded');
@@ -75,7 +78,7 @@ Object.assign(NYM.prototype, {
             // Try tag-based approach
             const offerIdTag = event.tags.find(t => t[0] === 'offer_id');
             const statusTag = event.tags.find(t => t[0] === 'status');
-            if (offerIdTag && statusTag && statusTag[1] === 'unseeded') {
+            if (offerIdTag && statusTag && statusTag[1] === 'unseeded' && this.isValidOfferId(offerIdTag[1])) {
                 this.p2pUnseededOffers.add(offerIdTag[1]);
                 this.updateFileOfferUI(offerIdTag[1], 'unseeded');
             }
@@ -175,15 +178,48 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
+    isValidOfferId(offerId) {
+        return typeof offerId === 'string' && _RX_P2P_OFFER_ID.test(offerId);
+    },
+
+    sanitizeFileOffer(raw, senderPubkey) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        if (typeof senderPubkey !== 'string' || !/^[0-9a-f]{64}$/.test(senderPubkey)) return null;
+        if (!this.isValidOfferId(raw.offerId)) return null;
+        if (raw.seederPubkey !== undefined && raw.seederPubkey !== senderPubkey) return null;
+        if (typeof raw.name !== 'string' || !raw.name || raw.name.length > 1024) return null;
+        if (!Number.isSafeInteger(raw.size) || raw.size < 0) return null;
+        const offer = {
+            offerId: raw.offerId,
+            name: raw.name,
+            size: raw.size,
+            type: (typeof raw.type === 'string' && _RX_P2P_MIME.test(raw.type)) ? raw.type : 'application/octet-stream',
+            seederPubkey: senderPubkey,
+            timestamp: Number.isSafeInteger(raw.timestamp) && raw.timestamp > 0 ? raw.timestamp : 0
+        };
+        if (raw.hash !== undefined) {
+            if (typeof raw.hash !== 'string' || !/^[0-9a-f]{64}$/i.test(raw.hash)) return null;
+            offer.hash = raw.hash.toLowerCase();
+        }
+        if (raw.magnetURI !== undefined) {
+            if (typeof raw.magnetURI !== 'string' || raw.magnetURI.length > 4096) return null;
+            if (!this.getValidatedMagnetInfoHash(raw.magnetURI)) return null;
+            offer.magnetURI = raw.magnetURI;
+        }
+        if (raw.infoHash !== undefined) {
+            if (typeof raw.infoHash !== 'string' || !/^[0-9a-f]{40}$/i.test(raw.infoHash)) return null;
+            offer.infoHash = raw.infoHash.toLowerCase();
+        }
+        return offer;
+    },
+
     // Parse and register a file offer carried on a message's tags
     parseFileOfferTag(tags, senderPubkey) {
         const offerTag = (tags || []).find(t => Array.isArray(t) && t[0] === 'offer');
-        if (!offerTag) return null;
+        if (!offerTag || typeof offerTag[1] !== 'string' || offerTag[1].length > 16384) return null;
         try {
-            const fileOffer = JSON.parse(offerTag[1]);
-            if (fileOffer && typeof fileOffer === 'object' && fileOffer.offerId) {
-                if (fileOffer.seederPubkey && fileOffer.seederPubkey !== senderPubkey) return null;
-                fileOffer.seederPubkey = senderPubkey;
+            const fileOffer = this.sanitizeFileOffer(JSON.parse(offerTag[1]), senderPubkey);
+            if (fileOffer) {
                 this.p2pFileOffers.set(fileOffer.offerId, fileOffer);
                 return fileOffer;
             }
@@ -195,6 +231,8 @@ Object.assign(NYM.prototype, {
 
     // Format file size for display
     formatFileSize(bytes) {
+        bytes = Number(bytes);
+        if (!Number.isFinite(bytes) || bytes < 0) bytes = 0;
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
@@ -218,6 +256,7 @@ Object.assign(NYM.prototype, {
 
     // Request a file from a seeder
     async requestP2PFile(offerId) {
+        if (!this.isValidOfferId(offerId)) return;
         const offer = this.p2pFileOffers.get(offerId);
         if (!offer) {
             this.displaySystemMessage('File offer not found');
@@ -758,7 +797,7 @@ Object.assign(NYM.prototype, {
                         <div class="p2p-transfer-status">
                             <span class="p2p-transfer-status-text complete">Seeding${isTorrent ? ' (Torrent)' : ' (P2P)'}</span>
                             <div class="p2p-transfer-actions">
-                                <button class="p2p-transfer-btn cancel" data-action="stopSeeding" data-offer-id="${offerId}">Stop</button>
+                                <button class="p2p-transfer-btn cancel" data-action="stopSeeding" data-offer-id="${this.escapeHtml(offerId)}">Stop</button>
                             </div>
                         </div>
                     `;
@@ -781,9 +820,9 @@ Object.assign(NYM.prototype, {
                             <div class="p2p-transfer-progress-fill" data-pct="${progress.toFixed(1)}"></div>
                         </div>
                         <div class="p2p-transfer-status">
-                            <span class="p2p-transfer-status-text ${transfer.status}">${transfer.status}</span>
+                            <span class="p2p-transfer-status-text ${this.escapeHtml(transfer.status)}">${this.escapeHtml(transfer.status)}</span>
                             <div class="p2p-transfer-actions">
-                                <button class="p2p-transfer-btn cancel" data-action="cancelTransfer" data-transfer-id="${transferId}">Cancel</button>
+                                <button class="p2p-transfer-btn cancel" data-action="cancelTransfer" data-transfer-id="${this.escapeHtml(transferId)}">Cancel</button>
                             </div>
                         </div>
                     `;
@@ -851,6 +890,7 @@ Object.assign(NYM.prototype, {
 
     // Update file offer UI element to reflect current status
     updateFileOfferUI(offerId, status) {
+        if (!this.isValidOfferId(offerId)) return;
         const offerEl = document.querySelector(`[data-offer-id="${offerId}"]`);
         if (!offerEl) return;
 

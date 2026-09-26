@@ -938,10 +938,11 @@ export function lowTrustSender(job) {
   return !(Number(job.pow) >= LOW_TRUST_POW_BITS);
 }
 
-function exactVerdict(simKey, now) {
+function exactVerdict(simKey, now, before) {
   const e = state.exact.get(simKey);
   if (!e) return null;
   if (now - e.at > EXACT_CACHE_MS) { state.exact.delete(simKey); return null; }
+  if (before != null && e.at > before) return null;
   return e;
 }
 
@@ -972,6 +973,17 @@ function flaggedForAudit(job, dossier) {
   return false;
 }
 
+function postedAt(job) {
+  const seen = Number(job.seenAt) || 0;
+  if (job.source !== "report") return seen;
+  const created = Number(job.createdAt) || 0;
+  return created > 0 && created < seen ? created : seen;
+}
+
+function cleanHistory(rec) {
+  return !!(rec && Number(rec.ham) > 0 && !(Number(rec.spam) > 0) && !(Number(rec.strikes) > 0));
+}
+
 async function loadDossier(env, job, settings, opts) {
   const db = env.DB_NOPE;
   const r = replica(db);
@@ -979,7 +991,8 @@ async function loadDossier(env, job, settings, opts) {
   const since = now - SIMILAR_WINDOW_MS;
   const labelSince = now - LABELS_WINDOW_MS;
   const light = !!(opts && opts.light);
-  const out = { self: null, record: null, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
+  const posted = postedAt(job);
+  const out = { self: null, record: null, cleanHistory: false, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
   const reusable = verdictReusable(job.fp);
   if (!job.force) {
     try {
@@ -989,6 +1002,7 @@ async function loadDossier(env, job, settings, opts) {
   try {
     out.record = await r.prepare("SELECT * FROM spam_pubkeys WHERE pubkey = ?").bind(job.pubkey).first();
   } catch (e) { out.record = null; }
+  out.cleanHistory = cleanHistory(out.record);
   if (!light) {
     try {
       const rs = await r.prepare("SELECT channel, nym, content, verdict, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8")
@@ -1009,15 +1023,17 @@ async function loadDossier(env, job, settings, opts) {
       const spamPks = new Set();
       for (const row of rows) {
         pks.add(row.pubkey);
-        if (verdictOf(row) === "spam") { out.similarSpam++; spamPks.add(row.pubkey); }
+        const earlier = Number(row.seen_at) <= posted;
+        if (verdictOf(row) === "spam" && earlier) { out.similarSpam++; spamPks.add(row.pubkey); }
         if (row.label === "spam") out.similarLabelledSpam++;
         if (!out.labelledOk && row.label === "ok" && row.sim_key === job.fp.simKey) out.labelledOk = row;
-        if (reusable && !out.exact && row.sim_key === job.fp.simKey && verdictOf(row) === "spam" && (row.label === "spam" || Number(row.confidence) >= settings.minConfidence) && row.pubkey !== job.pubkey) out.exact = row;
+        if (reusable && earlier && !out.exact && row.sim_key === job.fp.simKey && verdictOf(row) === "spam" && (row.label === "spam" || Number(row.confidence) >= settings.minConfidence) && row.pubkey !== job.pubkey) out.exact = row;
       }
       out.similar = rows;
       out.similarPubkeys = pks.size;
       out.similarSpamPubkeys = spamPks.size;
       if (out.labelledOk) { out.exact = null; state.exact.delete(job.fp.simKey); }
+      if (out.cleanHistory) out.exact = null;
     } catch (e) { out.similar = []; }
   }
   if (job.nymKey && !light) {
@@ -1312,16 +1328,22 @@ export async function auditNow(env, job, hooks) {
   const bypass = !!job.force && !review;
   const innocuous = bypass ? "" : innocuousKind(job.content);
   const reusable = verdictReusable(job.fp);
-  const memo = !job.force && !innocuous && reusable ? exactVerdict(job.fp.simKey, now) : null;
+  const posted = postedAt(job);
+  const memo = !job.force && !innocuous && reusable ? exactVerdict(job.fp.simKey, now, posted) : null;
   const memoStrong = !!(memo && memo.spam && memo.confidence >= settings.minConfidence);
   const muted = !job.force && isSpamMuted(job.pubkey, now);
-  const light = muted || memoStrong;
+  let light = muted || memoStrong;
   if (!bypass && !light && !dossierBudgetOk(settings)) {
     state.counters.skippedBudget++;
     return { skipped: "budget", suspicious: locallySuspicious(job, null) };
   }
-  const dossier = await loadDossier(env, job, settings, { light });
+  let dossier = await loadDossier(env, job, settings, { light });
   if (dossier.self) return adoptPeer(dossier.self, job);
+  if (light && !muted && dossier.cleanHistory) {
+    light = false;
+    dossier = await loadDossier(env, job, settings, { light });
+    if (dossier.self) return adoptPeer(dossier.self, job);
+  }
   job.pubkeyUnknown = !dossier.record;
   if (job.badge == null) job.badge = badgeTier(env, job, now);
   if (light) {
@@ -1332,7 +1354,7 @@ export async function auditNow(env, job, hooks) {
     await enrichDossier(env, job, dossier);
   }
   let v = null;
-  const cached = reusable ? exactVerdict(job.fp.simKey, now) : null;
+  const cached = reusable && !dossier.cleanHistory ? exactVerdict(job.fp.simKey, now, posted) : null;
   if (muted) {
     v = { spam: true, confidence: 1, category: "muted-sender", language: "", model: "rule", reason: "the sender was muted while this message waited for its audit" };
     state.counters.rules++;
@@ -1366,7 +1388,7 @@ export async function auditNow(env, job, hooks) {
     }
   }
   const strong = v.spam && v.confidence >= settings.minConfidence;
-  const enforceable = !review || reviewEvidenceStrong(v, settings);
+  const enforceable = !review || reviewEvidenceStrong(v, settings, dossier);
   const enforcing = !!(strong && settings.autoEnforce && enforceable);
   const strikes = strikesAfter(dossier, strong && enforceable);
   const plan = enforcing ? planEnforcement(job, v, dossier, strikes) : null;
@@ -1397,9 +1419,13 @@ export async function auditNow(env, job, hooks) {
   return { verdict: v, action, strikes, score: persisted.score, similar: dossier.similar.length, similarPubkeys: dossier.similarPubkeys, similarNyms: dossier.nymMatches.length, nymSpam: dossier.nymSpam, signals: job.signals };
 }
 
-export function reviewEvidenceStrong(v, settings) {
+export function reviewEvidenceStrong(v, settings, dossier) {
   if (!v || !v.spam) return false;
-  if (v.model === "rule" || v.model === "cache" || v.model === "cross-ref") return true;
+  if (v.model === "rule") return true;
+  if (v.model === "cache" || v.model === "cross-ref") {
+    const rec = dossier && dossier.record;
+    return !!(rec && (Number(rec.spam) > 0 || Number(rec.strikes) > 0));
+  }
   const floor = Math.max(settings && settings.minConfidence ? settings.minConfidence : 0, REPORT_ENFORCE_CONFIDENCE);
   return v.messageAlone === true && v.confidence >= floor;
 }

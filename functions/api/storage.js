@@ -1501,14 +1501,68 @@ async function handleEmojiAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
-function zapIsValidReceipt(ev) {
+var ZAP_FUTURE_SKEW_S = 600;
+var ZAP_REQUEST_MAX = 16384;
+
+function zapTagValue(tags, name) {
+  var t = Array.isArray(tags) ? tags.find(function (x) { return Array.isArray(x) && x[0] === name && typeof x[1] === "string"; }) : null;
+  return t ? t[1] : null;
+}
+
+function zapSignedEventOk(ev, kind, nowS) {
+  if (!ev || typeof ev !== "object" || ev.kind !== kind) return false;
+  if (typeof ev.id !== "string" || typeof ev.sig !== "string" || typeof ev.pubkey !== "string") return false;
+  if (!/^[0-9a-f]{64}$/.test(ev.pubkey)) return false;
+  if (typeof ev.content !== "string" || !Array.isArray(ev.tags)) return false;
+  if (!Number.isSafeInteger(ev.created_at) || ev.created_at < 0 || ev.created_at > nowS + ZAP_FUTURE_SKEW_S) return false;
+  if (getEventHash(ev) !== ev.id) return false;
+  return schnorr.verify(ev.sig, ev.id, ev.pubkey);
+}
+
+function zapBolt11Msats(invoice) {
+  if (typeof invoice !== "string" || invoice.length < 16 || invoice.length > 4096) return null;
+  var lower = invoice.toLowerCase();
+  var sep = lower.lastIndexOf("1");
+  if (sep < 4 || !/^[02-9ac-hj-np-z]{6,}$/.test(lower.slice(sep + 1))) return null;
+  var m = lower.slice(0, sep).match(/^ln(?:bcrt|bc|tbs|tb|sb)([1-9][0-9]{0,14})([munp]?)$/);
+  if (!m) return null;
+  var n = BigInt(m[1]);
+  var msats;
+  if (m[2] === "m") msats = n * 100000000n;
+  else if (m[2] === "u") msats = n * 100000n;
+  else if (m[2] === "n") msats = n * 100n;
+  else if (m[2] === "p") { if (n % 10n !== 0n) return null; msats = n / 10n; }
+  else msats = n * 100000000000n;
+  return msats > 0n ? msats : null;
+}
+
+function zapIsValidReceipt(ev, nowMs) {
   try {
-    if (!ev || typeof ev !== "object") return false;
-    if (ev.kind !== 9735) return false;
-    if (typeof ev.id !== "string" || typeof ev.sig !== "string" || typeof ev.pubkey !== "string") return false;
-    if (typeof ev.content !== "string" || !Array.isArray(ev.tags)) return false;
-    if (getEventHash(ev) !== ev.id) return false;
-    return schnorr.verify(ev.sig, ev.id, ev.pubkey);
+    var nowS = Math.floor((nowMs || Date.now()) / 1000);
+    if (!zapSignedEventOk(ev, 9735, nowS)) return false;
+    var desc = zapTagValue(ev.tags, "description");
+    if (!desc || desc.length > ZAP_REQUEST_MAX) return false;
+    var req = JSON.parse(desc);
+    if (!zapSignedEventOk(req, 9734, nowS)) return false;
+    var reqP = zapTagValue(req.tags, "p");
+    var recP = zapTagValue(ev.tags, "p");
+    if (!reqP || !recP || !/^[0-9a-f]{64}$/i.test(reqP) || reqP.toLowerCase() !== recP.toLowerCase()) return false;
+    var names = ["e", "a"];
+    for (var i = 0; i < names.length; i++) {
+      var recV = zapTagValue(ev.tags, names[i]);
+      if (recV === null) continue;
+      var reqV = zapTagValue(req.tags, names[i]);
+      if (reqV === null || (names[i] === "e" ? reqV.toLowerCase() !== recV.toLowerCase() : reqV !== recV)) return false;
+    }
+    var zapper = zapTagValue(ev.tags, "P");
+    if (zapper !== null && zapper.toLowerCase() !== req.pubkey) return false;
+    var msats = zapBolt11Msats(zapTagValue(ev.tags, "bolt11"));
+    if (msats === null) return false;
+    var amount = zapTagValue(req.tags, "amount");
+    if (amount !== null) {
+      if (!/^[1-9][0-9]{0,18}$/.test(amount) || BigInt(amount) !== msats) return false;
+    }
+    return true;
   } catch (e) { return false; }
 }
 
@@ -1639,7 +1693,7 @@ async function handleZapAction(context, body) {
     var pm = [];
     for (var n = 0; n < events.length; n++) {
       var ev = events[n];
-      if (!zapIsValidReceipt(ev)) continue;
+      if (!zapIsValidReceipt(ev, now)) continue;
       if (JSON.stringify(ev).length > ZAP_EVENT_MAX) continue;
       var info = zapClassify(ev);
       if (!info) continue;

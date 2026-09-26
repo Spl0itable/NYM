@@ -2,6 +2,10 @@
 
 const _RX_EMOJI_SHORTCODE = /^[a-zA-Z0-9_]+$/;
 const _RX_EMOJI_URL = /^https?:\/\//i;
+const _RX_REACTION_SHORTCODE = /^:[a-zA-Z0-9_]{1,64}:$/;
+const _RX_REACTION_EMOJI = new RegExp('^(?:(?:[\\u{1F1E0}-\\u{1F1FF}]{2})|(?:[#*0-9]\\u{FE0F}?\\u{20E3})|(?:(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?(?:\\u{200D}(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?)*)(?:[\\u{E0020}-\\u{E007E}]+\\u{E007F})?)$', 'u');
+const _REACTION_MAX_LENGTH = 64;
+const _REACTION_EXTRA_SYMBOLS = new Set(['\u20BF', '+', '-']);
 
 Object.assign(NYM.prototype, {
 
@@ -364,6 +368,26 @@ Object.assign(NYM.prototype, {
         return this.escapeHtml(emoji);
     },
 
+    isValidReactionEmoji(emoji) {
+        if (typeof emoji !== 'string' || !emoji || emoji.length > _REACTION_MAX_LENGTH + 2) return false;
+        if (_RX_REACTION_SHORTCODE.test(emoji)) return true;
+        if (emoji.length > _REACTION_MAX_LENGTH) return false;
+        return _REACTION_EXTRA_SYMBOLS.has(emoji) || _RX_REACTION_EMOJI.test(emoji);
+    },
+
+    sanitizeRecentEmojis(list) {
+        if (!Array.isArray(list)) return [];
+        const seen = new Set();
+        const out = [];
+        for (const e of list) {
+            if (!this.isValidReactionEmoji(e) || seen.has(e)) continue;
+            seen.add(e);
+            out.push(e);
+            if (out.length >= 24) break;
+        }
+        return out;
+    },
+
     // HTML for one emoji-picker option button (handles unicode and custom emoji)
     emojiOptionHtml(emoji, emojiToNames, btnClass = 'emoji-option') {
         if (typeof emoji === 'string') {
@@ -374,8 +398,9 @@ Object.assign(NYM.prototype, {
                 return `<button class="${btnClass} custom-emoji-option" data-emoji=":${code}:" data-names="${code}" title=":${code}:">${img}</button>`;
             }
         }
-        const names = (emojiToNames && emojiToNames[emoji]) || [];
-        return `<button class="${btnClass}" data-emoji="${this.escapeHtml(emoji)}" data-names="${names.join(' ')}" title="${names.join(', ')}">${emoji}</button>`;
+        const names = (emojiToNames && Object.prototype.hasOwnProperty.call(emojiToNames, emoji) && Array.isArray(emojiToNames[emoji])) ? emojiToNames[emoji] : [];
+        const safe = this.escapeHtml(emoji);
+        return `<button class="${btnClass}" data-emoji="${safe}" data-names="${this.escapeHtml(names.join(' '))}" title="${this.escapeHtml(names.join(', '))}">${safe}</button>`;
     },
 
     // Build the custom-emoji sections for an emoji modal, grouped by pack

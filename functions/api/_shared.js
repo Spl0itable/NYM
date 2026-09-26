@@ -2553,8 +2553,18 @@ function nip44Encrypt(plaintext, conversationKey) {
 }
 
 // NIP-59 gift wrap (Nymbot private replies)
+function secureRandomBelow(n) {
+  var buf = new Uint32Array(1);
+  var limit = Math.floor(4294967296 / n) * n;
+  do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+  return buf[0] % n;
+}
+function secureRandomId(prefix) {
+  var bytes = crypto.getRandomValues(new Uint8Array(6));
+  return prefix + Array.from(bytes, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+}
 function randomTimestampNow() {
-  return Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 172800);
+  return Math.floor(Date.now() / 1000) - secureRandomBelow(172800);
 }
 function buildGiftWrappedDM(plaintext, botPrivkey, botPubkey, recipientPubkey) {
   var rumor = {
@@ -2910,7 +2920,7 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
   return await new Promise(function (resolve) {
     var done = false, ws;
     var timer = null, infoTimer = null, retryTimer = null;
-    var infoSub = "nwci-" + Math.random().toString(36).slice(2, 10);
+    var infoSub = secureRandomId("nwci-");
     var tried = [];
     var subScheme = {};
     var reqIds = {};
@@ -2940,7 +2950,7 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
       tried.push(sch);
       if (infoTimer) { clearTimeout(infoTimer); infoTimer = null; }
       try { ws.send(JSON.stringify(["CLOSE", infoSub])); } catch (e) {}
-      var sub = "nwc-" + Math.random().toString(36).slice(2, 10);
+      var sub = secureRandomId("nwc-");
       try {
         var tags = [["p", cfg.walletPubkey]];
         if (sch === "nip44_v2") tags.push(["encryption", sch]);

@@ -4,6 +4,7 @@
     const VOUCHER_N = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
     const VOUCHER_DENOMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
     const VOUCHER_MAX_OUTPUTS = 32;
+    const VOUCHER_TIERS = ['standard', 'pro'];
     const HTC_DOMAIN = 'Nymbot_Voucher_HashToCurve_v1';
     const DLEQ_DOMAIN = 'Nymbot_Voucher_DLEQ_v1';
     const ANON_PREV_MAX = 4;
@@ -61,6 +62,25 @@
             } catch (_) { }
         }
         throw new Error('hash-to-curve failed');
+    }
+
+    function voucherKeysetFromResponse(keys) {
+        if (!keys || typeof keys !== 'object') return null;
+        const out = {};
+        const parts = [];
+        for (const tier of VOUCHER_TIERS) {
+            const row = keys[tier];
+            if (!row || typeof row !== 'object') return null;
+            out[tier] = {};
+            for (const denom of VOUCHER_DENOMS) {
+                const key = row[String(denom)];
+                if (typeof key !== 'string' || !/^0[23][0-9a-f]{64}$/.test(key)) return null;
+                out[tier][String(denom)] = key;
+                parts.push(tier + ':' + denom + ':' + key);
+            }
+        }
+        const keysetId = hex(NT()._sha256(enc.encode(parts.join('|')))).slice(0, 16);
+        return { keysetId, keys: out };
     }
 
     function splitAmount(amount) {
@@ -589,23 +609,40 @@
             return moved;
         },
 
+        async _botVoucherKeysFetch() {
+            const apiHost = typeof this._getApiHost === 'function' ? this._getApiHost() : '';
+            if (!apiHost) return { status: 0, data: {} };
+            const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'voucher-keys' })
+            });
+            const data = await resp.json().catch(() => ({}));
+            return { status: resp.status, data: data || {} };
+        },
+
         async _botVoucherKeyset(force) {
             if (this._botVoucherKeys && !force) return this._botVoucherKeys;
-            const { status, data } = await this._botMoneyRequest('voucher-keys', {}, { anon: false });
+            const { status, data } = await this._botVoucherKeysFetch();
             if (status >= 400 || !data || data.error || !data.keys || !data.keysetId) {
                 throw new Error((data && data.error) || 'Voucher keys unavailable');
             }
+            const computed = voucherKeysetFromResponse(data.keys);
+            if (!computed || computed.keysetId !== data.keysetId) {
+                throw new Error('Voucher keyset does not match its keys');
+            }
+            const keyset = Object.assign({}, data, { keysetId: computed.keysetId, keys: computed.keys });
             let pinned = null;
             try { pinned = localStorage.getItem('nym_botanon_keyset'); } catch (_) { }
-            if (pinned && pinned !== data.keysetId) {
+            if (pinned && pinned !== keyset.keysetId) {
                 const ok = await window.showAppConfirm(
                     'Nymbot\'s voucher signing keys changed since you last moved credits. That happens on a legitimate key rotation, but it is also what a server would do to tag your vouchers. Continue anyway?',
                     { title: 'Voucher keys changed', okLabel: 'Continue', danger: true });
                 if (!ok) throw new Error('Voucher keyset rejected');
             }
-            try { localStorage.setItem('nym_botanon_keyset', data.keysetId); } catch (_) { }
-            this._botVoucherKeys = data;
-            return data;
+            try { localStorage.setItem('nym_botanon_keyset', keyset.keysetId); } catch (_) { }
+            this._botVoucherKeys = keyset;
+            return keyset;
         },
 
         _botVoucherVerifyDleq(keyHex, blindedHex, sig) {

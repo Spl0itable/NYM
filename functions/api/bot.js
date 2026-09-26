@@ -3021,6 +3021,12 @@ function splitQuotedReply(raw) {
   return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim(), author: author };
 }
 
+function errorRef() {
+  var b = new Uint8Array(3);
+  crypto.getRandomValues(b);
+  return Array.from(b).map(function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+}
+
 var BOT_PM_TEXT_MAX = 200000;
 
 function parseBotPMRequest(rawMessage) {
@@ -3539,7 +3545,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       said = String((heard && (heard.text || heard.transcription ||
         (heard.result && heard.result.text))) || "").trim();
     } catch (e) {
-      return json({ error: "Transcription failed: " + String((e && e.message) || e).slice(0, 160) }, 502);
+      var ref = errorRef();
+      console.error("nymbot transcribe failed ref " + ref, e);
+      return json({ error: "Transcription failed. Please try again. (ref " + ref + ")" }, 502);
     }
     return json({ text: said });
   }
@@ -4328,7 +4336,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         }
       } catch (e) {
         // Nothing is charged when generation or upload fails.
-        return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
+        var ref = errorRef();
+        console.error("nymbot media generation failed ref " + ref, e);
+        return await turnFail({ error: "Nymbot could not create that. Please try again. (ref " + ref + ")" }, 500);
       }
       var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier, hold: holdId || undefined });
       holdId = null;
@@ -4456,7 +4466,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         inApp: isStandaloneNymbot(context.request, env)
       });
     } catch (e) {
-      return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
+      var ref = errorRef();
+      console.error("nymbot chat failed ref " + ref, e);
+      return await turnFail({ error: "Nymbot hit an error. Please try again. (ref " + ref + ")" }, 500);
     }
     var reply = chatResult && chatResult.reply;
     if (!reply) return await turnFail({ error: "Nymbot returned an empty response" }, 500);
@@ -7091,7 +7103,9 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     if (reply.trim()) return reply;
     return "(Nymbot returned an empty response)";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    var ref = errorRef();
+    console.error("nymbot command failed ref " + ref, e);
+    return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
 
@@ -7139,7 +7153,9 @@ async function handleSummarize(context, channelMessages, geohash) {
     }
     return "(Nymbot returned an empty response)";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    var ref = errorRef();
+    console.error("nymbot command failed ref " + ref, e);
+    return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
 
@@ -7451,7 +7467,9 @@ async function handleTrivia(args, context) {
     }
     return "Couldn't generate a trivia question — try again!";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    var ref = errorRef();
+    console.error("nymbot command failed ref " + ref, e);
+    return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
 
@@ -7474,7 +7492,9 @@ async function handleJoke(context) {
     }
     return "\u{1F602} I tried to think of a joke but my circuits got crossed. Try again!";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    var ref = errorRef();
+    console.error("nymbot command failed ref " + ref, e);
+    return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
 
@@ -7506,7 +7526,9 @@ async function handleRiddle(context) {
     }
     return "Couldn't generate a riddle — try again!";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    var ref = errorRef();
+    console.error("nymbot command failed ref " + ref, e);
+    return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
 
@@ -7694,7 +7716,9 @@ async function handleDefine(word, context) {
     if (result && result.response) return "\u{1F4D6} " + result.response;
     return "Could not define that word.";
   } catch (e) {
-    return "Error: " + (e.message || String(e));
+    var ref = errorRef();
+    console.error("nymbot define failed ref " + ref, e);
+    return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
 

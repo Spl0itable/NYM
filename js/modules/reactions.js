@@ -174,21 +174,28 @@ Object.assign(NYM.prototype, {
     },
 
     loadRecentEmojis() {
-        const saved = localStorage.getItem('nym_recent_emojis');
-        if (saved) {
-            this.recentEmojis = JSON.parse(saved);
+        let saved = null;
+        try { saved = localStorage.getItem('nym_recent_emojis'); } catch (_) { saved = null; }
+        if (!saved) return;
+        let parsed = null;
+        try { parsed = JSON.parse(saved); } catch (_) { parsed = null; }
+        this.recentEmojis = this.sanitizeRecentEmojis(parsed);
+        if (!Array.isArray(parsed) || parsed.length !== this.recentEmojis.length) {
+            try { localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis)); } catch (_) { }
         }
     },
 
     saveRecentEmojis() {
-        localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis.slice(0, 24)));
+        this.recentEmojis = this.sanitizeRecentEmojis(this.recentEmojis);
+        try { localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis)); } catch (_) { }
         if (typeof this._debouncedNostrSettingsSave === 'function') {
             this._debouncedNostrSettingsSave();
         }
     },
 
     addToRecentEmojis(emoji) {
-        this.recentEmojis = this.recentEmojis.filter(e => e !== emoji);
+        if (!this.isValidReactionEmoji(emoji)) return;
+        this.recentEmojis = (Array.isArray(this.recentEmojis) ? this.recentEmojis : []).filter(e => e !== emoji);
         this.recentEmojis.unshift(emoji);
         this.recentEmojis = this.recentEmojis.slice(0, 24);
         this._emojiRecentsDirty = true;
@@ -253,6 +260,7 @@ Object.assign(NYM.prototype, {
         // Register any NIP-30 custom emoji declared on this reaction
         this.ingestEmojiTags(event.tags);
         const reactionContent = event.content;
+        if (!this.isValidReactionEmoji(reactionContent)) return;
         const eTag = event.tags.find(t => t[0] === 'e');
         const kTag = event.tags.find(t => t[0] === 'k');
         const pTag = event.tags.find(t => t[0] === 'p');

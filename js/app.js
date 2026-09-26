@@ -3637,16 +3637,6 @@ async function showSettings() {
         };
     }
 
-    // Auto-translate messages settings
-    if (typeof nym._syncAutoTranslateSettingsUI === 'function') nym._syncAutoTranslateSettingsUI();
-    const autoTrSelect = document.getElementById('autoTranslateSelect');
-    if (autoTrSelect) {
-        autoTrSelect.onchange = function () {
-            const sub = document.getElementById('autoTranslateSubOptions');
-            if (sub) sub.classList.toggle('nm-hidden', autoTrSelect.value !== 'true');
-        };
-    }
-
     const gesturesEnabledSelect = document.getElementById('gesturesEnabledSelect');
     const swipeLeftSelect = document.getElementById('swipeLeftActionSelect');
     const swipeRightSelect = document.getElementById('swipeRightActionSelect');
@@ -4254,32 +4244,6 @@ async function saveSettings() {
             if (typeof nym._syncTranslateLanguageToUi === 'function') nym._syncTranslateLanguageToUi(uiLang);
         }
         nym.settings.uiLanguage = uiLang;
-    }
-
-    // Read and save auto-translate settings
-    let autoTranslateChanged = false;
-    const autoTrEl = document.getElementById('autoTranslateSelect');
-    if (autoTrEl) {
-        const on = autoTrEl.value === 'true';
-        if (on !== !!nym.settings.autoTranslate) autoTranslateChanged = true;
-        nym.settings.autoTranslate = on;
-        localStorage.setItem('nym_auto_translate', String(on));
-    }
-    const autoTrScope = [
-        ['autoTranslateChannelsSelect', 'autoTranslateChannels', 'nym_auto_translate_channels'],
-        ['autoTranslatePMsSelect', 'autoTranslatePMs', 'nym_auto_translate_pms'],
-        ['autoTranslateGroupsSelect', 'autoTranslateGroups', 'nym_auto_translate_groups'],
-    ];
-    for (const [elId, key, lsKey] of autoTrScope) {
-        const el = document.getElementById(elId);
-        if (!el) continue;
-        const on = el.value === 'true';
-        if (on !== (nym.settings[key] !== false)) autoTranslateChanged = true;
-        nym.settings[key] = on;
-        localStorage.setItem(lsKey, String(on));
-    }
-    if (autoTranslateChanged && typeof nym.retranslateVisibleMessages === 'function') {
-        nym.retranslateVisibleMessages();
     }
 
     const VALID_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
@@ -7331,25 +7295,6 @@ async function applyNostrSettings(s) {
         if (typeof nym.populateUiLanguageSelect === 'function') nym.populateUiLanguageSelect();
     }
 
-    // Auto-translate incoming messages (master + per-conversation-type gates)
-    if (typeof s.autoTranslate === 'boolean') {
-        nym.settings.autoTranslate = s.autoTranslate;
-        localStorage.setItem('nym_auto_translate', String(s.autoTranslate));
-    }
-    if (typeof s.autoTranslateChannels === 'boolean') {
-        nym.settings.autoTranslateChannels = s.autoTranslateChannels;
-        localStorage.setItem('nym_auto_translate_channels', String(s.autoTranslateChannels));
-    }
-    if (typeof s.autoTranslatePMs === 'boolean') {
-        nym.settings.autoTranslatePMs = s.autoTranslatePMs;
-        localStorage.setItem('nym_auto_translate_pms', String(s.autoTranslatePMs));
-    }
-    if (typeof s.autoTranslateGroups === 'boolean') {
-        nym.settings.autoTranslateGroups = s.autoTranslateGroups;
-        localStorage.setItem('nym_auto_translate_groups', String(s.autoTranslateGroups));
-    }
-    if (typeof nym._syncAutoTranslateSettingsUI === 'function') nym._syncAutoTranslateSettingsUI();
-    if (typeof nym.retranslateVisibleMessages === 'function') nym.retranslateVisibleMessages();
 
     // Favorite custom emoji packs
     if (Array.isArray(s.emojiPackFavorites)) {
@@ -7386,15 +7331,7 @@ async function applyNostrSettings(s) {
 
     // Recently used emoji — merge most-recent-first, dedupe by emoji
     if (Array.isArray(s.recentEmojis) && s.recentEmojis.length > 0) {
-        const seen = new Set();
-        const merged = [];
-        for (const e of s.recentEmojis) {
-            if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
-        }
-        for (const e of (nym.recentEmojis || [])) {
-            if (typeof e === 'string' && !seen.has(e)) { seen.add(e); merged.push(e); }
-        }
-        nym.recentEmojis = merged.slice(0, 24);
+        nym.recentEmojis = nym.sanitizeRecentEmojis([...s.recentEmojis, ...(nym.recentEmojis || [])]);
         try { localStorage.setItem('nym_recent_emojis', JSON.stringify(nym.recentEmojis)); } catch (_) { }
     }
 

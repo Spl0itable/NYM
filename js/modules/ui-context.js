@@ -1507,7 +1507,7 @@ Object.assign(NYM.prototype, {
                 if (cm && this.customEmojis && this.customEmojis.has(cm[1])) {
                     return `<button class="quick-react-emoji" data-emoji=":${this.escapeHtml(cm[1])}:">${this.renderCustomEmojiImg(cm[1])}</button>`;
                 }
-                return `<button class="quick-react-emoji" data-emoji="${this.escapeHtml(emoji)}">${emoji}</button>`;
+                return `<button class="quick-react-emoji" data-emoji="${this.escapeHtml(emoji)}">${this.escapeHtml(emoji)}</button>`;
             }).join('') +
                 `<button class="quick-react-expand" title="More reactions">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

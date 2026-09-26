@@ -1264,7 +1264,7 @@ Object.assign(NYM.prototype, {
                 if (eTag) {
                     const reactionMessageId = eTag[1];
                     const emoji = rumor.content;
-                    if (!emoji) { return; }
+                    if (!this.isValidReactionEmoji(emoji)) { return; }
                     const actionTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'action');
                     const isRemoval = actionTag && actionTag[1] === 'remove';
 
@@ -1754,7 +1754,7 @@ Object.assign(NYM.prototype, {
         this._pmDepositQueue.push(event);
         const depositCap = this.MAX_PM_DEPOSIT_QUEUE || 600;
         while (this._pmDepositQueue.length > depositCap) {
-            this._pmDepositQueue.splice(Math.floor(Math.random() * this._pmDepositQueue.length), 1);
+            this._pmDepositQueue.splice(this._pmSecureRandomInt(this._pmDepositQueue.length), 1);
             this._pmDepositDropped = (this._pmDepositDropped || 0) + 1;
             if (!this._pmDepositDropWarnTs || Date.now() - this._pmDepositDropWarnTs > 30000) {
                 this._pmDepositDropWarnTs = Date.now();
@@ -1768,25 +1768,34 @@ Object.assign(NYM.prototype, {
         }, this._pmDepositDelay(false));
     },
 
+    _pmSecureRandomInt(n) {
+        const range = Math.floor(n);
+        if (!(range > 1)) return 0;
+        const limit = Math.floor(0x100000000 / range) * range;
+        const buf = new Uint32Array(1);
+        do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+        return buf[0] % range;
+    },
+
     _pmDepositDelay(backlog) {
         const base = backlog
             ? (this.PM_DEPOSIT_BACKLOG_MS || 600)
             : (this.PM_DEPOSIT_FLUSH_MS || 4000);
         const jitter = this.PM_DEPOSIT_FLUSH_JITTER_MS || 0;
-        return base + Math.floor(Math.random() * (jitter + 1));
+        return base + this._pmSecureRandomInt(jitter + 1);
     },
 
     _pmDepositBatchSize() {
         const min = this.PM_DEPOSIT_BATCH_MIN || 40;
         const max = this.PM_DEPOSIT_BATCH_MAX || 100;
         if (max <= min) return max;
-        return min + Math.floor(Math.random() * (max - min + 1));
+        return min + this._pmSecureRandomInt(max - min + 1);
     },
 
     _shufflePmDepositQueue() {
         const q = this._pmDepositQueue;
         for (let i = q.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
+            const j = this._pmSecureRandomInt(i + 1);
             const tmp = q[i];
             q[i] = q[j];
             q[j] = tmp;
