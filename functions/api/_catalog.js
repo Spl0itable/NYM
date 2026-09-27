@@ -180,6 +180,7 @@ export async function catalogProModels(env, opts) {
         : (r.out_tokens_per_credit != null ? r.out_tokens_per_credit : 0),
       maxTokens: maxTokens > 0 ? maxTokens : 4096,
       vision: patch.vision != null ? !!patch.vision : !!r.vision,
+      visionPinned: patch.vision != null,
       reasoning: !!r.reasoning,
       tools: !!r.function_calling,
       context: r.context_window || null,

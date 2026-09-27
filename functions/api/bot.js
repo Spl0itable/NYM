@@ -468,6 +468,8 @@ function botProResolveKey(key) {
 // source of truth when it is reachable; BOT_PRO_MODELS above is the fallback,
 // so a new Cloudflare model becomes selectable without a deploy and an
 // unreachable catalog changes nothing.
+var BOT_PRO_VISION_FAMILY_RE = /^(?:anthropic\/claude-|openai\/gpt-(?:4o|4\.1|5|6)|google\/gemini-|xai\/grok-(?:[4-9]|\d{2})|moonshotai\/kimi-k(?:[3-9]|\d{2}))/i;
+
 async function botProCatalog(env) {
   var live = null;
   try { live = await catalogProModels(env); } catch (e) { live = null; }
@@ -512,6 +514,12 @@ async function botProCatalog(env) {
     var target = BOT_PRO_MODEL_ALIASES[k];
     if (aliases[target]) aliases[k] = aliases[target];
     else if (live.models[target]) aliases[k] = target;
+  });
+  Object.keys(live.models).forEach(function (k) {
+    var m = live.models[k];
+    if (m.visionPinned || m.vision) return;
+    var known = builtinById[m.model];
+    if ((known && known.vision) || BOT_PRO_VISION_FAMILY_RE.test(String(m.model || ""))) m.vision = true;
   });
   return { models: live.models, aliases: aliases, byModelId: live.byModelId, source: "catalog" };
 }
@@ -1107,6 +1115,13 @@ var BOT_PM_VISION_FALLBACKS = [
 ];
 var BOT_MEDIA_IMAGE_URL_RE = /https?:\/\/[^\s<>"']+\.(?:png|jpe?g|gif|webp)(?:\?[^\s<>"']*)?/gi;
 var BOT_MAX_VISION_IMAGES = 4;
+var BOT_MEDIA_VIDEO_URL_RE = /https?:\/\/[^\s<>"']+\.(?:mp4|m4v|webm|mov)(?:\?[^\s<>"']*)?/gi;
+var BOT_MAX_VIDEOS = 2;
+var BOT_VIDEO_MODEL_RE = /^google\/gemini-/i;
+var BOT_INLINE_VIDEO_MAX_BYTES = 20 * 1024 * 1024;
+var BOT_INLINE_VIDEO_TIMEOUT_MS = 20000;
+var BOT_VIDEO_FRAME_TIMES = [0, 3, 8, 15, 30];
+var BOT_VIDEO_FRAME_OPTS = "width=768,height=768,fit=scale-down,format=jpg";
 
 // A URL the message itself labels as an attached picture.
 var BOT_ATTACHED_IMAGE_RE = /---\s*attached image:[^\n]*---\s*\n\s*(https?:\/\/[^\s<>"']+)/gi;
@@ -1129,12 +1144,116 @@ function botExtractImageUrls(text) {
 
 // OpenAI-style multimodal content. anthropicizeRequest converts these blocks to
 // Anthropic's own image shape for the Claude models.
-function botVisionContent(question, urls) {
+var BOT_VISION_HISTORY_TURNS = 3;
+
+function botExtractVideoUrls(text) {
+  var out = [];
+  var m = String(text || "").match(BOT_MEDIA_VIDEO_URL_RE);
+  for (var i = 0; m && i < m.length && out.length < BOT_MAX_VIDEOS; i++) {
+    if (out.indexOf(m[i]) === -1 && !isPrivateHostUrl(m[i])) out.push(m[i]);
+  }
+  return out;
+}
+
+function botVideoMime(url) {
+  var ext = (/\.([a-z0-9]+)(?:\?|$)/i.exec(String(url || "")) || [])[1] || "";
+  ext = ext.toLowerCase();
+  if (ext === "webm") return "video/webm";
+  if (ext === "mov") return "video/mov";
+  return "video/mp4";
+}
+
+function botHistoryVision(turns, current, currentVideos) {
+  var used = (current || []).slice();
+  var room = BOT_MAX_VISION_IMAGES - used.length;
+  var seenVideos = currentVideos ? currentVideos.slice() : null;
+  var videoRoom = seenVideos ? BOT_MAX_VIDEOS - seenVideos.length : 0;
+  var out = [];
+  var recent = (turns || []).slice(-BOT_VISION_HISTORY_TURNS).reverse();
+  for (var i = 0; i < recent.length && (room > 0 || videoRoom > 0); i++) {
+    var urls = room > 0
+      ? botExtractImageUrls(recent[i].text).filter(function (u) { return used.indexOf(u) === -1; }).slice(0, room)
+      : [];
+    var videos = videoRoom > 0
+      ? botExtractVideoUrls(recent[i].text).filter(function (u) { return seenVideos.indexOf(u) === -1; }).slice(0, videoRoom)
+      : [];
+    if (!urls.length && !videos.length) continue;
+    urls.forEach(function (u) { used.push(u); });
+    videos.forEach(function (u) { seenVideos.push(u); });
+    room -= urls.length;
+    videoRoom -= videos.length;
+    out.push({ idx: recent[i].idx, text: recent[i].text, urls: urls, videos: videos });
+  }
+  return out;
+}
+
+function botVisionContent(question, urls, videos, framed) {
   var blocks = [{ type: "text", text: String(question) }];
   for (var i = 0; i < urls.length; i++) {
     blocks.push({ type: "image_url", image_url: { url: urls[i] } });
   }
+  for (var v = 0; videos && v < videos.length; v++) {
+    blocks.push({ type: "video_url", video_url: { url: videos[v] } });
+  }
+  (framed || []).forEach(function (f) {
+    blocks.push({ type: "text", text: "(Still frames from the video " + f.video + " at " +
+      f.frames.map(function (x) { return x.at + "s"; }).join(", ") +
+      ". You are seeing these stills, not the moving video or its sound.)" });
+    f.frames.forEach(function (x) {
+      blocks.push({ type: "image_url", image_url: { url: x.data } });
+    });
+  });
   return blocks;
+}
+
+function botVideoFramesOrigin(env, request) {
+  if (env && env.VIDEO_FRAMES_ORIGIN) return String(env.VIDEO_FRAMES_ORIGIN).replace(/\/+$/, "");
+  try { return new URL(request.url).origin; } catch (e) { return ""; }
+}
+
+function botVideoFrameUrl(origin, video, seconds) {
+  return origin + "/cdn-cgi/media/mode=frame,time=" + seconds + "s," + BOT_VIDEO_FRAME_OPTS + "/" + video;
+}
+
+function botSpread(list, n) {
+  if (list.length <= n) return list.slice();
+  var out = [];
+  for (var i = 0; i < n; i++) {
+    var pick = list[n === 1 ? 0 : Math.round(i * (list.length - 1) / (n - 1))];
+    if (out.indexOf(pick) === -1) out.push(pick);
+  }
+  return out;
+}
+
+async function botVideoFrames(origin, videos, room) {
+  var out = [];
+  if (!origin || !videos || !videos.length || room <= 0) return out;
+  var per = Math.max(1, Math.floor(room / videos.length));
+  for (var i = 0; i < videos.length && room > 0; i++) {
+    var video = videos[i];
+    var got = await Promise.all(BOT_VIDEO_FRAME_TIMES.map(function (t) {
+      return botImageDataUrl(botVideoFrameUrl(origin, video, t)).then(function (d) { return d ? { at: t, data: d } : null; });
+    }));
+    var frames = botSpread(got.filter(Boolean), Math.min(per, room));
+    if (!frames.length) continue;
+    room -= frames.length;
+    out.push({ video: video, frames: frames });
+  }
+  return out;
+}
+
+function botMessagesHaveVideo(messages) {
+  return Array.isArray(messages) && messages.some(function (m) {
+    return m && Array.isArray(m.content) && m.content.some(function (b) { return b && b.type === "video_url"; });
+  });
+}
+
+function botWithoutVideo(messages) {
+  return messages.map(function (m) {
+    if (!m || !Array.isArray(m.content)) return m;
+    if (!m.content.some(function (b) { return b && b.type === "video_url"; })) return m;
+    return Object.assign({}, m, { content: m.content.filter(function (b) { return !b || b.type !== "video_url"; }) });
+  });
 }
 
 var BOT_INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
@@ -1142,14 +1261,22 @@ var BOT_INLINE_IMAGE_TIMEOUT_MS = 8000;
 var botInlinedMessages = new WeakMap();
 
 async function botImageDataUrl(url) {
+  var bytes = await botFetchCapped(url, BOT_INLINE_IMAGE_MAX_BYTES, BOT_INLINE_IMAGE_TIMEOUT_MS, "image/*");
+  if (!bytes) return null;
+  var mime = botSniffImageMime(bytes);
+  if (mime === "image/jpeg" && !(bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) return null;
+  return "data:" + mime + ";base64," + botBase64Encode(bytes);
+}
+
+async function botFetchCapped(url, maxBytes, timeoutMs, accept) {
   if (!/^https?:\/\//i.test(url) || isPrivateHostUrl(url)) return null;
   var controller = new AbortController();
-  var timer = setTimeout(function () { controller.abort(); }, BOT_INLINE_IMAGE_TIMEOUT_MS);
+  var timer = setTimeout(function () { controller.abort(); }, timeoutMs);
   try {
     var at = url;
     var resp = null;
     for (var hop = 0; hop <= 3; hop++) {
-      resp = await fetch(at, { headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "image/*" }, redirect: "manual", signal: controller.signal });
+      resp = await fetch(at, { headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": accept }, redirect: "manual", signal: controller.signal });
       if (!(resp.status >= 300 && resp.status < 400)) break;
       var loc = resp.headers.get("Location");
       try { if (resp.body && resp.body.cancel) await resp.body.cancel(); } catch (e) { }
@@ -1160,7 +1287,7 @@ async function botImageDataUrl(url) {
     }
     if (!resp.ok || !resp.body) return null;
     var declared = Number(resp.headers.get("Content-Length")) || 0;
-    if (declared > BOT_INLINE_IMAGE_MAX_BYTES) return null;
+    if (declared > maxBytes) return null;
     var reader = resp.body.getReader();
     var chunks = [];
     var total = 0;
@@ -1168,7 +1295,7 @@ async function botImageDataUrl(url) {
       var r = await reader.read();
       if (r.done) break;
       total += r.value.length;
-      if (total > BOT_INLINE_IMAGE_MAX_BYTES) {
+      if (total > maxBytes) {
         try { await reader.cancel(); } catch (e) { }
         return null;
       }
@@ -1177,9 +1304,7 @@ async function botImageDataUrl(url) {
     var bytes = new Uint8Array(total);
     var off = 0;
     for (var i = 0; i < chunks.length; i++) { bytes.set(chunks[i], off); off += chunks[i].length; }
-    var mime = botSniffImageMime(bytes);
-    if (mime === "image/jpeg" && !(bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) return null;
-    return "data:" + mime + ";base64," + botBase64Encode(bytes);
+    return bytes;
   } catch (e) {
     return null;
   } finally {
@@ -1764,11 +1889,21 @@ function responsesRequest(messages, maxTokens) {
       instructions += (instructions ? "\n\n" : "") + (typeof m.content === "string" ? m.content : "");
       continue;
     }
-    input.push({ role: m.role, content: m.content });
+    input.push({ role: m.role, content: responsesContent(m.role, m.content) });
   }
   var req = { input: input, max_output_tokens: maxTokens };
   if (instructions) req.instructions = instructions;
   return req;
+}
+
+function responsesContent(role, content) {
+  if (!Array.isArray(content)) return content;
+  return content.map(function (b) {
+    if (!b) return b;
+    if (b.type === "text") return { type: role === "assistant" ? "output_text" : "input_text", text: b.text };
+    if (b.type === "image_url") return { type: "input_image", image_url: b.image_url && b.image_url.url };
+    return b;
+  });
 }
 
 // A Responses reply nests its text under output[] > content[] > output_text.
@@ -1875,6 +2010,8 @@ function anthropicizeRequest(messages, maxTokens, tools) {
         role: m.role,
         content: m.content.map(function (b) {
           if (b && b.type === "image_url" && b.image_url && b.image_url.url) {
+            var inline = /^data:([^;,]+);base64,(.*)$/.exec(b.image_url.url);
+            if (inline) return { type: "image", source: { type: "base64", media_type: inline[1], data: inline[2] } };
             return { type: "image", source: { type: "url", url: b.image_url.url } };
           }
           return b;
@@ -1921,11 +2058,12 @@ function proErrorDetail(data) {
   try { return JSON.stringify(e); } catch (x) { return ""; }
 }
 
-async function proHttpChat(url, headers, body) {
+async function proHttpChat(url, headers, body, shape) {
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
   var raw = await res.text();
   var data = null;
   try { data = JSON.parse(raw); } catch (e) { }
+  if (res.ok && shape === "gemini") data = geminiReply(data);
   if (!res.ok) {
     var detail = proErrorDetail(data) ||
       (data && Array.isArray(data.errors) && data.errors[0] &&
@@ -1956,7 +2094,122 @@ function proAnthropicNativeUrl(env) {
 
 // One attempt on one transport. Throws on failure so the runner below can
 // decide whether the next transport is worth trying.
+function proGeminiNativeUrl(env, catalogId) {
+  var ids = proGatewayIds(env);
+  if (!ids.acct || !ids.name) return null;
+  return "https://gateway.ai.cloudflare.com/v1/" + ids.acct + "/" + ids.name +
+    "/google-ai-studio/v1beta/models/" + encodeURIComponent(String(catalogId).replace(/^google\//, "")) + ":generateContent";
+}
+
+function geminiPart(block, videos) {
+  if (!block) return null;
+  if (block.type === "text") return block.text ? { text: String(block.text) } : null;
+  if (block.type === "image_url") {
+    var url = block.image_url && block.image_url.url;
+    var data = /^data:([^;,]+);base64,(.*)$/.exec(String(url || ""));
+    if (data) return { inline_data: { mime_type: data[1], data: data[2] } };
+    return url ? { text: "(An attached picture could not be loaded, so it is not shown here: " + url + ")" } : null;
+  }
+  if (block.type === "video_url") {
+    var v = block.video_url && block.video_url.url;
+    if (!v) return null;
+    var inline = videos && videos[v];
+    if (inline) return { inline_data: { mime_type: botVideoMime(v), data: inline } };
+    return { file_data: { mime_type: botVideoMime(v), file_uri: v } };
+  }
+  return null;
+}
+
+function geminiRequest(messages, maxTokens, videos) {
+  var system = "";
+  var contents = [];
+  (messages || []).forEach(function (m) {
+    if (!m) return;
+    if (m.role === "system") {
+      var sys = typeof m.content === "string" ? m.content : proMessageText(m);
+      if (sys) system += (system ? "\n\n" : "") + sys;
+      return;
+    }
+    var role = m.role === "assistant" ? "model" : "user";
+    var parts = [];
+    if (typeof m.content === "string") {
+      if (m.content) parts.push({ text: m.content });
+    } else if (Array.isArray(m.content)) {
+      m.content.forEach(function (b) {
+        var part = geminiPart(b, videos);
+        if (part) parts.push(part);
+      });
+    }
+    if (!parts.length) return;
+    var last = contents[contents.length - 1];
+    if (last && last.role === role) last.parts = last.parts.concat(parts);
+    else contents.push({ role: role, parts: parts });
+  });
+  var req = { contents: contents, generationConfig: { maxOutputTokens: maxTokens } };
+  if (system) req.systemInstruction = { parts: [{ text: system }] };
+  return req;
+}
+
+var GEMINI_BLOCKED_FINISH = { SAFETY: 1, PROHIBITED_CONTENT: 1, BLOCKLIST: 1, SPII: 1, IMAGE_SAFETY: 1 };
+
+function geminiReply(data) {
+  if (!data || typeof data !== "object" || !Array.isArray(data.candidates) && !data.promptFeedback) return data;
+  var cand = (data.candidates || [])[0] || {};
+  var parts = (cand.content && Array.isArray(cand.content.parts)) ? cand.content.parts : [];
+  var text = parts.filter(function (p) { return p && typeof p.text === "string" && !p.thought; })
+    .map(function (p) { return p.text; }).join("");
+  var um = data.usageMetadata || null;
+  var usage = um ? {
+    prompt_tokens: Number(um.promptTokenCount) || 0,
+    completion_tokens: (Number(um.candidatesTokenCount) || 0) + (Number(um.thoughtsTokenCount) || 0)
+  } : undefined;
+  var blocked = (data.promptFeedback && data.promptFeedback.blockReason) ||
+    (GEMINI_BLOCKED_FINISH[cand.finishReason] ? cand.finishReason : "");
+  if (!text.trim() && blocked) {
+    return { stop_reason: "refusal", stop_details: { category: String(blocked).toLowerCase() }, content: [] };
+  }
+  var out = { choices: [{ message: { role: "assistant", content: text } }] };
+  if (usage) out.usage = usage;
+  return out;
+}
+
+async function proGeminiVideoChat(env, model, messages, maxTokens) {
+  var url = proGeminiNativeUrl(env, model);
+  var headers = proCompatHeaders(env, "gateway", model);
+  messages = await botInlineVisionImages(messages);
+  try {
+    return await proHttpChat(url, headers, geminiRequest(messages, maxTokens, null), "gemini");
+  } catch (e) {
+    if (!e || e.httpStatus !== 400) throw e;
+    var inline = {};
+    var urls = [];
+    messages.forEach(function (m) {
+      if (!m || !Array.isArray(m.content)) return;
+      m.content.forEach(function (b) {
+        var v = b && b.type === "video_url" && b.video_url && b.video_url.url;
+        if (v && urls.indexOf(v) === -1) urls.push(v);
+      });
+    });
+    var budget = BOT_INLINE_VIDEO_MAX_BYTES;
+    for (var i = 0; i < urls.length && budget > 0; i++) {
+      var bytes = await botFetchCapped(urls[i], budget, BOT_INLINE_VIDEO_TIMEOUT_MS, "video/*");
+      if (!bytes) continue;
+      budget -= bytes.length;
+      inline[urls[i]] = botBase64Encode(bytes);
+    }
+    if (!Object.keys(inline).length) throw e;
+    return proHttpChat(url, headers, geminiRequest(messages, maxTokens, inline), "gemini");
+  }
+}
+
 async function proAttempt(env, step, messages, maxTokens, tools) {
+  if (botMessagesHaveVideo(messages)) {
+    if (step.kind === "compat" && !(tools && tools.length) && BOT_VIDEO_MODEL_RE.test(String(step.model || "")) &&
+        proGeminiNativeUrl(env, step.model)) {
+      return proGeminiVideoChat(env, step.model, messages, maxTokens);
+    }
+    messages = botWithoutVideo(messages);
+  }
   if (/^(?:workers-ai\/)?@cf\//.test(String(step.model || ""))) messages = await botInlineVisionImages(messages);
   if (step.kind === "bound") {
     // Anthropic speaks its own request shape even behind the binding — the
@@ -3057,6 +3310,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
 
   var dropped = [];
   var keptTurns = [];
+  var historyUserTurns = [];
   if (!freshOnly && Array.isArray(history) && history.length > 0) {
     var window = buildWindow(history, runOpts.historyBudget);
     dropped = window.dropped;
@@ -3067,6 +3321,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       var text = sanitizeInput(entry.text, BOT_PM_TEXT_MAX);
       if (!text) continue;
       messages.push({ role: entry.isBot ? "assistant" : "user", content: text });
+      if (!entry.isBot) historyUserTurns.push({ idx: messages.length - 1, text: text });
     }
   }
   // Everything the window could not hold, one line each. A model that knows
@@ -3171,17 +3426,37 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // model the pictures instead of just their URLs.
   var visionUrls = botExtractImageUrls(question);
   var canSee = proModel ? !!proModel.vision : !!BOT_PM_VISION_ROUTES[taskType];
+  var canWatch = !!(proModel && proModel.vision && BOT_VIDEO_MODEL_RE.test(String(proModel.model || "")));
+  var videoUrls = canWatch ? botExtractVideoUrls(question) : [];
+  var framed = [];
+  if (!canWatch && runOpts.free !== true && (!proModel || proModel.vision)) {
+    var frameSources = botExtractVideoUrls(question);
+    if (frameSources.length) {
+      framed = await botVideoFrames(botVideoFramesOrigin(context.env, context.request), frameSources,
+        BOT_MAX_VISION_IMAGES - visionUrls.length);
+    }
+  }
+  var frameUrls = [];
+  framed.forEach(function (f) { f.frames.forEach(function (x) { frameUrls.push(x.data); }); });
+  var frameCount = frameUrls.length;
+  var historyVision = botHistoryVision(historyUserTurns, visionUrls.concat(frameUrls), canWatch ? videoUrls : null);
+  var historyImages = historyVision.reduce(function (n, h) { return n + h.urls.length; }, 0);
   // Standard routing: the question picked the route, but a picture decides the model.
   var visionReroute = "";
-  if (visionUrls.length && !canSee && !proModel && runOpts.free !== true) {
+  if ((visionUrls.length || historyImages || frameCount) && !canSee && !proModel && runOpts.free !== true) {
     visionReroute = BOT_PM_VISION_MODEL;
     canSee = true;
     if (runOpts.progress) {
-      runOpts.progress({ kind: "vision", images: visionUrls.length });
+      runOpts.progress({ kind: "vision", images: visionUrls.length + historyImages + frameCount });
     }
   }
-  if (visionUrls.length && canSee) {
-    messages.push({ role: "user", content: botVisionContent(question, visionUrls) });
+  if (canSee) {
+    historyVision.forEach(function (h) {
+      messages[h.idx] = { role: "user", content: botVisionContent(h.text, h.urls, h.videos) };
+    });
+  }
+  if ((visionUrls.length || videoUrls.length || frameCount) && canSee) {
+    messages.push({ role: "user", content: botVisionContent(question, visionUrls, videoUrls, framed) });
   } else {
     messages.push({ role: "user", content: question });
   }
@@ -3245,7 +3520,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // mid-<think> sanitizes to nothing on either. The utility model doesn't think,
   // so it is the one that always returns something visible.
   // A picture falls back to models that can see before one that cannot.
-  var fallbacks = (canSee && visionUrls.length ? BOT_PM_VISION_FALLBACKS : [])
+  var fallbacks = (canSee && (visionUrls.length || historyImages || frameCount) ? BOT_PM_VISION_FALLBACKS : [])
     .concat([BOT_MODEL_DEFAULT, BOT_MODEL_UTILITY]);
   // The last two cannot see, so any image blocks have to collapse back to plain
   // text before they're handed over.
@@ -8381,6 +8656,16 @@ export {
   botTurnKey,
   botTurnMsgKey,
   botFreeNetId,
+  botHistoryVision,
+  botExtractVideoUrls,
+  botVideoFrames,
+  botVideoFrameUrl,
+  botVisionContent,
+  responsesRequest,
+  anthropicizeRequest,
+  geminiRequest,
+  geminiReply,
+  proAttempt,
   isPrivateHostUrl,
   fetchPageDocument
 };
