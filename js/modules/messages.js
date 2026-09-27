@@ -646,7 +646,8 @@ Object.assign(NYM.prototype, {
     displayMessage(message) {
         // Check if message has been deleted (kind 5)
         if (this.deletedEventIds.has(message.id) ||
-            (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId))) {
+            (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId)) ||
+            (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(message))) {
             return;
         }
         if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(message)) {
@@ -655,7 +656,8 @@ Object.assign(NYM.prototype, {
 
         // Apply pending edits that arrived before the original message
         const editLookupId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-        const pendingEdit = this.editedMessages.get(editLookupId);
+        const pendingEdit = (message.pubkey && this.editedMessages.get(`${message.pubkey}:${editLookupId}`))
+            || this.editedMessages.get(editLookupId);
         if (pendingEdit && pendingEdit.senderPubkey === message.pubkey) {
             message.content = pendingEdit.newContent;
             message.isEdited = true;
@@ -3478,6 +3480,7 @@ Object.assign(NYM.prototype, {
         return messages.filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
+            if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
             if (WOT_SPAM_GATE && clientGates && !msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {

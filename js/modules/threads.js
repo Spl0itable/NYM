@@ -217,6 +217,7 @@ Object.assign(NYM.prototype, {
         return list
             .filter(m => m && m.threadRoot === rootId && !this.deletedEventIds.has(m.id) &&
                 !(m.nymMessageId && this.deletedEventIds.has(m.nymMessageId)) &&
+                !(typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(m)) &&
                 !(m.pubkey !== this.pubkey && (this.blockedUsers.has(m.pubkey) || m.blocked)))
             .sort((a, b) => this._compareMessages(a, b));
     },

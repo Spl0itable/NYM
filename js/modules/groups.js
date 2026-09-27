@@ -444,6 +444,22 @@ Object.assign(NYM.prototype, {
     _canModerate(groupId, pubkey) {
         return this._canAdminister(groupId, pubkey) || this._isGroupMod(groupId, pubkey);
     },
+    _isGroupBareShell(group) {
+        return !!group && !group.createdBy
+            && (!Array.isArray(group.members) || group.members.filter(pk => pk !== this.pubkey).length === 0);
+    },
+    _isGroupRosterMember(groupId, pubkey) {
+        const g = this.groupConversations.get(groupId);
+        if (!g || !pubkey) return false;
+        return g.createdBy === pubkey || (Array.isArray(g.members) && g.members.includes(pubkey));
+    },
+    _groupSenderAdmitted(groupId, pubkey, msgType) {
+        const g = this.groupConversations.get(groupId);
+        if (!g) return true;
+        if (this._isGroupBareShell(g)) return true;
+        if (this._isGroupRosterMember(groupId, pubkey)) return true;
+        return msgType === 'group-join-request';
+    },
     _roleRank(groupId, pubkey) {
         if (this._isGroupOwner(groupId, pubkey)) return 0;
         if (this._isGroupAdmin(groupId, pubkey)) return 1;
@@ -968,6 +984,9 @@ Object.assign(NYM.prototype, {
         const groupId = groupTag[1];
         const groupConvKey = this.getGroupConversationKey(groupId);
 
+        const gateTypeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
+        if (!isOwn && !this._groupSenderAdmitted(groupId, senderPubkey, gateTypeTag ? gateTypeTag[1] : null)) return;
+
         if (typeof this.ingestImetaTags === 'function') {
             this.ingestImetaTags(rumor.tags);
         }
@@ -1133,13 +1152,6 @@ Object.assign(NYM.prototype, {
         // group-invite: the rumor author is always the group creator — persist this so
         // non-creating members know who owns the group without relying on local state.
         if (typeTag && typeTag[1] === 'group-invite') {
-            if (this.leftGroups.has(groupId)) {
-                this.leftGroups.delete(groupId);
-                if (this.leftGroupTimes) this.leftGroupTimes.delete(groupId);
-                this._saveLeftGroups();
-                try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes || new Map()))); } catch { }
-                this._debouncedNostrSettingsSave();
-            }
             // Pre-create the group entry with createdBy set BEFORE _addGroupMessage
             // runs later in this handler. Otherwise the merge-branch in
             // addGroupConversation creates the entry with createdBy: null first.
@@ -1157,6 +1169,23 @@ Object.assign(NYM.prototype, {
             const inviteGenesis = this._verifyGroupGenesis(groupId, inviteGOwner, inviteGNonce);
             if (inviteGenesis === false) return;
             if (inviteGenesis === true && senderPubkey !== inviteGOwner) return;
+            const existingInviteGroup = this.groupConversations.get(groupId);
+            if (existingInviteGroup) {
+                if (existingInviteGroup.genesisOwner && inviteGenesis === true
+                    && inviteGOwner !== existingInviteGroup.genesisOwner) return;
+                const inviteFromOwner = existingInviteGroup.createdBy
+                    ? existingInviteGroup.createdBy === senderPubkey
+                    : (inviteGenesis === true || (inviteGenesis === null && this._isGroupBareShell(existingInviteGroup)));
+                if (!inviteFromOwner) return;
+            }
+            if (this.leftGroups.has(groupId)) {
+                if (inviteGenesis !== true) return;
+                this.leftGroups.delete(groupId);
+                if (this.leftGroupTimes) this.leftGroupTimes.delete(groupId);
+                this._saveLeftGroups();
+                try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes || new Map()))); } catch { }
+                this._debouncedNostrSettingsSave();
+            }
             const inviteAvatar = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'avatar' && t[1])?.[1] || null;
             const inviteBanner = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'banner' && t[1])?.[1] || null;
             const inviteDesc = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'description' && t[1])?.[1] || null;
@@ -1273,12 +1302,14 @@ Object.assign(NYM.prototype, {
             if (!existingGroup && !senderIsClaimedOwner && !joiningViaInvite) return;
             if (existingGroup && existingGroup.createdBy) {
                 const isOwnerSender = existingGroup.createdBy === senderPubkey;
-                const isModSender = Array.isArray(existingGroup.mods) && existingGroup.mods.includes(senderPubkey);
+                const isModSender = this._canModerate(groupId, senderPubkey);
                 const isMemberSender = Array.isArray(existingGroup.members) && existingGroup.members.includes(senderPubkey);
                 const memberInvitesAllowed = existingGroup.allowMemberInvites !== false;
                 if (!isOwnerSender && !isModSender && !(isMemberSender && memberInvitesAllowed)) return;
             }
-            const trustBootstrap = senderIsClaimedOwner || (joiningViaInvite && !existingGroup);
+            const trustBootstrap = existingGroup
+                ? (existingGroup.createdBy ? existingGroup.createdBy === senderPubkey : senderIsClaimedOwner)
+                : (senderIsClaimedOwner || joiningViaInvite);
             const bannedSet = existingGroup && Array.isArray(existingGroup.banned)
                 ? new Set(existingGroup.banned) : new Set();
             const addMemberPubkeys = bannedSet.size > 0
@@ -1492,11 +1523,12 @@ Object.assign(NYM.prototype, {
             const grp = this.groupConversations.get(groupId);
             if (!grp) return;
             if (!this._canModerate(groupId, senderPubkey)) return;
-            const targetMsg = this._findGroupMessage(groupId, targetMessageId);
+            const targetPkTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'target_pubkey' && t[1]);
+            const targetMsg = this._findGroupMessage(groupId, targetMessageId, targetPkTag ? targetPkTag[1] : null);
             if (!targetMsg || !targetMsg.pubkey) return;
             const targetAuthor = targetMsg.pubkey;
             if (!this._canModDeleteGroupMessage(groupId, senderPubkey, targetAuthor)) return;
-            if (!this._applyGroupMessageDeletion(groupId, targetMessageId)) return;
+            if (!this._applyGroupMessageDeletion(groupId, targetMessageId, targetAuthor)) return;
             this._appendModLog(grp, { type: 'delete-message', actor: senderPubkey, target: targetAuthor, messageId: targetMessageId });
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
@@ -1536,12 +1568,12 @@ Object.assign(NYM.prototype, {
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
         if (groupEditTag) {
             const originalId = groupEditTag[1];
-            this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, groupConvKey);
+            this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, groupConvKey, senderVerified);
             return;
         }
 
         const nymMsgId = this.getNymMessageId(rumor);
-        if (this._isGroupModDeleted(groupId, event.id, nymMsgId)) return;
+        if (this._isGroupModDeleted(groupId, event.id, nymMsgId, nymMsgId && `${senderPubkey}:${nymMsgId}`)) return;
 
         // Content dedup for dual-wrap scenarios
         let dupGroupMsg = null;
@@ -1982,8 +2014,9 @@ Object.assign(NYM.prototype, {
             if (typeof e.c !== 'string' || !e.c) continue;
             if (!/^[0-9a-f]{64}$/i.test(e.x || '')) continue;
             if (existingIds.has(e.x)) continue;
-            if (this.deletedEventIds && this.deletedEventIds.has(e.x)) continue;
-            if (this._isGroupModDeleted(groupId, e.x)) continue;
+            if (this.deletedEventIds && (this.deletedEventIds.has(e.x)
+                || this.deletedEventIds.has(`${e.p.toLowerCase()}:${e.x}`))) continue;
+            if (this._isGroupModDeleted(groupId, e.x, `${e.p.toLowerCase()}:${e.x}`)) continue;
             const ts = Math.min(Math.floor(e.t || 0) || 0, Math.floor(Date.now() / 1000));
             if (ts <= 0) continue;
             existingIds.add(e.x);
@@ -3231,7 +3264,7 @@ Object.assign(NYM.prototype, {
             return;
         }
         if (!messageId) return;
-        const msg = this._findGroupMessage(groupId, messageId);
+        const msg = this._findGroupMessage(groupId, messageId, authorPubkey || null);
         if (!msg || !msg.pubkey) return;
         authorPubkey = msg.pubkey;
         if (!this._canModDeleteGroupMessage(groupId, this.pubkey, authorPubkey)) {
@@ -3260,18 +3293,22 @@ Object.assign(NYM.prototype, {
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
 
         // Apply locally
-        this._applyGroupMessageDeletion(groupId, sharedId);
+        this._applyGroupMessageDeletion(groupId, sharedId, authorPubkey);
         this._appendModLog(group, { type: 'delete-message', actor: this.pubkey, target: authorPubkey || null, messageId: sharedId });
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.displaySystemMessage(content);
     },
 
-    _findGroupMessage(groupId, messageId) {
+    _findGroupMessage(groupId, messageId, authorPubkey = null) {
         if (!groupId || typeof messageId !== 'string' || !messageId) return null;
         const list = this.pmMessages.get(this.getGroupConversationKey(groupId));
         if (!Array.isArray(list)) return null;
-        return list.find(m => m && (!m.groupId || m.groupId === groupId) && (m.id === messageId || m.nymMessageId === messageId)) || null;
+        const matches = list.filter(m => m && (!m.groupId || m.groupId === groupId) && (m.id === messageId || m.nymMessageId === messageId));
+        if (authorPubkey) return matches.find(m => m.pubkey === authorPubkey) || null;
+        if (matches.length === 0) return null;
+        if (matches.some(m => m.pubkey !== matches[0].pubkey)) return null;
+        return matches[0];
     },
 
     _canModDeleteGroupMessage(groupId, actorPubkey, targetPubkey) {
@@ -3288,19 +3325,22 @@ Object.assign(NYM.prototype, {
         return ids.some(id => id && grp.modDeletedIds.includes(id));
     },
 
-    _applyGroupMessageDeletion(groupId, messageId) {
+    _applyGroupMessageDeletion(groupId, messageId, authorPubkey = null) {
         if (!messageId) return null;
         const groupConvKey = this.getGroupConversationKey(groupId);
         const list = this.pmMessages.get(groupConvKey);
         if (!Array.isArray(list)) return null;
-        const idx = list.findIndex(m => m && (!m.groupId || m.groupId === groupId) && (m.id === messageId || m.nymMessageId === messageId));
+        const target = this._findGroupMessage(groupId, messageId, authorPubkey);
+        if (!target) return null;
+        const idx = list.indexOf(target);
         if (idx === -1) return null;
         const msg = list[idx];
         list.splice(idx, 1);
         const grp = this.groupConversations.get(groupId);
         if (grp) {
             if (!Array.isArray(grp.modDeletedIds)) grp.modDeletedIds = [];
-            for (const id of [msg.id, msg.nymMessageId]) {
+            const scopedNymId = msg.nymMessageId && msg.pubkey ? `${msg.pubkey}:${msg.nymMessageId}` : null;
+            for (const id of [msg.id, scopedNymId]) {
                 if (id && !grp.modDeletedIds.includes(id)) grp.modDeletedIds.push(id);
             }
             if (grp.modDeletedIds.length > 500) grp.modDeletedIds = grp.modDeletedIds.slice(-500);
@@ -3313,7 +3353,8 @@ Object.assign(NYM.prototype, {
             for (const domId of domIds) {
                 const sel = `[data-message-id="${(typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(domId) : domId}"]`;
                 document.querySelectorAll(sel).forEach(el => {
-                    if (el.dataset && el.dataset.groupId === groupId) el.remove();
+                    if (el.dataset && el.dataset.groupId === groupId
+                        && (!el.dataset.pubkey || el.dataset.pubkey === msg.pubkey)) el.remove();
                 });
             }
         }

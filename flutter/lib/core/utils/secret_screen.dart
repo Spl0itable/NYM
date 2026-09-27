@@ -33,9 +33,22 @@ class SecretScreen {
 
   static Future<void> copy(String value,
       {Duration life = clipboardLife}) async {
-    await Clipboard.setData(ClipboardData(text: value));
+    if (!await _copyNative(value)) {
+      await Clipboard.setData(ClipboardData(text: value));
+    }
     _wipe?.cancel();
     _wipe = Timer(life, () => unawaited(forget(value)));
+  }
+
+  static Future<bool> _copyNative(String value) async {
+    if (kIsWeb) return false;
+    try {
+      return await channel
+              .invokeMethod<bool>('copySecret', {'text': value}) ==
+          true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> forget(String value) async {

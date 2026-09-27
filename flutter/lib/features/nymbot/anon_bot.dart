@@ -467,10 +467,11 @@ class AnonBotManager {
         payload: payload,
       );
 
-  Future<Map<String, dynamic>?> authFor(String action) async {
+  Future<Map<String, dynamic>?> authFor(String action,
+      [String? payload]) async {
     final id = identity;
     if (id == null) return null;
-    return _authFor(action, id);
+    return _authFor(action, id, payload);
   }
 
   Map<String, dynamic> zapRequest({

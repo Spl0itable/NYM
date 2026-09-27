@@ -2808,7 +2808,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     if (dup != null) {
       var changed = false;
-      if ((dup.nymMessageId == null || dup.nymMessageId!.isEmpty) &&
+      final mayRewrite =
+          m.senderVerified == true || dup.senderVerified != true;
+      if (mayRewrite &&
+          (dup.nymMessageId == null || dup.nymMessageId!.isEmpty) &&
           nymId != null &&
           nymId.isNotEmpty) {
         dup.nymMessageId = nymId;
@@ -2818,12 +2821,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
         _indexMessage(key, dup);
         changed = true;
       }
-      if (m.content.length > dup.content.length) {
+      if (mayRewrite && m.content.length > dup.content.length) {
         dup.content = m.content;
         changed = true;
       }
       if (m.senderVerified == true && dup.senderVerified != true) {
         dup.senderVerified = true;
+        if (!dup.isEdited) dup.content = m.content;
         changed = true;
       }
       // Same upgrade-only rule as the verification lock above: a message whose
@@ -3506,10 +3510,32 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }) {
     final g = groupById(groupId);
     if (g == null) return GroupControlResult.ignored;
+    var controlTags = tags;
+    if (type == GroupControlType.deleteMessage) {
+      final targetId = GroupLogic.tagValue(tags, 'e');
+      final claimed = GroupLogic.tagValue(tags, 'target_pubkey');
+      final stored = targetId == null
+          ? null
+          : _groupMessageAuthor(GroupLogic.groupStorageKey(groupId), targetId,
+              claimed: claimed);
+      if (stored == null) {
+        if (claimed == null || claimed.isEmpty) {
+          return GroupControlResult.invalid;
+        }
+      } else if (claimed != null && claimed.isNotEmpty && claimed != stored) {
+        return GroupControlResult.unauthorized;
+      } else if (claimed == null || claimed.isEmpty) {
+        controlTags = [
+          for (final t in tags)
+            if (t.isEmpty || t[0] != 'target_pubkey') t,
+          ['target_pubkey', stored],
+        ];
+      }
+    }
     final result = GroupLogic.applyControlEvent(
       group: g,
       type: type,
-      tags: tags,
+      tags: controlTags,
       senderPubkey: senderPubkey,
       ts: ts,
       eventId: eventId,
@@ -3533,15 +3559,33 @@ class AppStateNotifier extends StateNotifier<AppState> {
       // message id is the `e` tag (groups.js:1172-1197 `_applyGroupMessageDeletion`).
       // Mirrors the `removeMember` self-removal special-case above.
       if (type == GroupControlType.deleteMessage) {
-        final targetId = GroupLogic.tagValue(tags, 'e');
-        if (targetId != null && targetId.isNotEmpty) {
-          removeMessage(targetId);
+        final targetId = GroupLogic.tagValue(controlTags, 'e');
+        final targetAuthor =
+            GroupLogic.tagValue(controlTags, 'target_pubkey');
+        if (targetId != null && targetId.isNotEmpty && targetAuthor != null) {
+          removeMessage(targetId,
+              author: targetAuthor,
+              storageKey: GroupLogic.groupStorageKey(groupId));
         }
       }
       _scheduleEmit();
       onGroupStoreChanged?.call();
     }
     return result;
+  }
+
+  String? _groupMessageAuthor(String storageKey, String messageId,
+      {String? claimed}) {
+    final list = state.messages[storageKey];
+    if (list == null || messageId.isEmpty) return null;
+    String? first;
+    for (final m in list) {
+      if (m.id != messageId && m.nymMessageId != messageId) continue;
+      if (m.pubkey.isEmpty) continue;
+      if (claimed != null && m.pubkey == claimed) return claimed;
+      first ??= m.pubkey;
+    }
+    return first;
   }
 
   /// Applies a parsed delivery/read [receipt] to our own outgoing message that
@@ -3577,6 +3621,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
         readerPk != null &&
         readerPk.isNotEmpty) {
       final nid = m.nymMessageId;
+      final gid = m.groupId;
+      final group = gid == null ? null : groupById(gid);
+      if (group == null || !GroupLogic.isMember(group, readerPk)) return;
       if (nid != null && nid.toLowerCase() == target) {
         final nym =
             state.users[readerPk]?.nym ?? getNymFromPubkey('nym', readerPk);
@@ -4264,8 +4311,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// what fixes the user-reported "edit shows as a duplicate" bug, mirroring the
   /// PWA's `editedMessages` map (messages.js:447,1932-1962).
   void applyEditOrDefer(String originalId, String newContent,
-      {required String editorPubkey}) {
-    if (originalId.isEmpty || editorPubkey.isEmpty) return;
+      {required String editorPubkey, bool verified = true}) {
+    if (!verified || originalId.isEmpty || editorPubkey.isEmpty) return;
     if (_hasMessageWithId(originalId)) {
       applyLocalEdit(originalId, newContent, authorPubkey: editorPubkey);
     } else {
@@ -4356,7 +4403,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     for (final t in e.tagsNamed('e')) {
       if (t.length < 2 || t[1].isEmpty) continue;
       final deletedId = t[1];
-      final originalAuthor = findMessageAuthor(deletedId);
+      final originalAuthor = findMessageAuthor(deletedId, author: requester);
       if (originalAuthor != null && originalAuthor != requester) continue;
       if (originalAuthor == null) {
         (_pendingDeletions[deletedId] ??= <String>{}).add(requester);
@@ -4368,7 +4415,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         }
         continue;
       }
-      _applyVerifiedDeletion(deletedId);
+      _applyVerifiedDeletion(deletedId, author: requester);
       deleted = true;
     }
     if (deleted) onDeletedIdsChanged?.call();
@@ -4383,25 +4430,54 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// The stored author of the message with [id] (event id or PM/group
   /// `nymMessageId`), or null when we don't hold it
   /// (`_findMessageAuthor`, nostr-core.js:2019).
-  String? findMessageAuthor(String id) {
+  String? findMessageAuthor(String id, {String? author}) {
     if (id.isEmpty) return null;
+    if (author != null && author.isNotEmpty && _hasMessageBy(id, author)) {
+      return author;
+    }
     final m = _msgByAnyId[id];
     if (m == null) return null;
     return m.pubkey.isEmpty ? null : m.pubkey;
   }
 
+  bool _hasMessageBy(String id, String author) {
+    final indexed = _msgByAnyId[id];
+    if (indexed != null && indexed.pubkey == author) return true;
+    for (final list in state.messages.values) {
+      for (final m in list) {
+        if ((m.id == id || m.nymMessageId == id) && m.pubkey == author) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /// Records [deletedId] (plus any paired id of the same message) as deleted
   /// and removes the message from every conversation
   /// (`_applyVerifiedDeletion`, nostr-core.js:2038).
-  void _applyVerifiedDeletion(String deletedId) {
-    _deletedEventIds.add(deletedId);
+  void _applyVerifiedDeletion(String deletedId, {String? author}) {
+    if (author == null) {
+      _deletedEventIds.add(deletedId);
+    } else {
+      _deletedEventIds.add(_scopedDeletedId(author, deletedId));
+    }
     // Pair the deleted id with the message's other id (event id <-> nymMessageId)
     // so a later delivery keyed on either form is still suppressed. O(1) lookup.
     final m = _msgByAnyId[deletedId];
-    if (m != null) {
-      if (m.id.isNotEmpty) _deletedEventIds.add(m.id);
+    if (m != null && (author == null || m.pubkey == author)) {
       final nid = m.nymMessageId;
-      if (nid != null && nid.isNotEmpty) _deletedEventIds.add(nid);
+      if (author == null) {
+        if (m.id.isNotEmpty) _deletedEventIds.add(m.id);
+        if (nid != null && nid.isNotEmpty) _deletedEventIds.add(nid);
+      } else {
+        if (m.id.isNotEmpty) {
+          _deletedEventIds.add(_scopedDeletedId(author, m.id));
+        }
+        if (nid != null && nid.isNotEmpty) {
+          _deletedEventIds.add(_scopedDeletedId(author, nid));
+        }
+      }
     }
     if (_deletedEventIds.length > 5000) {
       final arr = _deletedEventIds.toList();
@@ -4409,8 +4485,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
         ..clear()
         ..addAll(arr.sublist(arr.length - 4000));
     }
-    removeMessage(deletedId);
+    removeMessage(deletedId, author: author);
   }
+
+  static String _scopedDeletedId(String author, String id) => '$author:$id';
 
   /// Ingest gate: true when [m] was already NIP-09 deleted, or a parked
   /// out-of-order deletion from the SAME author matches it (which then
@@ -4423,13 +4501,24 @@ class AppStateNotifier extends StateNotifier<AppState> {
       return true;
     }
     if (m.pubkey.isEmpty) return false;
+    if ((m.id.isNotEmpty &&
+            _deletedEventIds.contains(_scopedDeletedId(m.pubkey, m.id))) ||
+        (nid != null &&
+            nid.isNotEmpty &&
+            _deletedEventIds.contains(_scopedDeletedId(m.pubkey, nid)))) {
+      return true;
+    }
     for (final id in <String>[m.id, if (nid != null && nid.isNotEmpty) nid]) {
       if (id.isEmpty) continue;
       final claimants = _pendingDeletions[id];
       if (claimants != null && claimants.contains(m.pubkey)) {
         _pendingDeletions.remove(id);
-        if (m.id.isNotEmpty) _deletedEventIds.add(m.id);
-        if (nid != null && nid.isNotEmpty) _deletedEventIds.add(nid);
+        if (m.id.isNotEmpty) {
+          _deletedEventIds.add(_scopedDeletedId(m.pubkey, m.id));
+        }
+        if (nid != null && nid.isNotEmpty) {
+          _deletedEventIds.add(_scopedDeletedId(m.pubkey, nid));
+        }
         onDeletedIdsChanged?.call();
         return true;
       }
@@ -4440,33 +4529,39 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Removes a message locally (deletion request / mod delete). Mirrors
   /// `publishDeletionEvent`'s DOM + stored-message removal. Matches on both the
   /// event id and the nymMessageId (PM/group bubbles key on nymMessageId).
-  bool removeMessage(String messageId) {
+  bool removeMessage(String messageId, {String? author, String? storageKey}) {
     var changed = false;
+    bool matches(Message m) =>
+        (m.id == messageId || m.nymMessageId == messageId) &&
+        (author == null || m.pubkey == author);
+    bool sweep(List<Message> list) {
+      final before = list.length;
+      list.removeWhere((m) {
+        final hit = matches(m);
+        if (hit) _unindexMessage(m);
+        return hit;
+      });
+      return list.length != before;
+    }
+
+    if (storageKey != null) {
+      final list = state.messages[storageKey];
+      if (list != null && sweep(list)) changed = true;
+      if (changed) _scheduleEmit();
+      return changed;
+    }
     // Fast path: the id index points straight at the owning conversation, so we
     // touch one list instead of scanning every conversation.
     final convKey = _convKeyByAnyId[messageId];
     if (convKey != null) {
       final list = state.messages[convKey];
-      if (list != null) {
-        final before = list.length;
-        list.removeWhere((m) {
-          final hit = m.id == messageId || m.nymMessageId == messageId;
-          if (hit) _unindexMessage(m);
-          return hit;
-        });
-        if (list.length != before) changed = true;
-      }
-    } else {
+      if (list != null && sweep(list)) changed = true;
+    }
+    if (convKey == null || (!changed && author != null)) {
       // Fallback (index miss): preserve the original exhaustive behavior so a
       // deletion is never silently skipped.
       for (final list in state.messages.values) {
-        final before = list.length;
-        list.removeWhere((m) {
-          final hit = m.id == messageId || m.nymMessageId == messageId;
-          if (hit) _unindexMessage(m);
-          return hit;
-        });
-        if (list.length != before) changed = true;
+        if (sweep(list)) changed = true;
       }
     }
     if (changed) _scheduleEmit();

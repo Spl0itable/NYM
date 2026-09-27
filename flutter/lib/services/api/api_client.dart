@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../../core/crypto/keys.dart' show bytesToHex, randomBytes;
 import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../core/crypto/pow.dart';
 import '../../models/nostr_event.dart';
@@ -145,6 +146,7 @@ class Nip98Auth {
       if (url.isNotEmpty) ['u', url],
       if (action.isNotEmpty) ['action', action],
       if (payload != null) ['payload', payload],
+      ['nonce', bytesToHex(randomBytes(16))],
     ];
     final unsigned = UnsignedEvent(
       pubkey: pubkey,
@@ -194,6 +196,7 @@ class Nip98Auth {
       if (url.isNotEmpty) ['u', url],
       if (action.isNotEmpty) ['action', action],
       ...extraTags,
+      if (sensitive && powBits <= 0) ['nonce', bytesToHex(randomBytes(16))],
     ];
     var unsigned = UnsignedEvent(
       pubkey: pubkey,
@@ -218,6 +221,22 @@ class Nip98Auth {
       return null;
     }
   }
+
+  static Future<Map<String, dynamic>?> buildWrite({
+    required String action,
+    required String url,
+    required EventSigner signer,
+    required String payload,
+  }) =>
+      buildSigned(
+        action: action,
+        url: url,
+        signer: signer,
+        sensitive: true,
+        extraTags: [
+          ['payload', payload],
+        ],
+      );
 
   /// 90s non-sensitive auth cache (the PWA's `_botAuthCache`). Static so it is
   /// shared across the storage + api-ws builders for one process identity.

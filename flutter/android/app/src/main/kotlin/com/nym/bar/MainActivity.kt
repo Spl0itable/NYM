@@ -1,7 +1,17 @@
 package com.nym.bar
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.PersistableBundle
+import android.provider.OpenableColumns
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
@@ -26,9 +36,34 @@ import javax.crypto.spec.GCMParameterSpec
 // "Biometric authentication failed." Extending FlutterFragmentActivity is the
 // plugin's documented requirement and makes fingerprint/face unlock work.
 class MainActivity : FlutterFragmentActivity() {
+    private var shareChannel: MethodChannel? = null
+    private val pendingShares = mutableListOf<Map<String, Any?>>()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        intent?.let { first ->
+            if (isShare(first)) {
+                if (savedInstanceState == null) readShare(first)?.let { pendingShares.add(it) }
+                setIntent(Intent(Intent.ACTION_MAIN))
+            }
+        }
+        super.onCreate(savedInstanceState)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        val share = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
+        share.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "initial" -> {
+                    val held = ArrayList(pendingShares)
+                    pendingShares.clear()
+                    result.success(held)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        shareChannel = share
 
         // "Stay Connected in Background": Dart asks for the foreground service
         // when the app goes off-screen and releases it on resume. See
@@ -92,6 +127,14 @@ class MainActivity : FlutterFragmentActivity() {
                     }
                     result.success(null)
                 }
+                "copySecret" -> {
+                    val text = call.argument<String>("text")
+                    if (text == null) {
+                        result.success(false)
+                    } else {
+                        result.success(copySecret(text))
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -133,6 +176,118 @@ class MainActivity : FlutterFragmentActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             PASSKEY_BACKUP_CHANNEL,
         ).setMethodCallHandler { call, result -> PasskeyBackup.handle(this, call, result) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        if (isShare(intent)) {
+            val payload = readShare(intent) ?: return
+            val channel = shareChannel
+            if (channel == null) pendingShares.add(payload) else channel.invokeMethod("incoming", payload)
+            return
+        }
+        super.onNewIntent(intent)
+    }
+
+    private fun copySecret(text: String): Boolean = try {
+        val clip = ClipData.newPlainText("", text)
+        val extras = PersistableBundle()
+        if (Build.VERSION.SDK_INT >= 33) {
+            extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        } else {
+            extras.putBoolean("android.content.extra.IS_SENSITIVE", true)
+        }
+        clip.description.extras = extras
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        manager.setPrimaryClip(clip)
+        true
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun isShare(intent: Intent): Boolean =
+        intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE
+
+    private fun readShare(intent: Intent): Map<String, Any?>? {
+        val text = try {
+            intent.getStringExtra(Intent.EXTRA_TEXT)
+        } catch (e: Exception) {
+            null
+        }
+        val files = mutableListOf<Map<String, Any?>>()
+        var total = 0L
+        for (uri in sharedStreams(intent).take(MAX_SHARED_FILES)) {
+            val file = sharedFile(uri) ?: continue
+            val size = (file["bytes"] as ByteArray).size
+            if (total + size > MAX_SHARED_TOTAL_BYTES) break
+            total += size
+            files.add(file)
+        }
+        if (text.isNullOrBlank() && files.isEmpty()) return null
+        return mapOf("text" to text, "files" to files)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun sharedStreams(intent: Intent): List<Uri> = try {
+        if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
+            val list = if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+            list?.filterNotNull() ?: emptyList()
+        } else {
+            val one = if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+            if (one == null) emptyList() else listOf(one)
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun foreignContent(uri: Uri): Boolean {
+        if (uri.scheme?.lowercase() != ContentResolver.SCHEME_CONTENT) return false
+        val authority = uri.authority?.lowercase() ?: return false
+        val own = packageName.lowercase()
+        if (authority.split(';').any { it == own || it.startsWith("$own.") }) return false
+        val owner = try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                packageManager.resolveContentProvider(authority, PackageManager.ComponentInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.resolveContentProvider(authority, 0)
+            }
+        } catch (e: Exception) {
+            null
+        }
+        return owner?.packageName != packageName
+    }
+
+    private fun sharedFile(uri: Uri): Map<String, Any?>? = if (!foreignContent(uri)) null else try {
+        var name = "shared"
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0)?.let { name = it }
+        }
+        val safe = File(name.replace('\\', '/')).name.trim().takeIf { it.isNotEmpty() && it != "." && it != ".." }
+            ?: "shared"
+        val bytes = contentResolver.openInputStream(uri)?.use { stream ->
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(64 * 1024)
+            var total = 0
+            while (true) {
+                val n = stream.read(buffer)
+                if (n < 0) break
+                total += n
+                if (total > MAX_SHARED_BYTES) return@use null
+                out.write(buffer, 0, n)
+            }
+            out.toByteArray()
+        }
+        if (bytes == null) null else mapOf("name" to safe, "mime" to contentResolver.getType(uri), "bytes" to bytes)
+    } catch (e: Exception) {
+        null
     }
 
     private class Reply(private val result: MethodChannel.Result) {
@@ -315,6 +470,10 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     companion object {
+        private const val SHARE_CHANNEL = "app.nymchat/share"
+        private const val MAX_SHARED_FILES = 10
+        private const val MAX_SHARED_BYTES = 16 * 1024 * 1024
+        private const val MAX_SHARED_TOTAL_BYTES = 64L * 1024 * 1024
         private const val BACKGROUND_CHANNEL = "app.nymchat/background_connectivity"
         private const val BUILD_INTEGRITY_CHANNEL = "app.nymchat/build_integrity"
         private const val ATTEST_CHANNEL = "app.nymchat/attest"

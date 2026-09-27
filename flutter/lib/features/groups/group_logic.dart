@@ -517,6 +517,28 @@ class GroupLogic {
   static bool isAdmin(Group g, String pubkey) => g.admins.contains(pubkey);
   static bool isMod(Group g, String pubkey) => g.mods.contains(pubkey);
 
+  static bool isMember(Group g, String pubkey) =>
+      pubkey.isNotEmpty &&
+      (isOwner(g, pubkey) ||
+          isAdmin(g, pubkey) ||
+          isMod(g, pubkey) ||
+          g.members.contains(pubkey));
+
+  static bool acceptsFromNonMember(String type) =>
+      type == GroupControlType.invite ||
+      type == GroupControlType.joinRequest ||
+      type == GroupControlType.roster;
+
+  static bool mayRewriteInviteIdentity(Group g, String sender,
+      {String? claimedOwner, bool? genesis, String? genesisOwner}) {
+    if (sender.isEmpty) return false;
+    final owner = g.createdBy;
+    if (owner != null && owner.isNotEmpty) return owner == sender;
+    if (claimedOwner != sender) return false;
+    if (genesis == true) return genesisOwner == sender;
+    return isMember(g, sender);
+  }
+
   static bool canAdminister(Group g, String pubkey) =>
       isOwner(g, pubkey) || isAdmin(g, pubkey);
 

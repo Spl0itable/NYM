@@ -261,7 +261,14 @@ class P2PService extends ChangeNotifier {
         if (data is Map &&
             data['status'] == 'unseeded' &&
             data['offerId'] != null) {
-          _unseeded.add(data['offerId'].toString());
+          final offerId = data['offerId'].toString();
+          final offer = _offers[offerId];
+          if (offer == null ||
+              senderPubkey.isEmpty ||
+              offer.seederPubkey != senderPubkey) {
+            return;
+          }
+          _unseeded.add(offerId);
           notifyListeners();
         }
       } catch (_) {}

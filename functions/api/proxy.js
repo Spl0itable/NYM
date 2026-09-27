@@ -12,7 +12,7 @@
 //   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
 //   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt / NIP-47 wallet lookup)
 
-import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked } from './_shared.js';
+import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked, ipv6NetKey, cacheRateTake } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
 import { translateText, MAX_CHARS } from './_translate.js';
 
@@ -46,6 +46,8 @@ const GEO_RELAYS_CACHE_TTL = 300;
 
 // Translate endpoints, tried in order.
 const TRANSLATE_CACHE_TTL = 86400;
+const TRANSLATE_IP_RATE = 600;
+const TRANSLATE_RATE_WINDOW_MS = 60000;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -55,7 +57,7 @@ const CORS_HEADERS = {
 };
 
 
-export { isPrivateUrl, ipv6IsPrivate, hostResolvesPrivate, handleJsonProxy, handleMediaProxy };
+export { isPrivateUrl, ipv6IsPrivate, hostResolvesPrivate, handleJsonProxy, handleMediaProxy, handleTranslate, translateIpKey, ssrfSafeFetch, readBounded };
 
 function errorRef() {
   const b = new Uint8Array(3);
@@ -550,6 +552,43 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
 // in the Workers log from any other 502 — `outcome: ok`, no exceptions, an
 // empty `logs` array — because the reason only ever reached the response body,
 // which the log does not record.
+function translateIpKey(request) {
+  let ip = '';
+  try { ip = (request && request.headers && request.headers.get('CF-Connecting-IP')) || ''; } catch { ip = ''; }
+  ip = String(ip).trim().slice(0, 64);
+  if (!ip) return '';
+  if (ip.includes(':')) return ipv6NetKey(ip) || ip;
+  return ip;
+}
+
+function translateBuildTokenOk(request, env) {
+  const expected = env && typeof env.NYM_BUILD_TOKEN === 'string' ? env.NYM_BUILD_TOKEN : '';
+  if (expected.length < 16) return false;
+  const got = (request.headers && request.headers.get('X-Nym-Build')) || '';
+  if (got.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
+}
+
+async function translateRateOk(request, context, units) {
+  if (units <= 0) return true;
+  if (translateBuildTokenOk(request, context && context.env)) return true;
+  return await cacheRateTake('translate-ip', translateIpKey(request), units,
+    TRANSLATE_IP_RATE, TRANSLATE_RATE_WINDOW_MS);
+}
+
+function translateRateLimited() {
+  return new Response(JSON.stringify({ error: 'Too many translation requests. Try again in a minute.' }), {
+    status: 429,
+    headers: {
+      ...CORS_HEADERS,
+      'Content-Type': 'application/json',
+      'Retry-After': String(Math.ceil(TRANSLATE_RATE_WINDOW_MS / 1000)),
+    },
+  });
+}
+
 async function handleTranslate(request, context) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'POST required' }, 405);
@@ -572,7 +611,7 @@ async function handleTranslate(request, context) {
   // its own inference call — the models take one input — so this saves the
   // network, not the work.
   if (Array.isArray(texts)) {
-    return await handleTranslateBatch(texts, source || 'auto', target, context);
+    return await handleTranslateBatch(texts, source || 'auto', target, context, request);
   }
   if (!text) {
     return jsonResponse({ error: 'Missing text or target language' }, 400);
@@ -586,6 +625,7 @@ async function handleTranslate(request, context) {
   const cachePath = `/translate?k=${await sha256Hex(`${sl}\u0000${target}\u0000${q}`)}`;
   const cached = await readEdgeCache(cachePath);
   if (cached) return cached;
+  if (!(await translateRateOk(request, context, 1))) return translateRateLimited();
 
   let result;
   try {
@@ -632,7 +672,7 @@ const TRANSLATE_BATCH_MAX = 25;
 const TRANSLATE_BATCH_BYTES = 20000;
 const TRANSLATE_BATCH_CONCURRENCY = 4;
 
-async function handleTranslateBatch(texts, source, target, context) {
+async function handleTranslateBatch(texts, source, target, context, request) {
   if (texts.length === 0) return jsonResponse({ translations: [] });
   if (texts.length > TRANSLATE_BATCH_MAX) {
     return jsonResponse({ error: `Too many strings (max ${TRANSLATE_BATCH_MAX})` }, 400);
@@ -642,6 +682,8 @@ async function handleTranslateBatch(texts, source, target, context) {
   if (total > TRANSLATE_BATCH_BYTES) {
     return jsonResponse({ error: `Batch too large (max ${TRANSLATE_BATCH_BYTES} chars)` }, 400);
   }
+  const units = items.reduce((n, t) => n + (t.trim() ? 1 : 0), 0);
+  if (!(await translateRateOk(request, context, units))) return translateRateLimited();
 
   const ai = context.env && context.env.AI;
   const out = new Array(items.length).fill(null);

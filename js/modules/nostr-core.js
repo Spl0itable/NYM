@@ -1630,8 +1630,16 @@ Object.assign(NYM.prototype, {
     },
 
     // Handle an incoming typing indicator
-    handleTypingIndicatorEvent(parsed, senderPubkey) {
+    handleTypingIndicatorEvent(parsed, senderPubkey, senderVerified = true) {
         if (!parsed || senderPubkey === this.pubkey) return;
+        if (senderVerified !== true) return;
+        if (parsed.groupId) {
+            const group = this.groupConversations && this.groupConversations.get(parsed.groupId);
+            if (!group) return;
+            const isMember = group.createdBy === senderPubkey
+                || (Array.isArray(group.members) && group.members.includes(senderPubkey));
+            if (!isMember) return;
+        }
 
         // Determine the conversation key for this indicator
         let convKey;
@@ -2452,11 +2460,7 @@ Object.assign(NYM.prototype, {
 
         for (const eTag of eTags) {
             const deletedId = eTag[1];
-            const originalAuthor = this._findMessageAuthor(deletedId);
-
-            if (originalAuthor && originalAuthor !== requesterPubkey) {
-                continue;
-            }
+            const originalAuthor = this._findMessageAuthor(deletedId, requesterPubkey);
 
             if (!originalAuthor) {
                 if (!this._pendingDeletions) this._pendingDeletions = new Map();
@@ -2473,40 +2477,74 @@ Object.assign(NYM.prototype, {
                 continue;
             }
 
-            this._applyVerifiedDeletion(deletedId);
+            this._applyVerifiedDeletion(deletedId, requesterPubkey);
         }
     },
 
-    _findMessageAuthor(id) {
+    _findMessageAuthor(id, pubkey) {
         if (!id) return null;
+        const matches = (m, byNymId) => m && (m.id === id || (byNymId && m.nymMessageId === id))
+            && (!pubkey || m.pubkey === pubkey);
         if (this.messages) {
             for (const msgs of this.messages.values()) {
                 for (const m of msgs) {
-                    if (m && m.id === id) return m.pubkey || null;
+                    if (matches(m, false)) return m.pubkey || null;
                 }
             }
         }
         if (this.pmMessages) {
             for (const msgs of this.pmMessages.values()) {
                 for (const m of msgs) {
-                    if (m && (m.id === id || m.nymMessageId === id)) return m.pubkey || null;
+                    if (matches(m, true)) return m.pubkey || null;
                 }
             }
         }
         return null;
     },
 
-    _applyVerifiedDeletion(deletedId) {
-        this.deletedEventIds.add(deletedId);
+    _authorDeletionKey(pubkey, id) {
+        return `${pubkey}:${id}`;
+    },
 
-        this.pmMessages.forEach(msgs => {
+    _isMessageDeleted(m) {
+        if (!m || !this.deletedEventIds) return false;
+        if (m.id && this.deletedEventIds.has(m.id)) return true;
+        if (!m.nymMessageId) return false;
+        if (this.deletedEventIds.has(m.nymMessageId)) return true;
+        return !!m.pubkey && this.deletedEventIds.has(this._authorDeletionKey(m.pubkey, m.nymMessageId));
+    },
+
+    _applyVerifiedDeletion(deletedId, authorPubkey) {
+        const scoped = typeof authorPubkey === 'string' && authorPubkey.length > 0;
+        const channelMatch = (m) => m && m.id === deletedId && (!scoped || m.pubkey === authorPubkey);
+        const pmMatch = (m) => m && (scoped
+            ? ((m.id === deletedId || m.nymMessageId === deletedId) && m.pubkey === authorPubkey)
+            : m.id === deletedId);
+
+        if (!scoped) this.deletedEventIds.add(deletedId);
+
+        const domIds = new Set();
+        this.messages.forEach(msgs => {
             for (const m of msgs) {
-                if (m.id === deletedId || m.nymMessageId === deletedId) {
-                    if (m.id) this.deletedEventIds.add(m.id);
-                    if (m.nymMessageId) this.deletedEventIds.add(m.nymMessageId);
+                if (channelMatch(m)) {
+                    this.deletedEventIds.add(m.id);
+                    domIds.add(m.id);
                 }
             }
         });
+        this.pmMessages.forEach(msgs => {
+            for (const m of msgs) {
+                if (!pmMatch(m)) continue;
+                if (m.id) this.deletedEventIds.add(m.id);
+                if (m.nymMessageId) {
+                    this.deletedEventIds.add(this._authorDeletionKey(m.pubkey, m.nymMessageId));
+                }
+                domIds.add(m.nymMessageId || m.id);
+            }
+        });
+        if (scoped && domIds.size === 0) {
+            this.deletedEventIds.add(this._authorDeletionKey(authorPubkey, deletedId));
+        }
 
         if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
@@ -2515,15 +2553,21 @@ Object.assign(NYM.prototype, {
             this.deletedEventIds = new Set(arr.slice(-4000));
         }
 
-        const messageEl = document.querySelector(`[data-message-id="${deletedId}"]`);
-        if (messageEl) {
-            if (typeof this._playMessageDisintegration !== 'function' || !this._playMessageDisintegration(messageEl)) {
-                messageEl.remove();
+        if (!scoped) domIds.add(deletedId);
+        if (typeof document !== 'undefined' && document.querySelectorAll) {
+            for (const domId of domIds) {
+                const sel = `[data-message-id="${(typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(domId) : domId}"]`;
+                document.querySelectorAll(sel).forEach(messageEl => {
+                    if (scoped && messageEl.dataset && messageEl.dataset.pubkey !== authorPubkey) return;
+                    if (typeof this._playMessageDisintegration !== 'function' || !this._playMessageDisintegration(messageEl)) {
+                        messageEl.remove();
+                    }
+                });
             }
         }
 
         this.messages.forEach((msgs, channel) => {
-            const idx = msgs.findIndex(m => m.id === deletedId);
+            const idx = msgs.findIndex(channelMatch);
             if (idx !== -1) {
                 msgs.splice(idx, 1);
                 this.persistChannelMessages(channel);
@@ -2539,7 +2583,7 @@ Object.assign(NYM.prototype, {
         this.pmMessages.forEach((msgs, convKey) => {
             let removed = false;
             for (let i = msgs.length - 1; i >= 0; i--) {
-                if (msgs[i].id === deletedId || msgs[i].nymMessageId === deletedId) {
+                if (pmMatch(msgs[i])) {
                     msgs.splice(i, 1);
                     removed = true;
                 }
@@ -2562,10 +2606,11 @@ Object.assign(NYM.prototype, {
             if (!id) continue;
             const claimants = this._pendingDeletions.get(id);
             if (claimants && claimants.has(message.pubkey)) {
-                this._pendingDeletions.delete(id);
-                this.deletedEventIds.add(id);
-                for (const otherId of ids) {
-                    if (otherId) this.deletedEventIds.add(otherId);
+                claimants.delete(message.pubkey);
+                if (claimants.size === 0) this._pendingDeletions.delete(id);
+                if (message.id) this.deletedEventIds.add(message.id);
+                if (message.nymMessageId) {
+                    this.deletedEventIds.add(this._authorDeletionKey(message.pubkey, message.nymMessageId));
                 }
                 if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
                 return true;
@@ -2611,14 +2656,16 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey) {
+    handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey, senderVerified = true) {
+        if (senderVerified !== true || !originalId || !senderPubkey) return;
         // Always store the edit so it can be applied even if the original arrives later
-        const existing = this.editedMessages.get(originalId);
-        if (!existing) {
-            this.editedMessages.set(originalId, {
+        const scopedKey = `${senderPubkey}:${originalId}`;
+        if (!this.editedMessages.has(scopedKey)) {
+            this.editedMessages.set(scopedKey, {
                 newContent,
                 editEventId: null,
                 senderPubkey,
+                senderVerified: true,
                 timestamp: new Date()
             });
         }

@@ -118,9 +118,6 @@
                 <data android:scheme="https" android:host="web.nymchat.app"/>
                 <data android:scheme="https" android:host="nymchat.app"/>
             </intent-filter>
-            <!-- Share sheet: receive text/URLs shared from other apps
-                 (receive_sharing_intent). The plugin reads the SEND intent and
-                 delivers it to Dart, which shows the destination picker. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND"/>
                 <category android:name="android.intent.category.DEFAULT"/>

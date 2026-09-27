@@ -662,6 +662,7 @@ class Nip46Service implements Nip46Signer {
 
       // Auth-url challenge: surface to UI, don't resolve the request.
       if (result == 'auth_url') {
+        if (_remotePubkey == null || event.pubkey != _remotePubkey) return;
         _authUrl = (error is String) ? error : null;
         _authUrlController?.add(_authUrl ?? '');
         return;
@@ -678,6 +679,8 @@ class Nip46Service implements Nip46Signer {
         if (_connectCompleter != null && !_connectCompleter!.isCompleted) {
           _connectCompleter!.complete(event.pubkey);
         }
+      } else if (event.pubkey != _remotePubkey) {
+        return;
       }
 
       if (id is String) {

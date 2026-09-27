@@ -5779,6 +5779,7 @@ async function _nip46HandleEvent(event) {
         const response = JSON.parse(decrypted);
 
         if (response.result === 'auth_url') {
+            if (!state.remotePubkey || event.pubkey !== state.remotePubkey) return;
             // The signer needs the user to authorize this request before it will
             // service it (common with Amber / nsecbunker the first time a given
             // permission — sign_event, nip44_encrypt, nip44_decrypt — is used).

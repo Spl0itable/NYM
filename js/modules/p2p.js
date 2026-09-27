@@ -66,19 +66,27 @@ Object.assign(NYM.prototype, {
     },
 
     // Handle P2P file status events (e.g., unseeded notifications)
+    _isOfferSeeder(offerId, pubkey) {
+        const offer = this.p2pFileOffers && this.p2pFileOffers.get(offerId);
+        return !!(offer && pubkey && offer.seederPubkey === pubkey);
+    },
+
     handleP2PFileStatusEvent(event) {
+        if (!event || !event.pubkey) return;
         try {
             const data = JSON.parse(event.content);
-            if (data.status === 'unseeded' && this.isValidOfferId(data.offerId)) {
+            if (data.status === 'unseeded' && this.isValidOfferId(data.offerId)
+                && this._isOfferSeeder(data.offerId, event.pubkey)) {
                 this.p2pUnseededOffers.add(data.offerId);
                 // Update UI to show file is no longer available
                 this.updateFileOfferUI(data.offerId, 'unseeded');
             }
         } catch (e) {
             // Try tag-based approach
-            const offerIdTag = event.tags.find(t => t[0] === 'offer_id');
-            const statusTag = event.tags.find(t => t[0] === 'status');
-            if (offerIdTag && statusTag && statusTag[1] === 'unseeded' && this.isValidOfferId(offerIdTag[1])) {
+            const offerIdTag = (event.tags || []).find(t => t[0] === 'offer_id');
+            const statusTag = (event.tags || []).find(t => t[0] === 'status');
+            if (offerIdTag && statusTag && statusTag[1] === 'unseeded' && this.isValidOfferId(offerIdTag[1])
+                && this._isOfferSeeder(offerIdTag[1], event.pubkey)) {
                 this.p2pUnseededOffers.add(offerIdTag[1]);
                 this.updateFileOfferUI(offerIdTag[1], 'unseeded');
             }

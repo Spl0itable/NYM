@@ -200,6 +200,7 @@ class NymbotService {
     required String pubkey,
     required String eventId,
     Future<Map<String, dynamic>?> Function()? auth,
+    Future<Map<String, dynamic>?> Function(String payload)? signedFor,
     String? proModel,
     bool fresh = false,
     Map<String, String>? cmdAlias,
@@ -231,6 +232,7 @@ class NymbotService {
         extra,
         pubkey: pubkey,
         auth: auth,
+        signedFor: signedFor,
         timeout: _pmTimeout,
         anon: anon,
       );
@@ -450,6 +452,7 @@ class NymbotService {
   Future<Map<String, dynamic>> clearHistory({
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
+    Future<Map<String, dynamic>?> Function(String payload)? signedFor,
     bool anon = false,
   }) async {
     final res = await _botRequest(
@@ -457,6 +460,7 @@ class NymbotService {
       const <String, dynamic>{},
       pubkey: pubkey,
       auth: auth,
+      signedFor: signedFor,
       anon: anon,
     );
     _throwOnStatus(res);

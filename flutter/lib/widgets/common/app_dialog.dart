@@ -410,14 +410,24 @@ class _AppDialogState extends State<_AppDialog> {
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: c.glassBorder),
               ),
-              child: SelectableText(
-                value,
-                style: TextStyle(
-                  color: c.primary,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                ),
-              ),
+              child: widget.secret
+                  ? Text(
+                      value,
+                      key: const Key('appDialogSecretValue'),
+                      style: TextStyle(
+                        color: c.primary,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    )
+                  : SelectableText(
+                      value,
+                      style: TextStyle(
+                        color: c.primary,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    ),
             ),
           ),
           const SizedBox(width: 8),

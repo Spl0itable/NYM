@@ -916,6 +916,12 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _pqRootLink,
+          builder: (_, value, __) => value.text.trim().isEmpty
+              ? const SizedBox.shrink()
+              : const SecretGuard(),
+        ),
         Text(tr('Post-quantum recovery code'),
             style: TextStyle(color: c.text, fontSize: 12)),
         const SizedBox(height: 4),

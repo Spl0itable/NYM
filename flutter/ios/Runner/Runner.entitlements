@@ -28,5 +28,9 @@
 		<string>applinks:web.nymchat.app</string>
 		<string>webcredentials:web.nymchat.app</string>
 	</array>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.nym.bar</string>
+	</array>
 </dict>
 </plist>

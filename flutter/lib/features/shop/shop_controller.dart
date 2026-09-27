@@ -355,7 +355,6 @@ class ShopController extends StateNotifier<ShopState> {
     String? comment,
     Map<String, dynamic>? zapRequest,
   }) async {
-    final auth = await _auth('shop-buy-invoice', identity);
     final isGift = recipientPubkey != null &&
         recipientPubkey.isNotEmpty &&
         recipientPubkey != identity.pubkey;
@@ -366,8 +365,10 @@ class ShopController extends StateNotifier<ShopState> {
       if (comment != null) 'comment': comment,
       if (isGift) 'recipientPubkey': recipientPubkey,
       if (zapRequest != null) 'zapRequest': zapRequest,
-      if (auth != null) 'auth': auth,
     };
+    final auth = await _auth(
+        'shop-buy-invoice', identity, Nip98Auth.payloadHashHex(body));
+    if (auth != null) body['auth'] = auth;
     final data = await _api.storageAction(body);
     final pr = data['pr']?.toString();
     if (pr == null || pr.isEmpty) {
@@ -426,15 +427,17 @@ class ShopController extends StateNotifier<ShopState> {
     Map<String, dynamic>? data;
     for (var attempt = 0; attempt < 6; attempt++) {
       try {
-        final auth = await _auth('shop-claim', identity);
-        data = await _api.storageAction({
+        final body = <String, dynamic>{
           'action': 'shop-claim',
           'pubkey': identity.pubkey,
           'invoiceId': invoiceId,
           if (receipt != null) 'receipt': receipt,
           if (gifterNym != null) 'gifterNym': gifterNym,
-          if (auth != null) 'auth': auth,
-        });
+        };
+        final auth = await _auth(
+            'shop-claim', identity, Nip98Auth.payloadHashHex(body));
+        if (auth != null) body['auth'] = auth;
+        data = await _api.storageAction(body);
         break;
       } on ApiException catch (e) {
         final notConfirmed = e.statusCode == 402 ||
@@ -516,13 +519,15 @@ class ShopController extends StateNotifier<ShopState> {
   }) async {
     final trimmed = code.trim();
     if (trimmed.isEmpty) return null;
-    final auth = await _auth('shop-redeem', identity);
-    final data = await _api.storageAction({
+    final body = <String, dynamic>{
       'action': 'shop-redeem',
       'pubkey': identity.pubkey,
       'code': trimmed,
-      if (auth != null) 'auth': auth,
-    });
+    };
+    final auth = await _auth(
+        'shop-redeem', identity, Nip98Auth.payloadHashHex(body));
+    if (auth != null) body['auth'] = auth;
+    final data = await _api.storageAction(body);
     applyOwnRecord(data);
     return data['itemId']?.toString();
   }
@@ -666,8 +671,6 @@ class ShopController extends StateNotifier<ShopState> {
   /// (wire that in the controller, see the task report). AUTHENTICATED (local
   /// key or NIP-46 signer); no-ops only when nothing can sign. Best-effort.
   Future<void> publishActiveItems(ShopIdentity identity) async {
-    final auth = await _auth('shop-set-active', identity);
-    if (auth == null) return;
     final a = state.active;
     final payload = <String, dynamic>{
       'style': a.style,
@@ -676,13 +679,17 @@ class ShopController extends StateNotifier<ShopState> {
       // supporter only counts when owned (server re-checks; mirrors shop.js:418).
       'supporter': state.owns('supporter-badge') && a.supporter,
     };
+    final body = <String, dynamic>{
+      'action': 'shop-set-active',
+      'pubkey': identity.pubkey,
+      'active': payload,
+    };
+    final auth = await _auth(
+        'shop-set-active', identity, Nip98Auth.payloadHashHex(body));
+    if (auth == null) return;
+    body['auth'] = auth;
     try {
-      final data = await _api.storageAction({
-        'action': 'shop-set-active',
-        'pubkey': identity.pubkey,
-        'active': payload,
-        'auth': auth,
-      });
+      final data = await _api.storageAction(body);
       // Re-apply the server's authoritative active record (with edition numbers).
       if (data['active'] is Map) {
         await applyOwnRecord({'active': data['active']});

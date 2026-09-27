@@ -3010,6 +3010,12 @@ class NostrController {
     // decrypt (PWA `handleGiftWrapDM`: bitchatUsers / nymUsers). A bitchat-
     // encrypted wrap → bitchat; a NIP-17 wrap carrying an `['x', …]` id → nym.
     final sender = rumor['pubkey'] as String?;
+    if (!u.senderVerified &&
+        (!PmLogic.unverifiedWrapAllowed(rumor, selfPubkey: self) ||
+            _isAnonBotPubkey(sender) ||
+            isVerifiedBot(sender ?? ''))) {
+      return;
+    }
     if (sender != null && sender.isNotEmpty && sender != self) {
       if (u.isBitchat) {
         // WITH the time it happened: the post-quantum send plan weighs this
@@ -3031,14 +3037,16 @@ class NostrController {
         _archiveGiftWrap(u);
         _onRumorMessage(u, appState, self);
       case EventKind.nymReceiptRumor: // 69420 — receipt or typing
-        _onReceiptOrTyping(rumor, appState);
+        if (u.senderVerified) _onReceiptOrTyping(rumor, appState);
       case EventKind.reaction: // 7 — gift-wrapped reaction
         // Durable content: archived like messages (pms.js:1021 runs before the
         // kind-7 branch) — without this, PM/group reactions never reach D1 and
         // vanish on relaunch instead of backfilling.
+        if (!u.senderVerified) return;
         _archiveGiftWrap(u);
         _onPrivateReaction(rumor, appState);
       case EventKind.zapReceipt: // 9735 — gift-wrapped private zap announcement
+        if (!u.senderVerified) return;
         _archiveGiftWrap(u);
         _onPrivateZap(rumor, appState, u.wrapId);
       case EventKind.callSignaling: // 25053 — call signaling transport
@@ -3373,8 +3381,13 @@ class NostrController {
       _ref.read(liveCustomEmojiProvider.notifier).ingestEmojiTags(tags);
     }
 
+    final knownGroup = groupId == null ? null : appState.groupById(groupId);
+    final nonMember = knownGroup != null &&
+        senderPubkey != self &&
+        !GroupLogic.isMember(knownGroup, senderPubkey);
+
     // Track an advertised group ephemeral key.
-    if (groupId != null) {
+    if (groupId != null && u.senderVerified && !nonMember) {
       final ephPk = _tagValue(tags, 'ephemeral_pk');
       final ts = (rumor['created_at'] as num?)?.toInt() ?? 0;
       if (ephPk != null && senderPubkey != self) {
@@ -3385,6 +3398,7 @@ class NostrController {
     // Group control / invite events.
     if (groupId != null && type != null && type != GroupControlType.message) {
       if (!u.senderVerified) return;
+      if (nonMember && !GroupLogic.acceptsFromNonMember(type)) return;
       _onGroupControl(groupId, type, tags, senderPubkey, rumor, u, appState);
       return;
     }
@@ -3397,15 +3411,16 @@ class NostrController {
     // group and 1:1 PM branches below.
     final editId = _tagValue(tags, 'edit');
     if (editId != null && editId.isNotEmpty) {
-      if (!u.senderVerified) return;
+      if (!u.senderVerified || nonMember) return;
       final content = rumor['content'] as String? ?? '';
-      appState.applyEditOrDefer(editId, content, editorPubkey: senderPubkey);
+      appState.applyEditOrDefer(editId, content,
+          editorPubkey: senderPubkey, verified: u.senderVerified);
       return;
     }
 
     // Group message.
     if (groupId != null) {
-      if (!u.senderVerified) return;
+      if (!u.senderVerified || nonMember) return;
       final m = _mapGroupMessage(rumor, u, self, groupId);
       if (m == null) return;
       final landed = appState.ingestGroupMessage(m);
@@ -3698,15 +3713,27 @@ class NostrController {
       // — the custom-group-avatar-missing-in-sidebar bug — then stop (an existing
       // group is not re-notified). Enriching a known group is safe; only CREATING
       // one stays gated below.
-      if (appState.groupById(groupId) != null) {
-        appState.enrichGroupIdentity(groupId,
-            createdBy: owner,
-            name: name,
-            avatar: avatar,
-            banner: banner,
-            description: description,
-            members: members,
-            mods: mods);
+      final existingGroup = appState.groupById(groupId);
+      if (existingGroup != null) {
+        final trusted = GroupLogic.mayRewriteInviteIdentity(
+            existingGroup, senderPubkey,
+            claimedOwner: owner,
+            genesis: genesis,
+            genesisOwner: genesisOwner);
+        final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
+        if (trusted) {
+          appState.enrichGroupIdentity(groupId,
+              createdBy: owner,
+              name: name,
+              avatar: avatar,
+              banner: banner,
+              description: description,
+              members: members,
+              mods: mods);
+        } else if (senderPubkey == self ||
+            GroupLogic.canAddMembers(existingGroup, senderPubkey)) {
+          appState.enrichGroupIdentity(groupId, members: members);
+        }
         _processPendingGroupHistory(groupId);
         unawaited(announceGroupEphemeralKey(groupId));
         return;
@@ -4174,6 +4201,11 @@ class NostrController {
           ((rumor['created_at'] as num?)?.toInt() ?? 0);
       final ttl = info.ttlSec > 0 ? (info.ttlSec > 30 ? 30 : info.ttlSec) : 5;
       if (age > ttl) return;
+      final typingGroup = info.groupId;
+      if (typingGroup != null) {
+        final group = appState.groupById(typingGroup);
+        if (group == null || !GroupLogic.isMember(group, info.pubkey!)) return;
+      }
       final storageKey = info.groupId != null
           ? GroupLogic.groupStorageKey(info.groupId!)
           : PmLogic.pmStorageKey(info.pubkey!);
@@ -4248,6 +4280,10 @@ class NostrController {
     // our pubkey. Group reactions also carry the group id (`g`) for routing.
     final targetAuthor = _tagValue(tags, 'p') ?? '';
     final groupId = _tagValue(tags, 'g');
+    if (groupId != null) {
+      final group = appState.groupById(groupId);
+      if (group == null || !GroupLogic.isMember(group, pubkey)) return;
+    }
     final synthetic = NostrEvent(
       pubkey: pubkey,
       createdAt: ts,
@@ -4292,6 +4328,11 @@ class NostrController {
     final amount = ZapLogic.parseAmountFromBolt11(bolt11);
     if (amount == null) return;
     final zapper = rumor['pubkey'] as String? ?? '';
+    final zapGroup = _tagValue(tags, 'g');
+    if (zapGroup != null) {
+      final group = appState.groupById(zapGroup);
+      if (group == null || !GroupLogic.isMember(group, zapper)) return;
+    }
     // A gift-wrapped private zap is zapper-signed, so it is NOT cryptographically
     // verified against the recipient's LNURL provider pubkey (zaps.js treats the
     // gift-wrap announcement as unverified — the badge tooltip flags the sats).
@@ -7566,7 +7607,8 @@ class NostrController {
       type: GroupControlType.deleteMessage,
       extraTags: extraTags,
     );
-    appState.removeMessage(messageId);
+    appState.removeMessage(messageId,
+        author: authorPubkey, storageKey: GroupLogic.groupStorageKey(group.id));
     if (ok) _emitSystemMessage(tr('Message deleted'));
     return ok;
   }
@@ -10596,6 +10638,12 @@ class NostrController {
           url: StorageSync.storageUrl(),
           signer: signer,
         ));
+    sync.setWriteAuthBuilder((action, payload) => Nip98Auth.buildWrite(
+          action: action,
+          url: StorageSync.storageUrl(),
+          signer: signer,
+          payload: payload,
+        ));
     // The root must reach the FIRST settings read of a launch, so it is pulled
     // rather than handed over — same reason _pqSelfKeyCandidates derives.
     sync.setPqRootProvider(_loadPqRoot);
@@ -12122,6 +12170,9 @@ class NostrController {
 
   @visibleForTesting
   void markSettingsDirtyForTest() => _markSettingsDirty();
+
+  @visibleForTesting
+  void processGiftWrapForTest(GiftWrapUnwrapped u) => _processGiftWrap(u);
 
   /// Test seam for the cross-device round trip: apply an inbound payload the
   /// way a real settings-get would, so a test can then rebuild the outbound

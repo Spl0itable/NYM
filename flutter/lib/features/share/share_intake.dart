@@ -1,8 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import 'share_destination_sheet.dart';
 
@@ -15,40 +16,31 @@ import 'share_destination_sheet.dart';
 class ShareIntake {
   ShareIntake({required this.ref, required this.navKey});
 
+  static const channel = MethodChannel('app.nymchat/share');
+  static const maxFiles = 10;
+  static const maxFileBytes = 16 * 1024 * 1024;
+
   final WidgetRef ref;
   final GlobalKey<NavigatorState> navKey;
 
-  StreamSubscription<List<SharedMediaFile>>? _sub;
-
-  /// Starts listening. Handles the cold-start payload (app launched by a share)
-  /// and the warm stream (shared while already running).
   Future<void> start() async {
+    channel.setMethodCallHandler((call) async {
+      if (call.method != 'incoming') return null;
+      final payload = await decode(call.arguments);
+      if (payload != null) _present(payload);
+      return null;
+    });
     try {
-      // Cold start: the app was launched by a share intent.
-      final initial = await ReceiveSharingIntent.instance.getInitialMedia();
-      if (initial.isNotEmpty) {
-        _present(initial);
-        // Tell the plugin we consumed it so a later getInitialMedia won't
-        // replay the same share.
-        await ReceiveSharingIntent.instance.reset();
+      final held = await channel.invokeMethod<List<Object?>>('initial');
+      for (final raw in held ?? const <Object?>[]) {
+        final payload = await decode(raw);
+        if (payload != null) _present(payload);
       }
-    } catch (_) {
-      // Plugin unavailable on this platform/build — nothing to do.
-    }
-    try {
-      _sub = ReceiveSharingIntent.instance
-          .getMediaStream()
-          .listen(_present, onError: (_) {});
-    } catch (_) {
-      // Stream unavailable — cold-start-only is still fine.
-    }
+    } catch (_) {}
   }
 
-  void _present(List<SharedMediaFile> media) {
-    final payload = _toPayload(media);
+  void _present(SharedPayload payload) {
     if (payload.isEmpty) return;
-    // Defer to the next frame so the navigator/providers are settled even when
-    // this fires during cold start.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = navKey.currentContext;
       if (ctx == null) return;
@@ -56,35 +48,57 @@ class ShareIntake {
     });
   }
 
-  /// Collapses the plugin's media list into a single [SharedPayload]: text/URL
-  /// entries join into one caption; image/video/file entries become local
-  /// paths for the composer's upload pipeline.
-  SharedPayload _toPayload(List<SharedMediaFile> media) {
-    final texts = <String>[];
-    final paths = <String>[];
-    for (final m in media) {
-      switch (m.type) {
-        case SharedMediaType.text:
-        case SharedMediaType.url:
-          // For text/url the `path` field carries the string itself.
-          if (m.path.trim().isNotEmpty) texts.add(m.path.trim());
-        case SharedMediaType.image:
-        case SharedMediaType.video:
-        case SharedMediaType.file:
-          if (m.path.isNotEmpty) paths.add(m.path);
+  static String safeName(Object? raw) {
+    final text = raw is String ? raw : '';
+    final base = text.replaceAll('\\', '/').split('/').last;
+    final clean = base
+        .replaceAll(RegExp(r'[\x00-\x1f\x7f:*?"<>|]'), '_')
+        .trim()
+        .replaceFirst(RegExp(r'^\.+'), '');
+    if (clean.isEmpty) return 'shared';
+    return clean.length > 120 ? clean.substring(clean.length - 120) : clean;
+  }
+
+  static Future<SharedPayload?> decode(Object? raw,
+      {Future<Directory> Function()? scratch}) async {
+    if (raw is! Map) return null;
+    final text = raw['text'] is String ? (raw['text'] as String).trim() : null;
+    final files = <({String name, Uint8List bytes})>[];
+    for (final f in (raw['files'] is List ? raw['files'] as List : const [])) {
+      if (files.length >= maxFiles) break;
+      if (f is! Map) continue;
+      final bytes = f['bytes'];
+      if (bytes is! Uint8List || bytes.isEmpty || bytes.length > maxFileBytes) {
+        continue;
       }
-      // iOS may attach a caption alongside media.
-      final msg = m.message;
-      if (msg != null && msg.trim().isNotEmpty) texts.add(msg.trim());
+      files.add((name: safeName(f['name']), bytes: bytes));
     }
-    return SharedPayload(
-      text: texts.isEmpty ? null : texts.join('\n'),
+    final paths = <String>[];
+    if (files.isNotEmpty) {
+      try {
+        final dir = await (scratch ??
+            () => Directory.systemTemp.createTemp('nym_share_'))();
+        final used = <String>{};
+        for (var i = 0; i < files.length; i++) {
+          var name = files[i].name;
+          if (!used.add(name)) {
+            name = '${i}_$name';
+            used.add(name);
+          }
+          final file = File('${dir.path}${Platform.pathSeparator}$name');
+          await file.writeAsBytes(files[i].bytes, flush: true);
+          paths.add(file.path);
+        }
+      } catch (_) {}
+    }
+    final payload = SharedPayload(
+      text: text == null || text.isEmpty ? null : text,
       filePaths: paths,
     );
+    return payload.isEmpty ? null : payload;
   }
 
   void dispose() {
-    _sub?.cancel();
-    _sub = null;
+    channel.setMethodCallHandler(null);
   }
 }

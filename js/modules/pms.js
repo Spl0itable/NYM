@@ -723,6 +723,19 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _unverifiedWrapAllowed(rumor, parseBitchat) {
+        if (!rumor || rumor.kind !== 14 || typeof rumor.content !== 'string') return false;
+        if (!rumor.pubkey || rumor.pubkey === this.pubkey) return false;
+        if (typeof this.isBotAnonPubkey === 'function' && this.isBotAnonPubkey(rumor.pubkey)) return false;
+        const blocked = new Set(['g', 'edit', 'typing', 'receipt', 'offer']);
+        if ((rumor.tags || []).some(t => Array.isArray(t) && blocked.has(t[0]))) return false;
+        if (rumor.content.startsWith('bitchat1:') && typeof parseBitchat === 'function') {
+            const parsed = parseBitchat(rumor.content);
+            if (!parsed || parsed.type !== 0x01) return false;
+        }
+        return true;
+    },
+
     async handleGiftWrapDM(event, opts) {
         try {
             const NT = window.NostrTools;
@@ -1022,6 +1035,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
             if (!senderVerified && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(rumor.pubkey)) return;
+            if (!senderVerified && !this._unverifiedWrapAllowed(rumor, parseBitchatMessage)) return;
 
             // Route private friend-presence rumors (status shared by a friend
             // who runs in "Friends only" mode). Verified senders only.
@@ -1143,10 +1157,11 @@ Object.assign(NYM.prototype, {
             // Handle typing indicators immediately (lightweight, no profile fetch needed)
             // Discard stale typing indicators — they are ephemeral signals, not historical data
             if (this.isTypingIndicator(rumor)) {
+                if (!senderVerified) return;
                 const rumorAge = Math.floor(Date.now() / 1000) - (rumor.created_at || 0);
                 if (rumorAge > this._typingExpireMs / 1000) return; // Older than expire window — stale
                 const parsed = this.parseTypingIndicator(rumor);
-                this.handleTypingIndicatorEvent(parsed, senderPubkey);
+                this.handleTypingIndicatorEvent(parsed, senderPubkey, senderVerified);
                 return;
             }
 
@@ -1154,6 +1169,7 @@ Object.assign(NYM.prototype, {
             // PM conversation state — so group receipts (which lack a 'g' tag)
             // don't accidentally create phantom 1:1 PM entries.
             if (this.isNymReceipt(rumor)) {
+                if (!senderVerified) return;
                 const nymReceipt = this.parseNymReceipt(rumor);
                 const receiptIds = (nymReceipt && nymReceipt.messageIds) || [];
                 if (nymReceipt && receiptIds.length) {
@@ -1167,6 +1183,8 @@ Object.assign(NYM.prototype, {
                         const msg = messages.find(m => m.nymMessageId?.toUpperCase() === receiptId);
                         if (msg && msg.isOwn) {
                             receiptMatched = true;
+                            if (msg.isGroup && msg.groupId && typeof this._groupSenderAdmitted === 'function'
+                                && !this._groupSenderAdmitted(msg.groupId, senderPubkey, null)) break;
                             const statusOrder = { sent: 0, delivered: 1, read: 2 };
                             if ((statusOrder[receiptType] || 0) >= (statusOrder[msg.deliveryStatus] || 0)) {
                                 msg.deliveryStatus = receiptType;
@@ -1206,6 +1224,7 @@ Object.assign(NYM.prototype, {
             if (rumor.content?.startsWith('bitchat1:')) {
                 const parsedEarly = parseBitchatMessage(rumor.content);
                 if (parsedEarly.type === 0x02 || parsedEarly.type === 0x03) {
+                    if (!senderVerified) return;
                     const receiptType = parsedEarly.type === 0x02 ? 'read' : 'delivered';
                     const receiptId = parsedEarly.messageId?.toUpperCase();
 
@@ -1260,6 +1279,7 @@ Object.assign(NYM.prototype, {
 
             // Handle 1:1 PM reactions (kind 7 gift-wrapped without group tag)
             if (rumor.kind === 7) {
+                if (!senderVerified) return;
                 const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
                 if (eTag) {
                     const reactionMessageId = eTag[1];
@@ -1313,6 +1333,7 @@ Object.assign(NYM.prototype, {
 
             // Handle 1:1 PM zaps (kind 9735 gift-wrapped without group tag)
             if (rumor.kind === 9735) {
+                if (!senderVerified) return;
                 const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
                 const boltTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'bolt11' && t[1]);
                 if (eTag && boltTag) {
@@ -1401,8 +1422,9 @@ Object.assign(NYM.prototype, {
             // Check if this is an edit of a previous message (has 'edit' tag in rumor)
             const pmEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
             if (pmEditTag) {
+                if (!senderVerified) return;
                 const originalId = pmEditTag[1];
-                this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, conversationKey);
+                this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, conversationKey, senderVerified);
                 return;
             }
 
@@ -1423,7 +1445,8 @@ Object.assign(NYM.prototype, {
             }
             if (dupMsg) {
                 let needsRerender = false;
-                if (!dupMsg.nymMessageId && nymMsgIdFromRumor) {
+                const dupMayRewrite = senderVerified === true || dupMsg.senderVerified !== true;
+                if (dupMayRewrite && !dupMsg.nymMessageId && nymMsgIdFromRumor) {
                     // Reactions stored under the event ID must follow the message
                     // to its nymMessageId, which is the ID the DOM renders with.
                     this._migrateReactionKey(dupMsg.id, nymMsgIdFromRumor);
@@ -1438,7 +1461,7 @@ Object.assign(NYM.prototype, {
                 }
                 // If the duplicate carries longer content, prefer it — the existing
                 // copy may be a bitchat wrap with content truncated by an older sender.
-                if (messageContent && messageContent.length > (dupMsg.content || '').length) {
+                if (dupMayRewrite && messageContent && messageContent.length > (dupMsg.content || '').length) {
                     dupMsg.content = messageContent;
                     needsRerender = true;
                 }
@@ -1505,7 +1528,7 @@ Object.assign(NYM.prototype, {
             // Use nymMessageId already extracted above (during dedup check)
             const nymMsgId = nymMsgIdFromRumor;
 
-            const pmFileOffer = this.parseFileOfferTag(rumor.tags, senderPubkey);
+            const pmFileOffer = senderVerified ? this.parseFileOfferTag(rumor.tags, senderPubkey) : null;
 
             // Our OWN message, rebuilt from a wrap. The only wrap of it we can
             // receive is the self-addressed archive copy, sealed to OUR key —
@@ -4306,6 +4329,7 @@ Object.assign(NYM.prototype, {
             if (this._botThreadForeign(msg, pmMessages)) return false;
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
+            if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
             const isOwn = msg.pubkey === this.pubkey;
             if (!isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;

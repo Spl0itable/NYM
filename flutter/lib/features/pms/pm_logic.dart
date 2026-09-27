@@ -148,6 +148,29 @@ class PmLogic {
     );
   }
 
+  static const Set<String> _unverifiedBlockedTags = {
+    'g',
+    'edit',
+    'typing',
+    'receipt',
+    'offer',
+    'type',
+  };
+
+  static bool unverifiedWrapAllowed(Map<String, dynamic> rumor,
+      {required String selfPubkey}) {
+    if ((rumor['kind'] as num?)?.toInt() != EventKind.dmRumor) return false;
+    final sender = rumor['pubkey'];
+    if (sender is! String || sender.isEmpty || sender == selfPubkey) {
+      return false;
+    }
+    if (rumor['content'] is! String) return false;
+    for (final t in _tags(rumor)) {
+      if (t.isNotEmpty && _unverifiedBlockedTags.contains(t[0])) return false;
+    }
+    return !isTyping(rumor) && !isReceipt(rumor);
+  }
+
   // ---- receipts / typing (kind 69420 rumor) -------------------------------
 
   /// True if [rumor] carries a `['receipt', 'delivered'|'read']` tag.

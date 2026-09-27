@@ -1460,15 +1460,13 @@ class StorageSync {
       final blob = await _encryptToSelf(plaintext, allowPq: allowPq);
       if (blob == null) return false;
 
-      final body = <String, dynamic>{
+      await _signedWrite(<String, dynamic>{
         'action': 'settings-set',
         'pubkey': _pubkey,
         'category': category,
         'blob': blob,
         'contentHash': hash,
-        'auth': await _auth('settings-set'),
-      };
-      await _api.storageAction(body);
+      });
       _lastSettingsHash[hashKey] = hash;
       return true;
     } catch (_) {
@@ -1482,12 +1480,15 @@ class StorageSync {
   Future<bool> purgeAccount() async {
     try {
       if (_pubkey.isEmpty) return false;
-      final auth = await _auth('account-purge');
-      if (auth == null) return false;
-      final res = await _api.storageAction(<String, dynamic>{
+      final body = <String, dynamic>{
         'action': 'account-purge',
         'app': 'nymchat',
         'pubkey': _pubkey,
+      };
+      final auth = await _writeAuth('account-purge', body);
+      if (auth == null) return false;
+      final res = await _api.storageAction(<String, dynamic>{
+        ...body,
         'auth': auth,
       });
       return res['ok'] == true;
@@ -1912,11 +1913,10 @@ class StorageSync {
   /// kind-0 event JSON. Best-effort; failures are swallowed.
   Future<void> profileSet(Map<String, dynamic> signedEvent) async {
     try {
-      await _api.storageAction({
+      await _signedWrite({
         'action': 'profile-set',
         'pubkey': _pubkey,
         'event': signedEvent,
-        'auth': await _auth('profile-set'),
       });
       final id = signedEvent['id'];
       if (id is String) markProfileCached(_pubkey);
@@ -1957,11 +1957,10 @@ class StorageSync {
     _trim(_archivedIds);
     if (batch.isEmpty) return 0;
     try {
-      await _api.storageAction({
+      await _signedWrite({
         'action': 'pm-put',
         'pubkey': _pubkey,
         'events': batch.take(100).toList(),
-        'auth': await _auth('pm-put'),
       });
       return batch.length;
     } catch (_) {
@@ -1988,11 +1987,10 @@ class StorageSync {
     _trim(_depositedIds);
     if (batch.isEmpty) return 0;
     try {
-      await _api.storageAction({
+      await _signedWrite({
         'action': 'pm-deposit',
         'pubkey': _pubkey,
         'events': batch.take(100).toList(),
-        'auth': await _auth('pm-deposit'),
       });
       return batch.length;
     } catch (_) {
@@ -2034,11 +2032,10 @@ class StorageSync {
     final batch = _depositQueue.sublist(0, n);
     _depositQueue.removeRange(0, n);
     try {
-      await _api.storageAction({
+      await _signedWrite({
         'action': 'pm-deposit',
         'pubkey': _pubkey,
         'events': batch,
-        'auth': await _auth('pm-deposit'),
       });
     } catch (_) {
       depositFailed++;
@@ -2074,11 +2071,10 @@ class StorageSync {
     for (var i = 0; i < clean.length; i += 200) {
       final end = (i + 200) < clean.length ? i + 200 : clean.length;
       try {
-        final res = await _api.storageAction({
+        final res = await _signedWrite({
           'action': 'pm-delete',
           'pubkey': _pubkey,
           'ids': clean.sublist(i, end),
-          'auth': await _auth('pm-delete'),
         });
         removed += (res['removed'] as num?)?.toInt() ?? 0;
       } catch (_) {
@@ -2512,11 +2508,10 @@ class StorageSync {
   Future<bool> zapPut(List<Map<String, dynamic>> events) async {
     if (events.isEmpty) return false;
     try {
-      await _api.storageAction({
+      await _signedWrite({
         'action': 'zap-put',
         'pubkey': _pubkey,
         'events': events.take(100).toList(),
-        'auth': await _auth('zap-put'),
       });
       return true;
     } catch (_) {
@@ -2636,6 +2631,33 @@ class StorageSync {
   /// no builder or signing fails (auth then omitted; tolerated best-effort).
   Future<Map<String, dynamic>?> _auth(String action) async =>
       _authBuilder == null ? null : await _authBuilder!(action);
+
+  Future<Map<String, dynamic>?> _writeAuth(
+      String action, Map<String, dynamic> body) async {
+    final builder = _writeAuthBuilder;
+    if (builder == null) return _auth(action);
+    return builder(action, Nip98Auth.payloadHashHex(body));
+  }
+
+  Future<Map<String, dynamic>> _signedWrite(Map<String, dynamic> body) async {
+    final action = body['action'] as String;
+    final unsigned = Map<String, dynamic>.of(body)..remove('auth');
+    final signed = <String, dynamic>{
+      ...unsigned,
+      'auth': await _writeAuth(action, unsigned),
+    };
+    return _api.storageAction(signed);
+  }
+
+  Future<Map<String, dynamic>?> Function(String action, String payload)?
+      _writeAuthBuilder;
+
+  void setWriteAuthBuilder(
+    Future<Map<String, dynamic>?> Function(String action, String payload)
+        builder,
+  ) {
+    _writeAuthBuilder = builder;
+  }
 
   /// Auth-event builder injected by the controller (which holds the signer).
   /// Returns the signed kind-27235 event JSON, or null. Async so it can sign via

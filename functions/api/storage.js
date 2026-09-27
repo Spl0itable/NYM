@@ -56,6 +56,7 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
+import { isPrivateUrl, ssrfSafeFetch, readBounded } from "./proxy.js";
 import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
 import { hiddenEventIdsSince, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
 
@@ -676,6 +677,10 @@ async function handleAccountAction(context, body) {
 
   var app = String(body.app || "nymchat").toLowerCase();
   if (app !== "nymchat" && app !== "nymbot") return json({ error: "Unknown app" }, 400);
+  if (!context._wsAuthedPubkey) {
+    var purgeReplay = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
+    if (!purgeReplay.ok) return json({ error: purgeReplay.error }, purgeReplay.status);
+  }
 
   var removed = { settings: 0, profile: 0, pm: 0 };
   var changes = function (r) { return (r && r.meta && r.meta.changes) || 0; };
@@ -1566,6 +1571,167 @@ function zapIsValidReceipt(ev, nowMs) {
   } catch (e) { return false; }
 }
 
+var ZAP_PROVIDER_TTL_S = 3600;
+var ZAP_PROVIDER_MISS_TTL_S = 300;
+var ZAP_PROVIDER_LOOKUPS_MAX = 8;
+var ZAP_LNURL_TIMEOUT_MS = 4000;
+var ZAP_LNURL_MAX_BYTES = 64 * 1024;
+var ZAP_PROFILE_RELAY_TIMEOUT_MS = 2500;
+var ZAP_PROVIDER_CACHE_HOST = "https://nymchat-zap-provider.invalid";
+var zapProviderMemo = new Map();
+
+function zapLud16FromProfile(ev, recipient) {
+  if (!profileIsValidEvent(ev, recipient)) return null;
+  var meta;
+  try { meta = JSON.parse(ev.content); } catch (e) { return null; }
+  var lud = meta && typeof meta.lud16 === "string" ? meta.lud16.trim().toLowerCase() : "";
+  if (!/^[a-z0-9._+-]{1,64}@[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63})+$/.test(lud)) return null;
+  return lud;
+}
+
+function zapFetchRelayProfiles(recipient, relays, timeoutMs) {
+  var filter = { kinds: [0], authors: [recipient], limit: 3 };
+  function fromRelay(url) {
+    return new Promise(function (resolve) {
+      var out = [];
+      var done = false;
+      var ws;
+      var timer;
+      function finish() {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch (e) { }
+        resolve(out);
+      }
+      try { ws = new WebSocket(url); } catch (e) { resolve(out); return; }
+      timer = setTimeout(finish, timeoutMs);
+      ws.addEventListener("open", function () {
+        try { ws.send(JSON.stringify(["REQ", "zp-" + Math.random().toString(36).slice(2, 8), filter])); }
+        catch (e) { finish(); }
+      });
+      ws.addEventListener("message", function (msg) {
+        try {
+          var data = JSON.parse(msg.data);
+          if (Array.isArray(data)) {
+            if (data[0] === "EVENT" && data[2] && out.length < 10) out.push(data[2]);
+            else if (data[0] === "EOSE") finish();
+          }
+        } catch (e) { }
+      });
+      ws.addEventListener("error", finish);
+      ws.addEventListener("close", finish);
+    });
+  }
+  return Promise.all((relays || []).map(fromRelay)).then(function (lists) {
+    var all = [];
+    for (var i = 0; i < lists.length; i++) all = all.concat(lists[i]);
+    return all;
+  }).catch(function () { return []; });
+}
+
+async function zapRecipientLud16(context, recipient) {
+  var env = context && context.env;
+  if (env && hasD1(env.DB_PROFILES)) {
+    try {
+      var row = await replica(env.DB_PROFILES).prepare("SELECT event FROM profiles WHERE pubkey = ?").bind(recipient).first();
+      if (row && typeof row.event === "string") {
+        var fromD1 = zapLud16FromProfile(JSON.parse(row.event), recipient);
+        if (fromD1) return fromD1;
+      }
+    } catch (e) { }
+  }
+  var events = await zapFetchRelayProfiles(recipient, STORAGE_PQ_RELAYS, ZAP_PROFILE_RELAY_TIMEOUT_MS);
+  var newest = null;
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    if (!ev || ev.kind !== 0 || ev.pubkey !== recipient) continue;
+    if (newest && (ev.created_at || 0) <= (newest.created_at || 0)) continue;
+    if (!profileIsValidEvent(ev, recipient)) continue;
+    newest = ev;
+  }
+  return newest ? zapLud16FromProfile(newest, recipient) : null;
+}
+
+async function zapLnurlNostrPubkey(lud16) {
+  var at = lud16.indexOf("@");
+  var url = "https://" + lud16.slice(at + 1) + "/.well-known/lnurlp/" + encodeURIComponent(lud16.slice(0, at));
+  if (isPrivateUrl(url)) return null;
+  var ctrl = typeof AbortController === "function" ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, ZAP_LNURL_TIMEOUT_MS) : null;
+  try {
+    var resp = await ssrfSafeFetch(url, {
+      headers: { "Accept": "application/json" },
+      ...(ctrl ? { signal: ctrl.signal } : {})
+    });
+    if (!resp || !resp.ok) return null;
+    var text = await readBounded(resp, ZAP_LNURL_MAX_BYTES);
+    if (text == null) return null;
+    var data = JSON.parse(text);
+    if (!data || data.allowsNostr !== true || typeof data.nostrPubkey !== "string") return null;
+    if (!/^[0-9a-f]{64}$/i.test(data.nostrPubkey)) return null;
+    return data.nostrPubkey.toLowerCase();
+  } catch (e) {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function zapRecipientProvider(context, recipient) {
+  var nowMs = Date.now();
+  var memo = zapProviderMemo.get(recipient);
+  if (memo && memo.exp > nowMs) return memo.pk;
+  var cacheKey = null;
+  try {
+    if (typeof caches !== "undefined" && caches.default) {
+      cacheKey = new Request(ZAP_PROVIDER_CACHE_HOST + "/p?k=" + recipient, { method: "GET" });
+      var hit = await caches.default.match(cacheKey);
+      if (hit) {
+        var v = (await hit.text()).trim();
+        var cachedPk = /^[0-9a-f]{64}$/.test(v) ? v : null;
+        zapProviderMemo.set(recipient, { pk: cachedPk, exp: nowMs + (cachedPk ? ZAP_PROVIDER_TTL_S : ZAP_PROVIDER_MISS_TTL_S) * 1000 });
+        return cachedPk;
+      }
+    }
+  } catch (e) { cacheKey = null; }
+  var lud16 = await zapRecipientLud16(context, recipient);
+  var pk = lud16 ? await zapLnurlNostrPubkey(lud16) : null;
+  var ttl = pk ? ZAP_PROVIDER_TTL_S : ZAP_PROVIDER_MISS_TTL_S;
+  zapProviderMemo.set(recipient, { pk: pk, exp: nowMs + ttl * 1000 });
+  if (zapProviderMemo.size > 2000) zapProviderMemo = new Map(Array.from(zapProviderMemo.entries()).slice(-1000));
+  if (cacheKey) {
+    try {
+      await caches.default.put(cacheKey, new Response(pk || "-", {
+        headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + ttl }
+      }));
+    } catch (e) { }
+  }
+  return pk;
+}
+
+function zapRequestPubkey(ev) {
+  try {
+    var req = JSON.parse(zapTagValue(ev.tags, "description"));
+    return req && typeof req.pubkey === "string" ? req.pubkey.toLowerCase() : null;
+  } catch (e) { return null; }
+}
+
+async function zapReceiptSignerOk(context, ev, providers) {
+  var signer = typeof ev.pubkey === "string" ? ev.pubkey.toLowerCase() : "";
+  if (!signer) return false;
+  if (signer === zapRequestPubkey(ev)) return true;
+  var recipient = zapTagValue(ev.tags, "p");
+  if (!recipient) return false;
+  recipient = recipient.toLowerCase();
+  if (!providers.has(recipient)) {
+    if (providers.size >= ZAP_PROVIDER_LOOKUPS_MAX) return false;
+    providers.set(recipient, zapRecipientProvider(context, recipient));
+  }
+  var provider = await providers.get(recipient);
+  return !!provider && provider === signer;
+}
+
 function zapTargetId(ev) {
   var tags = ev.tags || [];
   var e = tags.find(function (t) {
@@ -1691,10 +1857,12 @@ async function handleZapAction(context, body) {
     var now = Date.now();
     var chan = [];
     var pm = [];
+    var zapProviders = new Map();
     for (var n = 0; n < events.length; n++) {
       var ev = events[n];
       if (!zapIsValidReceipt(ev, now)) continue;
       if (JSON.stringify(ev).length > ZAP_EVENT_MAX) continue;
+      if (!(await zapReceiptSignerOk(context, ev, zapProviders))) continue;
       var info = zapClassify(ev);
       if (!info) continue;
       // Channel and profile zaps live in the channels DB (profile zaps keyed by

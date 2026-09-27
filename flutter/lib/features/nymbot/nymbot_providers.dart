@@ -1188,7 +1188,9 @@ class BotChatController extends StateNotifier<BotChatState> {
         eventId: wrapId,
         // Signed only on the HTTP fallback leg — the authenticated socket
         // skips per-action auth (shop.js:158-165).
-        auth: () => anonId != null ? anon.authFor('pm') : _authFor('pm'),
+        signedFor: (payload) async => anonId != null
+            ? await anon.authFor('pm', payload)
+            : (await _authFor('pm', payload) ?? _auth),
         proModel: pro?.key,
         fresh: fresh,
         cmdAlias: commandAliasHint(m.content),
@@ -1480,9 +1482,9 @@ class BotChatController extends StateNotifier<BotChatState> {
           .clearHistory(
               pubkey: pk,
               anon: anonId != null,
-              auth: () => anonId != null
-                  ? anon.authFor('clear-history')
-                  : _authFor('clear-history'))
+              signedFor: (payload) async => anonId != null
+                  ? await anon.authFor('clear-history', payload)
+                  : (await _authFor('clear-history', payload) ?? _auth))
           .catchError((_) => <String, dynamic>{}));
     }
     // Batch pm-delete of the thread's wraps from the D1 archive so no device
