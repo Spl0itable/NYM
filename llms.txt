@@ -56,5 +56,5 @@ the recipient can read, so the app being fully readable costs its users nothing.
 
 - [Contact](https://nymchat.app/contact/): operated by 21 Million LLC.
 - [Android app on Zapstore](https://zapstore.dev/apps/com.nym.bar): the native Flutter build, published with a signed NIP-82 `kind 3063` event carrying the APK's SHA-256 so an install can be verified off-device.
-- [Mobile source](https://github.com/Spl0itable/NYM/tree/main/android-ios-app): the iOS and Android client, sharing the protocol and post-quantum test fixtures with the PWA.
+- [Mobile source](https://github.com/Spl0itable/NYM/tree/main/flutter): the iOS and Android client, speaking the same protocol and post-quantum formats as the PWA.
 - [robots.txt](https://web.nymchat.app/robots.txt) and [sitemap.xml](https://web.nymchat.app/sitemap.xml): both deliberately minimal, and both explain why in comments.

@@ -1512,13 +1512,19 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Wrap using standard NIP-59 format
         if (this.privkey) {
-            const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, null);
+            const wrapped = await this._pmSignalWrapAsync(rumor, recipientPubkey);
             this.sendDMToRelays(['EVENT', wrapped]);
         } else {
             await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
         }
+    },
+
+    async _pmSignalWrapAsync(rumor, recipientPubkey) {
+        const plan = typeof this.pqPmPlan === 'function' ? this.pqPmPlan(recipientPubkey) : null;
+        return plan && plan.kemPk
+            ? this.pqWrapForPeerAsync(plan.pq2, rumor, this.privkey, recipientPubkey, plan.kemPk, null)
+            : this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, null);
     },
 
     // Check if a rumor is a typing indicator
@@ -1615,7 +1621,7 @@ Object.assign(NYM.prototype, {
             tags.push(['p', this.currentPM]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
             if (this.privkey) {
-                const wrapped = await this.nip59WrapEventAsync(rumor, this.privkey, this.currentPM, null);
+                const wrapped = await this._pmSignalWrapAsync(rumor, this.currentPM);
                 this.sendDMToRelays(['EVENT', wrapped]);
             } else {
                 await this._sendGiftWrapsAsync([this.currentPM], rumor, null);

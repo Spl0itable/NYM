@@ -3779,8 +3779,10 @@ Object.assign(NYM.prototype, {
                         const selfSealUnsigned = { kind: 13, content: selfSealContent, created_at: this.randomNow(), tags: [] };
                         const selfSeal = await signEvt(selfSealUnsigned);
                         const selfEphSk = NT.generateSecretKey();
-                        const selfCkWrap = NT.nip44.getConversationKey(selfEphSk, this.pubkey);
-                        const selfWrapContent = NT.nip44.encrypt(JSON.stringify(selfSeal), selfCkWrap);
+                        const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
+                        const selfWrapContent = selfKemPk
+                            ? window.NymCrypto.pq2Encrypt(JSON.stringify(selfSeal), selfEphSk, this.pubkey, selfKemPk)
+                            : NT.nip44.encrypt(JSON.stringify(selfSeal), NT.nip44.getConversationKey(selfEphSk, this.pubkey));
                         const selfWrapUnsigned = { kind: 1059, content: selfWrapContent, created_at: this.randomNow(), tags: [['p', this.pubkey]] };
                         if (expirationTs) selfWrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                         const selfWrapped = NT.finalizeEvent(selfWrapUnsigned, selfEphSk);

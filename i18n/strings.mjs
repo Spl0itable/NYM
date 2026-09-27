@@ -41,7 +41,7 @@ export function catalogCandidates() {
   out.push({
     kind: 'mirror',
     path: fileURLToPath(new URL(
-      '../android-ios-app/lib/features/i18n/app_strings_catalog.dart', import.meta.url)),
+      '../flutter/lib/features/i18n/app_strings_catalog.dart', import.meta.url)),
   });
   return out;
 }

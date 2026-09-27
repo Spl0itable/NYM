@@ -24,7 +24,7 @@ console.log(
 // pre-translates until the next run.
 if (counts.dartKind === 'mirror') {
   console.warn(
-    `\nReading the app strings from android-ios-app/, this repository's release`
+    `\nReading the app strings from flutter/, this repository's release`
     + `\nmirror — it can be a release behind, so strings added since the last`
     + `\nmirror update will not be translated. Check out flutter-app beside this`
     + `\nrepository (or set NYM_FLUTTER_CATALOG) to sync against the live catalog.\n`);

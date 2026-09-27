@@ -2257,6 +2257,16 @@ Object.assign(NYM.prototype, {
     // opts.forceRealPk: wrap to members' real pubkeys even for group sends —
     // used by key-resync requests, where our stored ephemeral keys are exactly
     // what we suspect is stale.
+    _pqWrapKeyFor(pubkey) {
+        if (pubkey === this.pubkey) return typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
+        return this.pqGroupKeyFor(pubkey);
+    },
+
+    _pqWrapUsesPq2(pubkey) {
+        if (pubkey === this.pubkey) return this.pqSelfUsesPq2();
+        return this.pqGroupUsesPq2(pubkey);
+    },
+
     async _sendGiftWrapsAsync(members, rumor, expirationTs, groupId = null, opts = {}) {
         // Archive-only self copy so group messages also hydrate from D1.
         if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
@@ -2288,9 +2298,9 @@ Object.assign(NYM.prototype, {
                     // max(classical, PQ), so the rotation still delivers its
                     // forward secrecy against classical attackers while the KEM leg
                     // delivers harvest-now-decrypt-later protection.
-                    const memberKemPk = this.pqGroupKeyFor(pubkey);
+                    const memberKemPk = this._pqWrapKeyFor(pubkey);
                     const wrapped = memberKemPk
-                        ? await this.pqWrapForPeerAsync(this.pqGroupUsesPq2(pubkey), rumor,
+                        ? await this.pqWrapForPeerAsync(this._pqWrapUsesPq2(pubkey), rumor,
                             this.privkey, encryptTo, memberKemPk, expirationTs)
                         : await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
                     if (memberKemPk) {
@@ -2352,13 +2362,13 @@ Object.assign(NYM.prototype, {
                 // leg encapsulates to the member's long-lived identity key,
                 // exactly as it does on the local-key path — the rotating
                 // ephemeral pubkey the classical leg uses has no announcement.
-                const memberKemPk = this.pqGroupKeyFor(pubkey);
+                const memberKemPk = this._pqWrapKeyFor(pubkey);
                 const ephSk = NT.generateSecretKey();
                 // The format the MEMBER announced, never a fixed one — a peer
                 // that published only `pk2` cannot open a combined wrap, so
                 // sending one dropped them out of the conversation silently.
                 const wrapContent = memberKemPk
-                    ? (this.pqGroupUsesPq2(pubkey)
+                    ? (this._pqWrapUsesPq2(pubkey)
                         ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk)
                         : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk))
                     : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, encryptTo));

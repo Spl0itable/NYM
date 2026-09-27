@@ -6,7 +6,7 @@ Please report security issues privately through
 [GitHub private vulnerability reporting](https://github.com/Spl0itable/NYM/security/advisories/new)
 rather than opening a public issue. Include reproduction steps and the affected
 surface (PWA, Cloudflare Functions backend, or the native Android/iOS app —
-the native client lives in the `android-ios-app` directory, which accepts reports
+the native client lives in the `flutter` directory, which accepts reports
 the same way).
 
 We aim to acknowledge reports promptly and to credit reporters in release

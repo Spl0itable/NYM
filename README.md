@@ -270,7 +270,9 @@ Nymbot also works inside message threads. Open a thread on a Nymbot message and 
 
 ## Mobile App (iOS & Android)
 
-Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`android-ios-app/`](android-ios-app/) directory. The Android APK can be downloaded directly from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).
+Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`flutter/`](flutter/) directory. The Android APK can be downloaded directly from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).
+
+`flutter/` holds only what builds the app: `lib/`, the `android/` and `ios/` projects, `web/`, `assets/` and the pubspec. It is a release copy of the Flutter app's own repository, refreshed with `node scripts/sync-flutter.mjs <path to the Flutter app>`, which copies the app files and removes everything else. Tests, internal docs, store listings, build scripts and signing keys stay out of it.
 
 ## Verify Build
 
@@ -300,7 +302,7 @@ gh attestation verify dist/build-manifest.json --repo Spl0itable/NYM
 
 ### Android
 
-The Android app cannot check itself the way the web app does. What runs on the device is AOT-compiled machine code, not the Dart in [`android-ios-app/`](android-ios-app/), and no computation available on the device relates one to the other.
+The Android app cannot check itself the way the web app does. What runs on the device is AOT-compiled machine code, not the Dart in [`flutter/`](flutter/), and no computation available on the device relates one to the other.
 
 What Android *does* expose is the installed APK itself, at `ApplicationInfo.sourceDir`. That makes the same shape of proof available — hash the artifact locally, compare against a hash the developer published and signed — and the published half already exists: the [Zapstore listing](https://zapstore.dev/apps/com.nym.bar). Publishing with `zsp` emits a NIP-82 **kind 3063 Software Asset** event per release, signed with the publisher's Nostr key, carrying the APK's SHA-256 in its `x` tag and the signing certificate's SHA-256 in `apk_certificate_hash`.
 

@@ -70,7 +70,7 @@ console.log(`${counts.total} source strings -> ${outDir}`);
 // way js/modules/i18n.js keys its cache. Do not converge the two.
 if (counts.dartKind === 'mirror') {
   console.warn(
-    `  read from android-ios-app/, this repository's release mirror — it can be a`
+    `  read from flutter/, this repository's release mirror — it can be a`
     + `\n  release behind. Check out flutter-app beside this repository (or set`
     + `\n  NYM_FLUTTER_CATALOG) to export against the live catalog.`);
 } else if (counts.dartKind === 'none') {

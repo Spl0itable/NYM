@@ -1,0 +1,266 @@
+/// localStorage key names ported verbatim from the PWA (docs/specs/01 §5.2).
+///
+/// On native these back a key/value store (SharedPreferences for non-secret
+/// values; the four identity secrets live in flutter_secure_storage — see
+/// [SecretKeys]). Names are preserved 1:1 so settings/state semantics match.
+class StorageKeys {
+  StorageKeys._();
+
+  // Hybrid post-quantum messaging (features/identity/pq_registry.dart)
+  static const pqMode = 'nym_pq_mode';
+  static const pqEpoch = 'nym_pq_epoch';
+  static const pqDeviceId = 'nym_pq_device_id';
+  static const pqUpgradeNotice = 'nym_pq_upgrade_notice';
+  static const pqUpgradeSeen = 'nym_pq_upgrade_seen';
+
+  /// The post-quantum ROOT SECRET (docs/PQ-ROOT-SPEC.md §5.3). Lives in SECURE
+  /// storage beside the identity key, not in the key/value store: it is key
+  /// material of the same weight as the nsec. Held locally so linking a device
+  /// happens once, not once per launch. Listed in [SecretKeys.all], which is
+  /// what puts it inside the at-rest vault and inside every path that clears
+  /// the identity.
+  static const pqRoot = 'nym_pq_root';
+
+  /// Set once after a root is generated, so the app can show the user their
+  /// `nympq1…` code exactly once and stop.
+  static const pqRootBackupNotice = 'nym_pq_root_backup_notice';
+
+  // Identity / login
+  static const nostrLoginMethod = 'nym_nostr_login_method';
+  static const nostrLoginPubkey = 'nym_nostr_login_pubkey';
+  static const nostrLoginNpub = 'nym_nostr_login_npub';
+  static const nostrLoginProfile = 'nym_nostr_login_profile';
+  static const nip46RemotePubkey = 'nym_nip46_remote_pubkey';
+  static const nip46Relay = 'nym_nip46_relay';
+  static const autoEphemeral = 'nym_auto_ephemeral';
+  static const autoEphemeralNick = 'nym_auto_ephemeral_nick';
+  static const autoEphemeralChannel = 'nym_auto_ephemeral_channel';
+  static const randomKeypairPerSession = 'nym_random_keypair_per_session';
+  static const keypairMode = 'nym_keypair_mode';
+
+  // Vault
+  static const vaultEnabled = 'nym_vault_enabled';
+  static const vaultMethod = 'nym_vault_method';
+  static const vaultSalt = 'nym_vault_salt';
+  static const vaultCred = 'nym_vault_cred';
+  static const vaultCheck = 'nym_vault_check';
+  static const vaultBioProtected = 'nym_vault_bio_protected';
+  static const encryptAtRestPref = 'nym_encrypt_at_rest_pref';
+  static const encryptAtRestPromptDismissed =
+      'nym_encrypt_at_rest_prompt_dismissed';
+
+  // Settings (one per Settings field)
+  static const theme = 'nym_theme';
+  static const colorMode = 'nym_color_mode';
+  static const sound = 'nym_sound';
+  static const autoscroll = 'nym_autoscroll';
+  static const timestamps = 'nym_timestamps';
+  static const timeFormat = 'nym_time_format';
+  static const dateFormat = 'nym_date_format';
+  static const sortProximity = 'nym_sort_proximity';
+  static const textSize = 'nym_text_size';
+  static const transparencyEnabled = 'nym_transparency_enabled';
+  static const chatLayout = 'nym_chat_layout';
+  static const chatViewMode = 'nym_chat_view_mode';
+
+  /// Message threads (Slack-style reply threads) on/off — default on.
+  static const threadsEnabled = 'nym_threads_enabled';
+  static const columnsLayout = 'nym_columns_layout';
+  static const columnsWallpaper = 'nym_columns_wallpaper';
+  static const wallpaperType = 'nym_wallpaper_type';
+  static const wallpaperCustomUrl = 'nym_wallpaper_custom_url';
+  static const lowDataMode = 'nym_low_data_mode';
+
+  /// When the last iOS background catch-up ran (unix seconds). Everything the
+  /// next one pulls that is NEWER than this may raise a notification; anything
+  /// older is backlog the user has already had a chance to see. Absent on a
+  /// device that has never run one, which deliberately alerts for nothing.
+  static const backgroundCatchUpTs = 'nym_background_catchup_ts';
+
+  /// Keep the Nostr relay sockets and the Bluetooth mesh radio running while
+  /// the app is backgrounded (Android: a foreground service with a persistent
+  /// notification; iOS: the declared background modes plus a background-task
+  /// window). Off by default — it costs battery.
+  static const backgroundConnectivity = 'nym_background_connectivity';
+  static const heartbeatToken = 'nym_heartbeat_token';
+  static const meshEnabled = 'nym_mesh_enabled';
+
+  /// Ghost Mode on/off. Device-local on purpose: it is not part of the synced
+  /// settings blob, so enabling it on one device does not announce that intent
+  /// to the others.
+  static const ghostMode = 'nym_ghost_mode';
+
+  /// Peers we talked to while ghosted. Their conversations are pinned to the
+  /// mesh for good, so a later reply can never go out over Nostr under the real
+  /// key and reveal that the ghost was us.
+  static const ghostPinnedPms = 'nym_ghost_pinned_pms';
+  static const groupchatPmOnlyMode = 'nym_groupchat_pm_only_mode';
+  static const nickStyle = 'nym_nick_style';
+  static const pinnedLandingChannel = 'nym_pinned_landing_channel';
+  static const lastView = 'nym_last_view';
+  static const dmFwdSecEnabled = 'nym_dm_fwdsec_enabled';
+  static const dmTtlSeconds = 'nym_dm_ttl_seconds';
+  static const readReceiptsScope = 'nym_read_receipts_scope';
+  static const readReceiptsEnabled = 'nym_read_receipts_enabled';
+  static const typingIndicatorsScope = 'nym_typing_indicators_scope';
+  static const typingIndicatorsEnabled = 'nym_typing_indicators_enabled';
+  static const acceptPms = 'nym_accept_pms';
+  static const acceptCalls = 'nym_accept_calls';
+  static const cachePms = 'nym_cache_pms';
+  static const syncMlsHistory = 'nym_sync_mls_history';
+  static const showStatus = 'nym_show_status';
+  static const gesturesEnabled = 'nym_gestures_enabled';
+  static const swipeLeftAction = 'nym_swipe_left_action';
+  static const swipeRightAction = 'nym_swipe_right_action';
+  static const swipeThreshold = 'nym_swipe_threshold';
+  static const swipeReactEmoji = 'nym_swipe_react_emoji';
+
+  /// Unix seconds of the LAST local pick of [swipeReactEmoji]. Published
+  /// alongside the emoji so a settings blob written before the pick (an older
+  /// build's ❤️ default, or another device that never chose one) can be
+  /// recognized as stale and rejected instead of clobbering the choice.
+  static const swipeReactEmojiTs = 'nym_swipe_react_emoji_ts';
+  static const translateLanguage = 'nym_translate_language';
+  static const translateFavorites = 'nym_translate_favorites';
+
+  /// The app's static-text UI language (empty ⇒ English). Distinct from
+  /// [translateLanguage], which is the on-the-fly message-translation target.
+  static const uiLanguage = 'nym_ui_language';
+
+  static const legacyAutoTranslateKeys = <String>[
+    'nym_auto_translate',
+    'nym_auto_translate_channels',
+    'nym_auto_translate_pms',
+    'nym_auto_translate_groups',
+  ];
+
+  /// Device-local flag: the first-run language picker has been answered (even
+  /// if the user kept English), so onboarding shows it at most once per device.
+  static const uiLanguageChosen = 'nym_ui_language_chosen';
+  static const powDifficulty = 'nym_pow_difficulty';
+  static const appVerifiedFilter = 'nym_app_verified_filter';
+  static const filterPacks = 'nym_filter_packs';
+  static const attestBadge = 'nym_attest_badge';
+  static const attestAuthority = 'nym_attest_authority';
+  static const hideNonPinned = 'nym_hide_non_pinned';
+  static const imageBlur = 'nym_image_blur';
+  static String imageBlurFor(String pubkey) => 'nym_image_blur_$pubkey';
+
+  // Profile / wallet
+  static const bio = 'nym_bio';
+  static const avatarUrl = 'nym_avatar_url';
+  static const bannerUrl = 'nym_banner_url';
+  static const lightningAddressGlobal = 'nym_lightning_address_global';
+  static const lightningAddress = 'nym_lightning_address';
+  static String lightningAddressFor(String pubkey) =>
+      'nym_lightning_address_$pubkey';
+  static const customNick = 'nym_custom_nick';
+
+  // Channels / lists
+  static const pinnedChannels = 'nym_pinned_channels';
+  static const hiddenChannels = 'nym_hidden_channels';
+  static const blockedChannels = 'nym_blocked_channels';
+  static const userJoinedChannels = 'nym_user_joined_channels';
+  static const userChannels = 'nym_user_channels';
+  static const unreadCounts = 'nym_unread_counts';
+  static const channelActivity = 'nym_channel_activity';
+  static const channelLastRead = 'nym_channel_last_read';
+
+  // Social / blocks
+  static const blocked = 'nym_blocked';
+  static const autoMuted = 'nym_auto_muted';
+  static const friends = 'nym_friends';
+  static const blockedKeywords = 'nym_blocked_keywords';
+
+  // Spam filter (heuristic content filter — PWA `spamFilterEnabled` /
+  // `spamFilterAggressive`, both default true; device-local, no UI in the PWA's
+  // settings modal). Distinct from the web-of-trust spam GATE.
+  static const spamFilterEnabled = 'nym_spam_filter_enabled';
+  static const spamFilterAggressive = 'nym_spam_filter_aggressive';
+
+  // PMs / groups
+  static const closedPms = 'nym_closed_pms';
+  static const closedPmTimes = 'nym_closed_pm_times';
+  static const leftGroups = 'nym_left_groups';
+  static const leftGroupTimes = 'nym_left_group_times';
+  static String lastPmSyncFor(String pubkey) => 'nym_last_pm_sync_$pubkey';
+  static const pendingGroupInvite = 'nym_pending_group_invite';
+  static const groupStorePrefix = 'nym_groups_';
+  static String groupStoreFor(String pubkey) => '$groupStorePrefix$pubkey';
+
+  /// The mesh sender outbox: sends the Bluetooth mesh carried because the
+  /// internet route was down, replayed to Nostr when relays return.
+  static const meshOutbox = 'nym_mesh_outbox';
+
+  /// The gossip-sync public history this device carries, so the backlog it can
+  /// serve to a peer who missed it survives a restart.
+  static const meshGossipArchive = 'nym_mesh_gossip_archive';
+
+  /// This device's one-time mesh prekeys (private halves). Persisted so mail
+  /// sealed to a key we published before a restart can still be opened.
+  static const meshPrekeys = 'nym_mesh_prekeys';
+
+  static const sealedPrefs = [
+    leftGroups,
+    leftGroupTimes,
+    meshGossipArchive,
+    meshPrekeys,
+  ];
+
+  // Notifications / sync
+  static const notificationsEnabled = 'nym_notifications_enabled';
+  static const groupNotifyMentionsOnly = 'nym_group_notify_mentions_only';
+  static const threadNotifyMentionsOnly = 'nym_thread_notify_mentions_only';
+  static const notifyFriendsOnly = 'nym_notify_friends_only';
+  static const notificationLastRead = 'nym_notification_last_read';
+  static const lastSettingsSyncTs = 'nym_last_settings_sync_ts';
+
+  // Emoji / gifs
+  static const emojiPackFavorites = 'nym_emoji_pack_favorites';
+  static const emojiCategoryFavorites = 'nym_emoji_category_favorites';
+  static const recentEmojis = 'nym_recent_emojis';
+  static const favoriteGifs = 'nym_favorite_gifs';
+
+  // Bot / shop
+  static const botpmWelcomed = 'nym_botpm_welcomed';
+  static const botpmClearedAt = 'nym_botpm_cleared_at';
+  static const botpmProModel = 'nym_botpm_pro_model';
+  static const purchasesCache = 'nym_purchases_cache';
+  static const activeStyle = 'nym_active_style';
+  static const activeFlair = 'nym_active_flair';
+
+  // Sidebar layout (section collapse + order persistence)
+  static const sidebarSectionCollapsed = 'nym_sidebar_section_collapsed';
+  static const sidebarSectionOrder = 'nym_sidebar_section_order';
+
+  // Misc
+  static const tutorialSeen = 'nym_tutorial_seen';
+  static const dismissedTransfers = 'nym_dismissed_transfers';
+  static const relayStats = 'nym_relay_stats';
+}
+
+/// The four identity secrets that are encrypted at rest in the PWA vault.
+/// On native these are stored via flutter_secure_storage (Keychain/Keystore).
+class SecretKeys {
+  SecretKeys._();
+  static const sessionNsec = 'nym_session_nsec';
+  static const devNsec = 'nym_dev_nsec';
+  static const nostrLoginNsec = 'nym_nostr_login_nsec';
+  static const nip46ClientSecret = 'nym_nip46_client_secret';
+
+  /// The post-quantum root secret. In this list — and therefore inside the
+  /// at-rest vault's protected set and every identity-clearing sweep — because
+  /// a user who asked for their key material to be encrypted at rest did not
+  /// ask for an encrypted nsec sitting next to a plaintext root, and a root
+  /// that outlives the identity it belongs to is a liability with no owner
+  /// (docs/PQ-ROOT-SPEC.md §5.3).
+  static const pqRoot = StorageKeys.pqRoot;
+
+  static const List<String> all = [
+    sessionNsec,
+    devNsec,
+    nostrLoginNsec,
+    nip46ClientSecret,
+    pqRoot,
+  ];
+}
