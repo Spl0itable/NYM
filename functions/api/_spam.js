@@ -65,7 +65,14 @@ const EXACT_CACHE_MAX = 4000;
 const SEEN_MAX = 20000;
 const MUTED_MAX = 5000;
 const MAX_CONCURRENT = 4;
+const HELD_EXTRA_SLOTS = 2;
 const MAX_QUEUE = 200;
+const CLAIM_TTL_S = 20;
+const CLAIM_POLL_MS = 200;
+const OUTCOME_TTL_S = 120;
+let CLAIM_WAIT_MS = 8000;
+export function _setClaimWaitMs(ms) { CLAIM_WAIT_MS = ms; }
+const INSTANCE_TOKEN = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let RATE_LIMIT_COOLDOWN_MS = 20000;
 export function _setRateLimitCooldownMs(ms) { RATE_LIMIT_COOLDOWN_MS = ms; }
 const CONTENT_MAX = 1200;
@@ -712,6 +719,7 @@ const state = {
   queue: [],
   running: 0,
   generation: 0,
+  heldRunning: 0,
   slotWaiters: [],
   budgetMinute: 0,
   budgetUsed: 0,
@@ -732,7 +740,7 @@ export function _resetSpamState() {
   for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
   state.pending.clear();
   state.velocity.clear(); state.examples = null; state.examplesLoading = null;
-  state.queue = []; state.running = 0; state.slotWaiters = []; state.generation++; state.budgetMinute = 0; state.budgetUsed = 0;
+  state.queue = []; state.running = 0; state.heldRunning = 0; state.slotWaiters = []; state.generation++; state.budgetMinute = 0; state.budgetUsed = 0;
   state.dossierMinute = 0; state.dossierUsed = 0;
   state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0; state.cooldownUntil = 0;
   for (const k of Object.keys(state.counters)) state.counters[k] = 0;
@@ -1729,24 +1737,116 @@ function coalesce(job) {
   }
 }
 
+function hasHeldJob() {
+  for (let i = 0; i < state.queue.length; i++) {
+    const p = state.pending.get(state.queue[i].id);
+    if (p && !p.released) return true;
+  }
+  return false;
+}
+
+function slotOpen() {
+  if (state.running < MAX_CONCURRENT) return true;
+  return state.running < MAX_CONCURRENT + HELD_EXTRA_SLOTS && state.heldRunning < MAX_CONCURRENT && hasHeldJob();
+}
+
+function freeJobSlot(job, generation) {
+  if (job.heldRun && generation === state.generation) state.heldRunning = Math.max(0, state.heldRunning - 1);
+  job.heldRun = false;
+  releaseSlot(generation);
+}
+
 function pump(env, context) {
-  while (state.running < MAX_CONCURRENT && state.queue.length) {
+  while (state.queue.length && slotOpen()) {
     const job = nextJob();
     const generation = state.generation;
+    const p = state.pending.get(job.id);
+    job.heldRun = !!(p && !p.released);
+    if (job.heldRun) state.heldRunning++;
     state.running++;
-    const work = auditNow(env, job, { onVerdict(drop) { settle(job.id, drop); if (drop) coalesce(job); } }).then((res) => {
-      state.lastAuditAt = Date.now();
-      settle(job.id, verdictDrops(job, res));
-      coalesce(job);
-    }, (e) => {
-      state.counters.errors++;
-      state.lastError = String(e && e.message || e).slice(0, 300);
-      state.lastErrorAt = Date.now();
-      console.error("[spam] audit failed for " + job.id + ": " + state.lastError);
-      settle(job.id, false);
-    }).then(() => noteStatus(env)).then(() => { releaseSlot(generation); pump(env, context); });
+    const work = runJob(env, context, job, generation);
     if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
   }
+}
+
+function claimKey(id) { return "claim/" + id; }
+function outcomeKey(id) { return "outcome/" + id; }
+
+function claimable(job) {
+  return !job.force && job.source !== "report" && !job.claimChecked;
+}
+
+async function claimAudit(id) {
+  const held = await edgeCacheGet(claimKey(id));
+  if (held && held.token && held.token !== INSTANCE_TOKEN && Date.now() - (Number(held.at) || 0) < CLAIM_TTL_S * 1000) return false;
+  await edgeCachePut(claimKey(id), { token: INSTANCE_TOKEN, at: Date.now() }, CLAIM_TTL_S);
+  const back = await edgeCacheGet(claimKey(id));
+  return !back || back.token === INSTANCE_TOKEN;
+}
+
+async function awaitOutcome(id) {
+  const deadline = Date.now() + CLAIM_WAIT_MS;
+  for (;;) {
+    const out = await edgeCacheGet(outcomeKey(id));
+    if (out) return out;
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, Math.min(CLAIM_POLL_MS, Math.max(1, deadline - Date.now()))));
+  }
+}
+
+function publishOutcome(job, res) {
+  let out = null;
+  if (res && res.verdict) {
+    out = { row: { verdict: res.verdict.spam ? "spam" : "ok", confidence: res.verdict.confidence, category: res.verdict.category || "", reason: res.verdict.reason || "", lang: res.verdict.language || "", action: res.action || "", label: null } };
+  } else if (res && res.skipped) {
+    out = { skipped: res.skipped, suspicious: !!res.suspicious };
+  }
+  return edgeCachePut(outcomeKey(job.id), out || { failed: true }, OUTCOME_TTL_S);
+}
+
+async function followPeer(env, context, job, generation) {
+  freeJobSlot(job, generation);
+  pump(env, context);
+  const out = await awaitOutcome(job.id);
+  if (generation !== state.generation) return;
+  if (out && out.row) {
+    const res = adoptPeer(out.row, job);
+    settle(job.id, verdictDrops(job, res));
+    coalesce(job);
+    return;
+  }
+  if (out && out.skipped) {
+    settle(job.id, verdictDrops(job, { skipped: out.skipped, suspicious: out.suspicious }));
+    return;
+  }
+  state.queue.unshift(job);
+  pump(env, context);
+}
+
+async function runJob(env, context, job, generation) {
+  let mine = false;
+  if (claimable(job)) {
+    job.claimChecked = true;
+    if (!(await claimAudit(job.id))) return followPeer(env, context, job, generation);
+    mine = true;
+  }
+  let res = null;
+  try {
+    res = await auditNow(env, job, { onVerdict(drop) { settle(job.id, drop); if (drop) coalesce(job); } });
+    state.lastAuditAt = Date.now();
+    settle(job.id, verdictDrops(job, res));
+    coalesce(job);
+  } catch (e) {
+    state.counters.errors++;
+    state.lastError = String(e && e.message || e).slice(0, 300);
+    state.lastErrorAt = Date.now();
+    console.error("[spam] audit failed for " + job.id + ": " + state.lastError);
+    settle(job.id, false);
+  }
+  if (mine) { try { await publishOutcome(job, res); } catch (_) { } }
+  try { await noteStatus(env); } catch (_) { }
+  freeJobSlot(job, generation);
+  pump(env, context);
 }
 
 function reportTag(tags, name) {
