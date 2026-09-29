@@ -270,7 +270,7 @@ Nymbot also works inside message threads. Open a thread on a Nymbot message and 
 
 ## Mobile App (iOS & Android)
 
-Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`flutter/`](flutter/) directory. The Android APK can be downloaded directly from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).
+Nymchat is also available as an open source Flutter app for iOS and Android. The source code is in the [`flutter/`](flutter/) directory. The Android APK can be downloaded directly from [download.nostrservices.com](https://download.nostrservices.com/apk/nymchat/app-release.apk) or from the [Zapstore](https://zapstore.dev/apps/com.nym.bar).
 
 `flutter/` holds only what builds the app: `lib/`, the `android/` and `ios/` projects, `web/`, `assets/` and the pubspec. It is a release copy of the Flutter app's own repository, refreshed with `node scripts/sync-flutter.mjs <path to the Flutter app>`, which copies the app files and removes everything else. Tests, internal docs, store listings, build scripts and signing keys stay out of it.
 
