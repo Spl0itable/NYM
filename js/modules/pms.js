@@ -2509,14 +2509,42 @@ Object.assign(NYM.prototype, {
     // Every read of the model list goes through here, so a failed or pending
     // fetch degrades to the built-in list instead of an empty picker.
     _botProModelList() {
-        const live = this._botProCatalog && this._botProCatalog.models;
-        return (live && live.length) ? live : this._botProModelsFallback;
+        const live = ((this._botProCatalog && this._botProCatalog.models) || [])
+            .filter(m => m && (!m.kind || m.kind === 'chat') && !m.command);
+        return live.length ? live : this._botProModelsFallback;
     },
 
     _botProGroups() {
         const live = this._botProCatalog;
-        if (live && live.groups && live.groups.length) return live.groups;
+        const groups = ((live && live.groups) || []).filter(g => g && (!g.kind || g.kind === 'chat'));
+        if (groups.length) return groups;
         return [{ author: '', authorSlug: '', keys: this._botProModelsFallback.map(m => m.key) }];
+    },
+
+    _botGeneratorList() {
+        return ((this._botProCatalog && this._botProCatalog.models) || [])
+            .filter(m => m && (m.kind === 'image' || m.kind === 'video') && m.key);
+    },
+
+    _botGeneratorGroups() {
+        return ((this._botProCatalog && this._botProCatalog.groups) || [])
+            .filter(g => g && (g.kind === 'image' || g.kind === 'video') && Array.isArray(g.keys));
+    },
+
+    _botPriceUnavailable() {
+        const cat = this._botProCatalog;
+        return !!(cat && (cat.priceUnavailable || cat.usdPerCredit === null));
+    },
+
+    _botGeneratorDefaultRes(g) {
+        const res = Array.isArray(g && g.resolutions) ? g.resolutions : [];
+        return (g && g.resolution) || (res.length ? res[res.length - 1].res : '');
+    },
+
+    _botGeneratorCredits(v) {
+        if (this._botPriceUnavailable() || v === null || v === undefined) return null;
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? n : null;
     },
 
     // A key the user pinned before a version bump ("claude-opus") resolves to
@@ -2566,6 +2594,7 @@ Object.assign(NYM.prototype, {
                 models: data.models, groups: data.groups || [], aliases: data.aliases || {},
                 source: data.source || '', at: now,
                 usdPerCredit: data.usdPerCredit, standardUsdPerCredit: data.standardUsdPerCredit,
+                priceUnavailable: !!data.priceUnavailable,
                 standardRoutes: data.standardRoutes || [], minChargeCredits: data.minChargeCredits,
                 metered: !!data.metered
             };
@@ -2608,7 +2637,7 @@ Object.assign(NYM.prototype, {
 
     _botProTurnCredits(m) {
         const cat = this._botProCatalog;
-        const usd = Number(cat && cat.usdPerCredit) || 0;
+        const usd = (cat && !cat.priceUnavailable && Number(cat.usdPerCredit)) || 0;
         const pin = Number(m && m.inUsdPerMTok);
         const pout = Number(m && m.outUsdPerMTok);
         if (!(usd > 0) || !(pin > 0) || !(pout > 0)) return null;
@@ -2803,6 +2832,10 @@ Object.assign(NYM.prototype, {
         const byKey = new Map(this._botProModelList().map(m => [m.key, m]));
         const rows = [];
 
+        if (this._botPriceUnavailable()) {
+            rows.push('<div class="bot-modal-status warn bot-model-notice">The Bitcoin price can’t be checked right now, so credit estimates are hidden. Paid messages will wait until it’s back.</div>');
+        }
+
         if (!q) {
             rows.push(`<button class="bot-model-row${!current ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="">
                 <span class="bot-model-row-main">
@@ -2813,7 +2846,7 @@ Object.assign(NYM.prototype, {
             </button>`);
         }
 
-        const matches = (m) => !q || [m.key, m.label, m.author, m.description]
+        const matches = (m) => !q || [m.key, m.label, m.author, m.description, m.kind === 'chat' ? '' : m.kind]
             .some(v => String(v || '').toLowerCase().includes(q));
 
         let shown = 0;
@@ -2846,10 +2879,88 @@ Object.assign(NYM.prototype, {
             </button>`);
             }
         }
+        shown += this._renderBotGeneratorRows(rows, matches, current);
         if (!shown && q) {
             rows.push(`<div class="bot-model-empty">No model matches “${this.escapeHtml(filter)}”.</div>`);
         }
         list.innerHTML = rows.join('');
+    },
+
+    _renderBotGeneratorRows(rows, matches, current) {
+        const byKey = new Map(this._botGeneratorList().map(m => [m.key, m]));
+        if (!byKey.size) return 0;
+        const groups = this._botGeneratorGroups();
+        const grouped = new Set(groups.flatMap(g => g.keys));
+        const loose = [...byKey.keys()].filter(k => !grouped.has(k));
+        const all = loose.length ? groups.concat([{ author: '', authorSlug: '', keys: loose }]) : groups;
+        const kindWord = { image: 'image', video: 'video' };
+        const out = [];
+        let shown = 0;
+        for (const g of all) {
+            const gens = g.keys.map(k => byKey.get(k)).filter(m => m && matches(m));
+            if (!gens.length) continue;
+            if (g.author) {
+                const marks = window.NymbotBrands;
+                const tile = marks && g.authorSlug ? marks.markup(g.authorSlug, 16) : '';
+                const kind = kindWord[g.kind] ? ` <span class="bot-model-group-kind">${kindWord[g.kind]}</span>` : '';
+                out.push(`<div class="bot-model-group">${tile}<span data-no-i18n>${this.escapeHtml(g.author)}</span>${kind}</div>`);
+            }
+            for (const m of gens) {
+                shown++;
+                out.push(this._botGeneratorRowHtml(m, current));
+            }
+        }
+        if (!shown) return 0;
+        rows.push('<div class="bot-model-section">Generators</div>');
+        rows.push(...out);
+        return shown;
+    },
+
+    _botGeneratorRowHtml(m, current) {
+        const key = this.escapeHtml(m.key);
+        const credits = this._botGeneratorCredits(m.credits);
+        const price = credits === null ? 'price unavailable' : this._creditWord(credits, 'Pro credit');
+        const meta = [price];
+        if (m.needsImage) meta.push(m.kind === 'video' ? 'Animates a picture you send' : 'Edits a picture you send');
+        const tag = current ? '' : ' <span class="bot-model-row-tag">Needs a Pro model</span>';
+        const res = Array.isArray(m.resolutions) ? m.resolutions.filter(r => r && r.res) : [];
+        const def = this._botGeneratorDefaultRes(m);
+        const chips = m.kind === 'video' && res.length > 1
+            ? `<span class="bot-gen-res">${res.map(r => {
+                const sel = r.res === def;
+                const c = this._botGeneratorCredits(r.credits);
+                const label = c === null ? this.escapeHtml(r.res) : `${this.escapeHtml(r.res)} · ${this._creditFigure(c)}`;
+                const aria = c === null ? `${r.res}, price unavailable` : `${r.res}, ${this._creditWord(c, 'Pro credit')}`;
+                return `<button class="bot-gen-res-chip${sel ? ' selected' : ''}" type="button" data-action="botPickGenerator" data-generator="${key}" data-res="${this.escapeHtml(r.res)}" aria-pressed="${sel ? 'true' : 'false'}" aria-label="${this.escapeHtml(aria)}">${label}</button>`;
+            }).join('')}</span>`
+            : '';
+        return `<div class="bot-model-row bot-gen-row">
+                <button class="bot-gen-pick" type="button" data-action="botPickGenerator" data-generator="${key}">
+                    <span class="bot-model-row-main">
+                        <span class="bot-model-row-name"><span data-no-i18n>${this.escapeHtml(m.label)}</span>${tag}</span>
+                        ${m.description ? `<span class="bot-model-row-about" data-no-i18n>${this.escapeHtml(m.description)}</span>` : ''}
+                        <span class="bot-model-row-desc">${this.escapeHtml(meta.join(' · '))}</span>
+                    </span>
+                </button>
+                ${chips}
+            </div>`;
+    },
+
+    _botPickGenerator(key, res) {
+        const g = this._botGeneratorList().find(m => m.key === key);
+        if (!g) return;
+        const base = g.command || `?${g.kind} --model ${String(g.key).split(':').pop()}`;
+        const def = this._botGeneratorDefaultRes(g);
+        const pick = g.kind === 'video' && res && res !== def ? ` --res ${res}` : '';
+        const text = `${base}${pick} `;
+        window.closeModal('botModelModal');
+        const input = document.getElementById('messageInput');
+        if (!input) return;
+        input.value = text;
+        input.focus();
+        input.selectionStart = text.length;
+        if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
+        if (typeof this.handleInputChange === 'function') this.handleInputChange(text);
     },
 
     _botSelectModel(key) {
@@ -3030,6 +3141,10 @@ Object.assign(NYM.prototype, {
                 else this.showBotCreditsModal(null, data.pro ? 'pro' : 'standard');
                 return;
             }
+            if (data && data.priceUnavailable) {
+                this._showBotPriceRetry(content, wrapId);
+                return;
+            }
             if (status >= 400 || !data || data.error) {
                 this.displaySystemMessage('Nymbot: ' + ((data && data.error) || 'request failed'));
                 return;
@@ -3066,6 +3181,26 @@ Object.assign(NYM.prototype, {
             this._setBotTyping(false);
             this.displaySystemMessage('Nymbot is unavailable right now. Please try again.');
         }
+    },
+
+    _showBotPriceRetry(content, wrapId) {
+        if (!this._botPriceRetries) this._botPriceRetries = new Map();
+        const id = 'bpr-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+        this._botPriceRetries.set(id, { content, wrapId });
+        this.displaySystemMessage(
+            `Nymbot can’t check the Bitcoin price right now, so it couldn’t price that message. Nothing was charged. <button class="bot-retry-btn" type="button" data-action="botRetryPM" data-retry-id="${id}">Retry</button>`,
+            'system', { html: true });
+    },
+
+    async _botRetryPM(id) {
+        const entry = this._botPriceRetries && this._botPriceRetries.get(id);
+        if (!entry) return;
+        this._botPriceRetries.delete(id);
+        const btn = typeof document.querySelector === 'function'
+            ? document.querySelector(`[data-retry-id="${id}"]`)
+            : null;
+        if (btn) btn.remove();
+        await this._handleBotPM(entry.content, entry.wrapId);
     },
 
     // Check the user's Nymbot credit balance; optionally show it as a message

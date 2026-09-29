@@ -37,6 +37,8 @@
 import { ledgerCall } from "./_ledger.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
+import { btcPriceGet, btcPriceSane, BtcPriceUnavailable } from "./_btcprice.js";
+import { mediaUsd, mediaRate, mediaTier as mediaResTier, mediaTiers } from "./_mediaprice.js";
 import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams,
   catalogGenerators, catalogMergeGenerators } from "./_catalog.js";
 import {
@@ -627,6 +629,25 @@ var BOT_GENERATOR_DEFAULTS = {
   video: botGeneratorCeiling(BOT_PRO_VIDEO_MODELS)
 };
 
+function botMediaCredits(kind, model, opts, btcUsd) {
+  var usd = mediaUsd(kind, model, opts || {}).usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN;
+  return Math.max(1, Math.ceil(botMilliForUsd(usd, btcUsd, BOT_PRO_SATS_PER_CREDIT) / BOT_MILLI_PER_CREDIT));
+}
+
+function botVideoResolutions(model, btcUsd) {
+  return mediaTiers(model).map(function (t) {
+    return { res: t.res, credits: btcUsd ? botMediaCredits("video", model, { res: t.res }, btcUsd) : null };
+  });
+}
+
+function botVideoPlanBody(videoModel, prompt, imageUrl, res) {
+  var body = botVideoRequestBody(videoModel.family, prompt, imageUrl);
+  var tier = mediaResTier(videoModel, res || "");
+  var rate = mediaRate("video", videoModel);
+  if (tier && rate.field) body[rate.field] = tier.value;
+  return body;
+}
+
 async function botProGenerators(env) {
   var live = null;
   try { live = await catalogGenerators(env); } catch (e) { live = null; }
@@ -637,7 +658,7 @@ async function botProGenerators(env) {
 
 /// The picture and video models as picker rows. Priced flat rather than per
 /// token, so `credits` and `max` are the same number.
-function botGeneratorCatalog(gens) {
+function botGeneratorCatalog(gens, btcUsd) {
   var out = [];
   var add = function (kind, command, table) {
     Object.keys(table).forEach(function (k) {
@@ -650,14 +671,16 @@ function botGeneratorCatalog(gens) {
         // and quietly draws with the default generator instead.
         command: command + " --model " + k,
         label: m.label,
-        credits: m.credits,
-        max: m.credits,
+        credits: btcUsd ? botMediaCredits(kind, m, {}, btcUsd) : m.credits,
+        max: btcUsd ? botMediaCredits(kind, m, {}, btcUsd) : m.credits,
         description: m.description || "",
         author: m.author || BOT_GEN_AUTHORS[slug] || slug,
         authorSlug: slug,
         vision: false, reasoning: false, tools: false, context: null,
         hosting: "third-party", priced: m.priced !== false, kind: kind,
-        needsImage: !!m.needsImage
+        needsImage: !!m.needsImage,
+        resolution: kind === "video" ? botVideoResolutions(m, btcUsd).slice(-1).map(function (r) { return r.res; })[0] : undefined,
+        resolutions: kind === "video" ? botVideoResolutions(m, btcUsd) : undefined
       });
     });
   };
@@ -689,13 +712,17 @@ function botProVideoModel(key, table) {
   return null;
 }
 
-function botProVideoList(table) {
+function botProVideoList(table, btcUsd) {
   var models = table || BOT_PRO_VIDEO_MODELS;
   var out = [];
   for (var k in models) {
     if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
     var m = models[k];
-    out.push(k + " \u2014 " + m.label + " (" + m.credits + " Pro credits"
+    var tiers = botVideoResolutions(m, btcUsd);
+    var top = tiers.length ? tiers[tiers.length - 1] : null;
+    var head = top && top.credits != null ? top.credits + " Pro credits at " + top.res : m.credits + " Pro credits";
+    var also = tiers.length > 1 && top.credits != null ? "; also " + tiers.slice(0, -1).reverse().map(function (r) { return r.res + " " + r.credits; }).join(", ") + " with --res" : "";
+    out.push(k + " \u2014 " + m.label + " (" + head + also
       + (m.priced === false ? ", estimated" : "") + ")"
       + (m.needsImage ? " \u2014 animates a picture you send" : ""));
   }
@@ -708,29 +735,28 @@ function botVideoRequestBody(family, prompt, imageUrl) {
   var body = { prompt: p };
   if (family === "veo") {
     body.aspect_ratio = "16:9";
-    body.resolution = "720p";
+    body.duration = BOT_VIDEO_MAX_SECONDS + "s";
+    body.generate_audio = true;
     if (imageUrl) body.image = imageUrl;
     return body;
   }
   if (family === "seedance") {
     body.duration = BOT_VIDEO_MAX_SECONDS;
-    body.resolution = "720p";
     if (imageUrl) body.image = imageUrl;
     return body;
   }
   if (family === "hailuo" || family === "pixverse" || family === "vidu") {
     body.duration = 6;
+    if (family === "pixverse") body.generate_audio = true;
     if (imageUrl) body.image_url = imageUrl;
     return body;
   }
   if (family === "wan") {
-    body.resolution = "720P";
     body.ratio = "adaptive";
     body.duration = 5;
     return body;
   }
   if (family === "hh") {
-    body.resolution = "720P";
     body.duration = 5;
     if (imageUrl) body.img_url = imageUrl;
     return body;
@@ -738,12 +764,10 @@ function botVideoRequestBody(family, prompt, imageUrl) {
   if (family === "grok") {
     body.aspect_ratio = "16:9";
     body.duration = 5;
-    body.resolution = "720p";
     return body;
   }
   if (family === "runway") {
     body.prompt = p.slice(0, 1000);
-    body.ratio = "1280:720";
     body.duration = 5;
     if (imageUrl) body.image_input = imageUrl;
     return body;
@@ -941,11 +965,11 @@ async function botPollVideoJob(jobUrl) {
     " seconds. Nothing was charged \u2014 try a shorter clip or a faster model (?video models).");
 }
 
-async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubkey) {
+async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubkey, res) {
   if (!proBindingAvailable(env) || !env.AI_GATEWAY_NAME) {
     throw new Error("Video generation needs the AI binding and AI_GATEWAY_NAME configured on the worker.");
   }
-  var body = botVideoRequestBody(videoModel.family, prompt, imageUrl);
+  var body = botVideoPlanBody(videoModel, prompt, imageUrl, res);
   body = botMediaBodyFromParams(body, await botDeclaredMediaParams(env, videoModel.model));
   var result;
   try {
@@ -1496,7 +1520,15 @@ function parseBotMediaCommand(message) {
       rest = (rest.slice(0, flag.index) + " " + rest.slice(flag.index + flag[0].length)).trim();
     }
   }
-  return { kind: kind, prompt: rest, modelKey: modelKey };
+  var res = "";
+  if (kind === "video") {
+    var resFlag = /(?:^|\s)(?:--res|--resolution)[\s=]+("[^"]+"|'[^']+'|\S+)/i.exec(rest);
+    if (resFlag) {
+      res = resFlag[1].replace(/^["']|["']$/g, "");
+      rest = (rest.slice(0, resFlag.index) + " " + rest.slice(resFlag.index + resFlag[0].length)).trim();
+    }
+  }
+  return { kind: kind, prompt: rest, modelKey: modelKey, res: res };
 }
 
 // Asking for a picture or for something read aloud, without knowing the
@@ -1563,31 +1595,24 @@ var BOT_PRICE_MARGIN = 1.5;
 // belongs in the charge rather than quietly in the margin.
 var BOT_UNIFIED_BILLING_FEE = 1.05;
 var BOT_MIN_CHARGE_MILLI = 50;
-var BOT_BTC_FALLBACK_USD = 90000;
-var BOT_BTC_TTL_MS = 600000;
 var BOT_MILLI_PER_CREDIT = 1000;
 
-var botBtcUsd = 0;
-var botBtcAt = 0;
+var botPriceEnv = null;
+
+function botBtcPriceBind(env) {
+  if (env) botPriceEnv = env;
+}
+
+async function botBtcQuote() {
+  return await btcPriceGet(botPriceEnv);
+}
 
 async function botBtcPrice() {
-  var now = Date.now();
-  if (botBtcUsd > 0 && now - botBtcAt < BOT_BTC_TTL_MS) return botBtcUsd;
-  try {
-    var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": BOT_BROWSER_AGENT }
-    });
-    if (resp.ok) {
-      var data = await resp.json();
-      var usd = Number(data && data.USD);
-      if (Number.isFinite(usd) && usd > 1000) {
-        botBtcUsd = usd;
-        botBtcAt = now;
-        return usd;
-      }
-    }
-  } catch (e) { }
-  return botBtcUsd > 0 ? botBtcUsd : BOT_BTC_FALLBACK_USD;
+  return (await botBtcQuote()).usd;
+}
+
+async function botBtcPriceOrNull() {
+  try { return await botBtcQuote(); } catch (e) { return null; }
 }
 
 function botMeteredModel(m) {
@@ -1619,7 +1644,8 @@ function botUsdForUsage(m, usage) {
 }
 
 function botMilliForUsd(usd, btcUsd, satsPerCredit) {
-  var price = Number(btcUsd) > 0 ? Number(btcUsd) : BOT_BTC_FALLBACK_USD;
+  var price = btcPriceSane(btcUsd);
+  if (price == null) throw new BtcPriceUnavailable();
   var per = Number(satsPerCredit) > 0 ? Number(satsPerCredit) : BOT_PRO_SATS_PER_CREDIT;
   var sats = (Number(usd) || 0) / price * 1e8;
   return Math.ceil(sats / per * BOT_MILLI_PER_CREDIT);
@@ -3547,7 +3573,25 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   return { reply: reply, taskType: taskType, sources: pmCitations,
     usage: usage, billedModel: billedModel };
 }
+function botPriceRefusal(e) {
+  return new Response(JSON.stringify({ error: e.message, retryable: true, priceUnavailable: true }), {
+    status: 503,
+    headers: { "Content-Type": "application/json", "Retry-After": "60", ...CLIENT_CORS_HEADERS }
+  });
+}
+
 async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
+  botBtcPriceBind(context && context.env);
+  try {
+    return await handleBotPMActionPriced(context, body, botPrivkey, botPubkey);
+  } catch (e) {
+    if (!(e instanceof BtcPriceUnavailable)) throw e;
+    await botReleaseStrandedTurn(context);
+    return botPriceRefusal(e);
+  }
+}
+
+async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   var env = context.env;
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
@@ -3640,7 +3684,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // The picture and video generators, so the picker can price them too. They
     // are not chat models — picking one writes the command rather than pinning
     // it — which is why they carry a kind and a command.
-    list = list.concat(botGeneratorCatalog(await botProGenerators(env)));
+    var priceQuote = await botBtcPriceOrNull();
+    var btcUsd = priceQuote ? priceQuote.usd : 0;
+    list = list.concat(botGeneratorCatalog(await botProGenerators(env), btcUsd));
     var groups = [];
     list.forEach(function (m) {
       var last = groups[groups.length - 1];
@@ -3648,7 +3694,6 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       else groups.push({ author: m.author || m.authorSlug || "Other", authorSlug: m.authorSlug, kind: m.kind, keys: [m.key] });
     });
     var unpriced = list.filter(function (m) { return !m.priced; }).length;
-    var btcUsd = await botBtcPrice();
     var routes = [];
     var taskNames = Object.keys(BOT_PM_MODELS);
     for (var ti = 0; ti < taskNames.length; ti++) {
@@ -3666,9 +3711,13 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       source: cat.source, models: list, groups: groups, aliases: cat.aliases,
       unpriced: unpriced, satsPerCredit: BOT_PRO_SATS_PER_CREDIT,
       standardRoutes: routes,
-      usdPerCredit: Math.round(BOT_PRO_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6,
-      standardUsdPerCredit: Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6,
-      btcUsd: Math.round(btcUsd),
+      usdPerCredit: btcUsd ? Math.round(BOT_PRO_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
+      standardUsdPerCredit: btcUsd ? Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
+      btcUsd: btcUsd ? Math.round(btcUsd) : null,
+      btcPriceAt: priceQuote ? priceQuote.at : null,
+      btcPriceAgeSec: priceQuote ? Math.round(priceQuote.ageMs / 1000) : null,
+      btcPriceSources: priceQuote ? priceQuote.sources : [],
+      priceUnavailable: !priceQuote,
       minChargeCredits: BOT_MIN_CHARGE_MILLI / BOT_MILLI_PER_CREDIT,
       metered: true,
       satsPerCreditTier: { standard: BOT_SATS_PER_CREDIT, pro: BOT_PRO_SATS_PER_CREDIT },
@@ -4064,6 +4113,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "pm") {
+    var turnBtcUsd = 0;
     var proModelKey = typeof body.proModel === "string" ? body.proModel : "";
     var proModel = null;
     if (proModelKey) {
@@ -4087,8 +4137,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (proModel) {
       var proBase = botProMaxCost(proModel);
       var proLegs = botEffortLevel(body.effort);
+      turnBtcUsd = await botBtcPrice();
       var proMetered = botMeteredReserve(proModel, proLegs,
-        await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT);
+        turnBtcUsd, BOT_PRO_SATS_PER_CREDIT);
       var proRequired = (proMetered != null ? proMetered : proBase * proLegs)
         + botPartSurcharge(botPartsCount(body));
       if (proMetered != null) proBase = Math.max(1, Math.ceil(proMetered / proLegs));
@@ -4502,7 +4553,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (media.kind === "video") {
           listText = mediaTier === "pro"
             ? "Video models — use ?video --model <name> <description>:\n\u2022 "
-              + botProVideoList(gens.video).join("\n\u2022 ")
+              + botProVideoList(gens.video, await botBtcPrice()).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_VIDEO_MODELS[BOT_PRO_VIDEO_DEFAULT].label
               + ". Send a picture in the same message to animate it instead of starting from nothing."
             : "?video needs Nymbot Pro — every video model is provider-hosted, so there is no standard-tier generator. Select one with ?model first.";
@@ -4567,6 +4618,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (!proVideo) {
           return await turnFail({ error: "Unknown video model '" + media.modelKey + "'. Type ?video models to see them." }, 400);
         }
+        if (media.res && mediaTiers(proVideo).length && !mediaResTier(proVideo, media.res)) {
+          return await turnFail({ error: proVideo.label + " does not offer " + media.res + ". It offers " +
+            mediaTiers(proVideo).map(function (t) { return t.res; }).join(", ") +
+            ", and uses the highest when --res is left out." }, 400);
+        }
         if (proVideo.needsImage && !botExtractImageUrls(message).length) {
           return await turnFail({ error: proVideo.label + " animates a picture rather than starting from nothing \u2014 send one in the same message, or pick a text-to-video model (?video models)." }, 400);
         }
@@ -4578,9 +4634,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       } else if (media.kind === "image" && media.modelKey) {
         return await turnFail({ error: "Picking an image model needs Nymbot Pro \u2014 select one with ?model first, or drop --model to use the standard generator." }, 400);
       }
-      var mediaCost = proVideo ? proVideo.credits
-        : (media.kind === "image" && proImage && proImage.credits
-          ? proImage.credits
+      var mediaCost = proVideo
+        ? botMediaCredits("video", proVideo, { body: botVideoPlanBody(proVideo, media.prompt, "", media.res) }, await botBtcPrice())
+        : (media.kind === "image" && proImage
+          ? botMediaCredits("image", proImage, {}, await botBtcPrice())
           : BOT_MEDIA_COSTS[media.kind][mediaTier]);
       var mediaRecord = proModel ? proRecord : record;
       if ((mediaRecord.balance || 0) < mediaCost) {
@@ -4603,7 +4660,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           // wherever the chosen model takes a reference.
           var refImages = botExtractImageUrls(message);
           mediaUrl = await botGenerateVideo(env, media.prompt, proVideo,
-            refImages.length ? refImages[0] : "", botPrivkey, botPubkey);
+            refImages.length ? refImages[0] : "", botPrivkey, botPubkey, media.res);
         } else if (media.kind === "image") {
           mediaUrl = await botGenerateImage(env, media.prompt, mediaTier, botPrivkey, botPubkey, proImage);
         } else {
@@ -4693,8 +4750,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (!proModel && !freeTurn) {
       stdRates = await botStandardRates(env, BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general);
       if (stdRates) {
+        turnBtcUsd = await botBtcPrice();
         var stdReserve = botMeteredReserve(stdRates, 1,
-          await botBtcPrice(), BOT_SATS_PER_CREDIT);
+          turnBtcUsd, BOT_SATS_PER_CREDIT);
         if (stdReserve != null) {
           stdRequired = Math.max(cost, stdReserve + botPartSurcharge(askedIds.length));
         }
@@ -4754,7 +4812,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         ? (await botStandardRates(env, chatResult.billedModel)) || stdRates
         : stdRates;
       var stdMetered = botMeteredCharge(stdBilled, chatResult.usage,
-        await botBtcPrice(), BOT_SATS_PER_CREDIT);
+        turnBtcUsd, BOT_SATS_PER_CREDIT);
       if (stdMetered != null) {
         costMilli = Math.min(
           stdMetered + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT,
@@ -4767,7 +4825,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var outTok = chatResult.outputTokens || Math.ceil(String(reply).length / 4);
       var capMilli = proRequired * BOT_MILLI_PER_CREDIT;
       var metered = landed > 0 && botUsageBilled(chatResult.usage)
-        ? botMeteredCharge(proModel, chatResult.usage, await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT)
+        ? botMeteredCharge(proModel, chatResult.usage, turnBtcUsd, BOT_PRO_SATS_PER_CREDIT)
         : null;
       if (metered != null) {
         costMilli = Math.min(
@@ -4927,6 +4985,7 @@ function canonicalizeBotText(text, alias) {
 // HTTP POST handler
 async function onRequest(context) {
   const { request } = context;
+  botBtcPriceBind(context.env);
 
   // Handle CORS preflight
   if (request.method === "OPTIONS") {
@@ -8064,13 +8123,7 @@ function handleUnits(args) {
 // Bitcoin Price Command
 async function handleBtc() {
   try {
-    var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": BOT_BROWSER_AGENT }
-    });
-    if (!resp.ok) throw new Error("API error");
-    var data = await resp.json();
-    var usd = data.USD;
-    if (!usd) throw new Error("No price data");
+    var usd = (await botBtcQuote()).usd;
     var formatted = usd.toLocaleString("en-US", { maximumFractionDigits: 0 });
     // Also fetch block height for extra context
     var blockResp = await fetch("https://mempool.space/api/blocks/tip/height", {

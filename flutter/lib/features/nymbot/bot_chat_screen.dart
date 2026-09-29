@@ -75,6 +75,7 @@ class BotChatScreen extends ConsumerStatefulWidget {
 
 class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   final _scroll = ScrollController();
+  final _composerKey = GlobalKey<_BotComposerState>();
 
   /// Whether the floating scroll-to-bottom chevron shows (the PWA's
   /// `distanceFromBottom > 150` gate, app.js:7120-7124). In the reversed list
@@ -204,7 +205,19 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
         // open.
         if (_openThread == null)
           const TypingIndicatorRow(storageKey: 'pm-$kNymbotPubkey'),
+        if (state.priceRetry != null)
+          BotPriceRetryBar(
+            colors: c,
+            busy: state.sending,
+            onRetry: () => ref
+                .read(botChatControllerProvider.notifier)
+                .retryPriceUnavailable(),
+            onDismiss: () => ref
+                .read(botChatControllerProvider.notifier)
+                .dismissPriceRetry(),
+          ),
         _BotComposer(
+          key: _composerKey,
           colors: c,
           onSubmit: (content) {
             ref.read(botChatControllerProvider.notifier).sendUserBotPM(content);
@@ -390,6 +403,10 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
           onSelected: (m) {
             ref.read(botChatControllerProvider.notifier).setModelDirect(m);
             Navigator.pop(context);
+          },
+          onGenerator: (text) {
+            Navigator.pop(context);
+            _composerKey.currentState?.fillWith(text);
           },
         ),
       ),
@@ -738,8 +755,65 @@ class _CtrlButtonState extends State<_CtrlButton> {
 // Composer — the PWA `.input-container` chrome (styles-chat.css:1384-1965)
 // =============================================================================
 
+class BotPriceRetryBar extends StatelessWidget {
+  const BotPriceRetryBar({
+    super.key,
+    required this.colors,
+    required this.onRetry,
+    required this.onDismiss,
+    this.busy = false,
+  });
+
+  final NymColors colors;
+  final VoidCallback onRetry;
+  final VoidCallback onDismiss;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+      decoration: BoxDecoration(
+        color: c.warning.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.warning.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.currency_bitcoin, size: 16, color: c.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+                tr('Bitcoin price unavailable. Your message was not charged.'),
+                style: TextStyle(color: c.text, fontSize: 12)),
+          ),
+          TextButton(
+            onPressed: busy ? null : onRetry,
+            style: TextButton.styleFrom(
+              foregroundColor: c.primary,
+              visualDensity: VisualDensity.compact,
+            ),
+            child: Text(tr('Retry')),
+          ),
+          IconButton(
+            tooltip: tr('Close'),
+            visualDensity: VisualDensity.compact,
+            iconSize: 16,
+            color: c.textDim,
+            onPressed: onDismiss,
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BotComposer extends ConsumerStatefulWidget {
   const _BotComposer({
+    super.key,
     required this.colors,
     required this.onSubmit,
   });
@@ -1005,6 +1079,15 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
     // Re-filter so a multi-step command (e.g. `?model `) immediately surfaces its
     // subcommands; a leaf command just hides the palette.
+    _onTextChanged();
+    _focus.requestFocus();
+  }
+
+  void fillWith(String text) {
+    _controller.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
     _onTextChanged();
     _focus.requestFocus();
   }
@@ -2593,6 +2676,11 @@ class _BotTranslateLangRowState extends State<_BotTranslateLangRow> {
 /// can target it rather than whichever Scrollable happens to come first.
 const Key proModelListKey = ValueKey('proModelList');
 
+const Key proPriceUnavailableKey = ValueKey('proPriceUnavailable');
+
+Key generatorResKey(String generatorKey, String res) =>
+    ValueKey('generatorRes:$generatorKey:$res');
+
 class ProModelPickerSheet extends StatefulWidget {
   const ProModelPickerSheet({
     super.key,
@@ -2600,9 +2688,12 @@ class ProModelPickerSheet extends StatefulWidget {
     required this.current,
     required this.onSelected,
     this.catalog,
+    this.onGenerator,
   });
 
   final NymColors colors;
+
+  final ValueChanged<String>? onGenerator;
 
   /// The live catalog. Null (or empty) falls back to the list compiled into
   /// the binary, so the sheet is never blank.
@@ -2642,6 +2733,156 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
         m.description.toLowerCase().contains(q);
   }
 
+  bool _matchesGenerator(ProGenerator g) {
+    if (_query.isEmpty) return true;
+    final q = _query;
+    return g.key.toLowerCase().contains(q) ||
+        g.label.toLowerCase().contains(q) ||
+        g.author.toLowerCase().contains(q) ||
+        g.kind.toLowerCase().contains(q) ||
+        g.description.toLowerCase().contains(q);
+  }
+
+  String? _credits(num? n) {
+    if (_catalog.priceUnavailable || n == null || n <= 0) return null;
+    return creditFigure(n);
+  }
+
+  String _generatorPrice(ProGenerator g) {
+    final n = _credits(g.credits);
+    if (n == null) return tr('price unavailable');
+    return n == '1'
+        ? tr('{n} Pro credit', {'n': n})
+        : tr('{n} Pro credits', {'n': n});
+  }
+
+  String _resolutionLabel(GeneratorResolution r) {
+    final n = _credits(r.credits);
+    if (n == null) return r.res;
+    return n == '1'
+        ? tr('{res} · {n} credit', {'res': r.res, 'n': n})
+        : tr('{res} · {n} credits', {'res': r.res, 'n': n});
+  }
+
+  Widget _groupHeader(String label, NymColors c) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+        child: Text(label.toUpperCase(),
+            style: TextStyle(
+                color: c.textDim,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.6)),
+      );
+
+  Widget _priceNotice(NymColors c) => Container(
+        key: proPriceUnavailableKey,
+        margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: c.warning.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: c.warning.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.info_outline, size: 16, color: c.warning),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                  tr("The Bitcoin price can't be checked right now, so credit "
+                      'estimates are hidden. Paid messages will wait until '
+                      "it's back."),
+                  style: TextStyle(color: c.text, fontSize: 12)),
+            ),
+          ],
+        ),
+      );
+
+  Widget _generatorTile(ProGenerator g, NymColors c, bool hasPro) {
+    final insert = widget.onGenerator;
+    final chips = g.isVideo && g.resolutions.length > 1;
+    return ListTile(
+      leading: g.authorSlug.isEmpty
+          ? Icon(g.isVideo ? Icons.movie_outlined : Icons.image_outlined,
+              color: c.primary)
+          : BrandTile(slug: g.authorSlug, size: 24),
+      title: Text(g.label, style: TextStyle(color: c.text)),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (g.description.isNotEmpty)
+            Text(g.description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: c.text.withValues(alpha: 0.75), fontSize: 11)),
+          Text(
+              [
+                g.isVideo ? tr('video') : tr('image'),
+                _generatorPrice(g),
+              ].join(' · '),
+              style: TextStyle(color: c.lightning, fontSize: 11)),
+          if (g.needsImage)
+            Text(
+                g.isVideo
+                    ? tr('Animates a picture you send')
+                    : tr('Edits a picture you send'),
+                style: TextStyle(color: c.textDim, fontSize: 11)),
+          if (!hasPro)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: c.warning.withValues(alpha: 0.5)),
+                ),
+                child: Text(tr('Needs a Pro model'),
+                    style: TextStyle(color: c.warning, fontSize: 10)),
+              ),
+            ),
+          if (chips)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final r in g.resolutions)
+                    ChoiceChip(
+                      key: generatorResKey(g.key, r.res),
+                      label: Text(_resolutionLabel(r)),
+                      labelStyle: TextStyle(
+                          color: r.res == g.resolution ? c.primary : c.text,
+                          fontSize: 11),
+                      selected: r.res == g.resolution,
+                      showCheckmark: false,
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize:
+                          MaterialTapTargetSize.shrinkWrap,
+                      backgroundColor: c.bgTertiary,
+                      selectedColor: c.primary.withValues(alpha: 0.16),
+                      side: BorderSide(
+                          color: r.res == g.resolution
+                              ? c.primary.withValues(alpha: 0.6)
+                              : c.border),
+                      onSelected: insert == null
+                          ? null
+                          : (_) => insert(g.insertText(r.res)),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+      isThreeLine: true,
+      onTap: insert == null ? null : () => insert(g.insertText()),
+    );
+  }
+
   /// "vision · reasoning · tools · cloudflare" — only the flags the catalog
   /// actually set. Cloudflare-hosted weights run on the worker's AI binding,
   /// with no gateway hop and no upstream provider to reject the call, which is
@@ -2677,21 +2918,13 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
       rows.add(Divider(height: 1, color: c.border));
     }
 
+    if (_catalog.priceUnavailable) rows.insert(0, _priceNotice(c));
+
     var shown = 0;
     for (final g in groups) {
       final models = g.value.where(_matches).toList();
       if (models.isEmpty) continue;
-      if (g.key.isNotEmpty) {
-        rows.add(Padding(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
-          child: Text(g.key.toUpperCase(),
-              style: TextStyle(
-                  color: c.textDim,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.6)),
-        ));
-      }
+      if (g.key.isNotEmpty) rows.add(_groupHeader(g.key, c));
       for (final m in models) {
         shown++;
         final tags = _tagLine(m);
@@ -2711,8 +2944,11 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         color: c.text.withValues(alpha: 0.75), fontSize: 11)),
-              Text(m.turnLabel(_catalog.usdPerCredit, _catalog.minChargeCredits),
-                  style: TextStyle(color: c.lightning, fontSize: 11)),
+              if (!_catalog.priceUnavailable)
+                Text(
+                    m.turnLabel(
+                        _catalog.usdPerCredit, _catalog.minChargeCredits),
+                    style: TextStyle(color: c.lightning, fontSize: 11)),
               if (rates != null || tags.isNotEmpty)
                 Text(
                     [if (rates != null) rates, if (tags.isNotEmpty) tags]
@@ -2726,6 +2962,36 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
           onTap: () => widget.onSelected(m),
         ));
       }
+    }
+
+    final generatorRows = <Widget>[];
+    for (final g in _catalog.groupedGenerators()) {
+      final gens = g.value.where(_matchesGenerator).toList();
+      if (gens.isEmpty) continue;
+      if (g.key.isNotEmpty) generatorRows.add(_groupHeader(g.key, c));
+      for (final gen in gens) {
+        shown++;
+        generatorRows.add(_generatorTile(gen, c, current != null));
+      }
+    }
+    if (generatorRows.isNotEmpty) {
+      rows.add(Divider(height: 1, color: c.border));
+      rows.add(Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 2),
+        child: Text(tr('Generators'),
+            style: TextStyle(
+                color: c.textBright,
+                fontSize: 14,
+                fontWeight: FontWeight.w600)),
+      ));
+      rows.add(Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+        child: Text(
+            tr('Images and videos. Picking one fills in the command; your '
+                'chat model stays the same.'),
+            style: TextStyle(color: c.textDim, fontSize: 11)),
+      ));
+      rows.addAll(generatorRows);
     }
 
     if (shown == 0) {

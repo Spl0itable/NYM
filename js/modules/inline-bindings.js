@@ -430,6 +430,8 @@ window.nymHapticTap = function (ms) {
         'botSetTier':                 function (_e, t) { nym().botSetTier(t.dataset.tier); },
         'openBotModelModal':          function () { nym().openBotModelModal(); },
         'botSelectModel':             function (_e, t) { nym()._botSelectModel(t.dataset.model || ''); },
+        'botPickGenerator':           function (_e, t) { nym()._botPickGenerator(t.dataset.generator || '', t.dataset.res || ''); },
+        'botRetryPM':                 function (_e, t) { nym()._botRetryPM(t.dataset.retryId || ''); },
         'openBotCreditsModal':        function () { nym().openBotCreditsModal(); },
         'openBotAnonModal':           function () { nym().openBotAnonModal(); },
         'botAnonToggle':              function (_e, t) { nym().botAnonToggleFromModal(t.checked); },

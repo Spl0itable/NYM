@@ -142,6 +142,22 @@ final botAnonRequestProvider =
 // Private bot-chat engine state
 // =============================================================================
 
+const String kBotPriceUnavailableText =
+    "Nymbot can't check the Bitcoin price right now, so it couldn't price "
+    'this message. Nothing was charged. Tap Retry to send it again once the '
+    'price is back.';
+
+String botSendErrorText(NymbotException e) => e.priceUnavailable
+    ? kBotPriceUnavailableText
+    : 'Nymbot: ${BotChatController._errorDetail(e) ?? 'request failed'}';
+
+class BotPriceRetry {
+  const BotPriceRetry({required this.message, this.wrapId});
+
+  final Message message;
+  final String? wrapId;
+}
+
 /// Immutable snapshot of the private Nymbot chat controls. The conversation
 /// itself lives in the canonical PM store (`AppState.messages['pm-<bot>']`).
 class BotChatState {
@@ -155,7 +171,10 @@ class BotChatState {
     this.infoMessages = const <Message>[],
     this.anonEnabled = false,
     this.anonPubkey,
+    this.priceRetry,
   });
+
+  final BotPriceRetry? priceRetry;
 
   /// The pinned Pro model (`?model <name>`), or null for standard routing.
   final ProModel? proModel;
@@ -202,6 +221,7 @@ class BotChatState {
     List<Message>? infoMessages,
     bool? anonEnabled,
     Object? anonPubkey = _sentinel,
+    Object? priceRetry = _sentinel,
   }) =>
       BotChatState(
         proModel: identical(proModel, _sentinel)
@@ -217,6 +237,9 @@ class BotChatState {
         anonPubkey: identical(anonPubkey, _sentinel)
             ? this.anonPubkey
             : anonPubkey as String?,
+        priceRetry: identical(priceRetry, _sentinel)
+            ? this.priceRetry
+            : priceRetry as BotPriceRetry?,
       );
 
   static const _sentinel = Object();
@@ -1165,7 +1188,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       return;
     }
     _setBotTyping(true);
-    state = state.copyWith(sending: true);
+    state = state.copyWith(sending: true, priceRetry: null);
     try {
       // A leading `!` marks a one-off "fresh" message that ignores history
       // (pms.js:2450 `isFresh`); the published wrap keeps the full text.
@@ -1277,13 +1300,28 @@ class BotChatController extends StateNotifier<BotChatState> {
       _markBotPMReceipts('read');
       // `status >= 400 || data.error` → 'Nymbot: <error|request failed>'
       // (pms.js:2484-2487).
-      _system('Nymbot: ${_errorDetail(e) ?? 'request failed'}');
+      if (e.priceUnavailable && mounted) {
+        state = state.copyWith(
+            priceRetry: BotPriceRetry(message: m, wrapId: wrapId));
+      }
+      _system(botSendErrorText(e));
     } catch (_) {
       _setBotTyping(false);
       _system('Nymbot is unavailable right now. Please try again.');
     } finally {
       if (mounted) state = state.copyWith(sending: false);
     }
+  }
+
+  Future<void> retryPriceUnavailable() async {
+    final retry = state.priceRetry;
+    if (retry == null || state.sending) return;
+    state = state.copyWith(priceRetry: null);
+    await _runBotExchange(retry.message, wrapId: retry.wrapId);
+  }
+
+  void dismissPriceRetry() {
+    if (state.priceRetry != null) state = state.copyWith(priceRetry: null);
   }
 
   /// The worker `error` string carried in a [NymbotException] body (the PWA's

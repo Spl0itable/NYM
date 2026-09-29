@@ -613,6 +613,17 @@ class NymbotException implements Exception {
   final int? statusCode;
   final String? body;
 
+  bool get priceUnavailable {
+    final raw = body;
+    if (statusCode != 503 || raw == null || raw.isEmpty) return false;
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map && decoded['priceUnavailable'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   String toString() => 'NymbotException: $message';
 }

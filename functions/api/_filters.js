@@ -1,7 +1,8 @@
 import { getEventHash, schnorr } from './_shared.js';
-import { hasD1, replica } from './_d1.js';
+import { hasD1, replica, edgeCacheGet, edgeCachePut } from './_d1.js';
 
 const REFRESH_MS = 60000;
+const NOPE_CACHE_KEY = "nope";
 const HEX64 = /^[0-9a-f]{64}$/;
 const REPORT_TARGET_JSON_MAX = 16384;
 
@@ -30,22 +31,30 @@ function emptySet() {
 let cache = emptySet();
 let loading = null;
 
+async function readRows(db) {
+  const hit = await edgeCacheGet(NOPE_CACHE_KEY);
+  if (Array.isArray(hit)) return hit;
+  let rs;
+  try {
+    rs = await replica(db).prepare("SELECT kind, value, mode, expires_at FROM nope").all();
+  } catch (e) {
+    for (const ddl of NOPE_DDL) { try { await db.prepare(ddl).run(); } catch (_) { } }
+    rs = await db.prepare("SELECT kind, value, mode, expires_at FROM nope").all();
+  }
+  const rows = ((rs && rs.results) || []).map((r) => ({ kind: r.kind, value: r.value, mode: r.mode, expires_at: r.expires_at }));
+  await edgeCachePut(NOPE_CACHE_KEY, rows, REFRESH_MS / 1000);
+  return rows;
+}
+
 async function readSet(env) {
   const db = env && env.DB_NOPE;
   const out = emptySet();
   out.at = Date.now();
   if (!hasD1(db)) return out;
-  let rs;
-  try {
-    rs = await replica(db).prepare("SELECT kind, value, mode, expires_at FROM nope").all();
-  } catch (e) {
-    try {
-      for (const ddl of NOPE_DDL) { try { await db.prepare(ddl).run(); } catch (_) { } }
-      rs = await db.prepare("SELECT kind, value, mode, expires_at FROM nope").all();
-    } catch (e2) { return out; }
-  }
+  let rows;
+  try { rows = await readRows(db); } catch (e) { return out; }
   const now = Date.now();
-  for (const r of (rs && rs.results) || []) {
+  for (const r of rows) {
     if (r.expires_at && r.expires_at > 0 && r.expires_at < now) continue;
     const v = String(r.value || "").trim().toLowerCase();
     if (!v) continue;

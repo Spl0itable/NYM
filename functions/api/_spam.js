@@ -1,4 +1,4 @@
-import { hasD1, replica } from './_d1.js';
+import { hasD1, replica, edgeCacheGet, edgeCachePut, edgeCacheDelete } from './_d1.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 import { cacheRateTake } from './_shared.js';
 
@@ -32,10 +32,22 @@ export const SPAM_DDL = [
   "CREATE INDEX IF NOT EXISTS spam_events_label ON spam_events (label, seen_at)",
   "CREATE TABLE IF NOT EXISTS spam_domains (id TEXT NOT NULL, domain TEXT NOT NULL, pubkey TEXT NOT NULL, verdict TEXT NOT NULL, " +
   "seen_at INTEGER NOT NULL, PRIMARY KEY (id, domain))",
-  "CREATE INDEX IF NOT EXISTS spam_domains_domain ON spam_domains (domain, seen_at)"
+  "CREATE INDEX IF NOT EXISTS spam_domains_domain ON spam_domains (domain, seen_at)",
+  "CREATE TABLE IF NOT EXISTS spam_hidden (id TEXT PRIMARY KEY, channel TEXT, seen_at INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS spam_hidden_channel ON spam_hidden (channel, seen_at)",
+  "CREATE INDEX IF NOT EXISTS spam_hidden_seen ON spam_hidden (seen_at)",
+  "CREATE INDEX IF NOT EXISTS spam_domains_seen ON spam_domains (seen_at)",
+  "CREATE INDEX IF NOT EXISTS spam_events_channel ON spam_events (channel, seen_at)",
+  "INSERT OR IGNORE INTO spam_hidden (id, channel, seen_at) SELECT id, channel, seen_at FROM spam_events WHERE action LIKE '%event-hidden%'"
 ];
 
+export const SPAM_SCHEMA_VERSION = 1;
+const SPAM_SCHEMA_KEY = "schema:worker";
+
 export const SPAM_SETTINGS_KEY = "settings";
+export const SPAM_RESTORED_KEY = "restored";
+const RESTORED_MAX = 500;
+const RESTORED_WINDOW_MS = 7 * 86400000;
 export const SPAM_ACTOR = "ai-spam";
 export const DEFAULT_SPAM_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
 const NO_THINK_SUFFIX = "\n\n/no_think";
@@ -203,6 +215,18 @@ const RHYTHM_MAX_GAP_MS = 3600000;
 const DOMAIN_WINDOW_MS = 7 * 86400000;
 const DOMAIN_MAX = 5;
 const EXAMPLES_TTL_MS = 5 * 60000;
+const EXAMPLES_CACHE_KEY = "examples";
+const EXAMPLES_CACHE_S = 300;
+const SETTINGS_CACHE_KEY = "settings";
+const SETTINGS_CACHE_S = 60;
+const DOMAIN_CACHE_S = 60;
+const RECORD_CACHE_S = 60;
+const HIDDEN_SINCE_CACHE_S = 30;
+const ARCHIVE_COUNT_CAP = 200;
+const NYM_RANGE_END = "\u{10FFFF}";
+const HIDE_SYNC_SQL = "INSERT OR IGNORE INTO spam_hidden (id, channel, seen_at) SELECT id, channel, seen_at FROM spam_events WHERE id = ? AND action LIKE '%event-hidden%'";
+const UNHIDE_SYNC_SQL = "DELETE FROM spam_hidden WHERE id = ? AND NOT EXISTS (SELECT 1 FROM spam_events WHERE id = ? AND action LIKE '%event-hidden%')";
+const UNRESTORE_SQL = "UPDATE spam_config SET value = (SELECT COALESCE(json_group_array(json(j.value)), '[]') FROM json_each(spam_config.value) j WHERE json_extract(j.value, '$.id') != ?) WHERE key = ? AND value LIKE ?";
 const EXAMPLES_PER_SIDE = 6;
 const EXAMPLES_WINDOW_MS = 7 * 86400000;
 const LABELS_WINDOW_MS = 30 * 86400000;
@@ -472,7 +496,7 @@ export function buildSpamPrompt(job, dossier) {
   const act = dossier.activity;
   if (!act) lines.push("unknown");
   else {
-    lines.push("messages in the last 15 min: " + act.n15 + " across " + act.ch15 + " channel" + (act.ch15 === 1 ? "" : "s") + "; in the last hour: " + act.n60 + "; archived messages on record: " + act.archived);
+    lines.push("messages in the last 15 min: " + act.n15 + " across " + act.ch15 + " channel" + (act.ch15 === 1 ? "" : "s") + "; in the last hour: " + act.n60 + "; archived messages on record: " + (act.archived >= ARCHIVE_COUNT_CAP ? ARCHIVE_COUNT_CAP + "+" : act.archived));
     lines.push(act.firstSeen ? "first seen: " + when(act.firstSeen) + " (" + agoText(job.seenAt - act.firstSeen) + " before this message)" : "first seen: never before this message");
     const rh = act.rhythm;
     if (!rh || rh.regularity === "unknown") lines.push("posting rhythm: too few messages to tell");
@@ -673,14 +697,18 @@ const state = {
   settingsAt: 0,
   settingsLoading: null,
   schemaReady: false,
+  schemaLoading: null,
   seen: new Map(),
   exact: new Map(),
   muted: new Map(),
   hidden: new Set(),
   dropped: new Map(),
+  restored: new Map(),
+  restoredValue: null,
   pending: new Map(),
   velocity: new Map(),
   examples: null,
+  examplesLoading: null,
   queue: [],
   running: 0,
   generation: 0,
@@ -698,11 +726,12 @@ const state = {
 };
 
 export function _resetSpamState() {
-  state.settings = null; state.settingsAt = 0; state.settingsLoading = null; state.schemaReady = false;
+  state.settings = null; state.settingsAt = 0; state.settingsLoading = null; state.schemaReady = false; state.schemaLoading = null;
   state.seen.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear(); state.dropped.clear();
+  state.restored.clear(); state.restoredValue = null;
   for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
   state.pending.clear();
-  state.velocity.clear(); state.examples = null;
+  state.velocity.clear(); state.examples = null; state.examplesLoading = null;
   state.queue = []; state.running = 0; state.slotWaiters = []; state.generation++; state.budgetMinute = 0; state.budgetUsed = 0;
   state.dossierMinute = 0; state.dossierUsed = 0;
   state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0; state.cooldownUntil = 0;
@@ -711,7 +740,13 @@ export function _resetSpamState() {
   badgeAuthority = undefined;
 }
 
-export function _dropExamplesCache() { state.examples = null; }
+function dropExamples() {
+  state.examples = null;
+  state.examplesLoading = null;
+  return edgeCacheDelete(EXAMPLES_CACHE_KEY);
+}
+
+export function _dropExamplesCache() { return dropExamples(); }
 
 export function noteVelocity(pubkey, now) {
   let arr = state.velocity.get(pubkey);
@@ -731,6 +766,30 @@ export function isCoolingDown(now) {
 }
 
 export function isSpamHidden(id) { return state.hidden.has(id); }
+
+export function _expireSpamSettings() { state.settingsAt = 0; }
+
+function applyRestored(value) {
+  state.restoredValue = value || null;
+  let list = [];
+  try { list = value ? JSON.parse(value) : []; } catch (_) { list = []; }
+  const since = Date.now() - RESTORED_WINDOW_MS;
+  const next = new Map();
+  for (const x of Array.isArray(list) ? list.slice(0, RESTORED_MAX) : []) {
+    const id = x && typeof x.id === "string" ? x.id.toLowerCase() : "";
+    if (!HEX64.test(id) || !(Number(x.at) > since)) continue;
+    next.set(id, Number(x.at));
+    state.hidden.delete(id);
+    state.dropped.delete(id);
+  }
+  state.restored = next;
+}
+
+function withoutRestored(ids) {
+  if (!state.restored.size) return ids;
+  for (const id of ids) if (state.restored.has(id)) ids.delete(id);
+  return ids;
+}
 
 function noteDropped(id) {
   state.dropped.set(id, 1);
@@ -795,40 +854,109 @@ export function spamCounters() { return Object.assign({}, state.counters); }
 
 const HIDDEN_LOOKUP_CHUNK = 80;
 const HIDDEN_SINCE_MAX = 5000;
+const HIDDEN_SINCE_BUCKET_MS = 30000;
 
 export async function hiddenEventIds(env, ids) {
   const out = new Set();
   const list = Array.from(new Set((ids || []).filter((id) => typeof id === "string" && id)));
   for (const id of list) if (state.hidden.has(id)) out.add(id);
   const db = env && env.DB_NOPE;
-  if (!hasD1(db) || !list.length) return out;
+  if (!hasD1(db) || !list.length) return withoutRestored(out);
+  await syncedSettings(env);
+  const r = replica(db);
   for (let i = 0; i < list.length; i += HIDDEN_LOOKUP_CHUNK) {
     const chunk = list.slice(i, i + HIDDEN_LOOKUP_CHUNK);
+    const ph = chunk.map(() => "?").join(", ");
+    let rs = null;
     try {
-      const rs = await db.prepare("SELECT id FROM spam_events WHERE id IN (" + chunk.map(() => "?").join(", ") + ") AND action LIKE '%event-hidden%'").bind(...chunk).all();
-      for (const row of (rs && rs.results) || []) out.add(row.id);
-    } catch (_) { }
+      rs = await r.prepare("SELECT id FROM spam_hidden WHERE id IN (" + ph + ")").bind(...chunk).all();
+    } catch (_) {
+      try { rs = await r.prepare("SELECT id FROM spam_events WHERE id IN (" + ph + ") AND action LIKE '%event-hidden%'").bind(...chunk).all(); } catch (_) { rs = null; }
+    }
+    for (const row of (rs && rs.results) || []) out.add(row.id);
   }
-  return out;
+  return withoutRestored(out);
 }
 
 export async function hiddenEventIdsSince(env, channels, sinceMs) {
   const out = new Set();
   const db = env && env.DB_NOPE;
-  const list = Array.isArray(channels) ? Array.from(new Set(channels.filter((c) => typeof c === "string" && c))).slice(0, 50) : [];
+  const list = Array.isArray(channels) ? Array.from(new Set(channels.filter((c) => typeof c === "string" && c))).slice(0, 50).sort() : [];
   if (!hasD1(db) || !list.length) return out;
+  await syncedSettings(env);
+  const bucket = Math.floor((Number(sinceMs) || 0) / HIDDEN_SINCE_BUCKET_MS);
+  const from = bucket * HIDDEN_SINCE_BUCKET_MS;
+  const key = "hidden-since/" + bucket + "/" + list.map(encodeURIComponent).join(",");
+  const hit = await edgeCacheGet(key);
+  if (Array.isArray(hit)) {
+    for (const id of hit) if (typeof id === "string") out.add(id);
+    return withoutRestored(out);
+  }
+  const r = replica(db);
+  const ph = list.map(() => "?").join(", ");
+  let rs = null;
   try {
-    const rs = await db.prepare("SELECT id FROM spam_events WHERE channel IN (" + list.map(() => "?").join(", ") + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
-      .bind(...list, Number(sinceMs) || 0).all();
-    for (const row of (rs && rs.results) || []) out.add(row.id);
+    rs = await r.prepare("SELECT id FROM spam_hidden WHERE channel IN (" + ph + ") AND seen_at > ? ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
+      .bind(...list, from).all();
+  } catch (_) {
+    try {
+      rs = await r.prepare("SELECT id FROM spam_events WHERE channel IN (" + ph + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
+        .bind(...list, from).all();
+    } catch (_) { return out; }
+  }
+  for (const row of (rs && rs.results) || []) out.add(row.id);
+  await edgeCachePut(key, Array.from(out), HIDDEN_SINCE_CACHE_S);
+  return withoutRestored(out);
+}
+
+async function migrateSchema(db) {
+  try {
+    const row = await replica(db).prepare("SELECT value FROM spam_config WHERE key = ?").bind(SPAM_SCHEMA_KEY).first();
+    if (row && Number(row.value) >= SPAM_SCHEMA_VERSION) { state.schemaReady = true; return; }
   } catch (_) { }
-  return out;
+  for (const ddl of SPAM_DDL) { try { await db.prepare(ddl).run(); } catch (_) { } }
+  try {
+    await db.prepare("INSERT INTO spam_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value " +
+      "WHERE CAST(spam_config.value AS INTEGER) < CAST(excluded.value AS INTEGER)").bind(SPAM_SCHEMA_KEY, String(SPAM_SCHEMA_VERSION)).run();
+  } catch (_) { }
+  state.schemaReady = true;
 }
 
 async function ensureSchema(db) {
   if (state.schemaReady) return;
-  for (const ddl of SPAM_DDL) { try { await db.prepare(ddl).run(); } catch (_) { } }
-  state.schemaReady = true;
+  if (!state.schemaLoading) {
+    const p = migrateSchema(db);
+    state.schemaLoading = p;
+    p.then(() => { if (state.schemaLoading === p) state.schemaLoading = null; });
+  }
+  await state.schemaLoading;
+}
+
+export const _ensureSchema = ensureSchema;
+
+const CONFIG_ROWS_SQL = "SELECT key, value FROM spam_config WHERE key IN (?, ?)";
+
+function configFrom(rs) {
+  const out = { value: null, restored: null };
+  for (const row of (rs && rs.results) || []) {
+    if (row.key === SPAM_SETTINGS_KEY) out.value = row.value || null;
+    else if (row.key === SPAM_RESTORED_KEY) out.restored = row.value || null;
+  }
+  return out;
+}
+
+async function configRows(db) {
+  try {
+    return configFrom(await replica(db).prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY).all());
+  } catch (e) {
+    await ensureSchema(db);
+    return configFrom(await db.prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY).all());
+  }
+}
+
+function settingsFrom(value, base) {
+  if (!value) return base;
+  try { return normalizeSpamSettings(JSON.parse(value), base); } catch (e) { return base; }
 }
 
 export async function readSpamSettings(env) {
@@ -836,16 +964,22 @@ export async function readSpamSettings(env) {
   const db = env && env.DB_NOPE;
   if (!hasD1(db)) return base;
   try {
-    let row;
-    try {
-      row = await replica(db).prepare("SELECT value FROM spam_config WHERE key = ?").bind(SPAM_SETTINGS_KEY).first();
-    } catch (e) {
-      await ensureSchema(db);
-      row = await db.prepare("SELECT value FROM spam_config WHERE key = ?").bind(SPAM_SETTINGS_KEY).first();
-    }
-    if (!row || !row.value) return base;
-    return normalizeSpamSettings(JSON.parse(row.value), base);
+    const rows = await configRows(db);
+    return settingsFrom(rows.value, base);
   } catch (e) { return base; }
+}
+
+async function loadSpamSettings(env) {
+  const base = defaultSpamSettings(env);
+  const db = env && env.DB_NOPE;
+  if (!hasD1(db)) return { settings: base };
+  const hit = await edgeCacheGet(SETTINGS_CACHE_KEY);
+  if (hit && typeof hit === "object" && "value" in hit) return { settings: settingsFrom(hit.value, base), restored: hit.restored };
+  try {
+    const rows = await configRows(db);
+    await edgeCachePut(SETTINGS_CACHE_KEY, { value: rows.value, restored: rows.restored }, SETTINGS_CACHE_S);
+    return { settings: settingsFrom(rows.value, base), restored: rows.restored };
+  } catch (e) { return { settings: base }; }
 }
 
 export async function writeSpamSettings(env, settings) {
@@ -855,12 +989,25 @@ export async function writeSpamSettings(env, settings) {
     .bind(SPAM_SETTINGS_KEY, JSON.stringify(settings)).run();
   state.settings = settings;
   state.settingsAt = Date.now();
+  await edgeCachePut(SETTINGS_CACHE_KEY, { value: JSON.stringify(settings), restored: state.restoredValue }, SETTINGS_CACHE_S);
+}
+
+async function syncedSettings(env) {
+  if (state.settings && Date.now() - state.settingsAt < SETTINGS_REFRESH_MS) return state.settings;
+  settingsSync(env);
+  if (state.settingsLoading) await state.settingsLoading;
+  return state.settings || defaultSpamSettings(env);
 }
 
 function settingsSync(env) {
   const now = Date.now();
   if (now - state.settingsAt >= SETTINGS_REFRESH_MS && !state.settingsLoading) {
-    state.settingsLoading = readSpamSettings(env).then((s) => { state.settings = s; state.settingsAt = Date.now(); state.settingsLoading = null; },
+    state.settingsLoading = loadSpamSettings(env).then((s) => {
+      state.settings = s.settings;
+      if (s.restored !== undefined) applyRestored(s.restored);
+      state.settingsAt = Date.now();
+      state.settingsLoading = null;
+    },
       () => { state.settingsLoading = null; state.settingsAt = Date.now(); });
   }
   return state.settings;
@@ -984,6 +1131,25 @@ function cleanHistory(rec) {
   return !!(rec && Number(rec.ham) > 0 && !(Number(rec.spam) > 0) && !(Number(rec.strikes) > 0));
 }
 
+async function loadRecord(r, pubkey) {
+  const key = "pubkey/" + pubkey;
+  const hit = await edgeCacheGet(key);
+  if (hit && typeof hit === "object" && "rec" in hit) return hit.rec || null;
+  let rec = null;
+  try {
+    rec = await r.prepare("SELECT * FROM spam_pubkeys WHERE pubkey = ?").bind(pubkey).first();
+  } catch (e) { return null; }
+  await edgeCachePut(key, { rec: rec || null }, RECORD_CACHE_S);
+  return rec || null;
+}
+
+async function rowsOf(query) {
+  try {
+    const rs = await query();
+    return (rs && rs.results) || [];
+  } catch (e) { return null; }
+}
+
 async function loadDossier(env, job, settings, opts) {
   const db = env.DB_NOPE;
   const r = replica(db);
@@ -998,64 +1164,63 @@ async function loadDossier(env, job, settings, opts) {
     try {
       out.self = await r.prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(job.id).first();
     } catch (e) { out.self = null; }
+    if (out.self) return out;
   }
-  try {
-    out.record = await r.prepare("SELECT * FROM spam_pubkeys WHERE pubkey = ?").bind(job.pubkey).first();
-  } catch (e) { out.record = null; }
-  out.cleanHistory = cleanHistory(out.record);
-  if (!light) {
-    try {
-      const rs = await r.prepare("SELECT channel, nym, content, verdict, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8")
-        .bind(job.pubkey, job.id).all();
-      out.recent = (rs && rs.results) || [];
-    } catch (e) { out.recent = []; }
-  }
+  let similarQuery = null;
   if (job.fp.simKey) {
     const b = job.fp.bands;
     const clauses = ["sim_key = ?"];
     const binds = [job.fp.simKey];
     for (let i = 0; i < 4; i++) if (b[i] != null) { clauses.push("b" + i + " = ?"); binds.push(b[i]); }
-    try {
-      const rs = await r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, sim_key, label, labeled_by FROM spam_events WHERE (" + clauses.join(" OR ") +
-        ") AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) AND id != ? ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince, job.id).all();
-      const rows = (rs && rs.results) || [];
-      const pks = new Set();
-      const spamPks = new Set();
-      for (const row of rows) {
-        pks.add(row.pubkey);
-        const earlier = Number(row.seen_at) <= posted;
-        if (verdictOf(row) === "spam" && earlier) { out.similarSpam++; spamPks.add(row.pubkey); }
-        if (row.label === "spam") out.similarLabelledSpam++;
-        if (!out.labelledOk && row.label === "ok" && row.sim_key === job.fp.simKey) out.labelledOk = row;
-        if (reusable && earlier && !out.exact && row.sim_key === job.fp.simKey && verdictOf(row) === "spam" && (row.label === "spam" || Number(row.confidence) >= settings.minConfidence) && row.pubkey !== job.pubkey) out.exact = row;
-      }
-      out.similar = rows;
-      out.similarPubkeys = pks.size;
-      out.similarSpamPubkeys = spamPks.size;
-      if (out.labelledOk) { out.exact = null; state.exact.delete(job.fp.simKey); }
-      if (out.cleanHistory) out.exact = null;
-    } catch (e) { out.similar = []; }
+    similarQuery = () => r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, sim_key, label, labeled_by FROM spam_events WHERE (" + clauses.join(" OR ") +
+      ") AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) AND id != ? ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince, job.id).all();
   }
+  let nymQuery = null;
   if (job.nymKey && !light) {
     const stem = nymStem(job.nymKey);
-    const clauses = ["nym_key = ?"];
-    const binds = [job.nymKey];
-    if (stem) { clauses.push("nym_key LIKE ?"); binds.push(stem + "%"); }
-    try {
-      const rs = await r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, label FROM spam_events WHERE (" + clauses.join(" OR ") +
-        ") AND pubkey != ? AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) ORDER BY seen_at DESC LIMIT 30").bind(...binds, job.pubkey, since, labelSince).all();
-      const rows = (rs && rs.results) || [];
-      const pks = new Set();
-      const spamPks = new Set();
-      for (const row of rows) {
-        pks.add(row.pubkey);
-        if (verdictOf(row) === "spam") { out.nymSpam++; spamPks.add(row.pubkey); }
-        if (row.label === "spam") out.nymLabelledSpam++;
-      }
-      out.nymMatches = rows;
-      out.nymPubkeys = pks.size;
-      out.nymSpamPubkeys = spamPks.size;
-    } catch (e) { out.nymMatches = []; }
+    const match = stem ? "nym_key >= ? AND nym_key < ?" : "nym_key = ?";
+    const binds = stem ? [stem, stem + NYM_RANGE_END] : [job.nymKey];
+    nymQuery = () => r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, label FROM spam_events WHERE " + match +
+      " AND pubkey != ? AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) ORDER BY seen_at DESC LIMIT 30").bind(...binds, job.pubkey, since, labelSince).all();
+  }
+  const [record, recent, similar, nyms] = await Promise.all([
+    loadRecord(r, job.pubkey),
+    light ? null : rowsOf(() => r.prepare("SELECT channel, nym, content, verdict, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8")
+      .bind(job.pubkey, job.id).all()),
+    similarQuery ? rowsOf(similarQuery) : null,
+    nymQuery ? rowsOf(nymQuery) : null
+  ]);
+  out.record = record;
+  out.cleanHistory = cleanHistory(out.record);
+  if (!light) out.recent = recent || [];
+  if (similarQuery && similar) {
+    const pks = new Set();
+    const spamPks = new Set();
+    for (const row of similar) {
+      pks.add(row.pubkey);
+      const earlier = Number(row.seen_at) <= posted;
+      if (verdictOf(row) === "spam" && earlier) { out.similarSpam++; spamPks.add(row.pubkey); }
+      if (row.label === "spam") out.similarLabelledSpam++;
+      if (!out.labelledOk && row.label === "ok" && row.sim_key === job.fp.simKey) out.labelledOk = row;
+      if (reusable && earlier && !out.exact && row.sim_key === job.fp.simKey && verdictOf(row) === "spam" && (row.label === "spam" || Number(row.confidence) >= settings.minConfidence) && row.pubkey !== job.pubkey) out.exact = row;
+    }
+    out.similar = similar;
+    out.similarPubkeys = pks.size;
+    out.similarSpamPubkeys = spamPks.size;
+    if (out.labelledOk) { out.exact = null; state.exact.delete(job.fp.simKey); }
+    if (out.cleanHistory) out.exact = null;
+  }
+  if (nymQuery && nyms) {
+    const pks = new Set();
+    const spamPks = new Set();
+    for (const row of nyms) {
+      pks.add(row.pubkey);
+      if (verdictOf(row) === "spam") { out.nymSpam++; spamPks.add(row.pubkey); }
+      if (row.label === "spam") out.nymLabelledSpam++;
+    }
+    out.nymMatches = nyms;
+    out.nymPubkeys = pks.size;
+    out.nymSpamPubkeys = spamPks.size;
   }
   return out;
 }
@@ -1067,28 +1232,35 @@ async function loadActivity(env, job, dossier) {
   const out = { n15: Math.max(mem.n15, 1), n60: Math.max(mem.n60, 1), ch15: 0, archived: 0, firstSeen: rec ? Number(rec.first_seen) || 0 : 0, rhythm: null };
   const chans = new Set();
   if (job.channel) chans.add(job.channel);
-  try {
-    const row = await replica(env.DB_NOPE).prepare("SELECT SUM(seen_at > ?) AS n15, COUNT(*) AS n60, COUNT(DISTINCT CASE WHEN seen_at > ? THEN channel END) AS ch15 FROM spam_events WHERE pubkey = ? AND seen_at > ? AND id != ?")
-      .bind(now - VELOCITY_WINDOW_MS, now - VELOCITY_WINDOW_MS, job.pubkey, now - VELOCITY_HOUR_MS, job.id).first();
-    if (row) {
-      out.n15 = Math.max(out.n15, (Number(row.n15) || 0) + 1);
-      out.n60 = Math.max(out.n60, (Number(row.n60) || 0) + 1);
-      out.ch15 = Math.max(out.ch15, Number(row.ch15) || 0);
-    }
-  } catch (_) { }
-  if (hasD1(env.DB_CHANNELS)) {
+  const own = (async () => {
+    try {
+      return await replica(env.DB_NOPE).prepare("SELECT SUM(seen_at > ?) AS n15, COUNT(*) AS n60, COUNT(DISTINCT CASE WHEN seen_at > ? THEN channel END) AS ch15 FROM spam_events WHERE pubkey = ? AND seen_at > ? AND id != ?")
+        .bind(now - VELOCITY_WINDOW_MS, now - VELOCITY_WINDOW_MS, job.pubkey, now - VELOCITY_HOUR_MS, job.id).first();
+    } catch (_) { return null; }
+  })();
+  const archive = (async () => {
+    if (!hasD1(env.DB_CHANNELS)) return null;
     try {
       const sec15 = Math.floor((now - VELOCITY_WINDOW_MS) / 1000);
-      const row = await replica(env.DB_CHANNELS).prepare("SELECT MIN(created_at) AS first, COUNT(*) AS total, SUM(created_at > ?) AS n15, COUNT(DISTINCT CASE WHEN created_at > ? THEN channel END) AS ch15 FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ?")
-        .bind(sec15, sec15, job.pubkey, job.id).first();
-      if (row) {
-        out.archived = Number(row.total) || 0;
-        out.n15 = Math.max(out.n15, (Number(row.n15) || 0) + 1);
-        out.ch15 = Math.max(out.ch15, Number(row.ch15) || 0);
-        const first = (Number(row.first) || 0) * 1000;
-        if (first > 0 && (!out.firstSeen || first < out.firstSeen)) out.firstSeen = first;
-      }
-    } catch (_) { }
+      return await replica(env.DB_CHANNELS).prepare("SELECT w.n15 AS n15, w.ch15 AS ch15, " +
+        "(SELECT created_at FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? ORDER BY created_at ASC LIMIT 1) AS first, " +
+        "(SELECT COUNT(*) FROM (SELECT 1 FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? LIMIT " + ARCHIVE_COUNT_CAP + ")) AS total " +
+        "FROM (SELECT COUNT(*) AS n15, COUNT(DISTINCT channel) AS ch15 FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND created_at > ? AND id != ?) w")
+        .bind(job.pubkey, job.id, job.pubkey, job.id, job.pubkey, sec15, job.id).first();
+    } catch (_) { return null; }
+  })();
+  const [row, arch] = await Promise.all([own, archive]);
+  if (row) {
+    out.n15 = Math.max(out.n15, (Number(row.n15) || 0) + 1);
+    out.n60 = Math.max(out.n60, (Number(row.n60) || 0) + 1);
+    out.ch15 = Math.max(out.ch15, Number(row.ch15) || 0);
+  }
+  if (arch) {
+    out.archived = Number(arch.total) || 0;
+    out.n15 = Math.max(out.n15, (Number(arch.n15) || 0) + 1);
+    out.ch15 = Math.max(out.ch15, Number(arch.ch15) || 0);
+    const first = (Number(arch.first) || 0) * 1000;
+    if (first > 0 && (!out.firstSeen || first < out.firstSeen)) out.firstSeen = first;
   }
   out.ch15 = Math.max(out.ch15, chans.size);
   const stamps = mem.stamps.slice();
@@ -1098,25 +1270,54 @@ async function loadActivity(env, job, dossier) {
   return out;
 }
 
+function domainCacheKey(domain) {
+  return "domain/" + encodeURIComponent(domain);
+}
+
 async function loadDomainStats(env, job) {
   const doms = job.domains || [];
   const out = { stats: {}, spam: 0, spamPubkeys: 0 };
   if (!doms.length) return out;
-  try {
-    const rs = await replica(env.DB_NOPE).prepare("SELECT domain, SUM(verdict = 'spam') AS spam, SUM(verdict = 'ok') AS ok, COUNT(DISTINCT pubkey) AS pubkeys, COUNT(DISTINCT CASE WHEN verdict = 'spam' THEN pubkey END) AS spam_pubkeys FROM spam_domains WHERE domain IN (" + doms.map(() => "?").join(", ") + ") AND seen_at > ? AND id != ? GROUP BY domain")
-      .bind(...doms, job.seenAt - DOMAIN_WINDOW_MS, job.id).all();
-    for (const row of (rs && rs.results) || []) {
-      const st = { spam: Number(row.spam) || 0, ok: Number(row.ok) || 0, pubkeys: Number(row.pubkeys) || 0, spamPubkeys: Number(row.spam_pubkeys) || 0 };
-      out.stats[row.domain] = st;
-      out.spam += st.spam;
-      out.spamPubkeys = Math.max(out.spamPubkeys, st.spamPubkeys);
-    }
-  } catch (_) { }
+  const useCache = !job.force;
+  const found = new Map();
+  let missing = doms;
+  if (useCache) {
+    const hits = await Promise.all(doms.map((d) => edgeCacheGet(domainCacheKey(d))));
+    missing = [];
+    doms.forEach((d, i) => {
+      const h = hits[i];
+      if (h && typeof h === "object" && "st" in h) found.set(d, h.st);
+      else missing.push(d);
+    });
+  }
+  if (missing.length) {
+    try {
+      const rs = await replica(env.DB_NOPE).prepare("SELECT domain, SUM(verdict = 'spam') AS spam, SUM(verdict = 'ok') AS ok, COUNT(DISTINCT pubkey) AS pubkeys, COUNT(DISTINCT CASE WHEN verdict = 'spam' THEN pubkey END) AS spam_pubkeys FROM spam_domains WHERE domain IN (" + missing.map(() => "?").join(", ") + ") AND seen_at > ? AND id != ? GROUP BY domain")
+        .bind(...missing, job.seenAt - DOMAIN_WINDOW_MS, job.id).all();
+      const got = new Map();
+      for (const row of (rs && rs.results) || []) {
+        got.set(row.domain, { spam: Number(row.spam) || 0, ok: Number(row.ok) || 0, pubkeys: Number(row.pubkeys) || 0, spamPubkeys: Number(row.spam_pubkeys) || 0 });
+      }
+      await Promise.all(missing.map((d) => {
+        const st = got.get(d) || null;
+        found.set(d, st);
+        return useCache ? edgeCachePut(domainCacheKey(d), { st }, DOMAIN_CACHE_S) : null;
+      }));
+    } catch (_) { }
+  }
+  for (const d of doms.slice().sort()) {
+    const st = found.get(d);
+    if (!st) continue;
+    out.stats[d] = st;
+    out.spam += st.spam;
+    out.spamPubkeys = Math.max(out.spamPubkeys, st.spamPubkeys);
+  }
   return out;
 }
 
-async function loadExamples(env, now) {
-  if (state.examples && now - state.examples.at < EXAMPLES_TTL_MS) return state.examples;
+async function fetchExamples(env, now) {
+  const hit = await edgeCacheGet(EXAMPLES_CACHE_KEY);
+  if (hit && typeof hit === "object" && Array.isArray(hit.spam) && Array.isArray(hit.ok)) return hit;
   const r = replica(env.DB_NOPE);
   const ex = { at: now, spam: [], ok: [], labelled: 0 };
   const keys = new Set();
@@ -1129,30 +1330,52 @@ async function loadExamples(env, now) {
       if (labelled) ex.labelled++;
     }
   };
-  try {
-    const l = await r.prepare("SELECT id, nym, channel, content, sim_key, label, labeled_by FROM spam_events WHERE label IN ('spam', 'ok') AND seen_at > ? ORDER BY seen_at DESC LIMIT 40").bind(now - LABELS_WINDOW_MS).all();
-    const rows = (l && l.results) || [];
-    take(rows.filter((x) => x.label === "spam"), "spam", true);
-    take(rows.filter((x) => x.label === "ok"), "ok", true);
-    const s = await r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'spam' AND label IS NULL AND confidence >= 0.9 AND model NOT IN ('cache', 'cross-ref', 'peer', 'developer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS).all();
-    take((s && s.results) || [], "spam", false);
-    const o = await r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'ok' AND label IS NULL AND confidence >= 0.7 AND model NOT IN ('chatter', 'action', 'cache', 'cross-ref', 'peer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS).all();
-    take((o && o.results) || [], "ok", false);
-  } catch (_) { }
-  state.examples = ex;
+  const [l, s, o] = await Promise.all([
+    rowsOf(() => r.prepare("SELECT * FROM (SELECT id, nym, channel, content, sim_key, label, labeled_by, seen_at FROM spam_events WHERE label = 'spam' AND seen_at > ? ORDER BY seen_at DESC LIMIT 40) " +
+      "UNION ALL SELECT * FROM (SELECT id, nym, channel, content, sim_key, label, labeled_by, seen_at FROM spam_events WHERE label = 'ok' AND seen_at > ? ORDER BY seen_at DESC LIMIT 40) ORDER BY seen_at DESC LIMIT 40")
+      .bind(now - LABELS_WINDOW_MS, now - LABELS_WINDOW_MS).all()),
+    rowsOf(() => r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'spam' AND label IS NULL AND confidence >= 0.9 AND model NOT IN ('cache', 'cross-ref', 'peer', 'developer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS).all()),
+    rowsOf(() => r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'ok' AND label IS NULL AND confidence >= 0.7 AND model NOT IN ('chatter', 'action', 'cache', 'cross-ref', 'peer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS).all())
+  ]);
+  if (!l) return ex;
+  take(l.filter((x) => x.label === "spam"), "spam", true);
+  take(l.filter((x) => x.label === "ok"), "ok", true);
+  if (!s) return ex;
+  take(s, "spam", false);
+  if (!o) return ex;
+  take(o, "ok", false);
+  await edgeCachePut(EXAMPLES_CACHE_KEY, ex, EXAMPLES_CACHE_S);
   return ex;
+}
+
+async function loadExamples(env, now) {
+  if (state.examples && now - state.examples.at < EXAMPLES_TTL_MS) return state.examples;
+  if (state.examplesLoading) return state.examplesLoading;
+  const p = fetchExamples(env, now);
+  state.examplesLoading = p;
+  try {
+    const ex = await p;
+    if (state.examplesLoading === p) state.examples = ex;
+    return ex;
+  } finally {
+    if (state.examplesLoading === p) state.examplesLoading = null;
+  }
 }
 
 async function enrichDossier(env, job, dossier) {
   if (job.domains == null) job.domains = extractDomains(job.content);
   if (!job.nonces) job.nonces = nonceTokens(job.content);
   job.conv = conversationSignals(job);
-  dossier.activity = await loadActivity(env, job, dossier);
-  const dom = await loadDomainStats(env, job);
+  const [activity, dom, examples] = await Promise.all([
+    loadActivity(env, job, dossier),
+    loadDomainStats(env, job),
+    loadExamples(env, job.seenAt)
+  ]);
+  dossier.activity = activity;
   dossier.domainStats = dom.stats;
   dossier.domainSpam = dom.spam;
   dossier.domainSpamPubkeys = dom.spamPubkeys;
-  dossier.examples = await loadExamples(env, job.seenAt);
+  dossier.examples = examples;
   job.signals = buildSignals(job, dossier);
 }
 
@@ -1217,7 +1440,10 @@ async function persist(env, job, v, dossier, action, strikesIn) {
       .bind(job.id, job.pubkey, clip(job.nym, 80) || null, clip(job.channel, 80) || null, job.kind, clip(job.content, 4000), job.fp.simKey,
         job.fp.bands[0], job.fp.bands[1], job.fp.bands[2], job.fp.bands[3], job.createdAt || job.seenAt, job.seenAt,
         v.spam ? "spam" : "ok", v.confidence, v.category || null, v.reason || null, v.model || null, action, job.source || "pool", job.localScore || 0, job.nymKey || null, v.language || null, job.badge && job.badge !== "none" ? job.badge : null, domains, signals);
-  const res = await insert.run();
+  const stmts = [insert];
+  if (/event-hidden/.test(action || "")) stmts.push(db.prepare(HIDE_SYNC_SQL).bind(job.id));
+  if (job.source === "report") stmts.push(db.prepare(UNHIDE_SYNC_SQL).bind(job.id, job.id));
+  const res = (await db.batch(stmts))[0];
   const changes = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 1;
   if (changes === 0 && (job.source === "report" || !job.force)) return { lost: true, strikes: 0, score: prevScore };
   return { lost: false, strikes, score };
@@ -1227,28 +1453,30 @@ async function persistRecord(env, job, v, dossier, strikes, score) {
   const db = env.DB_NOPE;
   const rec = dossier.record;
   const spam = v.spam ? 1 : 0;
+  const strikeDelta = strikes - (rec ? Number(rec.strikes) || 0 : 0);
+  const scoreDelta = v.spam ? v.confidence : -0.5;
   await rememberDomains(db, job, v.spam ? "spam" : "ok");
-  await db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) " +
+  const row = await db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT(pubkey) DO UPDATE SET last_seen = excluded.last_seen, audits = audits + 1, spam = spam + excluded.spam, ham = ham + excluded.ham, " +
-      "strikes = ?, score = ?, channels = ?, nyms = ?, last_reason = excluded.last_reason")
+      "strikes = spam_pubkeys.strikes + ?, score = MAX(0, spam_pubkeys.score + ?), channels = ?, nyms = ?, last_reason = COALESCE(excluded.last_reason, spam_pubkeys.last_reason) RETURNING *")
       .bind(job.pubkey, job.seenAt, job.seenAt, spam, 1 - spam, strikes, score,
-        mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym), v.spam ? clip(v.reason, 300) : (rec && rec.last_reason) || null,
-        strikes, score, mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym)).run();
+        mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym), v.spam ? clip(v.reason, 300) : null,
+        strikeDelta, scoreDelta, mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym)).first();
+  if (row && row.pubkey === job.pubkey) await edgeCachePut("pubkey/" + job.pubkey, { rec: row }, RECORD_CACHE_S);
 }
 
 async function rememberDomains(db, job, verdict) {
-  for (const d of job.domains || []) {
-    try {
-      await db.prepare("INSERT INTO spam_domains (id, domain, pubkey, verdict, seen_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id, domain) DO UPDATE SET verdict = excluded.verdict, seen_at = excluded.seen_at")
-        .bind(job.id, d, job.pubkey, verdict, job.seenAt).run();
-    } catch (_) { }
-  }
+  const stmts = (job.domains || []).map((d) => db.prepare("INSERT INTO spam_domains (id, domain, pubkey, verdict, seen_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id, domain) DO UPDATE SET verdict = excluded.verdict, seen_at = excluded.seen_at")
+    .bind(job.id, d, job.pubkey, verdict, job.seenAt));
+  if (!stmts.length) return;
+  try { await db.batch(stmts); } catch (_) { }
 }
 
 function adoptPeer(row, job) {
-  const eff = verdictOf(row);
+  const restored = state.restored.has(job.id);
+  const eff = restored ? "ok" : verdictOf(row);
   const v = { spam: eff === "spam", confidence: Number(row.confidence) || 0, category: row.category || (eff === "spam" ? "spam" : "ok"), language: row.lang || "", reason: row.reason || "", model: "peer" };
-  const action = row.label === "ok" ? "ok" : row.action || (v.spam ? "flagged" : "ok");
+  const action = restored || row.label === "ok" ? "ok" : row.action || (v.spam ? "flagged" : "ok");
   if (/event-hidden/.test(action)) { noteDropped(job.id); state.hidden.add(job.id); }
   state.counters.cached++;
   return { verdict: v, action, strikes: 0, score: 0, similar: 0, similarPubkeys: 0, similarNyms: 0, nymSpam: 0, peer: true };
@@ -1316,6 +1544,7 @@ export function nymIsOnlyEvidence(job, dossier, v) {
 }
 
 export async function auditNow(env, job, hooks) {
+  if (state.restored.has(job.id)) return { skipped: "restored" };
   const settings = job.settings || state.settings || defaultSpamSettings(env);
   job.settings = settings;
   const now = job.seenAt || Date.now();
@@ -1413,7 +1642,7 @@ export async function auditNow(env, job, hooks) {
     const done = (await applyEnforcement(env, job, plan)).join(",");
     if (done !== action) {
       action = done;
-      try { await env.DB_NOPE.prepare("UPDATE spam_events SET action = ? WHERE id = ?").bind(action, job.id).run(); } catch (_) { }
+      try { await env.DB_NOPE.batch([env.DB_NOPE.prepare("UPDATE spam_events SET action = ? WHERE id = ?").bind(action, job.id), env.DB_NOPE.prepare(HIDE_SYNC_SQL).bind(job.id)]); } catch (_) { }
     }
   }
   return { verdict: v, action, strikes, score: persisted.score, similar: dossier.similar.length, similarPubkeys: dossier.similarPubkeys, similarNyms: dossier.nymMatches.length, nymSpam: dossier.nymSpam, signals: job.signals };
@@ -1492,7 +1721,7 @@ function coalesce(job) {
   if (!textKey && !mutedSender) return;
   for (const q of state.queue) {
     if (!(textKey && q.fp && q.fp.simKey === textKey) && !(mutedSender && q.pubkey === mutedSender)) continue;
-    if (!state.pending.has(q.id)) continue;
+    if (!state.pending.has(q.id) || state.restored.has(q.id)) continue;
     noteDropped(q.id);
     if (s.blockEvents) hideLocally(q.id);
     settle(q.id, true);
@@ -1570,14 +1799,17 @@ async function enforceDeveloperReport(env, settings, r) {
     if (!job || job.pubkey !== targetPubkey) continue;
     try {
       job.domains = extractDomains(job.content);
-      await db.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, domains, label, labeled_by) " +
+      await db.batch([db.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, domains, label, labeled_by) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'spam', 1, 'reported', ?, 'developer', 'event-hidden,muted', 'report', 0, ?, ?, 'spam', 'developer') " +
         "ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = 'spam', confidence = 1, category = 'reported', reason = excluded.reason, model = 'developer', action = 'event-hidden,muted', source = 'report', domains = excluded.domains, label = 'spam', labeled_by = 'developer'")
         .bind(job.id, job.pubkey, clip(job.nym, 80) || null, clip(job.channel, 80) || null, job.kind, clip(job.content, 4000), job.fp ? job.fp.simKey : fingerprint(job.content).simKey,
-          null, null, null, null, job.createdAt || now, now, reason, nymKey(job.nym) || null, job.domains.length ? job.domains.join(",") : null).run();
+          null, null, null, null, job.createdAt || now, now, reason, nymKey(job.nym) || null, job.domains.length ? job.domains.join(",") : null),
+        db.prepare(HIDE_SYNC_SQL).bind(job.id),
+        db.prepare(UNRESTORE_SQL).bind(job.id, SPAM_RESTORED_KEY, "%" + job.id + "%")]);
       await rememberDomains(db, job, "spam");
-      state.examples = null;
+      await dropExamples();
     } catch (_) { }
+    state.restored.delete(job.id);
     noteDropped(job.id);
     state.hidden.add(job.id);
     if (state.hidden.size > SEEN_MAX) state.hidden.delete(state.hidden.values().next().value);
@@ -1597,6 +1829,7 @@ async function enforceDeveloperReport(env, settings, r) {
     await db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason, muted_until) VALUES (?, ?, ?, 1, 1, 0, 1, 1, ?, ?, ?, ?) " +
       "ON CONFLICT(pubkey) DO UPDATE SET last_seen = excluded.last_seen, audits = audits + 1, spam = spam + 1, strikes = strikes + 1, score = score + 1, last_reason = excluded.last_reason, muted_until = excluded.muted_until")
       .bind(targetPubkey, now, now, first ? clip(first.channel, 80) : null, first ? clip(first.nym, 80) : null, reason, now + DEVELOPER_MUTE_MARK_MS).run();
+    await edgeCacheDelete("pubkey/" + targetPubkey);
     try {
       await db.prepare("INSERT INTO audit (at, actor, action, kind, value, detail) VALUES (?, ?, 'spam.mute', 'pubkey', ?, ?)")
         .bind(now, SPAM_ACTOR, targetPubkey, JSON.stringify({ reason, until: 0, event: r.targetEvent, hidden, developer: true })).run();
@@ -1642,7 +1875,7 @@ export async function reviewSpamReport(env, ev, opts) {
   const type = String((e && e[2]) || (p && p[2]) || "").toLowerCase();
   if (type !== "spam") return { skipped: "not a spam report" };
   if (!hasD1(env && env.DB_NOPE) || !hasD1(env && env.DB_CHANNELS) || !hasD1(env && env.DB_REPORT)) return { skipped: "no database" };
-  const settings = await readSpamSettings(env);
+  const settings = await syncedSettings(env);
   const reporter = ev.pubkey.toLowerCase();
   const targetEvent = e && HEX64.test(e[1].toLowerCase()) ? e[1].toLowerCase() : null;
   let targetPubkey = p && HEX64.test(p[1].toLowerCase()) ? p[1].toLowerCase() : null;
@@ -1753,6 +1986,7 @@ export function spamEngine(env, context) {
       const now = Date.now();
       state.counters.inspected++;
       if (isExemptPubkey(s, pubkey)) return "pass";
+      if (state.restored.has(job.id)) return "pass";
       if (isSpamMuted(pubkey, now)) { state.counters.dropped++; return "drop"; }
       if (state.dropped.has(job.id) || state.hidden.has(job.id)) { state.counters.dropped++; return "drop"; }
       if (typeof job.content !== "string" || !job.content.trim()) return "pass";

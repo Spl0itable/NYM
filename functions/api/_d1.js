@@ -13,6 +13,42 @@ export function replica(db) {
   return db;
 }
 
+const EDGE_CACHE_HOST = "https://nym-spam.internal/v1/";
+
+function edgeCache() {
+  try { return typeof caches !== "undefined" && caches && caches.default ? caches.default : null; } catch (e) { return null; }
+}
+
+function edgeCacheRequest(key) {
+  return new Request(EDGE_CACHE_HOST + key, { method: "GET" });
+}
+
+export async function edgeCacheGet(key) {
+  const cache = edgeCache();
+  if (!cache) return undefined;
+  try {
+    const hit = await cache.match(edgeCacheRequest(key));
+    if (!hit) return undefined;
+    return await hit.json();
+  } catch (e) { return undefined; }
+}
+
+export async function edgeCachePut(key, value, ttlSeconds) {
+  const cache = edgeCache();
+  if (!cache) return;
+  try {
+    await cache.put(edgeCacheRequest(key), new Response(JSON.stringify(value), {
+      headers: { "Content-Type": "application/json", "Cache-Control": "max-age=" + Math.max(1, Math.round(ttlSeconds || 60)) }
+    }));
+  } catch (e) { }
+}
+
+export async function edgeCacheDelete(key) {
+  const cache = edgeCache();
+  if (!cache) return;
+  try { await cache.delete(edgeCacheRequest(key)); } catch (e) { }
+}
+
 function parseJson(s, fallback) {
   try { return s ? JSON.parse(s) : fallback; } catch (e) { return fallback; }
 }

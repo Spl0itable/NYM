@@ -1648,6 +1648,93 @@ body.chat-bubbles .read-more-btn {
     display: flex;
 }
 
+.bot-model-notice {
+    margin: 0;
+}
+
+.bot-model-section {
+    margin-top: 10px;
+    padding: 10px 2px 0;
+    border-top: 1px solid var(--glass-border);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--text-bright);
+}
+
+.bot-model-group-kind {
+    margin-left: 0.45em;
+    font-weight: 500;
+    opacity: 0.8;
+}
+
+.bot-model-row.bot-gen-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    cursor: default;
+}
+
+.bot-gen-pick {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.bot-gen-res {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.bot-gen-res-chip {
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.bot-gen-res-chip:hover {
+    border-color: rgb(from var(--primary) r g b / 0.4);
+}
+
+.bot-gen-res-chip.selected {
+    border-color: rgb(from var(--primary) r g b / 0.6);
+    background: rgb(from var(--primary) r g b / 0.1);
+    color: var(--text-bright);
+}
+
+.bot-retry-btn {
+    margin-left: 6px;
+    padding: 2px 10px;
+    background: rgb(from var(--primary) r g b / 0.1);
+    border: 1px solid rgb(from var(--primary) r g b / 0.5);
+    border-radius: var(--radius-sm);
+    color: var(--primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.bot-retry-btn:hover {
+    background: rgb(from var(--primary) r g b / 0.18);
+}
+
 .bot-modal-intro {
     color: var(--text-dim);
     font-size: 12.5px;

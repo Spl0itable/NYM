@@ -353,6 +353,7 @@ class ProModelGroup {
     required this.author,
     required this.authorSlug,
     required this.keys,
+    this.kind = '',
   });
 
   factory ProModelGroup.fromJson(Map<String, dynamic> j) {
@@ -360,18 +361,117 @@ class ProModelGroup {
     return ProModelGroup(
       author: (j['author'] ?? '').toString(),
       authorSlug: (j['authorSlug'] ?? '').toString(),
+      kind: (j['kind'] ?? '').toString(),
       keys: [
         for (final k in (rawKeys is List ? rawKeys : const [])) k.toString(),
       ],
     );
   }
 
-  Map<String, dynamic> toJson() =>
-      {'author': author, 'authorSlug': authorSlug, 'keys': keys};
+  Map<String, dynamic> toJson() => {
+        'author': author,
+        'authorSlug': authorSlug,
+        if (kind.isNotEmpty) 'kind': kind,
+        'keys': keys,
+      };
 
   final String author;
   final String authorSlug;
   final List<String> keys;
+  final String kind;
+}
+
+class GeneratorResolution {
+  const GeneratorResolution({required this.res, this.credits});
+
+  factory GeneratorResolution.fromJson(Map<String, dynamic> j) =>
+      GeneratorResolution(
+        res: (j['res'] ?? '').toString(),
+        credits: j['credits'] is num ? j['credits'] as num : null,
+      );
+
+  Map<String, dynamic> toJson() => {'res': res, 'credits': credits};
+
+  final String res;
+  final num? credits;
+}
+
+class ProGenerator {
+  const ProGenerator({
+    required this.key,
+    required this.kind,
+    required this.command,
+    required this.label,
+    this.credits,
+    this.priced = true,
+    this.needsImage = false,
+    this.author = '',
+    this.authorSlug = '',
+    this.description = '',
+    this.resolution,
+    this.resolutions = const [],
+  });
+
+  factory ProGenerator.fromJson(Map<String, dynamic> j) {
+    final rawRes = j['resolutions'];
+    final resolutions = [
+      for (final r in (rawRes is List ? rawRes : const []))
+        if (r is Map) GeneratorResolution.fromJson(r.cast<String, dynamic>()),
+    ]..removeWhere((r) => r.res.isEmpty);
+    final res = (j['resolution'] ?? '').toString();
+    return ProGenerator(
+      key: (j['key'] ?? '').toString(),
+      kind: (j['kind'] ?? '').toString(),
+      command: (j['command'] ?? '').toString().trim(),
+      label: (j['label'] ?? j['key'] ?? '').toString(),
+      credits: j['credits'] is num ? j['credits'] as num : null,
+      priced: j['priced'] != false,
+      needsImage: j['needsImage'] == true,
+      author: (j['author'] ?? '').toString(),
+      authorSlug: (j['authorSlug'] ?? '').toString(),
+      description: (j['description'] ?? '').toString(),
+      resolution: res.isNotEmpty
+          ? res
+          : (resolutions.isEmpty ? null : resolutions.last.res),
+      resolutions: resolutions,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'key': key,
+        'kind': kind,
+        'command': command,
+        'label': label,
+        'credits': credits,
+        'priced': priced,
+        'needsImage': needsImage,
+        if (author.isNotEmpty) 'author': author,
+        if (authorSlug.isNotEmpty) 'authorSlug': authorSlug,
+        if (description.isNotEmpty) 'description': description,
+        if (resolution != null) 'resolution': resolution,
+        if (resolutions.isNotEmpty)
+          'resolutions': [for (final r in resolutions) r.toJson()],
+      };
+
+  final String key;
+  final String kind;
+  final String command;
+  final String label;
+  final num? credits;
+  final bool priced;
+  final bool needsImage;
+  final String author;
+  final String authorSlug;
+  final String description;
+  final String? resolution;
+  final List<GeneratorResolution> resolutions;
+
+  bool get isVideo => kind == 'video';
+
+  String insertText([String? res]) =>
+      (res == null || res.isEmpty || res == resolution)
+          ? '$command '
+          : '$command --res $res ';
 }
 
 /// The Pro model list the picker renders.
@@ -390,6 +490,10 @@ class ProModelCatalog {
     this.usdPerCredit = 0.0,
     this.minChargeCredits = 0.0,
     this.bulkBonus = kBulkBonusFallback,
+    this.generators = const [],
+    this.priceUnavailable = false,
+    this.btcUsd,
+    this.standardUsdPerCredit,
   });
 
   factory ProModelCatalog.fromJson(Map<String, dynamic> j) {
@@ -400,10 +504,23 @@ class ProModelCatalog {
     final rawAliases = j['aliases'];
     final models = [
       for (final m in (rawModels is List ? rawModels : const []))
-        if (m is Map) ProModel.fromJson(m.cast<String, dynamic>()),
+        if (m is Map && (m['kind'] == null || m['kind'] == 'chat') && m['command'] == null)
+          ProModel.fromJson(m.cast<String, dynamic>()),
     ]..removeWhere((m) => m.key.isEmpty);
+    final generators = [
+      for (final m in (rawModels is List ? rawModels : const []))
+        if (m is Map &&
+            (m['kind'] == 'image' || m['kind'] == 'video') &&
+            m['command'] is String)
+          ProGenerator.fromJson(m.cast<String, dynamic>()),
+    ]..removeWhere((g) => g.key.isEmpty || g.command.isEmpty);
+    double? price(Object? v) => v is num && v > 0 ? v.toDouble() : null;
     return ProModelCatalog(
       models: models,
+      generators: generators,
+      priceUnavailable: j['priceUnavailable'] == true,
+      btcUsd: price(j['btcUsd']),
+      standardUsdPerCredit: price(j['standardUsdPerCredit']),
       groups: [
         for (final g in (rawGroups is List ? rawGroups : const []))
           if (g is Map) ProModelGroup.fromJson(g.cast<String, dynamic>()),
@@ -432,7 +549,10 @@ class ProModelCatalog {
   }
 
   Map<String, dynamic> toJson() => {
-        'models': [for (final m in models) m.toJson()],
+        'models': [
+          for (final m in models) m.toJson(),
+          for (final g in generators) g.toJson(),
+        ],
         'groups': [for (final g in groups) g.toJson()],
         'aliases': aliases,
         'source': source,
@@ -440,9 +560,16 @@ class ProModelCatalog {
         'usdPerCredit': usdPerCredit,
         'minChargeCredits': minChargeCredits,
         'bulkBonus': [for (final b in bulkBonus) b.toJson()],
+        if (priceUnavailable) 'priceUnavailable': true,
+        'btcUsd': btcUsd,
+        'standardUsdPerCredit': standardUsdPerCredit,
       };
 
   final List<ProModel> models;
+  final List<ProGenerator> generators;
+  final bool priceUnavailable;
+  final double? btcUsd;
+  final double? standardUsdPerCredit;
   final List<ProModelGroup> groups;
 
   /// Retired/short keys mapped to a current one, so a model pinned before a
@@ -538,6 +665,27 @@ class ProModelCatalog {
       if (rows.isNotEmpty) out.add(MapEntry(g.author, rows));
     }
     return out;
+  }
+
+  List<MapEntry<String, List<ProGenerator>>> groupedGenerators() {
+    final byKeyMap = {for (final g in generators) g.key: g};
+    final placed = <String>{};
+    final byAuthor = <String, List<ProGenerator>>{};
+    void add(String author, ProGenerator gen) {
+      if (!placed.add(gen.key)) return;
+      byAuthor.putIfAbsent(author, () => []).add(gen);
+    }
+
+    for (final g in groups) {
+      for (final k in g.keys) {
+        final gen = byKeyMap[k];
+        if (gen != null) add(g.author, gen);
+      }
+    }
+    for (final gen in generators) {
+      add(gen.author, gen);
+    }
+    return [for (final e in byAuthor.entries) MapEntry(e.key, e.value)];
   }
 }
 
