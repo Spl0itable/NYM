@@ -400,12 +400,14 @@ class NymbotService {
     required String reqId,
     required List<Map<String, dynamic>> outputs,
     Future<Map<String, dynamic>?> Function(String payload)? signedFor,
+    bool anon = false,
   }) async {
     final res = await _botRequest(
       'voucher-issue',
       <String, dynamic>{'tier': tier, 'reqId': reqId, 'outputs': outputs},
       pubkey: pubkey,
       signedFor: signedFor,
+      anon: anon,
     );
     _throwOnError(res);
     return res.data;

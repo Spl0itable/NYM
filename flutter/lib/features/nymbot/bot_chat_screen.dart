@@ -3171,7 +3171,8 @@ class _AnonModalState extends ConsumerState<_AnonModal> {
           .anonRotate(sweep: true);
       if (!mounted) return;
       setState(() => _status = moved > 0
-          ? tr('New throwaway key created; balance carried over.')
+          ? tr('New throwaway key created. The old key\'s balance became '
+              'anonymous vouchers the new key uses as needed.')
           : tr('New throwaway key created.'));
     } catch (e) {
       if (!mounted) return;

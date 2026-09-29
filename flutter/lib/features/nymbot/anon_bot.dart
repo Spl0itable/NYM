@@ -8,10 +8,12 @@ import '../../core/crypto/pq.dart' as pq;
 import '../../core/crypto/voucher.dart';
 import '../../models/nostr_event.dart';
 import '../../services/api/api_client.dart';
+import 'nymbot_models.dart';
 import 'nymbot_service.dart';
 
 const int kAnonPrevMax = 4;
 const int kAnonAnnounceTtlSec = 7 * 24 * 3600;
+const int kAnonTokenMax = 200;
 
 class AnonBotIdentity {
   const AnonBotIdentity({
@@ -94,11 +96,13 @@ class AnonVoucherRequest {
     required this.tier,
     required this.reqId,
     required this.outputs,
+    this.from,
   });
 
   final String tier;
   final String reqId;
   final List<AnonVoucherOutput> outputs;
+  final String? from;
 
   static AnonVoucherRequest? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -112,13 +116,20 @@ class AnonVoucherRequest {
       if (parsed == null) return null;
       outputs.add(parsed);
     }
-    return AnonVoucherRequest(tier: tier, reqId: reqId, outputs: outputs);
+    final from = raw['from'];
+    return AnonVoucherRequest(
+      tier: tier,
+      reqId: reqId,
+      outputs: outputs,
+      from: from is String ? from : null,
+    );
   }
 
   Map<String, dynamic> toJson() => {
         'tier': tier,
         'reqId': reqId,
         'outputs': outputs.map((o) => o.toJson()).toList(),
+        if (from != null) 'from': from,
       };
 }
 
@@ -193,7 +204,7 @@ class AnonBotState {
     if (rawTokens is List) {
       for (final t in rawTokens) {
         final token = AnonVoucherToken.fromJson(t);
-        if (token != null && tokens.length < 200) tokens.add(token);
+        if (token != null && tokens.length < kAnonTokenMax) tokens.add(token);
       }
     }
     return AnonBotState(
@@ -207,7 +218,7 @@ class AnonBotState {
   Map<String, dynamic> toJson() => {
         'current': current?.toJson(),
         'prev': prev.take(kAnonPrevMax).map((p) => p.toJson()).toList(),
-        'tokens': tokens.take(200).map((t) => t.toJson()).toList(),
+        'tokens': tokens.take(kAnonTokenMax).map((t) => t.toJson()).toList(),
         'pending': pending?.toJson(),
       };
 
@@ -238,6 +249,7 @@ class AnonBotManager {
   final Map<String, MlKemKeyPair> _kemCache = {};
   Map<String, dynamic>? _announcement;
   int _announcementExp = 0;
+
   /// Which identity [_announcement] belongs to. Without this the cache can
   /// outlive the identity it announces and the worker seals its reply to a
   /// KEM key we no longer hold.
@@ -371,24 +383,76 @@ class AnonBotManager {
 
   Future<int> sweepPrevious() async {
     final st = _state;
-    final target = st?.current;
-    if (st == null || target == null || st.prev.isEmpty) return 0;
-    var moved = 0;
-    for (final old in st.prev) {
+    if (st == null || st.current == null || st.prev.isEmpty) return 0;
+    final waiting = st.pending;
+    if (waiting != null) {
       try {
-        final res = await _service.transfer(
+        await _finishIssue(waiting);
+      } catch (_) {}
+      if (_state?.pending != null) return 0;
+    }
+    try {
+      await keyset();
+    } catch (_) {
+      return 0;
+    }
+    var issued = 0;
+    for (final old in List<AnonBotIdentity>.of(st.prev)) {
+      BotBalance balance;
+      try {
+        balance = await _service.balance(
           pubkey: old.pk,
-          targetPubkey: target.pk,
-          signedFor: (payload) async =>
-              _authFor('transfer-credits', old, payload),
+          auth: () async => _authFor('balance', old),
           anon: true,
         );
-        moved += ((res['transferred'] as num?)?.toInt() ?? 0) +
-            ((res['proTransferred'] as num?)?.toInt() ?? 0);
       } catch (_) {
+        continue;
+      }
+      for (final tier in voucherTiers) {
+        final whole =
+            (tier == 'pro' ? balance.proBalance : balance.balance).floor();
+        if (whole <= 0) continue;
+        for (final denoms in voucherBatches(whole)) {
+          final now = _state;
+          if (now == null ||
+              now.tokens.length + denoms.length > kAnonTokenMax) {
+            break;
+          }
+          final request = AnonVoucherRequest(
+            tier: tier,
+            reqId: bytesToHex(randomBytes(32)),
+            outputs: _blindOutputs(denoms),
+            from: old.pk,
+          );
+          now.pending = request;
+          _save();
+          try {
+            final minted = await _finishIssue(request);
+            issued += minted.fold<int>(0, (sum, t) => sum + t.d);
+          } catch (_) {
+            if (_state?.pending != null) return issued;
+            break;
+          }
+        }
       }
     }
-    return moved;
+    return issued;
+  }
+
+  List<AnonVoucherOutput> _blindOutputs(List<int> denoms) {
+    final outputs = <AnonVoucherOutput>[];
+    for (final d in denoms) {
+      final x = randomBytes(32);
+      final r = voucherRandomScalar();
+      final b = voucherBlind(x, r);
+      outputs.add(AnonVoucherOutput(
+        d: d,
+        x: bytesToHex(x),
+        r: voucherScalarHex(r),
+        b: voucherPointHex(b),
+      ));
+    }
+    return outputs;
   }
 
   MlKemKeyPair? kemFor(AnonBotIdentity id) {
@@ -558,22 +622,10 @@ class AnonBotManager {
     await keyset();
     final st = _state!;
     if (st.pending != null) await _wrapIssue(st.pending!);
-    final outputs = <AnonVoucherOutput>[];
-    for (final d in denoms) {
-      final x = randomBytes(32);
-      final r = voucherRandomScalar();
-      final b = voucherBlind(x, r);
-      outputs.add(AnonVoucherOutput(
-        d: d,
-        x: bytesToHex(x),
-        r: voucherScalarHex(r),
-        b: voucherPointHex(b),
-      ));
-    }
     st.pending = AnonVoucherRequest(
       tier: tier,
       reqId: bytesToHex(randomBytes(32)),
-      outputs: outputs,
+      outputs: _blindOutputs(denoms),
     );
     _save();
     await _wrapIssue(st.pending!);
@@ -633,20 +685,30 @@ class AnonBotManager {
   }
 
   Future<List<AnonVoucherToken>> _finishIssue(AnonVoucherRequest pending) async {
+    final from = pending.from;
+    final signer = from == null ? null : identityForWrap(from);
+    if (from != null && signer == null) {
+      _state?.pending = null;
+      _save();
+      throw AnonBotException(
+          'The anonymous key that owned these credits is gone.');
+    }
     final account = _accountPubkey;
-    if (account == null) {
+    if (signer == null && account == null) {
       throw AnonBotException('Not signed in.');
     }
     final ks = await keyset();
     Map<String, dynamic> data;
     try {
       data = await _service.voucherIssue(
-        pubkey: account,
+        pubkey: signer?.pk ?? account!,
         tier: pending.tier,
         reqId: pending.reqId,
         outputs: pending.outputs.map((o) => o.toWire()).toList(),
-        signedFor: (payload) async =>
-            _accountAuth?.call('voucher-issue', payload),
+        signedFor: (payload) async => signer != null
+            ? _authFor('voucher-issue', signer, payload)
+            : _accountAuth?.call('voucher-issue', payload),
+        anon: signer != null,
       );
     } on NymbotException catch (e) {
       final code = e.statusCode ?? 0;
@@ -662,7 +724,8 @@ class AnonBotManager {
       final balance = (data['balance'] as num?)?.toInt() ?? 0;
       final required = (data['required'] as num?)?.toInt() ?? 0;
       throw AnonBotException(
-        'Not enough ${pending.tier == 'pro' ? 'Pro ' : ''}credits on your nym — '
+        'Not enough ${pending.tier == 'pro' ? 'Pro ' : ''}credits on '
+        '${signer != null ? 'your old anonymous key' : 'your nym'} — '
         '$balance left, $required needed.',
         insufficient: true,
       );

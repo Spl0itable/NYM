@@ -619,6 +619,7 @@ const List<String> kAppStringsCatalog = <String>[
   'New members will no longer receive chat history.',
   'New members will now receive recent chat history when they join.',
   'New message',
+  'New throwaway key created. The old key\'s balance became anonymous vouchers the new key uses as needed.',
   'Next',
   'Next column',
   'Nickname',

@@ -4,6 +4,8 @@
     const VOUCHER_N = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
     const VOUCHER_DENOMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
     const VOUCHER_MAX_OUTPUTS = 32;
+    const VOUCHER_MAX_AMOUNT = 100000;
+    const ANON_TOKEN_MAX = 200;
     const VOUCHER_TIERS = ['standard', 'pro'];
     const HTC_DOMAIN = 'Nymbot_Voucher_HashToCurve_v1';
     const DLEQ_DOMAIN = 'Nymbot_Voucher_DLEQ_v1';
@@ -94,6 +96,38 @@
             }
         }
         return left === 0 ? out : null;
+    }
+
+    function voucherBatches(amount) {
+        const batches = [];
+        let batch = [];
+        let total = 0;
+        let left = Math.floor(amount);
+        for (let i = VOUCHER_DENOMS.length - 1; i >= 0 && left > 0; i--) {
+            const d = VOUCHER_DENOMS[i];
+            while (left >= d) {
+                if (batch.length >= VOUCHER_MAX_OUTPUTS || total + d > VOUCHER_MAX_AMOUNT) {
+                    batches.push(batch);
+                    batch = [];
+                    total = 0;
+                }
+                batch.push(d);
+                total += d;
+                left -= d;
+            }
+        }
+        if (batch.length) batches.push(batch);
+        return batches;
+    }
+
+    function blindOutputs(denoms) {
+        const P = VPoint();
+        return denoms.map(d => {
+            const x = crypto.getRandomValues(new Uint8Array(32));
+            const r = randomScalar();
+            const B = hashToCurve(x).add(P.BASE.multiply(r));
+            return { d, x: hex(x), r: scalarHex(r), B: B.toHex(true) };
+        });
     }
 
     Object.assign(NYM.prototype, {
@@ -447,7 +481,7 @@
             return {
                 current: st.current ? one(st.current) : null,
                 prev: (st.prev || []).slice(0, ANON_PREV_MAX).map(one),
-                tokens: (st.tokens || []).slice(0, 200),
+                tokens: (st.tokens || []).slice(0, ANON_TOKEN_MAX),
                 pending: st.pending || null
             };
         },
@@ -464,7 +498,7 @@
             return {
                 current,
                 prev: (Array.isArray(data.prev) ? data.prev : []).map(one).filter(Boolean).slice(0, ANON_PREV_MAX),
-                tokens: Array.isArray(data.tokens) ? data.tokens.slice(0, 200) : [],
+                tokens: Array.isArray(data.tokens) ? data.tokens.slice(0, ANON_TOKEN_MAX) : [],
                 pending: data.pending || null
             };
         },
@@ -557,17 +591,46 @@
         async botAnonSweepPrev() {
             const st = this._botAnon;
             if (!st || !st.current || !(st.prev || []).length) return 0;
-            let moved = 0;
-            for (const old of st.prev) {
-                try {
-                    const { status, data } = await this._botAnonPost('bot', 'transfer-credits',
-                        { targetPubkey: st.current.pk }, { identity: old });
-                    if (status < 400 && data && !data.error) {
-                        moved += (data.transferred || 0) + (data.proTransferred || 0);
-                    }
-                } catch (_) { }
+            if (st.pending) {
+                try { await this._botVoucherFinishIssue(st.pending); } catch (_) { }
+                if (this._botAnon.pending) return 0;
             }
-            return moved;
+            try { await this._botVoucherKeyset(); } catch (_) { return 0; }
+            let issued = 0;
+            for (const old of st.prev.slice()) {
+                let data;
+                try {
+                    const res = await this._botAnonPost('bot', 'balance', {}, { identity: old });
+                    if (res.status >= 400 || !res.data || res.data.error) continue;
+                    data = res.data;
+                } catch (_) { continue; }
+                for (const tier of VOUCHER_TIERS) {
+                    const figure = tier === 'pro'
+                        ? (typeof data.proBalanceCredits === 'number' ? data.proBalanceCredits : data.proBalance)
+                        : (typeof data.balanceCredits === 'number' ? data.balanceCredits : data.balance);
+                    const whole = Math.floor(Number(figure) || 0);
+                    if (whole <= 0) continue;
+                    for (const denoms of voucherBatches(whole)) {
+                        if ((this._botAnon.tokens || []).length + denoms.length > ANON_TOKEN_MAX) break;
+                        this._botAnon.pending = {
+                            tier,
+                            reqId: hex(crypto.getRandomValues(new Uint8Array(32))),
+                            outputs: blindOutputs(denoms),
+                            from: old.pk
+                        };
+                        this._saveBotAnonState();
+                        try {
+                            const tokens = await this._botVoucherFinishIssue(this._botAnon.pending);
+                            issued += tokens.reduce((s, t) => s + t.d, 0);
+                        } catch (_) {
+                            if (this._botAnon.pending) return issued;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+            return issued;
         },
 
         _botAnonAdoptPrev(entry) {
@@ -694,11 +757,24 @@
 
         async _botVoucherFinishIssue(pending) {
             const keyset = await this._botVoucherKeyset();
-            const { status, data } = await this._botMoneyRequest('voucher-issue', {
+            const request = {
                 tier: pending.tier,
                 reqId: pending.reqId,
                 outputs: pending.outputs.map(o => ({ d: o.d, B: o.B }))
-            }, { anon: false });
+            };
+            let signer = null;
+            if (pending.from) {
+                const st = this._botAnon || {};
+                signer = [st.current, ...(st.prev || [])].find(e => e && e.pk === pending.from) || null;
+                if (!signer) {
+                    this._botAnon.pending = null;
+                    this._saveBotAnonState();
+                    throw new Error('The anonymous key that owned these credits is gone');
+                }
+            }
+            const { status, data } = signer
+                ? await this._botAnonPost('bot', 'voucher-issue', request, { identity: signer })
+                : await this._botMoneyRequest('voucher-issue', request, { anon: false });
             if (status >= 400 || !data || data.error) {
                 if (status >= 400 && status < 500 && !(data && data.insufficient)) {
                     this._botAnon.pending = null;
@@ -709,7 +785,7 @@
             if (data.insufficient) {
                 this._botAnon.pending = null;
                 this._saveBotAnonState();
-                const err = new Error(`Not enough ${pending.tier === 'pro' ? 'Pro ' : ''}credits on your identity — ${data.balance} left, ${data.required} needed.`);
+                const err = new Error(`Not enough ${pending.tier === 'pro' ? 'Pro ' : ''}credits on ${signer ? 'your old anonymous key' : 'your identity'} — ${data.balance} left, ${data.required} needed.`);
                 err.insufficient = true;
                 throw err;
             }
@@ -790,13 +866,7 @@
             if (!this._botAnonEnsure()) throw new Error('Anonymous Nymbot chat is unavailable right now.');
             await this._botVoucherKeyset();
             if (this._botAnon.pending) await this._botVoucherFinishIssue(this._botAnon.pending);
-            const P = VPoint();
-            const outputs = denoms.map(d => {
-                const x = crypto.getRandomValues(new Uint8Array(32));
-                const r = randomScalar();
-                const B = hashToCurve(x).add(P.BASE.multiply(r));
-                return { d, x: hex(x), r: scalarHex(r), B: B.toHex(true) };
-            });
+            const outputs = blindOutputs(denoms);
             this._botAnon.pending = { tier, reqId: hex(crypto.getRandomValues(new Uint8Array(32))), outputs };
             this._saveBotAnonState();
             await this._botVoucherFinishIssue(this._botAnon.pending);
@@ -897,12 +967,12 @@
 
         async botAnonRotateFromModal() {
             const res = await window.showAppConfirm(
-                'A new throwaway key starts an empty conversation. Nymbot cannot tell the new key is the same person as the old one — unless you carry the balance across, which it does see as one anonymous key paying another.',
+                'A new throwaway key starts an empty conversation. Nymbot cannot tell the new key is the same person as the old one. If you carry the balance across, the old key\'s balance becomes anonymous vouchers that the new key uses as needed, so Nymbot never sees one key pay the other.',
                 {
                     title: 'New anonymous key',
                     okLabel: 'Rotate',
                     danger: true,
-                    checkboxLabel: 'Move the old key\'s remaining credits over'
+                    checkboxLabel: 'Turn the old key\'s remaining credits into vouchers for the new key'
                 });
             if (!res || !res.confirmed) return;
             this._setBotAnonStatus('Rotating…');
@@ -910,7 +980,7 @@
             this._renderBotAnonBody();
             this._refreshBotAnonBalances();
             this._setBotAnonStatus(moved
-                ? `New anonymous key created and ${moved} credit${moved === 1 ? '' : 's'} carried over.`
+                ? `New anonymous key created. The old key's ${moved} credit${moved === 1 ? '' : 's'} became anonymous vouchers the new key uses as needed.`
                 : 'New anonymous key created.', 'ok');
         }
     });

@@ -13,6 +13,8 @@ const List<int> voucherDenoms = [
 
 const int voucherMaxOutputs = 32;
 
+const int voucherMaxAmount = 100000;
+
 const List<String> voucherTiers = ['standard', 'pro'];
 
 const String voucherHtcDomain = 'Nymbot_Voucher_HashToCurve_v1';
@@ -140,6 +142,28 @@ List<int>? voucherSplitAmount(int amount) {
     }
   }
   return left == 0 ? out : null;
+}
+
+List<List<int>> voucherBatches(int amount) {
+  final batches = <List<int>>[];
+  var batch = <int>[];
+  var total = 0;
+  var left = amount;
+  for (var i = voucherDenoms.length - 1; i >= 0 && left > 0; i--) {
+    final d = voucherDenoms[i];
+    while (left >= d) {
+      if (batch.length >= voucherMaxOutputs || total + d > voucherMaxAmount) {
+        batches.add(batch);
+        batch = <int>[];
+        total = 0;
+      }
+      batch.add(d);
+      total += d;
+      left -= d;
+    }
+  }
+  if (batch.isNotEmpty) batches.add(batch);
+  return batches;
 }
 
 String? voucherKeysetId(Map<dynamic, dynamic> keys, List<int> denoms) {
